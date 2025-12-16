@@ -1,0 +1,11 @@
+language = "C"
+include_guard = "SAMPLE_FNS_H"
+pragma_once = true
+
+[export]
+include = [
+  "bench_run_json",
+  "bench_free_string",
+  "bench_fib_24",
+  "bench_checksum_1k",
+]
