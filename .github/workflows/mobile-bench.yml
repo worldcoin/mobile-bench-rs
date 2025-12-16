@@ -1,0 +1,54 @@
+name: Mobile Bench (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "android | ios | both"
+        required: false
+        default: "android"
+
+jobs:
+  android:
+    if: ${{ github.event.inputs.platform == 'android' || github.event.inputs.platform == 'both' || github.event.inputs.platform == '' }}
+    name: Android build (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-34
+            build-tools;34.0.0
+            ndk;26.1.10909125
+
+      - name: Build Rust shared libs for Android
+        run: scripts/build-android.sh
+
+      - name: Sync .so into Android app
+        run: scripts/sync-android-libs.sh
+
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.7
+
+      - name: Assemble APK
+        working-directory: android
+        run: gradle :app:assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-bench-android-apk
+          path: android/app/build/outputs/apk/debug/*.apk
