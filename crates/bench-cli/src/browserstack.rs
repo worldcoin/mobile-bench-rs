@@ -2,6 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::Value;
 use std::path::Path;
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
@@ -199,6 +200,40 @@ impl BrowserStackClient {
             self.base_url.trim_end_matches('/'),
             path.trim_start_matches('/')
         )
+    }
+
+    pub fn get_json(&self, path: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .get(self.api(path))
+            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
+            .send()
+            .with_context(|| format!("requesting BrowserStack API {}", path))?;
+
+        parse_response(resp, path)
+    }
+
+    pub fn download_url(&self, url: &str, dest: &Path) -> Result<()> {
+        let resp = self
+            .http
+            .get(url)
+            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
+            .send()
+            .with_context(|| format!("downloading BrowserStack asset {}", url))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .with_context(|| format!("reading BrowserStack asset body {}", url))?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "BrowserStack asset download failed (status {}): {}",
+                status,
+                String::from_utf8_lossy(&bytes)
+            ));
+        }
+        std::fs::write(dest, bytes)
+            .with_context(|| format!("writing BrowserStack asset to {:?}", dest))?;
+        Ok(())
     }
 }
 
