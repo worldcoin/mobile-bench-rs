@@ -2,3 +2,4 @@ target/
 **/*.DS_Store
 .vscode/
 android/app/src/main/jniLibs/*/libsample_fns.so
+.env.local
