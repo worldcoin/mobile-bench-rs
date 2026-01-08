@@ -2,4 +2,7 @@ target/
 **/*.DS_Store
 .vscode/
 android/app/src/main/jniLibs/*/libsample_fns.so
+android/app/src/main/jniLibs/*/libuniffi_sample_fns.so
+ios/BenchRunner/BenchRunner.xcodeproj/
+**/xcuserdata/
 .env.local

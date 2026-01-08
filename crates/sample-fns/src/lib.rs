@@ -95,14 +95,22 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
     let report = match runner_spec.name.as_str() {
         "fibonacci" | "fib" | "sample_fns::fibonacci" => {
             run_closure(runner_spec, || {
-                let _ = fibonacci(24);
+                let result = fibonacci_batch(30, 1000);
+                // Use the result to prevent optimization
+                std::hint::black_box(result);
                 Ok(())
             })
             .map_err(|e: BenchRunnerError| -> BenchError { e.into() })?
         }
         "checksum" | "checksum_1k" | "sample_fns::checksum" => {
             run_closure(runner_spec, || {
-                let _ = checksum(&CHECKSUM_INPUT);
+                // Run checksum 10000 times to make it measurable
+                let mut sum = 0u64;
+                for _ in 0..10000 {
+                    sum = sum.wrapping_add(checksum(&CHECKSUM_INPUT));
+                }
+                // Use the result to prevent optimization
+                std::hint::black_box(sum);
                 Ok(())
             })
             .map_err(|e: BenchRunnerError| -> BenchError { e.into() })?
@@ -133,6 +141,15 @@ pub fn fibonacci(n: u32) -> u64 {
             b
         }
     }
+}
+
+/// Compute fibonacci in a more measurable way by doing it multiple times.
+pub fn fibonacci_batch(n: u32, iterations: u32) -> u64 {
+    let mut result = 0u64;
+    for _ in 0..iterations {
+        result = result.wrapping_add(fibonacci(n));
+    }
+    result
 }
 
 /// Compute checksum by summing all bytes.

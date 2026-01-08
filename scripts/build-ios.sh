@@ -55,12 +55,14 @@ for target in "${IOS_TARGETS[@]}"; do
   # Determine platform and architecture
   case "${target}" in
     aarch64-apple-ios)
-      PLATFORM="ios"
+      PLATFORM="iPhoneOS"
+      XCFRAMEWORK_PLATFORM="ios"
       ARCH="arm64"
       FRAMEWORK_NAME="ios-arm64"
       ;;
     aarch64-apple-ios-sim)
-      PLATFORM="ios-simulator"
+      PLATFORM="iPhoneSimulator"
+      XCFRAMEWORK_PLATFORM="ios-simulator"
       ARCH="arm64"
       FRAMEWORK_NAME="ios-simulator-arm64"
       ;;
@@ -70,11 +72,11 @@ for target in "${IOS_TARGETS[@]}"; do
       ;;
   esac
 
-  FRAMEWORK_DIR="${XCFRAMEWORK_PATH}/${FRAMEWORK_NAME}.framework"
+  FRAMEWORK_DIR="${XCFRAMEWORK_PATH}/${FRAMEWORK_NAME}/sample_fns.framework"
   mkdir -p "${FRAMEWORK_DIR}/Headers"
 
-  # Copy library (framework binary should match framework name)
-  cp "${LIB_PATH}" "${FRAMEWORK_DIR}/${FRAMEWORK_NAME}"
+  # Copy library (framework binary should match module name)
+  cp "${LIB_PATH}" "${FRAMEWORK_DIR}/sample_fns"
 
   # Copy UniFFI-generated C header
   UNIFFI_HEADER="${ROOT_DIR}/ios/BenchRunner/BenchRunner/Generated/sample_fnsFFI.h"
@@ -94,9 +96,9 @@ for target in "${IOS_TARGETS[@]}"; do
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>${FRAMEWORK_NAME}</string>
+  <string>sample_fns</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.world.bench.sample_fns</string>
+  <string>dev.world.sample-fns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -117,7 +119,7 @@ EOF
 
   # Create module map for UniFFI C bindings
   cat > "${FRAMEWORK_DIR}/Headers/module.modulemap" <<EOF
-module sample_fns {
+module sample_fnsFFI {
     header "sample_fnsFFI.h"
     export *
 }
@@ -136,25 +138,29 @@ cat > "${XCFRAMEWORK_PATH}/Info.plist" <<EOF
       <key>LibraryIdentifier</key>
       <string>ios-arm64</string>
       <key>LibraryPath</key>
-      <string>ios-arm64.framework</string>
+      <string>sample_fns.framework</string>
       <key>SupportedArchitectures</key>
       <array>
         <string>arm64</string>
       </array>
       <key>SupportedPlatform</key>
       <string>ios</string>
+      <key>SupportedPlatformVariant</key>
+      <string></string>
     </dict>
     <dict>
       <key>LibraryIdentifier</key>
       <string>ios-simulator-arm64</string>
       <key>LibraryPath</key>
-      <string>ios-simulator-arm64.framework</string>
+      <string>sample_fns.framework</string>
       <key>SupportedArchitectures</key>
       <array>
         <string>arm64</string>
       </array>
       <key>SupportedPlatform</key>
-      <string>ios-simulator</string>
+      <string>ios</string>
+      <key>SupportedPlatformVariant</key>
+      <string>simulator</string>
     </dict>
   </array>
   <key>CFBundlePackageType</key>
@@ -166,3 +172,12 @@ cat > "${XCFRAMEWORK_PATH}/Info.plist" <<EOF
 EOF
 
 echo "✓ iOS build complete. XCFramework created at: ${XCFRAMEWORK_PATH}"
+
+# Code-sign the xcframework (required for Xcode)
+echo "Signing xcframework..."
+codesign --force --deep --sign - "${XCFRAMEWORK_PATH}" 2>/dev/null || {
+  echo "⚠️  Warning: Failed to sign xcframework. You may need to sign manually:"
+  echo "   codesign --force --deep --sign - ${XCFRAMEWORK_PATH}"
+}
+
+echo "✓ Build and signing complete"
