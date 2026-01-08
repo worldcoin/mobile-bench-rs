@@ -7,6 +7,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+use std::time::{Duration, Instant};
 
 use browserstack::{BrowserStackAuth, BrowserStackClient};
 
@@ -47,6 +48,14 @@ enum Command {
         ios_app: Option<PathBuf>,
         #[arg(long, help = "Path to iOS XCUITest test suite package (.zip or .ipa)")]
         ios_test_suite: Option<PathBuf>,
+        #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
+        fetch: bool,
+        #[arg(long, default_value = "target/browserstack")]
+        fetch_output_dir: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        fetch_poll_interval_secs: u64,
+        #[arg(long, default_value_t = 1800)]
+        fetch_timeout_secs: u64,
     },
     /// Run a local demo against bundled sample functions to validate the harness.
     Demo {
@@ -66,6 +75,21 @@ enum Command {
     Plan {
         #[arg(long, default_value = "device-matrix.yaml")]
         output: PathBuf,
+    },
+    /// Fetch BrowserStack build artifacts (logs, session JSON) for CI.
+    Fetch {
+        #[arg(long, value_enum)]
+        target: MobileTarget,
+        #[arg(long)]
+        build_id: String,
+        #[arg(long, default_value = "target/browserstack")]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = true)]
+        wait: bool,
+        #[arg(long, default_value_t = 10)]
+        poll_interval_secs: u64,
+        #[arg(long, default_value_t = 1800)]
+        timeout_secs: u64,
     },
 }
 
@@ -180,6 +204,10 @@ fn main() -> Result<()> {
             local_only,
             ios_app,
             ios_test_suite,
+            fetch,
+            fetch_output_dir,
+            fetch_poll_interval_secs,
+            fetch_timeout_secs,
         } => {
             let spec = resolve_run_spec(
                 target,
@@ -256,6 +284,35 @@ fn main() -> Result<()> {
                 remote_run,
             };
             write_summary(&summary, output.as_deref())?;
+
+            if fetch {
+                if let Some(remote) = &summary.remote_run {
+                    let build_id = match remote {
+                        RemoteRun::Android { build_id, .. } => build_id,
+                        RemoteRun::Ios { build_id, .. } => build_id,
+                    };
+                    let creds = resolve_browserstack_credentials(summary.spec.browserstack.as_ref())?;
+                    let client = BrowserStackClient::new(
+                        BrowserStackAuth {
+                            username: creds.username,
+                            access_key: creds.access_key,
+                        },
+                        creds.project,
+                    )?;
+                    let output_root = fetch_output_dir.join(build_id);
+                    fetch_browserstack_artifacts(
+                        &client,
+                        summary.spec.target,
+                        build_id,
+                        &output_root,
+                        true,
+                        fetch_poll_interval_secs,
+                        fetch_timeout_secs,
+                    )?;
+                } else {
+                    println!("No BrowserStack run to fetch (devices not provided?)");
+                }
+            }
         }
         Command::Demo { iterations, warmup } => {
             let spec = BenchSpec::new("sample_fns::fibonacci", iterations, warmup)?;
@@ -276,6 +333,33 @@ fn main() -> Result<()> {
         Command::Plan { output } => {
             write_device_matrix_template(&output)?;
             println!("Wrote sample device matrix to {:?}", output);
+        }
+        Command::Fetch {
+            target,
+            build_id,
+            output_dir,
+            wait,
+            poll_interval_secs,
+            timeout_secs,
+        } => {
+            let creds = resolve_browserstack_credentials(None)?;
+            let client = BrowserStackClient::new(
+                BrowserStackAuth {
+                    username: creds.username,
+                    access_key: creds.access_key,
+                },
+                creds.project,
+            )?;
+            let output_root = output_dir.join(&build_id);
+            fetch_browserstack_artifacts(
+                &client,
+                target,
+                &build_id,
+                &output_root,
+                wait,
+                poll_interval_secs,
+                timeout_secs,
+            )?;
         }
     }
 
@@ -334,6 +418,233 @@ fn write_device_matrix_template(path: &Path) -> Result<()> {
 
     let contents = serde_yaml::to_string(&matrix)?;
     write_file(path, contents.as_bytes())
+}
+
+fn fetch_browserstack_artifacts(
+    client: &BrowserStackClient,
+    target: MobileTarget,
+    build_id: &str,
+    output_root: &Path,
+    wait: bool,
+    poll_interval_secs: u64,
+    timeout_secs: u64,
+) -> Result<()> {
+    fs::create_dir_all(output_root)
+        .with_context(|| format!("creating output dir {:?}", output_root))?;
+
+    let base = browserstack_base_path(target);
+    let build_path = format!("{base}/builds/{build_id}");
+    let sessions_path = format!("{base}/builds/{build_id}/sessions");
+
+    if wait {
+        wait_for_build(client, &build_path, poll_interval_secs, timeout_secs)?;
+    }
+
+    let build_json = client.get_json(&build_path)?;
+    write_json(output_root.join("build.json"), &build_json)?;
+
+    let sessions_json = match client.get_json(&sessions_path) {
+        Ok(value) => {
+            write_json(output_root.join("sessions.json"), &value)?;
+            Some(value)
+        }
+        Err(err) => {
+            let msg = shorten_html_error(&err.to_string());
+            println!("Sessions endpoint unavailable; falling back to build.json: {msg}");
+            None
+        }
+    };
+
+    let session_ids = extract_session_ids(sessions_json.as_ref().unwrap_or(&build_json));
+    if session_ids.is_empty() {
+        println!("No sessions found for build {}", build_id);
+        return Ok(());
+    }
+
+    for session_id in session_ids {
+        let session_path = format!("{base}/builds/{build_id}/sessions/{session_id}");
+        let session_json = client.get_json(&session_path)?;
+        let session_dir = output_root.join(format!("session-{}", session_id));
+        fs::create_dir_all(&session_dir)
+            .with_context(|| format!("creating session dir {:?}", session_dir))?;
+        write_json(session_dir.join("session.json"), &session_json)?;
+
+        let mut bench_report: Option<Value> = None;
+        for (key, url) in extract_url_fields(&session_json) {
+            let file_name = filename_for_url(&key, &url);
+            let dest = session_dir.join(file_name);
+            if let Err(err) = client.download_url(&url, &dest) {
+                println!("Skipping download for {key}: {err}");
+                continue;
+            }
+            if key.contains("device_log") || key.contains("instrumentation_log") || key.contains("app_log") {
+                if let Ok(contents) = fs::read_to_string(&dest) {
+                    if let Some(parsed) = extract_bench_json(&contents) {
+                        bench_report = Some(parsed);
+                    }
+                }
+            }
+        }
+
+        if let Some(report) = bench_report {
+            write_json(session_dir.join("bench-report.json"), &report)?;
+        }
+    }
+
+    println!("Fetched BrowserStack artifacts to {:?}", output_root);
+    Ok(())
+}
+
+fn browserstack_base_path(target: MobileTarget) -> &'static str {
+    match target {
+        MobileTarget::Android => "app-automate/espresso/v2",
+        MobileTarget::Ios => "app-automate/xcuitest/v2",
+    }
+}
+
+fn wait_for_build(
+    client: &BrowserStackClient,
+    build_path: &str,
+    poll_interval_secs: u64,
+    timeout_secs: u64,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        let build_json = client.get_json(build_path)?;
+        if let Some(status) = build_json
+            .get("status")
+            .and_then(|val| val.as_str())
+            .map(|val| val.to_lowercase())
+        {
+            if status == "failed" || status == "error" {
+                println!("Build status: {status}");
+                return Ok(());
+            }
+            if status == "done" || status == "passed" || status == "completed" {
+                println!("Build status: {status}");
+                return Ok(());
+            }
+            println!("Build status: {status} (waiting)");
+        } else {
+            println!("Build status missing; continuing without wait");
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            println!("Timed out waiting for build status");
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_secs(poll_interval_secs));
+    }
+}
+
+fn extract_session_ids(value: &Value) -> Vec<String> {
+    let sessions = value
+        .get("sessions")
+        .and_then(|val| val.as_array())
+        .or_else(|| value.as_array());
+    let mut ids = Vec::new();
+    if let Some(entries) = sessions {
+        for entry in entries {
+            let id = entry
+                .get("id")
+                .or_else(|| entry.get("session_id"))
+                .or_else(|| entry.get("sessionId"))
+                .and_then(|val| val.as_str());
+            if let Some(id) = id {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    if ids.is_empty() {
+        if let Some(devices) = value.get("devices").and_then(|val| val.as_array()) {
+            for device in devices {
+                if let Some(sessions) = device.get("sessions").and_then(|val| val.as_array()) {
+                    for entry in sessions {
+                        if let Some(id) = entry.get("id").and_then(|val| val.as_str()) {
+                            ids.push(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
+fn extract_url_fields(value: &Value) -> Vec<(String, String)> {
+    let mut urls = Vec::new();
+    extract_url_fields_recursive(value, "", &mut urls);
+    urls
+}
+
+fn extract_url_fields_recursive(value: &Value, prefix: &str, out: &mut Vec<(String, String)>) {
+    match value {
+        Value::Object(map) => {
+            for (key, val) in map {
+                let next = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{}.{}", prefix, key)
+                };
+                if let Value::String(url) = val {
+                    if url.starts_with("http") || url.starts_with("bs://") {
+                        out.push((next.clone(), url.clone()));
+                    }
+                }
+                extract_url_fields_recursive(val, &next, out);
+            }
+        }
+        Value::Array(items) => {
+            for (idx, val) in items.iter().enumerate() {
+                let next = format!("{}[{}]", prefix, idx);
+                extract_url_fields_recursive(val, &next, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn filename_for_url(key: &str, url: &str) -> String {
+    let stripped = url.split('?').next().unwrap_or(url);
+    let ext = Path::new(stripped)
+        .extension()
+        .and_then(|val| val.to_str())
+        .unwrap_or("log");
+    let mut safe = String::with_capacity(key.len());
+    for ch in key.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            safe.push(ch);
+        } else {
+            safe.push('_');
+        }
+    }
+    format!("{}.{}", safe, ext)
+}
+
+fn extract_bench_json(contents: &str) -> Option<Value> {
+    let marker = "BENCH_JSON ";
+    for line in contents.lines().rev() {
+        if let Some(idx) = line.find(marker) {
+            let json_part = &line[idx + marker.len()..];
+            if let Ok(value) = serde_json::from_str::<Value>(json_part) {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn write_json(path: PathBuf, value: &Value) -> Result<()> {
+    let contents = serde_json::to_string_pretty(value)?;
+    write_file(&path, contents.as_bytes())
+}
+
+fn shorten_html_error(message: &str) -> String {
+    if message.contains("<!DOCTYPE html>") || message.contains("<html") {
+        return "received HTML response (check BrowserStack API endpoint)".to_string();
+    }
+    message.to_string()
 }
 
 fn resolve_run_spec(
