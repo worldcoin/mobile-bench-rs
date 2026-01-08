@@ -1,5 +1,4 @@
 import Foundation
-import sample_fns
 
 private let defaultFunction = "sample_fns::fibonacci"
 private let defaultIterations: UInt32 = 20

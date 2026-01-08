@@ -34,6 +34,38 @@ The CLI supports both Espresso (Android) and XCUITest (iOS) test automation fram
 - **iOS**: Uploads app IPA/bundle + XCUITest runner package, schedules XCUITest runs
 - Credentials: `BROWSERSTACK_USERNAME`, `BROWSERSTACK_ACCESS_KEY` (from env or config)
 
+## Build and Testing Documentation
+
+**Primary Documentation:**
+- **`BUILD.md`**: Complete build reference with prerequisites, step-by-step instructions, and troubleshooting for both Android and iOS
+- **`TESTING.md`**: Comprehensive testing guide with advanced scenarios and detailed troubleshooting
+
+For comprehensive testing instructions, see **`TESTING.md`** which includes:
+- Prerequisites and setup
+- Host testing (cargo test, CLI demo)
+- Android testing (emulator, device, Android Studio)
+- iOS testing (simulator, device, Xcode)
+- Troubleshooting common issues
+- Advanced testing scenarios
+
+Quick test commands:
+```bash
+# Run all Rust tests
+cargo test --all
+
+# Test host harness
+cargo run -p bench-cli -- demo --iterations 10 --warmup 2
+
+# Android e2e (requires Android NDK)
+scripts/build-android-app.sh
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n dev.world.bench/.MainActivity
+
+# iOS e2e (requires Xcode)
+scripts/build-ios.sh
+cd ios/BenchRunner && xcodegen generate && open BenchRunner.xcodeproj
+```
+
 ## Common Commands
 
 ### Building
@@ -60,29 +92,60 @@ Requirements:
 
 #### iOS
 ```bash
-# Build Rust xcframework for iOS (uses UniFFI-generated headers)
+# Build Rust xcframework for iOS (includes UniFFI headers and automatic signing)
 scripts/build-ios.sh
 
 # Generate Xcode project from project.yml
 cd ios/BenchRunner && xcodegen generate
+
+# Open in Xcode
+open BenchRunner.xcodeproj
 ```
 
 Requirements:
 - Xcode command-line tools
 - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
-- `xcodegen` installed (for generating Xcode projects)
+- `xcodegen` installed: `brew install xcodegen`
 
-Note: UniFFI headers are generated automatically during the build process.
+**Important iOS Build Details:**
 
-### Testing
-
-```bash
-# Run all host-side tests
-cargo test --all
-
-# Run local demo (exercises harness without mobile builds)
-cargo run -p bench-cli -- demo --iterations 10 --warmup 2
+The `build-ios.sh` script creates an xcframework with the following structure:
 ```
+target/ios/sample_fns.xcframework/
+├── Info.plist                           # XCFramework manifest
+├── ios-arm64/                           # Device slice
+│   └── sample_fns.framework/
+│       ├── sample_fns                   # Static library (libsample_fns.a)
+│       ├── Headers/
+│       │   ├── sample_fnsFFI.h         # UniFFI-generated C header
+│       │   └── module.modulemap        # Module map for Swift import
+│       └── Info.plist
+└── ios-simulator-arm64/                 # Simulator slice (M1+ Macs)
+    └── sample_fns.framework/
+        ├── sample_fns                   # Static library (libsample_fns.a)
+        ├── Headers/
+        │   ├── sample_fnsFFI.h
+        │   └── module.modulemap
+        └── Info.plist
+```
+
+**Key Configuration Details:**
+- Framework binary must be named `sample_fns` (the module name), not the platform identifier
+- Each framework slice must be in `{LibraryIdentifier}/sample_fns.framework/` directory structure
+- Module map defines the C module as `sample_fnsFFI` (matches what UniFFI-generated Swift code imports)
+- Info.plist uses `iPhoneOS`/`iPhoneSimulator` platform identifiers with `SupportedPlatformVariant`
+- Framework bundle ID is `dev.world.sample-fns` (must not conflict with app bundle ID `dev.world.bench`)
+- The Xcode project uses a bridging header (`BenchRunner-Bridging-Header.h`) to expose C FFI types to Swift
+- UniFFI-generated Swift bindings are compiled directly into the app (no `import sample_fns` needed)
+
+**Automatic Code Signing**: The build script automatically signs the xcframework with:
+```bash
+codesign --force --deep --sign - target/ios/sample_fns.xcframework
+```
+
+If automatic signing fails, the script will display a warning with instructions for manual signing.
+
+Note: UniFFI C headers are generated automatically during the build process and copied into each framework slice.
 
 ### Benchmarking
 
@@ -130,16 +193,6 @@ cargo run -p bench-cli -- plan --output device-matrix.yaml
 
 # Run with config
 cargo run -p bench-cli -- run --config bench-config.toml
-```
-
-### Android Device Testing
-
-Launch the app with custom parameters via ADB:
-```bash
-adb shell am start -n dev.world.bench/.MainActivity \
-  --es bench_function sample_fns::checksum \
-  --ei bench_iterations 30 \
-  --ei bench_warmup 5
 ```
 
 ## Key Implementation Details
@@ -202,6 +255,25 @@ The workflow supports manual dispatch with platform selection:
 
 `scripts/build-ios.sh` manually constructs an xcframework (not using `xcodebuild -create-xcframework`) by creating framework slices for each target with proper Info.plist and module.modulemap files.
 
+**Critical Implementation Details:**
+1. **Directory Structure**: Each framework must be in `{LibraryIdentifier}/{FrameworkName}.framework/`, not directly at the root. For example: `ios-simulator-arm64/sample_fns.framework/`, not `ios-simulator-arm64.framework/`.
+
+2. **Framework Binary Naming**: The binary inside each framework slice must be named after the module (`sample_fns`), not the platform identifier (`ios-simulator-arm64`). This is what Xcode's linker expects.
+
+3. **Module Map**: The C module in `module.modulemap` must be named `sample_fnsFFI` to match what UniFFI-generated Swift code tries to import via `#if canImport(sample_fnsFFI)`.
+
+4. **Platform Identifiers**: The framework Info.plist uses Apple's official platform names:
+   - Device: `CFBundleSupportedPlatforms = ["iPhoneOS"]`
+   - Simulator: `CFBundleSupportedPlatforms = ["iPhoneSimulator"]`
+
+   The xcframework Info.plist uses `SupportedPlatform = "ios"` with `SupportedPlatformVariant = "simulator"` for simulator slices.
+
+5. **Bundle Identifier**: The framework bundle ID must not conflict with the app's bundle ID. Use `dev.world.sample-fns` for the framework, while the app uses `dev.world.bench`.
+
+6. **Static vs Dynamic**: The xcframework contains static libraries (`.a` archives built with `staticlib` crate-type), not dynamic frameworks. This requires a bridging header in the Xcode project to expose C types to Swift.
+
+7. **Code Signing**: After building, the xcframework must be code-signed for Xcode to accept it: `codesign --force --deep --sign - target/ios/sample_fns.xcframework`
+
 ### Gradle Integration (Android)
 
 The Android app expects `.so` files under `android/app/src/main/jniLibs/{abi}/libsample_fns.so`. The `sync-android-libs.sh` script copies them from `target/android/{abi}/release/` to the correct locations.
@@ -240,12 +312,60 @@ devices:
     tags: [default, iphone]
 ```
 
+## Common iOS Build Issues and Solutions
+
+### Issue: "The Framework 'sample_fns.xcframework' is unsigned"
+**Solution**: Code-sign the xcframework after building:
+```bash
+codesign --force --deep --sign - target/ios/sample_fns.xcframework
+```
+
+### Issue: "While building for iOS Simulator, no library for this platform was found"
+**Root Cause**: Incorrect xcframework structure (frameworks at wrong path or incorrectly named).
+
+**Solution**: Ensure `build-ios.sh` creates the correct structure with frameworks in subdirectories:
+```
+ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
+```
+
+### Issue: "framework 'ios-simulator-arm64' not found" (linker error)
+**Root Cause**: Framework LibraryPath in xcframework Info.plist points to wrong name.
+
+**Solution**: Verify xcframework Info.plist has:
+```xml
+<key>LibraryPath</key>
+<string>sample_fns.framework</string>  <!-- NOT ios-simulator-arm64.framework -->
+```
+
+### Issue: "Unable to find module dependency: 'sample_fns'" in Swift
+**Root Cause**: Trying to import the module when it should be compiled directly into the app.
+
+**Solution**: Remove `import sample_fns` from Swift files. The UniFFI-generated Swift bindings are compiled into the app target, and C types are exposed via the bridging header.
+
+### Issue: "Cannot find type 'RustBuffer' in scope"
+**Root Cause**: Bridging header missing or not configured.
+
+**Solution**:
+1. Ensure `BenchRunner-Bridging-Header.h` exists with `#import "sample_fnsFFI.h"`
+2. Verify `project.yml` has `SWIFT_OBJC_BRIDGING_HEADER` set
+3. Regenerate Xcode project: `xcodegen generate`
+
+### Issue: "Framework had an invalid CFBundleIdentifier"
+**Root Cause**: Framework bundle ID conflicts with app bundle ID.
+
+**Solution**: Use different bundle IDs:
+- Framework: `dev.world.sample-fns`
+- App: `dev.world.bench`
+
 ## Important Files
 
 - **`PROJECT_PLAN.md`**: Goals, architecture, task backlog
+- **`TESTING.md`**: Comprehensive testing guide with detailed troubleshooting
 - **`scripts/build-android.sh`**: Builds Rust libs with cargo-ndk for Android targets
-- **`scripts/build-ios.sh`**: Builds iOS xcframework and generates C header
+- **`scripts/build-ios.sh`**: Builds iOS xcframework with correct structure and code signing
 - **`scripts/sync-android-libs.sh`**: Copies .so files into Android jniLibs structure
 - **`android/app/src/main/java/dev/world/bench/MainActivity.kt`**: Android app entry point
 - **`ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift`**: iOS FFI wrapper
+- **`ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h`**: Objective-C bridging header for C FFI types
+- **`ios/BenchRunner/project.yml`**: XcodeGen project specification
 - **`crates/bench-cli/src/browserstack.rs`**: BrowserStack REST API client
