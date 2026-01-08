@@ -2,8 +2,14 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 
 android {
-    namespace "dev.world.bench"
-    compileSdk 34
+    namespace = "dev.world.bench"
+    compileSdk = 34
+    ndkVersion "26.1.10909125"
+    def repoRoot = rootProject.projectDir.parentFile
+    def benchSpecDir = new File(repoRoot, "target/mobile-spec/android")
+    if (!benchSpecDir.exists()) {
+        benchSpecDir.mkdirs()
+    }
 
     defaultConfig {
         applicationId "dev.world.bench"
@@ -38,6 +44,17 @@ android {
     sourceSets {
         main {
             jniLibs.srcDirs "src/main/jniLibs"
+            assets.srcDirs += [benchSpecDir.absolutePath]
+        }
+        androidTest {
+            assets.srcDirs += [benchSpecDir.absolutePath]
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            // Keep symbols in Rust shared objects; avoid strip warning.
+            keepDebugSymbols += ["**/libsample_fns.so"]
         }
     }
 }
@@ -46,6 +63,7 @@ dependencies {
     implementation "androidx.core:core-ktx:1.12.0"
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.android.material:material:1.11.0"
+    implementation "net.java.dev.jna:jna:5.14.0@aar"
     androidTestImplementation "androidx.test.ext:junit:1.1.5"
     androidTestImplementation "androidx.test.espresso:espresso-core:3.5.1"
 }

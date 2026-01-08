@@ -29,13 +29,13 @@ impl BenchSpec {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BenchSample {
-    pub duration_ns: u128,
+    pub duration_ns: u64,
 }
 
 impl BenchSample {
     fn from_duration(duration: Duration) -> Self {
         Self {
-            duration_ns: duration.as_nanos(),
+            duration_ns: duration.as_nanos() as u64,
         }
     }
 }

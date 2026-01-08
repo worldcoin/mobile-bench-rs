@@ -5,15 +5,21 @@ set -euo pipefail
 # then assemble the Android APK.
 #
 # Requires:
-#   - ANDROID_NDK_HOME set to your NDK path (e.g. $HOME/Library/Android/sdk/ndk/29.0.14206865)
 #   - cargo-ndk installed
 #   - Android SDK/Gradle available
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Resolve ANDROID_NDK_HOME if not provided.
 if [[ -z "${ANDROID_NDK_HOME:-}" ]]; then
-  echo "ANDROID_NDK_HOME is not set; please export it before running." >&2
-  exit 1
+  DEFAULT_NDK="${HOME}/Library/Android/sdk/ndk/29.0.14206865"
+  if [[ -d "${DEFAULT_NDK}" ]]; then
+    export ANDROID_NDK_HOME="${DEFAULT_NDK}"
+    echo "ANDROID_NDK_HOME not set; defaulting to ${ANDROID_NDK_HOME}"
+  else
+    echo "ANDROID_NDK_HOME is not set and default NDK path not found; please export it before running." >&2
+    exit 1
+  fi
 fi
 
 pushd "${ROOT_DIR}" >/dev/null
