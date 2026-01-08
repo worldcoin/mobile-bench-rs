@@ -1,8 +1,12 @@
 package dev.world.bench
 
 import android.os.Bundle
+import android.os.Debug
+import android.os.Process
+import android.os.SystemClock
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.sample_fns.BenchException
 import uniffi.sample_fns.BenchReport
@@ -47,6 +51,7 @@ class MainActivity : AppCompatActivity() {
             if (report.samples.isNotEmpty()) {
                 android.util.Log.d("MainActivity", "First sample duration_ns: ${report.samples[0].durationNs}")
             }
+            logBenchReport(report)
             formatBenchReport(report)
         } catch (e: BenchException.InvalidIterations) {
             "Error: ${e.message}"
@@ -85,6 +90,45 @@ class MainActivity : AppCompatActivity() {
             appendLine("  Max: ${String.format("%.3f", max)} μs")
             appendLine("  Avg: ${String.format("%.3f", avg)} μs")
         }
+    }
+
+    private fun logBenchReport(report: BenchReport) {
+        val json = JSONObject()
+        val spec = JSONObject()
+        spec.put("name", report.spec.name)
+        spec.put("iterations", report.spec.iterations.toInt())
+        spec.put("warmup", report.spec.warmup.toInt())
+        json.put("spec", spec)
+
+        val samples = report.samples.map { it.durationNs.toLong() }
+        val sampleArray = JSONArray()
+        samples.forEach { sampleArray.put(it) }
+        json.put("samples_ns", sampleArray)
+
+        if (samples.isNotEmpty()) {
+            val min = samples.minOrNull() ?: 0L
+            val max = samples.maxOrNull() ?: 0L
+            val avg = samples.sum().toDouble() / samples.size.toDouble()
+            val stats = JSONObject()
+            stats.put("min_ns", min)
+            stats.put("max_ns", max)
+            stats.put("avg_ns", avg.toDouble())
+            json.put("stats", stats)
+        }
+
+        val memInfo = Debug.MemoryInfo()
+        Debug.getMemoryInfo(memInfo)
+        val resources = JSONObject()
+        resources.put("elapsed_cpu_ms", Process.getElapsedCpuTime())
+        resources.put("uptime_ms", SystemClock.elapsedRealtime())
+        resources.put("total_pss_kb", memInfo.totalPss)
+        resources.put("private_dirty_kb", memInfo.totalPrivateDirty)
+        resources.put("native_heap_kb", Debug.getNativeHeapAllocatedSize() / 1024)
+        val usedHeap = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()
+        resources.put("java_heap_kb", usedHeap / 1024)
+        json.put("resources", resources)
+
+        android.util.Log.i("BenchRunner", "BENCH_JSON ${json}")
     }
 
     private fun resolveBenchParams(): BenchParams {
