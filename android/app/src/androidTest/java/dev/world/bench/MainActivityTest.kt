@@ -20,6 +20,6 @@ class MainActivityTest {
     @Test
     fun showsBenchOutput() {
         onView(withId(R.id.result_text))
-            .check(matches(withText(containsString("samples"))))
+            .check(matches(withText(containsString("Samples"))))
     }
 }
