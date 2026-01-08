@@ -7,6 +7,7 @@ struct ContentView: View {
         ScrollView {
             Text(report)
                 .font(.system(.body, design: .monospaced))
+                .accessibilityIdentifier("benchmarkReport")
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
         }
@@ -19,9 +20,6 @@ struct ContentView: View {
     }
 }
 
-#Preview
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView()
-    }
+#Preview {
+    ContentView()
 }

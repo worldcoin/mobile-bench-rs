@@ -22,8 +22,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.world.bench
         SWIFT_OBJC_BRIDGING_HEADER: BenchRunner/BenchRunner-Bridging-Header.h
-        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/../../target/ios/include"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/BenchRunner/Generated"
     dependencies:
       - framework: ../../target/ios/sample_fns.xcframework
         embed: true
         link: true
+  BenchRunnerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: BenchRunnerUITests
+    dependencies:
+      - target: BenchRunner
