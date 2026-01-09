@@ -1,3 +1,4 @@
 fn main() {
-    uniffi::generate_scaffolding("./src/sample_fns.udl").unwrap();
+    // Scaffolding is now generated via proc macros (uniffi::setup_scaffolding! in lib.rs)
+    // No UDL file processing needed
 }
