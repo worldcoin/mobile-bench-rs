@@ -86,20 +86,20 @@ enum BenchRunnerFFI {
 
         output += "Samples (\(report.samples.count)):\n"
         for (index, sample) in report.samples.enumerated() {
-            let durationMs = Double(sample.durationNs) / 1_000_000.0
-            output += "  \(index + 1). \(String(format: "%.3f", durationMs)) ms\n"
+            let durationUs = Double(sample.durationNs) / 1_000.0
+            output += "  \(index + 1). \(String(format: "%.3f", durationUs)) μs (\(sample.durationNs) ns)\n"
         }
 
         if !report.samples.isEmpty {
-            let durations = report.samples.map { Double($0.durationNs) / 1_000_000.0 }
+            let durations = report.samples.map { Double($0.durationNs) / 1_000.0 }
             let min = durations.min() ?? 0.0
             let max = durations.max() ?? 0.0
             let avg = durations.reduce(0, +) / Double(durations.count)
 
             output += "\nStatistics:\n"
-            output += "  Min: \(String(format: "%.3f", min)) ms\n"
-            output += "  Max: \(String(format: "%.3f", max)) ms\n"
-            output += "  Avg: \(String(format: "%.3f", avg)) ms\n"
+            output += "  Min: \(String(format: "%.3f", min)) μs\n"
+            output += "  Max: \(String(format: "%.3f", max)) μs\n"
+            output += "  Avg: \(String(format: "%.3f", avg)) μs\n"
         }
 
         return output
