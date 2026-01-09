@@ -19,7 +19,7 @@ The repository is organized as a Cargo workspace with three main crates:
 ### Mobile Integration Flow
 
 1. **Build Phase**: Rust functions are compiled to native libraries (`.so` for Android, `.a` for iOS)
-2. **Bindings Generation**: UniFFI generates type-safe Kotlin/Swift bindings from `sample_fns.udl`
+2. **Bindings Generation**: UniFFI **proc macros** generate type-safe Kotlin/Swift bindings from Rust code (no UDL file needed)
 3. **Packaging**: Libraries and generated bindings are embedded into mobile apps (Android APK, iOS xcframework)
 4. **Execution**: Apps read benchmark specs from:
    - Android: Intent extras or `bench_spec.json` asset
@@ -199,15 +199,37 @@ cargo run -p bench-cli -- run --config bench-config.toml
 
 ### FFI Boundary (`sample-fns`)
 
-This crate uses **UniFFI** to generate type-safe bindings for Kotlin and Swift. The API is defined in `crates/sample-fns/src/sample_fns.udl`:
+This crate uses **UniFFI proc macros** to generate type-safe bindings for Kotlin and Swift. The API is defined directly in Rust code with attributes:
 
-- **`runBenchmark(spec: BenchSpec) -> BenchReport`**: Main benchmark entrypoint with structured input/output
-- **`BenchSpec`**: Struct containing `name` (function path), `iterations`, and `warmup` parameters
-- **`BenchReport`**: Struct containing the original spec and a list of `BenchSample` timing results
-- **`BenchError`**: Error enum with variants: `InvalidIterations`, `UnknownFunction`, `ExecutionFailed`
+```rust
+#[derive(uniffi::Record)]
+pub struct BenchSpec {
+    pub name: String,
+    pub iterations: u32,
+    pub warmup: u32,
+}
 
-Regenerate bindings after modifying the UDL:
+#[derive(uniffi::Error)]
+pub enum BenchError {
+    InvalidIterations,
+    UnknownFunction { name: String },
+    ExecutionFailed { reason: String },
+}
+
+#[uniffi::export]
+pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
+    // Implementation
+}
+
+uniffi::setup_scaffolding!();  // Auto-uses crate name as namespace
+```
+
+Regenerate bindings after modifying FFI types in `crates/sample-fns/src/lib.rs`:
 ```bash
+# Build library to generate metadata
+cargo build -p sample-fns
+
+# Generate Kotlin + Swift bindings
 cargo run --bin generate-bindings --features bindgen
 ```
 
@@ -241,10 +263,12 @@ The workflow supports manual dispatch with platform selection:
 
 1. Add function to `crates/sample-fns/src/lib.rs`
 2. Add function dispatch to `run_benchmark()` match statement (e.g., `"my_func" => run_closure(spec, || my_func())`)
-3. If the API surface changes (new public types or functions), update `sample_fns.udl`
-4. Regenerate bindings: `cargo run --bin generate-bindings --features bindgen`
+3. If adding new FFI types, add proc macro attributes (`#[derive(uniffi::Record)]`, `#[uniffi::export]`, etc.)
+4. Regenerate bindings: `cargo build -p sample-fns && cargo run --bin generate-bindings --features bindgen`
 5. Rebuild native libraries: `scripts/build-android.sh` and/or `scripts/build-ios.sh`
 6. Mobile apps will automatically use the updated bindings
+
+**Note**: No UDL file needed! Proc macros automatically detect FFI types from Rust code.
 
 ### Target Architectures
 
