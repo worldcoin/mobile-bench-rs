@@ -39,6 +39,7 @@ impl BrowserStackClient {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]  // Used in tests to verify URL construction
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
@@ -318,5 +319,196 @@ mod tests {
         .unwrap();
         let missing = Path::new("/tmp/definitely-missing-file");
         assert!(client.upload_espresso_app(missing).is_err());
+    }
+
+    #[test]
+    fn suppresses_dead_code_warning_for_test_helper() {
+        // This test uses with_base_url to verify it works and suppress the warning
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap()
+        .with_base_url("https://test.example.com");
+
+        assert_eq!(client.base_url, "https://test.example.com");
+    }
+
+    #[test]
+    fn new_client_uses_default_base_url() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "testuser".into(),
+                access_key: "testkey".into(),
+            },
+            Some("test-project".into()),
+        )
+        .unwrap();
+
+        assert_eq!(client.base_url, DEFAULT_BASE_URL);
+        assert_eq!(client.project, Some("test-project".to_string()));
+    }
+
+    #[test]
+    fn api_constructs_url_correctly() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let url = client.api("app-automate/espresso/v2/app");
+        assert_eq!(url, "https://api-cloud.browserstack.com/app-automate/espresso/v2/app");
+    }
+
+    #[test]
+    fn api_handles_leading_slash() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let url = client.api("/app-automate/builds");
+        assert_eq!(url, "https://api-cloud.browserstack.com/app-automate/builds");
+    }
+
+    #[test]
+    fn api_handles_trailing_slash_in_base_url() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap()
+        .with_base_url("https://test.example.com/");
+
+        let url = client.api("endpoint");
+        assert_eq!(url, "https://test.example.com/endpoint");
+    }
+
+    #[test]
+    fn schedule_espresso_run_rejects_empty_devices() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let result = client.schedule_espresso_run(
+            &[],
+            "bs://app123",
+            "bs://test456",
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn schedule_espresso_run_rejects_empty_app_url() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let result = client.schedule_espresso_run(
+            &["Pixel 7-13".to_string()],
+            "",
+            "bs://test456",
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("app_url"));
+    }
+
+    #[test]
+    fn schedule_espresso_run_rejects_empty_test_suite_url() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let result = client.schedule_espresso_run(
+            &["Pixel 7-13".to_string()],
+            "bs://app123",
+            "",
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("test_suite_url"));
+    }
+
+    #[test]
+    fn schedule_xcuitest_run_rejects_empty_devices() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let result = client.schedule_xcuitest_run(
+            &[],
+            "bs://app123",
+            "bs://test456",
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn upload_xcuitest_app_rejects_missing_artifact() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let missing = Path::new("/tmp/nonexistent-ios-app.ipa");
+        assert!(client.upload_xcuitest_app(missing).is_err());
+    }
+
+    #[test]
+    fn upload_xcuitest_test_suite_rejects_missing_artifact() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let missing = Path::new("/tmp/nonexistent-test-suite.zip");
+        assert!(client.upload_xcuitest_test_suite(missing).is_err());
     }
 }
