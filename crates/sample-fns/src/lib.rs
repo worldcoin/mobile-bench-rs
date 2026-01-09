@@ -1,14 +1,11 @@
-//! Sample benchmark functions for mobile testing using UniFFI (UDL mode).
+//! Sample benchmark functions for mobile testing using UniFFI (proc macro mode).
 
 use bench_runner::{run_closure, BenchError as BenchRunnerError};
-
-// Include UniFFI scaffolding (generated from UDL)
-uniffi::include_scaffolding!("sample_fns");
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
 
 /// Specification for a benchmark run.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchSpec {
     pub name: String,
     pub iterations: u32,
@@ -16,20 +13,21 @@ pub struct BenchSpec {
 }
 
 /// A single benchmark sample with timing information.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchSample {
     pub duration_ns: u64,
 }
 
 /// Complete benchmark report with spec and timing samples.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchReport {
     pub spec: BenchSpec,
     pub samples: Vec<BenchSample>,
 }
 
 /// Error types for benchmark operations.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
 pub enum BenchError {
     #[error("iterations must be greater than zero")]
     InvalidIterations,
@@ -40,6 +38,9 @@ pub enum BenchError {
     #[error("benchmark execution failed: {reason}")]
     ExecutionFailed { reason: String },
 }
+
+// Generate UniFFI scaffolding from proc macros
+uniffi::setup_scaffolding!();
 
 // Conversion from bench-runner types
 impl From<bench_runner::BenchSpec> for BenchSpec {
@@ -89,6 +90,7 @@ impl From<BenchRunnerError> for BenchError {
 }
 
 /// Run a benchmark by name with the given specification.
+#[uniffi::export]
 pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
     let runner_spec: bench_runner::BenchSpec = spec.into();
 

@@ -470,6 +470,9 @@ fileprivate struct FfiConverterString: FfiConverter {
 }
 
 
+/**
+ * Complete benchmark report with spec and timing samples.
+ */
 public struct BenchReport {
     public var spec: BenchSpec
     public var samples: [BenchSample]
@@ -536,6 +539,9 @@ public func FfiConverterTypeBenchReport_lower(_ value: BenchReport) -> RustBuffe
 }
 
 
+/**
+ * A single benchmark sample with timing information.
+ */
 public struct BenchSample {
     public var durationNs: UInt64
 
@@ -594,6 +600,9 @@ public func FfiConverterTypeBenchSample_lower(_ value: BenchSample) -> RustBuffe
 }
 
 
+/**
+ * Specification for a benchmark run.
+ */
 public struct BenchSpec {
     public var name: String
     public var iterations: UInt32
@@ -668,6 +677,9 @@ public func FfiConverterTypeBenchSpec_lower(_ value: BenchSpec) -> RustBuffer {
 }
 
 
+/**
+ * Error types for benchmark operations.
+ */
 public enum BenchError {
 
     
@@ -762,6 +774,9 @@ fileprivate struct FfiConverterSequenceTypeBenchSample: FfiConverterRustBuffer {
         return seq
     }
 }
+/**
+ * Run a benchmark by name with the given specification.
+ */
 public func runBenchmark(spec: BenchSpec)throws  -> BenchReport {
     return try  FfiConverterTypeBenchReport.lift(try rustCallWithError(FfiConverterTypeBenchError.lift) {
     uniffi_sample_fns_fn_func_run_benchmark(
@@ -785,7 +800,7 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_sample_fns_checksum_func_run_benchmark() != 35019) {
+    if (uniffi_sample_fns_checksum_func_run_benchmark() != 38523) {
         return InitializationResult.apiChecksumMismatch
     }
 
