@@ -7,15 +7,18 @@ mobile benchmarks, and then run them on BrowserStack.
 
 Install the following tools (per platform):
 
-- Rust toolchain (stable) + `rustup`
+- Rust toolchain (stable) + `rustup`:
+  - https://www.rust-lang.org/tools/install
 - Android:
-  - Android SDK + NDK (API 24+)
-  - `cargo-ndk` (`cargo install cargo-ndk`)
-  - JDK 17 (for Gradle)
+  - Android Studio (SDK + NDK manager): https://developer.android.com/studio
+  - Android NDK (API 24+): https://developer.android.com/ndk/downloads
+  - `cargo-ndk` (`cargo install cargo-ndk`): https://github.com/bbqsrc/cargo-ndk
+  - JDK 17 (for Gradle): https://adoptium.net/temurin/releases/?version=17
 - iOS (macOS only):
-  - Xcode + Command Line Tools
+  - Xcode + Command Line Tools: https://developer.apple.com/xcode/
   - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
-  - `xcodegen` (optional, if you plan to regenerate the Xcode project)
+    - https://doc.rust-lang.org/rustup/targets.html
+  - `xcodegen` (optional): https://github.com/yonaskolb/XcodeGen
 
 ## 2) Add bench-sdk to your crate
 
