@@ -381,12 +381,17 @@ xcodegen generate
 - Check `scripts/build-ios.sh` uses `dev.world.sample-fns` for framework
 - App uses `dev.world.bench`
 
-## UniFFI Bindings
+## UniFFI Bindings (Proc Macros)
 
-If you modify the Rust API (`crates/sample-fns/src/sample_fns.udl`):
+This project uses UniFFI **proc macros** - no UDL file needed! FFI types are defined with attributes in Rust code.
+
+If you modify FFI types in Rust (`crates/sample-fns/src/lib.rs`):
 
 ```bash
-# Regenerate bindings
+# Build library to generate metadata
+cargo build -p sample-fns
+
+# Regenerate bindings from proc macros
 cargo run --bin generate-bindings --features bindgen
 
 # This updates:
@@ -396,9 +401,23 @@ cargo run --bin generate-bindings --features bindgen
 
 # Then rebuild mobile apps
 ./scripts/build-android-app.sh  # Android
-./scripts/build-ios.sh          # iOS
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+./scripts/build-ios.sh          # iOS (includes automatic code signing)
 ```
+
+**Example**: Adding a new FFI type:
+```rust
+#[derive(uniffi::Record)]
+pub struct MyNewType {
+    pub field: String,
+}
+
+#[uniffi::export]
+pub fn my_new_function(arg: MyNewType) -> Result<String, BenchError> {
+    Ok(arg.field)
+}
+```
+
+Then regenerate bindings as shown above.
 
 ## Performance Testing
 
