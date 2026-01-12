@@ -86,14 +86,10 @@ impl From<bench_sdk::RunnerReport> for BenchReport {
 impl From<bench_sdk::BenchError> for BenchError {
     fn from(err: bench_sdk::BenchError) -> Self {
         match err {
-            bench_sdk::BenchError::Runner(runner_err) => {
-                BenchError::ExecutionFailed {
-                    reason: runner_err.to_string(),
-                }
-            }
-            bench_sdk::BenchError::UnknownFunction(name) => {
-                BenchError::UnknownFunction { name }
-            }
+            bench_sdk::BenchError::Runner(runner_err) => BenchError::ExecutionFailed {
+                reason: runner_err.to_string(),
+            },
+            bench_sdk::BenchError::UnknownFunction(name) => BenchError::UnknownFunction { name },
             _ => BenchError::ExecutionFailed {
                 reason: err.to_string(),
             },

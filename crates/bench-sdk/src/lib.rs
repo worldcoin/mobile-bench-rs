@@ -81,8 +81,8 @@ pub mod types;
 pub use bench_macros::benchmark;
 
 // Re-export key types for convenience
-pub use registry::{discover_benchmarks, find_benchmark, list_benchmark_names, BenchFunction};
-pub use runner::{run_benchmark, BenchmarkBuilder};
+pub use registry::{BenchFunction, discover_benchmarks, find_benchmark, list_benchmark_names};
+pub use runner::{BenchmarkBuilder, run_benchmark};
 pub use types::{
     BenchError, BenchSample, BenchSpec, BuildConfig, BuildProfile, BuildResult, InitConfig,
     RunnerReport, Target,

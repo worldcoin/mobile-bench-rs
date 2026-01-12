@@ -7,6 +7,11 @@ use crate::types::{BenchError, InitConfig, Target};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use include_dir::{Dir, DirEntry, include_dir};
+
+const ANDROID_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../templates/android");
+const IOS_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../templates/ios");
+
 /// Template variable that can be replaced in template files
 #[derive(Debug, Clone)]
 pub struct TemplateVar {
@@ -32,24 +37,27 @@ pub struct TemplateVar {
 /// * `Err(BenchError)` - If generation fails
 pub fn generate_project(config: &InitConfig) -> Result<PathBuf, BenchError> {
     let output_dir = &config.output_dir;
+    let project_slug = sanitize_package_name(&config.project_name);
+    let project_pascal = to_pascal_case(&project_slug);
+    let bundle_prefix = format!("dev.world.{}", project_slug);
 
     // Create base directories
     fs::create_dir_all(output_dir)?;
 
     // Generate bench-mobile FFI wrapper crate
-    generate_bench_mobile_crate(output_dir, &config.project_name)?;
+    generate_bench_mobile_crate(output_dir, &project_slug)?;
 
     // Generate platform-specific projects
     match config.target {
         Target::Android => {
-            generate_android_project(output_dir, &config.project_name)?;
+            generate_android_project(output_dir, &project_slug)?;
         }
         Target::Ios => {
-            generate_ios_project(output_dir, &config.project_name)?;
+            generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix)?;
         }
         Target::Both => {
-            generate_android_project(output_dir, &config.project_name)?;
-            generate_ios_project(output_dir, &config.project_name)?;
+            generate_android_project(output_dir, &project_slug)?;
+            generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix)?;
         }
     }
 
@@ -67,12 +75,14 @@ pub fn generate_project(config: &InitConfig) -> Result<PathBuf, BenchError> {
 /// Generates the bench-mobile FFI wrapper crate
 fn generate_bench_mobile_crate(output_dir: &Path, project_name: &str) -> Result<(), BenchError> {
     let crate_dir = output_dir.join("bench-mobile");
-    fs::create_dir_all(&crate_dir.join("src"))?;
+    fs::create_dir_all(crate_dir.join("src"))?;
+
+    let crate_name = format!("{}-bench-mobile", project_name);
 
     // Generate Cargo.toml
     let cargo_toml = format!(
         r#"[package]
-name = "{}-bench-mobile"
+name = "{}"
 version = "0.1.0"
 edition = "2021"
 
@@ -80,27 +90,31 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-bench-sdk = "0.1"
+bench-sdk = {{ path = ".." }}
 uniffi = "0.28"
+{} = {{ path = ".." }}
 
-# Add your project's crate here
-# {} = {{ path = ".." }}
+[features]
+default = []
 
 [build-dependencies]
 uniffi = {{ version = "0.28", features = ["build"] }}
 "#,
-        project_name, project_name
+        crate_name, project_name
     );
 
     fs::write(crate_dir.join("Cargo.toml"), cargo_toml)?;
 
     // Generate src/lib.rs
-    let lib_rs = r#"//! Mobile FFI bindings for benchmarks
+    let lib_rs_template = r#"//! Mobile FFI bindings for benchmarks
 //!
 //! This crate provides the FFI boundary between Rust benchmarks and mobile
 //! platforms (Android/iOS). It uses UniFFI to generate type-safe bindings.
 
 use uniffi;
+
+// Ensure the user crate is linked so benchmark registrations are pulled in.
+extern crate {{USER_CRATE}} as _bench_user_crate;
 
 // Re-export bench-sdk types with UniFFI annotations
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -204,6 +218,13 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
 uniffi::setup_scaffolding!();
 "#;
 
+    let lib_rs = render_template(
+        lib_rs_template,
+        &[TemplateVar {
+            name: "USER_CRATE",
+            value: project_name.replace('-', "_"),
+        }],
+    );
     fs::write(crate_dir.join("src/lib.rs"), lib_rs)?;
 
     // Generate build.rs
@@ -218,20 +239,61 @@ uniffi::setup_scaffolding!();
 }
 
 /// Generates Android project structure
-fn generate_android_project(_output_dir: &Path, _project_name: &str) -> Result<(), BenchError> {
-    // TODO: Implement Android project generation
-    // This will extract templates from the embedded templates/ directory
-    // For now, return Ok as a placeholder
-    println!("Android project generation not yet implemented");
+fn generate_android_project(output_dir: &Path, project_slug: &str) -> Result<(), BenchError> {
+    let target_dir = output_dir.join("android");
+    let vars = vec![
+        TemplateVar {
+            name: "PACKAGE_NAME",
+            value: format!("dev.world.{}", project_slug),
+        },
+        TemplateVar {
+            name: "UNIFFI_NAMESPACE",
+            value: project_slug.replace('-', "_"),
+        },
+        TemplateVar {
+            name: "LIBRARY_NAME",
+            value: project_slug.replace('-', "_"),
+        },
+        TemplateVar {
+            name: "DEFAULT_FUNCTION",
+            value: "example_fibonacci".to_string(),
+        },
+    ];
+    render_dir(&ANDROID_TEMPLATES, Path::new(""), &target_dir, &vars)?;
     Ok(())
 }
 
 /// Generates iOS project structure
-fn generate_ios_project(_output_dir: &Path, _project_name: &str) -> Result<(), BenchError> {
-    // TODO: Implement iOS project generation
-    // This will extract templates from the embedded templates/ directory
-    // For now, return Ok as a placeholder
-    println!("iOS project generation not yet implemented");
+fn generate_ios_project(
+    output_dir: &Path,
+    project_slug: &str,
+    project_pascal: &str,
+    bundle_prefix: &str,
+) -> Result<(), BenchError> {
+    let target_dir = output_dir.join("ios");
+    let vars = vec![
+        TemplateVar {
+            name: "DEFAULT_FUNCTION",
+            value: "example_fibonacci".to_string(),
+        },
+        TemplateVar {
+            name: "PROJECT_NAME_PASCAL",
+            value: project_pascal.to_string(),
+        },
+        TemplateVar {
+            name: "BUNDLE_ID_PREFIX",
+            value: bundle_prefix.to_string(),
+        },
+        TemplateVar {
+            name: "BUNDLE_ID",
+            value: format!("{}.{}", bundle_prefix, project_slug),
+        },
+        TemplateVar {
+            name: "LIBRARY_NAME",
+            value: project_slug.replace('-', "_"),
+        },
+    ];
+    render_dir(&IOS_TEMPLATES, Path::new(""), &target_dir, &vars)?;
     Ok(())
 }
 
@@ -329,6 +391,90 @@ fn fibonacci(n: u32) -> u64 {
     fs::write(examples_dir.join("example.rs"), example_content)?;
 
     Ok(())
+}
+
+fn render_dir(
+    dir: &Dir,
+    prefix: &Path,
+    out_root: &Path,
+    vars: &[TemplateVar],
+) -> Result<(), BenchError> {
+    for entry in dir.entries() {
+        match entry {
+            DirEntry::Dir(sub) => {
+                // Skip cache directories
+                if sub.path().components().any(|c| c.as_os_str() == ".gradle") {
+                    continue;
+                }
+                let next_prefix = prefix.join(sub.path());
+                render_dir(sub, &next_prefix, out_root, vars)?;
+            }
+            DirEntry::File(file) => {
+                if file.path().components().any(|c| c.as_os_str() == ".gradle") {
+                    continue;
+                }
+                let mut relative = prefix.join(file.path());
+                let mut contents = file.contents().to_vec();
+                if let Some(ext) = relative.extension()
+                    && ext == "template"
+                {
+                    relative.set_extension("");
+                    let rendered = render_template(
+                        std::str::from_utf8(&contents).map_err(|e| {
+                            BenchError::Build(format!(
+                                "invalid UTF-8 in template {:?}: {}",
+                                file.path(),
+                                e
+                            ))
+                        })?,
+                        vars,
+                    );
+                    contents = rendered.into_bytes();
+                }
+                let out_path = out_root.join(relative);
+                if let Some(parent) = out_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&out_path, contents)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_template(input: &str, vars: &[TemplateVar]) -> String {
+    let mut output = input.to_string();
+    for var in vars {
+        output = output.replace(&format!("{{{{{}}}}}", var.name), &var.value);
+    }
+    output
+}
+
+fn sanitize_package_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .replace("--", "-")
+}
+
+fn to_pascal_case(input: &str) -> String {
+    input
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let mut chars = s.chars();
+            let first = chars.next().unwrap().to_ascii_uppercase();
+            let rest: String = chars.map(|c| c.to_ascii_lowercase()).collect();
+            format!("{}{}", first, rest)
+        })
+        .collect::<String>()
 }
 
 #[cfg(test)]

@@ -24,6 +24,23 @@ fi
 
 pushd "${ROOT_DIR}" >/dev/null
 ./scripts/build-android.sh
+ABI="${UNIFFI_ANDROID_ABI:-arm64-v8a}"
+case "${ABI}" in
+  arm64-v8a)
+    LIB_PATH="${ROOT_DIR}/target/android/aarch64-linux-android/arm64-v8a/libsample_fns.so"
+    ;;
+  x86_64)
+    LIB_PATH="${ROOT_DIR}/target/android/x86_64-linux-android/x86_64/libsample_fns.so"
+    ;;
+  armeabi-v7a)
+    LIB_PATH="${ROOT_DIR}/target/android/armv7-linux-androideabi/armeabi-v7a/libsample_fns.so"
+    ;;
+  *)
+    echo "Unknown UNIFFI_ANDROID_ABI=${ABI}; expected arm64-v8a, x86_64, or armeabi-v7a" >&2
+    exit 1
+    ;;
+esac
+UNIFFI_LIBRARY_PATH="${LIB_PATH}" ./scripts/generate-bindings.sh
 ./scripts/sync-android-libs.sh
 popd >/dev/null
 

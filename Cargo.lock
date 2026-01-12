@@ -147,6 +147,7 @@ dependencies = [
  "bench-sdk",
  "clap",
  "dotenvy",
+ "inventory",
  "reqwest",
  "sample-fns",
  "serde",

@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
 use std::time::{Duration, Instant};
 
 use browserstack::{BrowserStackAuth, BrowserStackClient};
@@ -329,7 +328,8 @@ fn main() -> Result<()> {
                         RemoteRun::Android { build_id, .. } => build_id,
                         RemoteRun::Ios { build_id, .. } => build_id,
                     };
-                    let creds = resolve_browserstack_credentials(summary.spec.browserstack.as_ref())?;
+                    let creds =
+                        resolve_browserstack_credentials(summary.spec.browserstack.as_ref())?;
                     let client = BrowserStackClient::new(
                         BrowserStackAuth {
                             username: creds.username,
@@ -529,12 +529,13 @@ fn fetch_browserstack_artifacts(
                 println!("Skipping download for {key}: {err}");
                 continue;
             }
-            if key.contains("device_log") || key.contains("instrumentation_log") || key.contains("app_log") {
-                if let Ok(contents) = fs::read_to_string(&dest) {
-                    if let Some(parsed) = extract_bench_json(&contents) {
-                        bench_report = Some(parsed);
-                    }
-                }
+            if (key.contains("device_log")
+                || key.contains("instrumentation_log")
+                || key.contains("app_log"))
+                && let Ok(contents) = fs::read_to_string(&dest)
+                && let Some(parsed) = extract_bench_json(&contents)
+            {
+                bench_report = Some(parsed);
             }
         }
 
@@ -608,14 +609,14 @@ fn extract_session_ids(value: &Value) -> Vec<String> {
             }
         }
     }
-    if ids.is_empty() {
-        if let Some(devices) = value.get("devices").and_then(|val| val.as_array()) {
-            for device in devices {
-                if let Some(sessions) = device.get("sessions").and_then(|val| val.as_array()) {
-                    for entry in sessions {
-                        if let Some(id) = entry.get("id").and_then(|val| val.as_str()) {
-                            ids.push(id.to_string());
-                        }
+    if ids.is_empty()
+        && let Some(devices) = value.get("devices").and_then(|val| val.as_array())
+    {
+        for device in devices {
+            if let Some(sessions) = device.get("sessions").and_then(|val| val.as_array()) {
+                for entry in sessions {
+                    if let Some(id) = entry.get("id").and_then(|val| val.as_str()) {
+                        ids.push(id.to_string());
                     }
                 }
             }
@@ -639,10 +640,10 @@ fn extract_url_fields_recursive(value: &Value, prefix: &str, out: &mut Vec<(Stri
                 } else {
                     format!("{}.{}", prefix, key)
                 };
-                if let Value::String(url) = val {
-                    if url.starts_with("http") || url.starts_with("bs://") {
-                        out.push((next.clone(), url.clone()));
-                    }
+                if let Value::String(url) = val
+                    && (url.starts_with("http") || url.starts_with("bs://"))
+                {
+                    out.push((next.clone(), url.clone()));
                 }
                 extract_url_fields_recursive(val, &next, out);
             }
@@ -765,12 +766,24 @@ fn load_device_matrix(path: &Path) -> Result<DeviceMatrix> {
 
 fn run_ios_build() -> Result<(PathBuf, PathBuf)> {
     let root = repo_root()?;
-    run_cmd(ProcessCommand::new(root.join("scripts/build-ios.sh")).current_dir(&root))?;
-
-    Ok((
-        root.join("target/ios/sample_fns.xcframework"),
-        root.join("target/ios/include/sample_fns.h"),
-    ))
+    let crate_name =
+        detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
+    let builder = bench_sdk::builders::IosBuilder::new(&root, crate_name).verbose(true);
+    let cfg = bench_sdk::BuildConfig {
+        target: bench_sdk::Target::Ios,
+        profile: bench_sdk::BuildProfile::Debug,
+        incremental: true,
+    };
+    let result = builder.build(&cfg)?;
+    let header = root.join("target/ios/include").join(format!(
+        "{}.h",
+        result
+            .app_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("module")
+    ));
+    Ok((result.app_path, header))
 }
 
 #[derive(Debug, Clone)]
@@ -881,26 +894,23 @@ fn resolve_browserstack_credentials(
             .transpose()?;
     }
 
-    if username.as_deref().map(str::is_empty).unwrap_or(true) {
-        if let Ok(val) = env::var("BROWSERSTACK_USERNAME") {
-            if !val.is_empty() {
-                username = Some(val);
-            }
-        }
+    if username.as_deref().map(str::is_empty).unwrap_or(true)
+        && let Ok(val) = env::var("BROWSERSTACK_USERNAME")
+        && !val.is_empty()
+    {
+        username = Some(val);
     }
-    if access_key.as_deref().map(str::is_empty).unwrap_or(true) {
-        if let Ok(val) = env::var("BROWSERSTACK_ACCESS_KEY") {
-            if !val.is_empty() {
-                access_key = Some(val);
-            }
-        }
+    if access_key.as_deref().map(str::is_empty).unwrap_or(true)
+        && let Ok(val) = env::var("BROWSERSTACK_ACCESS_KEY")
+        && !val.is_empty()
+    {
+        access_key = Some(val);
     }
-    if project.is_none() {
-        if let Ok(val) = env::var("BROWSERSTACK_PROJECT") {
-            if !val.is_empty() {
-                project = Some(val);
-            }
-        }
+    if project.is_none()
+        && let Ok(val) = env::var("BROWSERSTACK_PROJECT")
+        && !val.is_empty()
+    {
+        project = Some(val);
     }
 
     let username = username.filter(|s| !s.is_empty()).ok_or_else(|| {
@@ -927,14 +937,14 @@ fn expand_env_var(raw: &str) -> Result<String> {
 }
 
 fn run_local_smoke(spec: &RunSpec) -> Result<Value> {
-    let bench_spec = sample_fns::BenchSpec {
+    let bench_spec = bench_sdk::BenchSpec {
         name: spec.function.clone(),
         iterations: spec.iterations,
         warmup: spec.warmup,
     };
 
-    let report = sample_fns::run_benchmark(bench_spec)
-        .map_err(|e| anyhow!("benchmark failed: {:?}", e))?;
+    let report =
+        bench_sdk::run_benchmark(bench_spec).map_err(|e| anyhow!("benchmark failed: {:?}", e))?;
 
     serde_json::to_value(&report).context("serializing benchmark report")
 }
@@ -972,32 +982,19 @@ fn write_summary(summary: &RunSummary, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-fn run_android_build(ndk_home: &str) -> Result<PathBuf> {
+fn run_android_build(_ndk_home: &str) -> Result<PathBuf> {
     let root = repo_root()?;
-    run_cmd(
-        ProcessCommand::new(root.join("scripts/build-android.sh"))
-            .env("ANDROID_NDK_HOME", ndk_home)
-            .current_dir(&root),
-    )?;
-    run_cmd(
-        ProcessCommand::new(root.join("scripts/sync-android-libs.sh"))
-            .env("ANDROID_NDK_HOME", ndk_home)
-            .current_dir(&root),
-    )?;
-    run_cmd(
-        ProcessCommand::new(root.join("android/gradlew"))
-            .arg(":app:assembleDebug")
-            .current_dir(root.join("android")),
-    )?;
+    let crate_name =
+        detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
 
-    // Also build the androidTest (Espresso) test APK so it can be uploaded as the test suite.
-    run_cmd(
-        ProcessCommand::new(root.join("android/gradlew"))
-            .arg(":app:assembleAndroidTest")
-            .current_dir(root.join("android")),
-    )?;
-
-    Ok(root.join("android/app/build/outputs/apk/debug/app-debug.apk"))
+    let cfg = bench_sdk::BuildConfig {
+        target: bench_sdk::Target::Android,
+        profile: bench_sdk::BuildProfile::Debug,
+        incremental: true,
+    };
+    let builder = bench_sdk::builders::AndroidBuilder::new(&root, crate_name).verbose(true);
+    let result = builder.build(&cfg)?;
+    Ok(result.app_path)
 }
 
 fn load_dotenv() {
@@ -1007,22 +1004,13 @@ fn load_dotenv() {
     }
 }
 
-fn run_cmd(cmd: &mut ProcessCommand) -> Result<()> {
-    let desc = format!("{:?}", cmd);
-    let status = cmd.status().with_context(|| format!("running {desc}"))?;
-    if !status.success() {
-        bail!("command failed: {desc}");
-    }
-    Ok(())
-}
-
 fn repo_root() -> Result<PathBuf> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .context("resolving repo root")?;
-    Ok(path)
+    // Prefer the build-time repo root but fall back to the current directory for installed binaries.
+    let compiled = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    if let Ok(path) = compiled.canonicalize() {
+        return Ok(path);
+    }
+    std::env::current_dir().context("resolving repo root from current directory")
 }
 
 fn ensure_can_write(path: &Path) -> Result<()> {
@@ -1061,8 +1049,7 @@ fn cmd_init_sdk(
         generate_examples,
     };
 
-    bench_sdk::codegen::generate_project(&config)
-        .context("Failed to generate project")?;
+    bench_sdk::codegen::generate_project(&config).context("Failed to generate project")?;
 
     println!("\n✓ Project initialized successfully!");
     println!("\nNext steps:");
@@ -1080,7 +1067,8 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
     println!("  Profile: {}", if release { "release" } else { "debug" });
 
     let project_root = std::env::current_dir().context("Failed to get current directory")?;
-    let crate_name = "bench-mobile"; // Default name generated by init
+    let crate_name = detect_bench_mobile_crate_name(&project_root)
+        .unwrap_or_else(|_| "bench-mobile".to_string()); // Fallback for legacy layouts
 
     let build_config = bench_sdk::BuildConfig {
         target: target.into(),
@@ -1094,14 +1082,15 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
 
     match target {
         SdkTarget::Android => {
-            let builder = bench_sdk::builders::AndroidBuilder::new(&project_root, crate_name)
-                .verbose(true);
+            let builder =
+                bench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
+                    .verbose(true);
             let result = builder.build(&build_config)?;
             println!("\n✓ Android build completed!");
             println!("  APK: {:?}", result.app_path);
         }
         SdkTarget::Ios => {
-            let builder = bench_sdk::builders::IosBuilder::new(&project_root, crate_name)
+            let builder = bench_sdk::builders::IosBuilder::new(&project_root, crate_name.clone())
                 .verbose(true);
             let result = builder.build(&build_config)?;
             println!("\n✓ iOS build completed!");
@@ -1109,15 +1098,16 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
         }
         SdkTarget::Both => {
             // Build Android
-            let android_builder = bench_sdk::builders::AndroidBuilder::new(&project_root, crate_name)
-                .verbose(true);
+            let android_builder =
+                bench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
+                    .verbose(true);
             let android_result = android_builder.build(&build_config)?;
             println!("\n✓ Android build completed!");
             println!("  APK: {:?}", android_result.app_path);
 
             // Build iOS
-            let ios_builder = bench_sdk::builders::IosBuilder::new(&project_root, crate_name)
-                .verbose(true);
+            let ios_builder =
+                bench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
             let ios_result = ios_builder.build(&build_config)?;
             println!("\n✓ iOS build completed!");
             println!("  Framework: {:?}", ios_result.app_path);
@@ -1125,6 +1115,20 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn detect_bench_mobile_crate_name(root: &Path) -> Result<String> {
+    let path = root.join("bench-mobile").join("Cargo.toml");
+    let contents = fs::read_to_string(&path)
+        .with_context(|| format!("reading bench-mobile manifest at {:?}", path))?;
+    let value: toml::Value = toml::from_str(&contents)
+        .with_context(|| format!("parsing bench-mobile manifest {:?}", path))?;
+    let name = value
+        .get("package")
+        .and_then(|pkg| pkg.get("name"))
+        .and_then(|n| n.as_str())
+        .ok_or_else(|| anyhow!("bench-mobile package.name missing in {:?}", path))?;
+    Ok(name.to_string())
 }
 
 /// List all discovered benchmark functions (Phase 1 MVP)
@@ -1153,6 +1157,12 @@ fn cmd_list() -> Result<()> {
 mod tests {
     use super::*;
 
+    // Register a lightweight benchmark for tests so the inventory contains at least one entry.
+    #[bench_sdk::benchmark]
+    fn noop_benchmark() {
+        std::hint::black_box(1u8);
+    }
+
     #[test]
     fn resolves_cli_spec() {
         let spec = resolve_run_spec(
@@ -1178,7 +1188,7 @@ mod tests {
     fn local_smoke_produces_samples() {
         let spec = RunSpec {
             target: MobileTarget::Android,
-            function: "sample_fns::fibonacci".into(),
+            function: "noop_benchmark".into(),
             iterations: 3,
             warmup: 1,
             devices: vec![],
@@ -1187,7 +1197,7 @@ mod tests {
         };
         let report = run_local_smoke(&spec).expect("local harness");
         assert!(report["samples"].is_array());
-        assert_eq!(report["spec"]["name"], "sample_fns::fibonacci");
+        assert_eq!(report["spec"]["name"], "noop_benchmark");
     }
 
     #[test]

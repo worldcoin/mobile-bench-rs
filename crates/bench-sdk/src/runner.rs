@@ -37,13 +37,12 @@ use bench_runner::run_closure;
 /// ```
 pub fn run_benchmark(spec: BenchSpec) -> Result<RunnerReport, BenchError> {
     // Find the benchmark function in the registry
-    let bench_fn = find_benchmark(&spec.name)
-        .ok_or_else(|| BenchError::UnknownFunction(spec.name.clone()))?;
+    let bench_fn =
+        find_benchmark(&spec.name).ok_or_else(|| BenchError::UnknownFunction(spec.name.clone()))?;
 
     // Create a closure that invokes the registered function
-    let closure = || {
-        (bench_fn.invoke)(&[]).map_err(|e| bench_runner::BenchError::Execution(e.to_string()))
-    };
+    let closure =
+        || (bench_fn.invoke)(&[]).map_err(|e| bench_runner::BenchError::Execution(e.to_string()));
 
     // Run the benchmark using bench-runner's timing infrastructure
     let report = run_closure(spec, closure)?;
@@ -136,9 +135,7 @@ mod tests {
 
     #[test]
     fn test_builder_customization() {
-        let builder = BenchmarkBuilder::new("test_fn")
-            .iterations(50)
-            .warmup(5);
+        let builder = BenchmarkBuilder::new("test_fn").iterations(50).warmup(5);
         assert_eq!(builder.iterations, 50);
         assert_eq!(builder.warmup, 5);
     }

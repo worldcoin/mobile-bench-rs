@@ -7,8 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_JNILIBS="${ROOT_DIR}/android/app/src/main/jniLibs"
 LIB_NAME="${LIB_NAME:-sample_fns}"
-# JNA expects libuniffi_sample_fns.so, so we rename during copy
-TARGET_LIB_NAME="${TARGET_LIB_NAME:-uniffi_sample_fns}"
+TARGET_LIB_NAME="${TARGET_LIB_NAME:-sample_fns}"
 
 declare -A ABI_MAP=(
   ["aarch64-linux-android"]="arm64-v8a"
@@ -33,6 +32,10 @@ for TRIPLE in "${!ABI_MAP[@]}"; do
   fi
   mkdir -p "${DEST_DIR}"
   cp "${SRC}" "${DEST}"
+  # Keep a compat copy for older loaders that expect uniffi_ prefix.
+  if [[ "${TARGET_LIB_NAME}" == "sample_fns" ]]; then
+    cp "${SRC}" "${DEST_DIR}/libuniffi_sample_fns.so"
+  fi
   echo "Copied ${SRC} -> ${DEST}"
 done
 

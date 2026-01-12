@@ -91,9 +91,7 @@ pub fn find_benchmark(name: &str) -> Option<&'static BenchFunction> {
 /// }
 /// ```
 pub fn list_benchmark_names() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = inventory::iter::<BenchFunction>()
-        .map(|f| f.name)
-        .collect();
+    let mut names: Vec<&'static str> = inventory::iter::<BenchFunction>().map(|f| f.name).collect();
     names.sort();
     names
 }

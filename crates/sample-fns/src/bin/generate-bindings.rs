@@ -8,18 +8,31 @@ fn main() {
     let manifest_dir = Utf8PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let root_dir = manifest_dir.parent().unwrap().parent().unwrap();
 
-    // Build the library first to generate metadata
-    println!("Building library to generate UniFFI metadata...");
-    let target_dir = root_dir.join("target");
-    let lib_file = if cfg!(target_os = "macos") {
-        target_dir.join("debug/libsample_fns.dylib")
-    } else if cfg!(target_os = "linux") {
-        target_dir.join("debug/libsample_fns.so")
+    let lib_file = if let Ok(path) = env::var("UNIFFI_LIBRARY_PATH") {
+        println!("Using UniFFI library from UNIFFI_LIBRARY_PATH");
+        Utf8PathBuf::from(path)
     } else {
-        target_dir.join("debug/sample_fns.dll")
+        let profile = env::var("UNIFFI_PROFILE").unwrap_or_else(|_| "release".to_string());
+        println!("Building library to generate UniFFI metadata (profile={})...", profile);
+        let target_dir = root_dir.join("target").join(&profile);
+        let lib_name = if cfg!(target_os = "macos") {
+            "libsample_fns.dylib"
+        } else if cfg!(target_os = "linux") {
+            "libsample_fns.so"
+        } else {
+            "sample_fns.dll"
+        };
+        target_dir.join(lib_name)
     };
 
     println!("Using library: {:?}", lib_file);
+    if !lib_file.exists() {
+        eprintln!(
+            "UniFFI library not found at {:?}. Build it first or set UNIFFI_LIBRARY_PATH.",
+            lib_file
+        );
+        std::process::exit(1);
+    }
 
     // Generate Kotlin bindings
     let kotlin_out = root_dir.join("android/app/src/main/java");
@@ -34,7 +47,8 @@ fn main() {
         None, // config override path
         &kotlin_out,
         false, // try_format_code
-    ).unwrap();
+    )
+    .unwrap();
 
     println!("✓ Kotlin bindings generated");
 
@@ -51,7 +65,8 @@ fn main() {
         None, // config override path
         &swift_out,
         false, // try_format_code
-    ).unwrap();
+    )
+    .unwrap();
 
     println!("✓ Swift bindings generated");
 

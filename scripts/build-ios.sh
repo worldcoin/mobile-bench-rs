@@ -173,6 +173,16 @@ EOF
 
 echo "✓ iOS build complete. XCFramework created at: ${XCFRAMEWORK_PATH}"
 
+# Copy public header for CLI consumers (matches bench-cli expectation)
+INCLUDE_DIR="${OUTPUT_DIR}/include"
+mkdir -p "${INCLUDE_DIR}"
+if [[ -f "${UNIFFI_HEADER}" ]]; then
+  cp "${UNIFFI_HEADER}" "${INCLUDE_DIR}/sample_fns.h"
+else
+  echo "Error: UniFFI header still missing at ${UNIFFI_HEADER}" >&2
+  exit 1
+fi
+
 # Code-sign the xcframework (required for Xcode)
 echo "Signing xcframework..."
 codesign --force --deep --sign - "${XCFRAMEWORK_PATH}" 2>/dev/null || {

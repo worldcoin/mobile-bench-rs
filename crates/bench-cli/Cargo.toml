@@ -19,3 +19,4 @@ dotenvy = "0.15"
 
 [dev-dependencies]
 tempfile = "3"
+inventory = "0.3"

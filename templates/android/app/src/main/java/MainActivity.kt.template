@@ -25,7 +25,7 @@ class MainActivity : AppCompatActivity() {
         private const val SPEC_ASSET = "bench_spec.json"
 
         init {
-            System.loadLibrary("uniffi_{{LIBRARY_NAME}}")
+            System.loadLibrary("{{LIBRARY_NAME}}")
         }
     }
 
