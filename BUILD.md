@@ -19,10 +19,13 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustc --version
 cargo --version
 ```
+Download: https://www.rust-lang.org/tools/install
 
 ### Android
 ```bash
 # Install Android NDK via Android Studio or sdkmanager
+# Android Studio: https://developer.android.com/studio
+# Android NDK: https://developer.android.com/ndk/downloads
 # Set environment variable (add to ~/.zshrc or ~/.bashrc)
 export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
 
@@ -31,6 +34,11 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 
 # Install cargo-ndk
 cargo install cargo-ndk
+## cargo-ndk: https://github.com/bbqsrc/cargo-ndk
+
+# Install JDK 17+ (for Gradle; any distribution)
+# https://openjdk.org/install/
+# Note: Android Gradle Plugin (AGP) officially supports Java 17.
 
 # Verify NDK installation
 ls $ANDROID_NDK_HOME
@@ -39,15 +47,18 @@ ls $ANDROID_NDK_HOME
 ### iOS (macOS only)
 ```bash
 # Install Xcode from App Store
+# https://developer.apple.com/xcode/
 
 # Install command-line tools
 xcode-select --install
 
 # Install xcodegen
 brew install xcodegen
+## https://github.com/yonaskolb/XcodeGen
 
 # Install required Rust targets
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+## https://doc.rust-lang.org/rustup/targets.html
 
 # Verify installation
 xcodegen --version

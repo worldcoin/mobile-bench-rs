@@ -466,17 +466,20 @@ cargo run -p bench-cli -- run --config bench-config.toml
 
 ### Android
 
-- Android SDK/NDK (API level 24+)
+- Android Studio (SDK + NDK manager): https://developer.android.com/studio
+- Android NDK (API level 24+): https://developer.android.com/ndk/downloads
 - `ANDROID_NDK_HOME` environment variable set
-- `cargo-ndk` installed: `cargo install cargo-ndk`
+- `cargo-ndk` installed: `cargo install cargo-ndk` (https://github.com/bbqsrc/cargo-ndk)
+- JDK 17+ (for Gradle; any distribution): https://openjdk.org/install/
+  - Note: Android Gradle Plugin (AGP) officially supports Java 17.
 - For local testing: Android emulator or physical device
 - For BrowserStack: BrowserStack account and credentials
 
 ### iOS
 
-- macOS with Xcode command-line tools
-- Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`
-- `xcodegen` installed: `brew install xcodegen`
+- macOS with Xcode command-line tools: https://developer.apple.com/xcode/
+- Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim` (https://doc.rust-lang.org/rustup/targets.html)
+- `xcodegen` installed (optional): https://github.com/yonaskolb/XcodeGen
 - For local testing: iOS Simulator or physical device (requires code signing)
 - For BrowserStack: BrowserStack account and credentials
 

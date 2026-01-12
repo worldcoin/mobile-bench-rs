@@ -13,7 +13,8 @@ Install the following tools (per platform):
   - Android Studio (SDK + NDK manager): https://developer.android.com/studio
   - Android NDK (API 24+): https://developer.android.com/ndk/downloads
   - `cargo-ndk` (`cargo install cargo-ndk`): https://github.com/bbqsrc/cargo-ndk
-  - JDK 17 (for Gradle): https://adoptium.net/temurin/releases/?version=17
+  - JDK 17+ (for Gradle; any distribution): https://openjdk.org/install/
+    - Note: Android Gradle Plugin (AGP) officially supports Java 17.
 - iOS (macOS only):
   - Xcode + Command Line Tools: https://developer.apple.com/xcode/
   - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
