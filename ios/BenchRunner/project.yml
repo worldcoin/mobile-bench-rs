@@ -1,0 +1,37 @@
+name: BenchRunner
+options:
+  bundleIdPrefix: dev.world
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+targets:
+  BenchRunner:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: BenchRunner
+    resources:
+      - path: BenchRunner/Resources
+        optional: true
+      - path: ../../target/mobile-spec/ios
+        optional: true
+    info:
+      path: BenchRunner/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.world.bench
+        SWIFT_OBJC_BRIDGING_HEADER: BenchRunner/BenchRunner-Bridging-Header.h
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/BenchRunner/Generated"
+    dependencies:
+      - framework: ../../target/ios/sample_fns.xcframework
+        embed: true
+        link: true
+  BenchRunnerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: BenchRunnerUITests
+    dependencies:
+      - target: BenchRunner
