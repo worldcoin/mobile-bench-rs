@@ -4,6 +4,8 @@
 
 > **Phase 1 MVP Complete!** This project has been transformed into an importable library crate (`bench-sdk`) that can be published to crates.io.
 
+New integrators should start here: `BENCH_SDK_INTEGRATION.md`.
+
 ## 🚀 What's New in Phase 1
 
 ### Library-First Design

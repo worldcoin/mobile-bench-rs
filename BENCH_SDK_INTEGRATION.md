@@ -3,7 +3,21 @@
 This guide shows how to integrate `bench-sdk` into an existing Rust project, run local
 mobile benchmarks, and then run them on BrowserStack.
 
-## 1) Add bench-sdk to your crate
+## 1) Prerequisites
+
+Install the following tools (per platform):
+
+- Rust toolchain (stable) + `rustup`
+- Android:
+  - Android SDK + NDK (API 24+)
+  - `cargo-ndk` (`cargo install cargo-ndk`)
+  - JDK 17 (for Gradle)
+- iOS (macOS only):
+  - Xcode + Command Line Tools
+  - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
+  - `xcodegen` (optional, if you plan to regenerate the Xcode project)
+
+## 2) Add bench-sdk to your crate
 
 In your project's `Cargo.toml`:
 
@@ -12,7 +26,7 @@ In your project's `Cargo.toml`:
 bench-sdk = "0.1"
 ```
 
-## 2) Annotate benchmark functions
+## 3) Annotate benchmark functions
 
 Add `#[bench_sdk::benchmark]` to any function you want to run on devices.
 
@@ -31,7 +45,7 @@ Benchmarks are identified by name at runtime. You can call them by:
 - Fully-qualified path (e.g., `my_crate::checksum_bench`)
 - Or suffix match (e.g., `checksum_bench`)
 
-## 3) Scaffold mobile projects
+## 4) Scaffold mobile projects
 
 From your repo root, create a mobile harness with the CLI:
 
@@ -44,14 +58,23 @@ This generates:
 - `android/` and `ios/` app templates
 - `bench-sdk.toml` configuration
 
-## 4) Local Android testing
+## 5) Local Android testing
 
 Build the Android app with ABI-aware bindings (emulator uses x86_64):
+
+If you are using this repo directly, you can use the helper scripts:
 
 ```bash
 UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n dev.world.bench/.MainActivity
+```
+
+If you are integrating into another repo, the `init-sdk` command does **not** copy
+the `scripts/` directory. In that case, prefer the CLI build:
+
+```bash
+cargo run -p bench-cli -- build --target android
 ```
 
 To override benchmark parameters:
@@ -63,18 +86,28 @@ adb shell am start -n dev.world.bench/.MainActivity \
   --ei bench_warmup 5
 ```
 
-## 5) Local iOS testing
+## 6) Local iOS testing
+
+If you are using this repo directly:
 
 ```bash
 ./scripts/build-ios.sh
 open ios/BenchRunner/BenchRunner.xcodeproj
 ```
 
+If you are integrating into another repo, use:
+
+```bash
+cargo run -p bench-cli -- build --target ios
+```
+
 Run the app in Xcode. It will read `bench_spec.json` from the bundle or use defaults.
 
-## 6) BrowserStack (Android Espresso)
+## 7) BrowserStack (Android Espresso)
 
 Build APK + test APK:
+
+If you have the scripts available:
 
 ```bash
 UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
@@ -94,7 +127,7 @@ cargo run -p bench-cli -- run \
   --devices "Pixel 7-13.0"
 ```
 
-## 7) BrowserStack (iOS XCUITest)
+## 8) BrowserStack (iOS XCUITest)
 
 Build iOS artifacts, then provide the app and test suite:
 
