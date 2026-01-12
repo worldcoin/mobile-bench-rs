@@ -1,0 +1,29 @@
+[package]
+name = "sample-fns"
+version.workspace = true
+edition = "2021"  # UniFFI 0.28 generates code for edition 2021
+license.workspace = true
+
+[lib]
+name = "sample_fns"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bench-runner = { path = "../bench-runner" }
+uniffi.workspace = true
+thiserror.workspace = true
+uniffi_bindgen = { version = "0.28", optional = true }
+camino = { version = "1.1", optional = true }
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
+
+[[bin]]
+name = "generate-bindings"
+path = "src/bin/generate-bindings.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi_bindgen", "camino"]

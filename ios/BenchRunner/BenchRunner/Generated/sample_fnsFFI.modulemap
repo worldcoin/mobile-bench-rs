@@ -1,0 +1,4 @@
+module sample_fnsFFI {
+    header "sample_fnsFFI.h"
+    export *
+}
