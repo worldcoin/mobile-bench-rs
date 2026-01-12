@@ -43,7 +43,7 @@ The CLI supports both Espresso (Android) and XCUITest (iOS) test automation fram
 For comprehensive testing instructions, see **`TESTING.md`** which includes:
 - Prerequisites and setup
 - Host testing (cargo test, CLI demo)
-- Android testing (emulator, device, Android Studio)
+- Android testing (emulator, device, Android Studio; use `UNIFFI_ANDROID_ABI=x86_64` for default emulators)
 - iOS testing (simulator, device, Xcode)
 - Troubleshooting common issues
 - Advanced testing scenarios
@@ -230,7 +230,7 @@ Regenerate bindings after modifying FFI types in `crates/sample-fns/src/lib.rs`:
 cargo build -p sample-fns
 
 # Generate Kotlin + Swift bindings
-cargo run --bin generate-bindings --features bindgen
+./scripts/generate-bindings.sh
 ```
 
 Generated files (committed to git):
@@ -264,7 +264,7 @@ The workflow supports manual dispatch with platform selection:
 1. Add function to `crates/sample-fns/src/lib.rs`
 2. Add function dispatch to `run_benchmark()` match statement (e.g., `"my_func" => run_closure(spec, || my_func())`)
 3. If adding new FFI types, add proc macro attributes (`#[derive(uniffi::Record)]`, `#[uniffi::export]`, etc.)
-4. Regenerate bindings: `cargo build -p sample-fns && cargo run --bin generate-bindings --features bindgen`
+4. Regenerate bindings: `./scripts/generate-bindings.sh`
 5. Rebuild native libraries: `scripts/build-android.sh` and/or `scripts/build-ios.sh`
 6. Mobile apps will automatically use the updated bindings
 

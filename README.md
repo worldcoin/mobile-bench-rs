@@ -120,7 +120,7 @@ After modifying FFI types in `crates/sample-fns/src/lib.rs`:
 cargo build -p sample-fns
 
 # Generate Kotlin + Swift bindings
-cargo run --bin generate-bindings --features bindgen
+./scripts/generate-bindings.sh
 ```
 
 Generated files (committed to git for reproducibility):
@@ -155,7 +155,8 @@ Test your benchmarks locally using Android Studio or Xcode. This is the fastest 
 
 ```bash
 # Build everything and create APK
-scripts/build-android-app.sh
+# Set UNIFFI_ANDROID_ABI for emulator ABI (x86_64 for default Android Studio emulators).
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh
 
 # Install and launch on emulator/device
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -165,16 +166,13 @@ adb shell am start -n dev.world.bench/.MainActivity
 #### Step-by-Step
 
 ```bash
-# 1. Build Rust libraries for all Android ABIs (arm64-v8a, armeabi-v7a, x86_64)
-scripts/build-android.sh
+# 1. Build Rust libraries + regenerate bindings (ABI-aware) + sync jniLibs
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh
 
-# 2. Sync .so files into Android project structure (jniLibs)
-scripts/sync-android-libs.sh
-
-# 3. Build the APK with Gradle
+# 2. Build the APK with Gradle
 cd android && ./gradlew :app:assembleDebug
 
-# 4. Install and launch
+# 3. Install and launch
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n dev.world.bench/.MainActivity
 ```
@@ -272,7 +270,7 @@ The build process is **streamlined** with UniFFI proc macros:
 - ✅ No need to run `cbindgen` manually
 - ✅ UniFFI headers (`sample_fnsFFI.h`) are automatically generated during `build-ios.sh`
 - ✅ Kotlin/Swift bindings are already committed to git
-- ✅ Only regenerate bindings if you change FFI types in Rust (via `cargo run --bin generate-bindings --features bindgen`)
+- ✅ Only regenerate bindings if you change FFI types in Rust (via `./scripts/generate-bindings.sh`)
 - ✅ Apps show formatted output with statistics (min/max/avg in microseconds)
 - ✅ Type-safe error handling (no more string parsing)
 
@@ -298,7 +296,7 @@ Test your benchmarks on real devices in the cloud using BrowserStack App Automat
 
 ```bash
 # Build Android app APK and test suite
-./scripts/build-android-app.sh
+UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
 
 # Build test APK (if needed)
 cd android

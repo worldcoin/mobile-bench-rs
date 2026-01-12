@@ -80,7 +80,8 @@ cargo run -p bench-cli -- demo --iterations 5 --warmup 1
 
 ```bash
 # Build everything and create APK
-scripts/build-android-app.sh
+# For Android Studio emulators, use UNIFFI_ANDROID_ABI=x86_64
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh
 
 # Install on connected device/emulator
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -92,20 +93,10 @@ adb shell am start -n dev.world.bench/.MainActivity
 ### Method 2: Step-by-Step Build
 
 ```bash
-# Step 1: Build Rust libraries for Android
-scripts/build-android.sh
+# Step 1: Build Rust libraries + bindings (ABI-aware)
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh
 
-# This compiles for three ABIs:
-# - aarch64-linux-android (arm64-v8a)
-# - armv7-linux-androideabi (armeabi-v7a)
-# - x86_64-linux-android (x86_64, for emulator)
-
-# Step 2: Copy .so files to Android project
-scripts/sync-android-libs.sh
-
-# This copies from target/android/{abi}/release/ to android/app/src/main/jniLibs/{abi}/
-
-# Step 3: Build APK
+# Step 2: Build APK
 cd android
 ./gradlew :app:assembleDebug
 cd ..
@@ -442,10 +433,10 @@ codesign --force --deep --sign - target/ios/sample_fns.xcframework
 ```bash
 # Solution: Rebuild library and regenerate bindings
 cargo build -p sample-fns
-cargo run --bin generate-bindings --features bindgen
+./scripts/generate-bindings.sh
 
 # Then rebuild mobile apps
-scripts/build-android-app.sh  # For Android
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh  # For Android
 scripts/build-ios.sh          # For iOS (includes signing)
 ```
 

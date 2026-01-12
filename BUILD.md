@@ -59,7 +59,8 @@ xcodebuild -version
 ### Quick Start (Recommended)
 ```bash
 # Build everything and create APK in one command
-./scripts/build-android-app.sh
+# For Android Studio emulators, use UNIFFI_ANDROID_ABI=x86_64
+UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
 
 # Install on connected device or emulator
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -70,9 +71,10 @@ adb shell am start -n dev.world.bench/.MainActivity
 
 ### Step-by-Step Build
 
-#### Step 1: Build Rust Libraries
+#### Step 1: Build Rust Libraries + Bindings
 ```bash
-./scripts/build-android.sh
+# ABI-aware binding generation to avoid UniFFI checksum mismatches.
+UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
 ```
 
 This compiles Rust code for three Android ABIs:
@@ -82,14 +84,9 @@ This compiles Rust code for three Android ABIs:
 
 Output: `target/android/{abi}/release/libsample_fns.so`
 
-#### Step 2: Sync Libraries to Android Project
-```bash
-./scripts/sync-android-libs.sh
-```
-
 This copies `.so` files to `android/app/src/main/jniLibs/{abi}/libsample_fns.so` where Android's build system expects them.
 
-#### Step 3: Build APK with Gradle
+#### Step 2: Build APK with Gradle
 ```bash
 cd android
 ./gradlew :app:assembleDebug
@@ -98,7 +95,7 @@ cd ..
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk`
 
-#### Step 4: Install and Run
+#### Step 3: Install and Run
 ```bash
 # Install
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -392,7 +389,7 @@ If you modify FFI types in Rust (`crates/sample-fns/src/lib.rs`):
 cargo build -p sample-fns
 
 # Regenerate bindings from proc macros
-cargo run --bin generate-bindings --features bindgen
+./scripts/generate-bindings.sh
 
 # This updates:
 # - android/app/src/main/java/uniffi/sample_fns/sample_fns.kt (Kotlin)
@@ -400,7 +397,7 @@ cargo run --bin generate-bindings --features bindgen
 # - ios/BenchRunner/BenchRunner/Generated/sample_fnsFFI.h (C header)
 
 # Then rebuild mobile apps
-./scripts/build-android-app.sh  # Android
+UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh  # Android
 ./scripts/build-ios.sh          # iOS (includes automatic code signing)
 ```
 
