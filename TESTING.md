@@ -436,16 +436,17 @@ codesign --force --deep --sign - target/ios/sample_fns.xcframework
 - Trust developer certificate on device: Settings → General → VPN & Device Management
 - The xcframework must be signed: `codesign --force --deep --sign - target/ios/sample_fns.xcframework`
 
-### UniFFI Bindings
+### UniFFI Bindings (Proc Macros)
 
-**Problem**: Changes to `sample_fns.udl` not reflected in mobile apps
+**Problem**: Changes to FFI types in `crates/sample-fns/src/lib.rs` not reflected in mobile apps
 ```bash
-# Solution: Regenerate bindings
+# Solution: Rebuild library and regenerate bindings
+cargo build -p sample-fns
 cargo run --bin generate-bindings --features bindgen
 
 # Then rebuild mobile apps
 scripts/build-android-app.sh  # For Android
-scripts/build-ios.sh          # For iOS
+scripts/build-ios.sh          # For iOS (includes signing)
 ```
 
 **Problem**: "error: cannot find type `BenchSpec` in the crate root"
@@ -464,7 +465,7 @@ cargo test --all
 
 # Common causes:
 # - Missing serde dependency (check Cargo.toml)
-# - API signature changes (update UDL and regenerate bindings)
+# - API signature changes (update FFI types with proc macros and regenerate bindings)
 # - Test assertions need updating
 ```
 
