@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/bench-cli",
+    "crates/bench-runner",
+    "crates/sample-fns",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+uniffi = "0.28"

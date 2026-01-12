@@ -1,0 +1,26 @@
+namespace sample_fns {
+    [Throws=BenchError]
+    BenchReport run_benchmark(BenchSpec spec);
+};
+
+dictionary BenchSpec {
+    string name;
+    u32 iterations;
+    u32 warmup;
+};
+
+dictionary BenchSample {
+    u64 duration_ns;
+};
+
+dictionary BenchReport {
+    BenchSpec spec;
+    sequence<BenchSample> samples;
+};
+
+[Error]
+enum BenchError {
+    "InvalidIterations",
+    "UnknownFunction",
+    "ExecutionFailed",
+};

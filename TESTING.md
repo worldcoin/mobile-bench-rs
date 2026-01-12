@@ -1,0 +1,564 @@
+# Testing Guide
+
+This document provides comprehensive testing instructions for mobile-bench-rs.
+
+> **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
+
+## Table of Contents
+- [Prerequisites](#prerequisites)
+- [Host Testing](#host-testing)
+- [Android Testing](#android-testing)
+- [iOS Testing](#ios-testing)
+- [Troubleshooting](#troubleshooting)
+
+## Prerequisites
+
+### Rust
+```bash
+# Install Rust if not already installed
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install required targets
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+# Install cargo-ndk for Android builds
+cargo install cargo-ndk
+```
+
+### Android
+```bash
+# Install Android SDK and NDK (via Android Studio or command line)
+# Set environment variable (add to ~/.zshrc or ~/.bashrc)
+export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
+
+# Verify NDK is available
+ls $ANDROID_NDK_HOME
+```
+
+### iOS (macOS only)
+```bash
+# Install Xcode from App Store
+# Install command-line tools
+xcode-select --install
+
+# Install xcodegen
+brew install xcodegen
+```
+
+## Host Testing
+
+### Unit Tests
+Run all Rust tests:
+```bash
+cargo test --all
+```
+
+Expected output: All tests pass (11 tests total as of UniFFI migration).
+
+### CLI Demo
+Test the benchmarking harness without mobile builds:
+```bash
+cargo run -p bench-cli -- demo --iterations 10 --warmup 2
+```
+
+Expected output: JSON report with timing samples for `fibonacci` function.
+
+### Testing Different Functions
+```bash
+# Test fibonacci (default)
+cargo run -p bench-cli -- demo --iterations 5 --warmup 1
+
+# Currently supports:
+# - fibonacci / fib / sample_fns::fibonacci
+# - checksum / checksum_1k / sample_fns::checksum
+```
+
+## Android Testing
+
+### Method 1: Quick All-in-One Build
+
+```bash
+# Build everything and create APK
+scripts/build-android-app.sh
+
+# Install on connected device/emulator
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+
+# Launch app
+adb shell am start -n dev.world.bench/.MainActivity
+```
+
+### Method 2: Step-by-Step Build
+
+```bash
+# Step 1: Build Rust libraries for Android
+scripts/build-android.sh
+
+# This compiles for three ABIs:
+# - aarch64-linux-android (arm64-v8a)
+# - armv7-linux-androideabi (armeabi-v7a)
+# - x86_64-linux-android (x86_64, for emulator)
+
+# Step 2: Copy .so files to Android project
+scripts/sync-android-libs.sh
+
+# This copies from target/android/{abi}/release/ to android/app/src/main/jniLibs/{abi}/
+
+# Step 3: Build APK
+cd android
+./gradlew :app:assembleDebug
+cd ..
+
+# Step 4: Install and launch
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n dev.world.bench/.MainActivity
+```
+
+### Method 3: Using Android Studio
+
+1. Build Rust libraries first:
+   ```bash
+   scripts/build-android.sh
+   scripts/sync-android-libs.sh
+   ```
+
+2. Open `android/` directory in Android Studio
+
+3. Let Gradle sync complete
+
+4. Click Run (green triangle) or Run → Run 'app'
+
+5. Select target device/emulator
+
+### Testing with Custom Parameters
+
+Launch with different benchmark configurations:
+
+```bash
+# Test checksum function with 30 iterations
+adb shell am start -n dev.world.bench/.MainActivity \
+  --es bench_function sample_fns::checksum \
+  --ei bench_iterations 30 \
+  --ei bench_warmup 5
+
+# Test fibonacci with minimal runs
+adb shell am start -n dev.world.bench/.MainActivity \
+  --es bench_function fibonacci \
+  --ei bench_iterations 5 \
+  --ei bench_warmup 1
+```
+
+Parameters:
+- `--es bench_function <string>`: Function name (fibonacci, checksum, sample_fns::fibonacci, etc.)
+- `--ei bench_iterations <int>`: Number of benchmark iterations
+- `--ei bench_warmup <int>`: Number of warmup iterations
+
+### Verifying Output
+
+Check logcat for detailed output:
+```bash
+adb logcat | grep -i bench
+```
+
+The app display should show:
+```
+=== Benchmark Results ===
+
+Function: sample_fns::fibonacci
+Iterations: 20
+Warmup: 3
+
+Samples (20):
+  1. 0.001 ms
+  2. 0.001 ms
+  ...
+
+Statistics:
+  Min: 0.001 ms
+  Max: 0.002 ms
+  Avg: 0.001 ms
+```
+
+## iOS Testing
+
+### Build and Run
+
+```bash
+# Step 1: Build Rust xcframework (includes automatic code signing)
+scripts/build-ios.sh
+
+# This script:
+# - Compiles Rust for aarch64-apple-ios (device) and aarch64-apple-ios-sim (simulator)
+# - Creates xcframework with proper structure:
+#   target/ios/sample_fns.xcframework/
+#     ├── Info.plist
+#     ├── ios-arm64/
+#     │   └── sample_fns.framework/
+#     │       ├── sample_fns (binary)
+#     │       ├── Headers/
+#     │       │   ├── sample_fnsFFI.h
+#     │       │   └── module.modulemap
+#     │       └── Info.plist
+#     └── ios-simulator-arm64/
+#         └── sample_fns.framework/
+#             ├── sample_fns (binary)
+#             ├── Headers/
+#             │   ├── sample_fnsFFI.h
+#             │   └── module.modulemap
+#             └── Info.plist
+# - Copies UniFFI-generated C headers into framework
+# - Creates module map for Swift to import C FFI
+# - Automatically code-signs the xcframework
+
+# Step 2: Generate Xcode project from project.yml
+cd ios/BenchRunner
+xcodegen generate
+
+# Step 3: Open in Xcode
+open BenchRunner.xcodeproj
+```
+
+In Xcode:
+1. Select a scheme: BenchRunner
+2. Select a destination: iPhone 15 (or any simulator)
+3. Click Run (⌘R) or Product → Run
+
+**Important Notes:**
+- The xcframework contains static libraries (`.a` archives), not dynamic frameworks
+- A bridging header (`BenchRunner-Bridging-Header.h`) is used to expose C FFI types to Swift
+- The UniFFI-generated Swift bindings (`sample_fns.swift`) are compiled directly into the app
+- No `import sample_fns` is needed - the types are available globally via the bridging header
+
+### Testing with Custom Parameters
+
+#### Method 1: Edit Scheme in Xcode
+
+1. Product → Scheme → Edit Scheme...
+2. Click "Run" in left sidebar
+3. Go to "Arguments" tab
+4. Click "Environment Variables" section
+5. Click "+" to add variables:
+   - Name: `BENCH_FUNCTION`, Value: `sample_fns::checksum`
+   - Name: `BENCH_ITERATIONS`, Value: `30`
+   - Name: `BENCH_WARMUP`, Value: `5`
+6. Click Close
+7. Run the app
+
+#### Method 2: Command Line (Simulator Only)
+
+First, build and install to simulator:
+```bash
+# Build for simulator
+xcodebuild -project ios/BenchRunner/BenchRunner.xcodeproj \
+  -scheme BenchRunner \
+  -destination 'platform=iOS Simulator,name=iPhone 15' \
+  -derivedDataPath ios/build
+
+# Launch with arguments
+xcrun simctl launch booted dev.world.bench.BenchRunner \
+  --bench-function=sample_fns::checksum \
+  --bench-iterations=30 \
+  --bench-warmup=5
+```
+
+#### Method 3: Edit bench_spec.json Bundle Resource
+
+Add `bench_spec.json` to the app bundle:
+1. Create `ios/BenchRunner/BenchRunner/Resources/bench_spec.json`:
+   ```json
+   {
+     "function": "sample_fns::checksum",
+     "iterations": 30,
+     "warmup": 5
+   }
+   ```
+2. Add to Xcode project (File → Add Files to "BenchRunner"...)
+3. Ensure it's in "Copy Bundle Resources" build phase
+4. Run the app
+
+### Verifying Output
+
+The app should display:
+```
+=== Benchmark Results ===
+
+Function: sample_fns::fibonacci
+Iterations: 20
+Warmup: 3
+
+Samples (20):
+  1. 0.001 ms
+  2. 0.001 ms
+  ...
+
+Statistics:
+  Min: 0.001 ms
+  Max: 0.002 ms
+  Avg: 0.001 ms
+```
+
+## Troubleshooting
+
+### Android
+
+**Problem**: `ANDROID_NDK_HOME is not set`
+```bash
+# Solution: Export the NDK path
+export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
+# Or add to ~/.zshrc / ~/.bashrc
+```
+
+**Problem**: `cargo-ndk: command not found`
+```bash
+# Solution: Install cargo-ndk
+cargo install cargo-ndk
+```
+
+**Problem**: `error: failed to run custom build command for 'sample-fns'`
+```bash
+# Solution: Clean and rebuild
+cargo clean
+scripts/build-android.sh
+```
+
+**Problem**: App crashes on launch with "UnsatisfiedLinkError"
+```bash
+# Solution: Ensure .so files are in the APK
+scripts/sync-android-libs.sh
+cd android && ./gradlew clean assembleDebug
+```
+
+**Problem**: App shows "Error: UnknownFunction"
+- Check function name matches one of: `fibonacci`, `fib`, `sample_fns::fibonacci`, `checksum`, `checksum_1k`, `sample_fns::checksum`
+- Function names are case-sensitive
+
+### iOS
+
+**Problem**: `xcodegen: command not found`
+```bash
+# Solution: Install xcodegen
+brew install xcodegen
+```
+
+**Problem**: "The Framework 'sample_fns.xcframework' is unsigned"
+```bash
+# Solution: Code-sign the xcframework
+codesign --force --deep --sign - target/ios/sample_fns.xcframework
+
+# The build script now includes signing, but if you built manually:
+scripts/build-ios.sh
+cd ios/BenchRunner
+xcodegen generate
+# Clean build in Xcode (⌘+Shift+K) then build (⌘+B)
+```
+
+**Problem**: "No such module 'sample_fns'" or "Unable to find module dependency: 'sample_fns'" in Swift
+```bash
+# Solution: The Swift bindings are compiled directly into the app.
+# Remove any `import sample_fns` statements from your Swift code.
+# The types (BenchSpec, BenchReport, etc.) are available without import.
+```
+
+**Problem**: "Cannot find type 'RustBuffer' in scope" or FFI type errors
+```bash
+# Solution: Ensure the bridging header is configured
+# Check that BenchRunner-Bridging-Header.h exists at:
+# ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h
+
+# If missing, create it with:
+cat > ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h << 'EOF'
+//
+//  BenchRunner-Bridging-Header.h
+//  BenchRunner
+//
+//  Bridge to import C FFI from Rust (UniFFI-generated)
+//
+
+#import "sample_fnsFFI.h"
+EOF
+
+# Then regenerate the Xcode project:
+cd ios/BenchRunner
+xcodegen generate
+```
+
+**Problem**: Build fails with "library not found for -lsample_fns" or "framework 'ios-simulator-arm64' not found"
+```bash
+# Solution: Ensure xcframework was built correctly with proper structure
+rm -rf target/ios/sample_fns.xcframework
+scripts/build-ios.sh
+codesign --force --deep --sign - target/ios/sample_fns.xcframework
+
+# Verify structure:
+ls -la target/ios/sample_fns.xcframework/
+# Should show:
+#   ios-arm64/sample_fns.framework/
+#   ios-simulator-arm64/sample_fns.framework/
+#   Info.plist
+```
+
+**Problem**: "While building for iOS Simulator, no library for this platform was found"
+```bash
+# Solution: Rebuild the xcframework - the structure may be incorrect
+rm -rf target/ios/sample_fns.xcframework
+scripts/build-ios.sh
+codesign --force --deep --sign - target/ios/sample_fns.xcframework
+
+# Clean Xcode build folder
+cd ios/BenchRunner
+xcodebuild clean -project BenchRunner.xcodeproj -scheme BenchRunner
+# Then build in Xcode
+```
+
+**Problem**: "Framework had an invalid CFBundleIdentifier in its Info.plist"
+```bash
+# Solution: The framework bundle ID should not conflict with the app
+# Check scripts/build-ios.sh has correct bundle ID (dev.world.sample-fns)
+# Rebuild:
+scripts/build-ios.sh
+codesign --force --deep --sign - target/ios/sample_fns.xcframework
+```
+
+**Problem**: Simulator crashes with "Symbol not found"
+```bash
+# Solution: Clean and rebuild for simulator architecture
+cargo clean
+scripts/build-ios.sh
+codesign --force --deep --sign - target/ios/sample_fns.xcframework
+
+# In Xcode, clean (⌘+Shift+K) then build (⌘+B)
+```
+
+**Problem**: "Could not launch" on physical device
+- Ensure proper code signing is configured in Xcode
+- Select your development team in Xcode → Project Settings → Signing & Capabilities
+- Trust developer certificate on device: Settings → General → VPN & Device Management
+- The xcframework must be signed: `codesign --force --deep --sign - target/ios/sample_fns.xcframework`
+
+### UniFFI Bindings
+
+**Problem**: Changes to `sample_fns.udl` not reflected in mobile apps
+```bash
+# Solution: Regenerate bindings
+cargo run --bin generate-bindings --features bindgen
+
+# Then rebuild mobile apps
+scripts/build-android-app.sh  # For Android
+scripts/build-ios.sh          # For iOS
+```
+
+**Problem**: "error: cannot find type `BenchSpec` in the crate root"
+```bash
+# Solution: Ensure build.rs runs and generates scaffolding
+cargo clean
+cargo build -p sample-fns
+```
+
+### General
+
+**Problem**: Tests fail after code changes
+```bash
+# Solution: Run tests to see specific failures
+cargo test --all
+
+# Common causes:
+# - Missing serde dependency (check Cargo.toml)
+# - API signature changes (update UDL and regenerate bindings)
+# - Test assertions need updating
+```
+
+**Problem**: "permission denied" when running scripts
+```bash
+# Solution: Make scripts executable
+chmod +x scripts/*.sh
+```
+
+## Advanced Testing
+
+### BrowserStack Integration Testing
+
+See the main [README.md](README.md) for BrowserStack testing instructions.
+
+### Performance Regression Testing
+
+Compare benchmark results across builds:
+```bash
+# Run benchmark and save results
+cargo run -p bench-cli -- run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --iterations 100 \
+  --local-only \
+  --output results-v1.json
+
+# After changes, run again
+cargo run -p bench-cli -- run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --iterations 100 \
+  --local-only \
+  --output results-v2.json
+
+# Compare results (requires jq)
+jq -s '.[0].local_report.samples, .[1].local_report.samples' results-v1.json results-v2.json
+```
+
+### Adding New Test Functions
+
+1. Add function to `crates/sample-fns/src/lib.rs`
+2. Add to dispatch in `run_benchmark()` match statement
+3. Add test case in `#[cfg(test)]` module
+4. Run tests: `cargo test -p sample-fns`
+5. Test on mobile platforms
+
+Example:
+```rust
+// In lib.rs
+pub fn my_new_function(n: u32) -> u64 {
+    // implementation
+}
+
+// In run_benchmark()
+"my_new_function" | "sample_fns::my_new_function" => {
+    run_closure(runner_spec, || {
+        let _ = my_new_function(100);
+        Ok(())
+    })
+    .map_err(|e: BenchRunnerError| -> BenchError { e.into() })?
+}
+
+// In tests
+#[test]
+fn test_my_new_function() {
+    let spec = BenchSpec {
+        name: "my_new_function".to_string(),
+        iterations: 3,
+        warmup: 1,
+    };
+    let report = run_benchmark(spec).unwrap();
+    assert_eq!(report.samples.len(), 3);
+}
+```
+
+## Continuous Integration
+
+The project includes a GitHub Actions workflow (`.github/workflows/mobile-bench.yml`) that:
+- Runs host tests on every push
+- Builds Android APK (optional)
+- Builds iOS xcframework (optional)
+- Uploads artifacts
+
+To trigger manually:
+1. Go to GitHub Actions tab
+2. Select "mobile-bench-rs CI"
+3. Click "Run workflow"
+4. Select platform(s) to build
+
+## Additional Resources
+
+- [UniFFI Documentation](https://mozilla.github.io/uniffi-rs/)
+- [Android NDK Documentation](https://developer.android.com/ndk)
+- [Rust Cross-Compilation Guide](https://rust-lang.github.io/rustup/cross-compilation.html)
+- [PROJECT_PLAN.md](PROJECT_PLAN.md) - Roadmap and architecture
+- [CLAUDE.md](CLAUDE.md) - Developer guide for working with this codebase

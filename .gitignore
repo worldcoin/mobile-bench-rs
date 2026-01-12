@@ -1,0 +1,21 @@
+target/
+**/*.DS_Store
+.vscode/
+android/app/src/main/jniLibs/*/libsample_fns.so
+android/app/src/main/jniLibs/*/libuniffi_sample_fns.so
+android/build/
+android/.gradle/
+android/app/build/
+**/.gradle/
+**/build/
+ios/BenchRunner/BenchRunner.xcodeproj/
+**/xcuserdata/
+**/DerivedData/
+ios/build/
+target/ios/
+.env.local
+
+# CLI-generated artifacts
+run-summary.json
+bench-config.toml
+device-matrix.yaml
