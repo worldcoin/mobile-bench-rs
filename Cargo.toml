@@ -2,7 +2,10 @@
 members = [
     "crates/bench-cli",
     "crates/bench-runner",
+    "crates/bench-macros",
+    "crates/bench-sdk",
     "crates/sample-fns",
+    "examples/basic-benchmark",
 ]
 resolver = "2"
 
@@ -20,3 +23,12 @@ thiserror = "1"
 serde_yaml = "0.9"
 toml = "0.8"
 uniffi = "0.28"
+
+# Phase 1: Registry and proc macros
+inventory = "0.3"
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+# Phase 1: Template embedding
+include_dir = "0.7"

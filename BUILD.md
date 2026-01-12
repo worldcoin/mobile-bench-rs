@@ -430,5 +430,5 @@ cargo run -p bench-cli -- demo --iterations 100 --warmup 10
 
 - **`TESTING.md`**: Comprehensive testing guide with troubleshooting
 - **`README.md`**: Project overview and quick start
-- **`CLAUDE.md`**: Developer guide for working with this codebase
+- **`CLAUDE.md`**: Developer guide for this codebase
 - **`PROJECT_PLAN.md`**: Architecture and roadmap

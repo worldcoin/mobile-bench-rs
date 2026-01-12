@@ -1,6 +1,58 @@
-# mobile-bench-rs
+# mobile-bench-rs → bench-sdk
 
-Benchmarking tool for Rust functions on mobile devices using BrowserStack.
+**Mobile benchmarking SDK for Rust** - Run Rust benchmarks on real Android and iOS devices.
+
+> **Phase 1 MVP Complete!** This project has been transformed into an importable library crate (`bench-sdk`) that can be published to crates.io.
+
+## 🚀 What's New in Phase 1
+
+### Library-First Design
+
+Use `bench-sdk` in any Rust project:
+
+```toml
+[dependencies]
+bench-sdk = "0.1"
+inventory = "0.3"  # Required for registry
+```
+
+### #[benchmark] Macro
+
+Mark functions for benchmarking:
+
+```rust
+use bench_sdk::benchmark;
+
+#[benchmark]
+fn my_expensive_operation() {
+    let result = compute_something();
+    std::hint::black_box(result);
+}
+```
+
+### New CLI Commands
+
+```bash
+# Initialize SDK project
+cargo bench-sdk init-sdk --target android --project-name my-bench
+
+# Build mobile artifacts
+cargo bench-sdk build --target android
+
+# List discovered benchmarks
+cargo bench-sdk list
+```
+
+### Architecture
+
+- **bench-sdk**: Core library (registry, runner, builders, codegen)
+- **bench-macros**: `#[benchmark]` proc macro
+- **bench-cli**: CLI wrapper over SDK API
+- **examples/basic-benchmark**: Example using the new SDK
+
+---
+
+## Original README (Legacy Information)
 
 ## Layout
 
@@ -435,7 +487,7 @@ cargo run -p bench-cli -- run --config bench-config.toml
 - **`BUILD.md`**: Complete build reference guide for Android and iOS (prerequisites, step-by-step instructions, troubleshooting)
 - **`TESTING.md`**: Comprehensive testing guide with troubleshooting and advanced scenarios
 - **`PROJECT_PLAN.md`**: Project goals, architecture, and task backlog
-- **`CLAUDE.md`**: Developer guide for working with this codebase (for Claude Code and developers)
+- **`CLAUDE.md`**: Developer guide for this codebase
 
 ---
 

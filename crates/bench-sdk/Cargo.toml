@@ -1,0 +1,37 @@
+[package]
+name = "bench-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mobile benchmarking SDK for Rust - run benchmarks on real devices"
+repository = "https://github.com/dcbuild3r/mobile-bench-rs"
+keywords = ["benchmark", "mobile", "android", "ios", "performance"]
+categories = ["development-tools::profiling", "development-tools::testing"]
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+# Core dependencies
+bench-runner = { path = "../bench-runner" }
+bench-macros = { path = "../bench-macros" }
+
+# Registry
+inventory.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Template embedding (Phase 1)
+include_dir.workspace = true
+
+# Build automation (Phase 1)
+toml.workspace = true
+
+[dev-dependencies]
+# Test dependencies will be added as needed

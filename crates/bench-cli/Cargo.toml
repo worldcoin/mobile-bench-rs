@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+bench-sdk = { path = "../bench-sdk" }
 bench-runner = { path = "../bench-runner" }
 sample-fns = { path = "../sample-fns" }
 clap.workspace = true

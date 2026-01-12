@@ -562,4 +562,4 @@ To trigger manually:
 - [Android NDK Documentation](https://developer.android.com/ndk)
 - [Rust Cross-Compilation Guide](https://rust-lang.github.io/rustup/cross-compilation.html)
 - [PROJECT_PLAN.md](PROJECT_PLAN.md) - Roadmap and architecture
-- [CLAUDE.md](CLAUDE.md) - Developer guide for working with this codebase
+- [CLAUDE.md](CLAUDE.md) - Developer guide for this codebase
