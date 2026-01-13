@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Mobile benchmarking CLI for Rust - Run benchmarks on real Android and iOS devices"
-repository = "https://github.com/anthropics/mobile-bench-rs"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
 keywords = ["benchmark", "mobile", "android", "ios", "performance"]
 categories = ["development-tools", "command-line-utilities"]
 
@@ -21,8 +21,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-mobench-sdk = { path = "../mobench-sdk" }
-bench-runner = { path = "../bench-runner" }
+mobench-sdk = { version = "0.1", path = "../mobench-sdk" }
+bench-runner = { version = "0.1", path = "../bench-runner" }
 sample-fns = { path = "../sample-fns" }
 clap.workspace = true
 serde.workspace = true
