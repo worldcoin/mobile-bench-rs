@@ -14,8 +14,8 @@ crate-type = ["lib"]
 
 [dependencies]
 # Core dependencies
-bench-runner = { path = "../bench-runner" }
-mobench-macros = { path = "../mobench-macros" }
+bench-runner = { version = "0.1", path = "../bench-runner" }
+mobench-macros = { version = "0.1", path = "../mobench-macros" }
 
 # Registry
 inventory.workspace = true
