@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
-#[cfg(feature = "demo")]
+#[cfg(test)]
 use bench_runner::{BenchSpec, run_closure};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -56,13 +56,6 @@ enum Command {
         fetch_poll_interval_secs: u64,
         #[arg(long, default_value_t = 1800)]
         fetch_timeout_secs: u64,
-    },
-    /// Run a local demo against bundled sample functions to validate the harness.
-    Demo {
-        #[arg(long, default_value_t = 50)]
-        iterations: u32,
-        #[arg(long, default_value_t = 5)]
-        warmup: u32,
     },
     /// Scaffold a base config file for the CLI.
     Init {
@@ -376,29 +369,6 @@ fn main() -> Result<()> {
                 } else {
                     println!("No BrowserStack run to fetch (devices not provided?)");
                 }
-            }
-        }
-        Command::Demo { iterations, warmup } => {
-            #[allow(unused_variables)]
-            let _ = (iterations, warmup);
-            #[cfg(feature = "demo")]
-            {
-                let spec = BenchSpec::new("sample_fns::fibonacci", iterations, warmup)?;
-                let report = run_closure(spec, || {
-                    // This is the shape of the closure that will be invoked on-device;
-                    // for now we reuse it locally.
-                    let _ = sample_fns::fibonacci(24);
-                    Ok(())
-                })?;
-
-                let json = serde_json::to_string_pretty(&report)?;
-                println!("{json}");
-            }
-            #[cfg(not(feature = "demo"))]
-            {
-                eprintln!("Error: Demo command requires the 'demo' feature.");
-                eprintln!("Install with: cargo install mobench --features demo");
-                std::process::exit(1);
             }
         }
         Command::Init { output, target } => {
