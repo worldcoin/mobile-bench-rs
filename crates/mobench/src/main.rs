@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
+#[cfg(feature = "demo")]
 use bench_runner::{BenchSpec, run_closure};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -378,16 +379,27 @@ fn main() -> Result<()> {
             }
         }
         Command::Demo { iterations, warmup } => {
-            let spec = BenchSpec::new("sample_fns::fibonacci", iterations, warmup)?;
-            let report = run_closure(spec, || {
-                // This is the shape of the closure that will be invoked on-device;
-                // for now we reuse it locally.
-                let _ = sample_fns::fibonacci(24);
-                Ok(())
-            })?;
+            #[allow(unused_variables)]
+            let _ = (iterations, warmup);
+            #[cfg(feature = "demo")]
+            {
+                let spec = BenchSpec::new("sample_fns::fibonacci", iterations, warmup)?;
+                let report = run_closure(spec, || {
+                    // This is the shape of the closure that will be invoked on-device;
+                    // for now we reuse it locally.
+                    let _ = sample_fns::fibonacci(24);
+                    Ok(())
+                })?;
 
-            let json = serde_json::to_string_pretty(&report)?;
-            println!("{json}");
+                let json = serde_json::to_string_pretty(&report)?;
+                println!("{json}");
+            }
+            #[cfg(not(feature = "demo"))]
+            {
+                eprintln!("Error: Demo command requires the 'demo' feature.");
+                eprintln!("Install with: cargo install mobench --features demo");
+                std::process::exit(1);
+            }
         }
         Command::Init { output, target } => {
             write_config_template(&output, target)?;

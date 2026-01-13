@@ -19,11 +19,14 @@ path = "src/main.rs"
 name = "cargo-mobench"
 path = "src/main.rs"
 
+[features]
+demo = ["dep:sample-fns"]
+
 [dependencies]
 anyhow.workspace = true
 mobench-sdk = { version = "0.1", path = "../mobench-sdk" }
 bench-runner = { version = "0.1", path = "../bench-runner" }
-sample-fns = { path = "../sample-fns" }
+sample-fns = { path = "../sample-fns", optional = true }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
