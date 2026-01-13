@@ -2,6 +2,13 @@
 
 Complete build instructions for Android and iOS targets.
 
+> **For SDK Integrators**: If you're importing `bench-sdk` into your project, use the CLI commands:
+> - `cargo mobench build --target android` for Android
+> - `cargo mobench build --target ios` for iOS
+>
+> The scripts shown below are legacy tooling for developing this repository.
+> See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide.
+
 ## Table of Contents
 - [Prerequisites](#prerequisites)
 - [Android Build](#android-build)
@@ -431,7 +438,7 @@ Then regenerate bindings as shown above.
 
 Run benchmarks locally without mobile builds:
 ```bash
-cargo run -p bench-cli -- demo --iterations 100 --warmup 10
+cargo mobench demo --iterations 100 --warmup 10
 ```
 
 ## Additional Documentation

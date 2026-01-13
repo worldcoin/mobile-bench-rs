@@ -14,7 +14,7 @@ mod browserstack;
 
 /// CLI orchestrator for building, packaging, and executing Rust benchmarks on mobile.
 #[derive(Parser, Debug)]
-#[command(name = "bench-cli", author, version, about = "Mobile Rust benchmarking orchestrator", long_about = None)]
+#[command(name = "mobench", author, version, about = "Mobile Rust benchmarking orchestrator", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -108,6 +108,13 @@ enum Command {
         #[arg(long, help = "Build in release mode")]
         release: bool,
     },
+    /// Package iOS app as IPA for distribution or testing.
+    PackageIpa {
+        #[arg(long, default_value = "BenchRunner", help = "Xcode scheme to build")]
+        scheme: String,
+        #[arg(long, value_enum, default_value = "adhoc", help = "Signing method")]
+        method: IosSigningMethodArg,
+    },
     /// List all discovered benchmark functions (Phase 1 MVP).
     List,
 }
@@ -133,6 +140,24 @@ impl From<SdkTarget> for bench_sdk::Target {
             SdkTarget::Android => bench_sdk::Target::Android,
             SdkTarget::Ios => bench_sdk::Target::Ios,
             SdkTarget::Both => bench_sdk::Target::Both,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum IosSigningMethodArg {
+    /// Ad-hoc signing (no Apple ID needed, works for BrowserStack)
+    Adhoc,
+    /// Development signing (requires Apple Developer account)
+    Development,
+}
+
+impl From<IosSigningMethodArg> for bench_sdk::builders::SigningMethod {
+    fn from(arg: IosSigningMethodArg) -> Self {
+        match arg {
+            IosSigningMethodArg::Adhoc => bench_sdk::builders::SigningMethod::AdHoc,
+            IosSigningMethodArg::Development => bench_sdk::builders::SigningMethod::Development,
         }
     }
 }
@@ -409,6 +434,9 @@ fn main() -> Result<()> {
         }
         Command::Build { target, release } => {
             cmd_build(target, release)?;
+        }
+        Command::PackageIpa { scheme, method } => {
+            cmd_package_ipa(&scheme, method)?;
         }
         Command::List => {
             cmd_list()?;
@@ -1055,7 +1083,7 @@ fn cmd_init_sdk(
     println!("\nNext steps:");
     println!("  1. Add benchmark functions to your code with #[benchmark]");
     println!("  2. Run 'cargo build --target <platform>' to build");
-    println!("  3. Run benchmarks with 'cargo bench-cli build --target <platform>'");
+    println!("  3. Run benchmarks with 'cargo mobench build --target <platform>'");
 
     Ok(())
 }
@@ -1149,6 +1177,32 @@ fn cmd_list() -> Result<()> {
             println!("  - {}", bench.name);
         }
     }
+
+    Ok(())
+}
+
+/// Package iOS app as IPA for distribution or testing
+fn cmd_package_ipa(scheme: &str, method: IosSigningMethodArg) -> Result<()> {
+    println!("Packaging iOS app as IPA...");
+    println!("  Scheme: {}", scheme);
+    println!("  Method: {:?}", method);
+
+    let project_root = std::env::current_dir().context("Failed to get current directory")?;
+    let crate_name = detect_bench_mobile_crate_name(&project_root)
+        .unwrap_or_else(|_| "bench-mobile".to_string());
+
+    let builder = bench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+
+    let signing_method: bench_sdk::builders::SigningMethod = method.into();
+    let ipa_path = builder
+        .package_ipa(scheme, signing_method)
+        .context("Failed to package IPA")?;
+
+    println!("\n✓ IPA packaged successfully!");
+    println!("  Path: {:?}", ipa_path);
+    println!("\nYou can now:");
+    println!("  - Install on device: Use Xcode or ios-deploy");
+    println!("  - Test on BrowserStack: cargo mobench run --target ios --ios-app {:?}", ipa_path);
 
     Ok(())
 }

@@ -3,6 +3,10 @@
 This guide shows how to integrate `bench-sdk` into an existing Rust project, run local
 mobile benchmarks, and then run them on BrowserStack.
 
+> **Important**: This guide is for integrators importing `bench-sdk` as a library.
+> You do **NOT** need the `scripts/` directory from this repository.
+> All build functionality is available via `cargo mobench` commands.
+
 ## 1) Prerequisites
 
 Install the following tools (per platform):
@@ -54,7 +58,7 @@ Benchmarks are identified by name at runtime. You can call them by:
 From your repo root, create a mobile harness with the CLI:
 
 ```bash
-cargo run -p bench-cli -- init-sdk --target both --project-name my-bench --output-dir .
+cargo mobench init-sdk --target both --project-name my-bench --output-dir .
 ```
 
 This generates:
@@ -64,21 +68,23 @@ This generates:
 
 ## 5) Local Android testing
 
-Build the Android app with ABI-aware bindings (emulator uses x86_64):
-
-If you are using this repo directly, you can use the helper scripts:
+Build the Android app using the mobench:
 
 ```bash
-UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n dev.world.bench/.MainActivity
+cargo mobench build --target android
 ```
 
-If you are integrating into another repo, the `init-sdk` command does **not** copy
-the `scripts/` directory. In that case, prefer the CLI build:
+This automatically:
+- Builds Rust libraries for all Android ABIs (arm64-v8a, armeabi-v7a, x86_64)
+- Generates UniFFI Kotlin bindings
+- Copies .so files to jniLibs
+- Runs Gradle to create the APK
+
+Install and run on emulator or device:
 
 ```bash
-cargo run -p bench-cli -- build --target android
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n dev.world.bench/.MainActivity
 ```
 
 To override benchmark parameters:
@@ -92,38 +98,42 @@ adb shell am start -n dev.world.bench/.MainActivity \
 
 ## 6) Local iOS testing
 
-If you are using this repo directly:
+Build the iOS xcframework using the mobench:
 
 ```bash
-./scripts/build-ios.sh
+cargo mobench build --target ios
+```
+
+This automatically:
+- Builds Rust libraries for iOS device + simulator
+- Generates UniFFI Swift bindings and C headers
+- Creates properly structured xcframework
+- Code-signs the framework
+- Generates Xcode project (if xcodegen is installed)
+
+Open and run in Xcode:
+
+```bash
 open ios/BenchRunner/BenchRunner.xcodeproj
 ```
 
-If you are integrating into another repo, use:
-
-```bash
-cargo run -p bench-cli -- build --target ios
-```
-
-Run the app in Xcode. It will read `bench_spec.json` from the bundle or use defaults.
+The app will read `bench_spec.json` from the bundle or use defaults.
 
 ## 7) BrowserStack (Android Espresso)
 
 Build APK + test APK:
 
-If you have the scripts available:
-
 ```bash
-UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
+cargo mobench build --target android
 cd android
 ./gradlew :app:assembleDebugAndroidTest
 cd ..
 ```
 
-Run via CLI:
+Run on BrowserStack:
 
 ```bash
-cargo run -p bench-cli -- run \
+cargo mobench run \
   --target android \
   --function my_crate::checksum_bench \
   --iterations 100 \
@@ -131,25 +141,48 @@ cargo run -p bench-cli -- run \
   --devices "Pixel 7-13.0"
 ```
 
+The CLI will automatically:
+- Upload APK and test APK to BrowserStack
+- Schedule the test run
+- Wait for completion
+- Download results and logs
+
 ## 8) BrowserStack (iOS XCUITest)
 
-Build iOS artifacts, then provide the app and test suite:
+Build iOS artifacts and package as IPA:
 
 ```bash
-./scripts/build-ios.sh
+# Build xcframework
+cargo mobench build --target ios
 
-cargo run -p bench-cli -- run \
+# Package as IPA (ad-hoc signing, no Apple ID needed)
+cargo mobench package-ipa --method adhoc
+
+# Or for development signing (requires Apple Developer account)
+cargo mobench package-ipa --method development
+```
+
+Run on BrowserStack:
+
+```bash
+cargo mobench run \
   --target ios \
   --function my_crate::checksum_bench \
   --iterations 100 \
   --warmup 10 \
   --devices "iPhone 14-16" \
-  --ios-app path/to/BenchRunner.ipa \
-  --ios-test-suite path/to/BenchRunnerUITests.zip
+  --ios-app target/ios/BenchRunner.ipa \
+  --ios-test-suite target/ios/BenchRunnerUITests.zip
 ```
+
+**IPA Signing Methods:**
+- `adhoc`: No Apple ID required, works for BrowserStack device testing
+- `development`: Requires Apple Developer account, for physical device testing
 
 ## Notes
 
-- If you change FFI types, regenerate bindings: `./scripts/generate-bindings.sh`
-- Android emulator ABI is typically `x86_64` in Android Studio.
-- BrowserStack credentials must be set via `BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY`.
+- **No scripts needed**: All functionality is available via `cargo mobench` commands
+- If you change FFI types, the build process automatically regenerates bindings
+- Android emulator ABI is typically `x86_64` in Android Studio
+- BrowserStack credentials must be set via `BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY`
+- For developing this repo (not integrating the SDK), legacy `scripts/` are available but deprecated

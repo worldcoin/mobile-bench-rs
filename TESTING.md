@@ -2,6 +2,11 @@
 
 This document provides comprehensive testing instructions for mobile-bench-rs.
 
+> **For SDK Integrators**: If you're importing `bench-sdk` into your project, use:
+> - `cargo mobench build --target <android|ios>` for builds
+> - Scripts shown below are legacy tooling for this repository
+> - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide
+
 > **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
 
 ## Table of Contents
@@ -69,7 +74,7 @@ Expected output: All tests pass (11 tests total as of UniFFI migration).
 ### CLI Demo
 Test the benchmarking harness without mobile builds:
 ```bash
-cargo run -p bench-cli -- demo --iterations 10 --warmup 2
+cargo mobench demo --iterations 10 --warmup 2
 ```
 
 Expected output: JSON report with timing samples for `fibonacci` function.
@@ -77,7 +82,7 @@ Expected output: JSON report with timing samples for `fibonacci` function.
 ### Testing Different Functions
 ```bash
 # Test fibonacci (default)
-cargo run -p bench-cli -- demo --iterations 5 --warmup 1
+cargo mobench demo --iterations 5 --warmup 1
 
 # Currently supports:
 # - fibonacci / fib / sample_fns::fibonacci
@@ -487,7 +492,7 @@ See the main [README.md](README.md) for BrowserStack testing instructions.
 Compare benchmark results across builds:
 ```bash
 # Run benchmark and save results
-cargo run -p bench-cli -- run \
+cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 100 \
@@ -495,7 +500,7 @@ cargo run -p bench-cli -- run \
   --output results-v1.json
 
 # After changes, run again
-cargo run -p bench-cli -- run \
+cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 100 \

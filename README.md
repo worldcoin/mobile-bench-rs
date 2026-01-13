@@ -4,7 +4,18 @@
 
 > **Phase 1 MVP Complete!** This project has been transformed into an importable library crate (`bench-sdk`) that can be published to crates.io.
 
-New integrators should start here: `BENCH_SDK_INTEGRATION.md`.
+## 🎯 For SDK Integrators
+
+**Importing bench-sdk into your project?** You do **NOT** need the `scripts/` directory!
+
+- ✅ Use `cargo mobench build --target <android|ios|both>` for all builds
+- ✅ All build logic is in pure Rust (no shell scripts required)
+- ✅ Templates are embedded in the binary
+- ✅ See **[BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md)** for the integration guide
+
+**The `scripts/` directory** is legacy tooling for developing this repository. SDK users should ignore it.
+
+---
 
 ## 🚀 What's New in Phase 1
 
@@ -36,20 +47,23 @@ fn my_expensive_operation() {
 
 ```bash
 # Initialize SDK project
-cargo bench-sdk init-sdk --target android --project-name my-bench
+cargo mobench init-sdk --target android --project-name my-bench
 
 # Build mobile artifacts
-cargo bench-sdk build --target android
+cargo mobench build --target android
+
+# Package iOS app as IPA (for BrowserStack or physical devices)
+cargo mobench package-ipa --method adhoc
 
 # List discovered benchmarks
-cargo bench-sdk list
+cargo mobench list
 ```
 
 ### Architecture
 
 - **bench-sdk**: Core library (registry, runner, builders, codegen)
 - **bench-macros**: `#[benchmark]` proc macro
-- **bench-cli**: CLI wrapper over SDK API
+- **mobench**: CLI tool for building, testing, and running benchmarks
 - **examples/basic-benchmark**: Example using the new SDK
 
 ---
@@ -58,7 +72,7 @@ cargo bench-sdk list
 
 ## Layout
 
-- `crates/bench-cli`: CLI orchestrator for building/packaging benchmarks and driving BrowserStack runs (stubbed).
+- `crates/mobench`: CLI orchestrator for building/packaging benchmarks and driving BrowserStack runs.
 - `crates/bench-runner`: Shared harness that will be embedded in Android/iOS binaries; currently host-side only.
 - `crates/sample-fns`: Small Rust functions used as demo benchmarks with UniFFI bindings for mobile platforms.
 - `PROJECT_PLAN.md`: Goals, architecture outline, and initial task backlog.
@@ -71,7 +85,7 @@ cargo bench-sdk list
 Test the benchmarking harness locally:
 
 ```bash
-cargo run -p bench-cli -- demo --iterations 10 --warmup 2
+cargo mobench demo --iterations 10 --warmup 2
 ```
 
 ### Mobile Testing
@@ -86,8 +100,8 @@ For complete end-to-end testing on Android/iOS, see the **[End-to-End Testing](#
 ### Generate Config Files
 
 ```bash
-cargo run -p bench-cli -- init --output bench-config.toml
-cargo run -p bench-cli -- plan --output device-matrix.yaml
+cargo mobench init --output bench-config.toml
+cargo mobench plan --output device-matrix.yaml
 ```
 
 ## UniFFI Bindings (Proc Macro Mode)
@@ -314,7 +328,7 @@ Artifacts created:
 
 ```bash
 # Run benchmark on specific device
-cargo run -p bench-cli -- run \
+cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 100 \
@@ -392,7 +406,7 @@ Artifacts created:
 
 ```bash
 # Run benchmark on specific device
-cargo run -p bench-cli -- run \
+cargo mobench run \
   --target ios \
   --function sample_fns::fibonacci \
   --iterations 100 \
@@ -416,8 +430,8 @@ For repeated runs, use config files:
 
 ```bash
 # Generate templates
-cargo run -p bench-cli -- init --output bench-config.toml --target android
-cargo run -p bench-cli -- plan --output device-matrix.yaml
+cargo mobench init --output bench-config.toml --target android
+cargo mobench plan --output device-matrix.yaml
 ```
 
 **bench-config.toml:**
@@ -449,7 +463,7 @@ devices:
 
 **Run with config:**
 ```bash
-cargo run -p bench-cli -- run --config bench-config.toml
+cargo mobench run --config bench-config.toml
 ```
 
 ### BrowserStack Features

@@ -139,25 +139,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bench-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bench-runner",
- "bench-sdk",
- "clap",
- "dotenvy",
- "inventory",
- "reqwest",
- "sample-fns",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "toml 0.8.23",
-]
-
-[[package]]
 name = "bench-macros"
 version = "0.1.0"
 dependencies = [
@@ -831,6 +812,25 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mobench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bench-runner",
+ "bench-sdk",
+ "clap",
+ "dotenvy",
+ "inventory",
+ "reqwest",
+ "sample-fns",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "toml 0.8.23",
 ]
 
 [[package]]

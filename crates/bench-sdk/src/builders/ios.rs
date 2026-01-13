@@ -6,6 +6,7 @@
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -585,6 +586,191 @@ fn run_command(mut cmd: Command, description: &str) -> Result<(), BenchError> {
         )));
     }
     Ok(())
+}
+
+/// iOS code signing methods for IPA packaging
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningMethod {
+    /// Ad-hoc signing (no Apple ID required, works for BrowserStack testing)
+    AdHoc,
+    /// Development signing (requires Apple Developer account and provisioning profile)
+    Development,
+}
+
+impl SigningMethod {
+    /// Returns the CODE_SIGN_IDENTITY value for xcodebuild
+    fn identity(&self) -> &'static str {
+        match self {
+            SigningMethod::AdHoc => "-",
+            SigningMethod::Development => "iPhone Developer",
+        }
+    }
+
+    /// Returns the export method for ExportOptions.plist
+    fn export_method(&self) -> &'static str {
+        match self {
+            SigningMethod::AdHoc => "ad-hoc",
+            SigningMethod::Development => "development",
+        }
+    }
+}
+
+impl IosBuilder {
+    /// Packages the iOS app as an IPA file for distribution or testing
+    ///
+    /// This requires the app to have been built first with `build()`.
+    /// The IPA can be used for:
+    /// - BrowserStack device testing (ad-hoc signing)
+    /// - Physical device testing (development signing)
+    ///
+    /// # Arguments
+    ///
+    /// * `scheme` - The Xcode scheme to build (e.g., "BenchRunner")
+    /// * `method` - The signing method (AdHoc or Development)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(PathBuf)` - Path to the generated IPA file
+    /// * `Err(BenchError)` - If the build or packaging fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use bench_sdk::builders::{IosBuilder, SigningMethod};
+    ///
+    /// let builder = IosBuilder::new(".", "bench-mobile");
+    /// let ipa_path = builder.package_ipa("BenchRunner", SigningMethod::AdHoc)?;
+    /// println!("IPA created at: {:?}", ipa_path);
+    /// # Ok::<(), bench_sdk::BenchError>(())
+    /// ```
+    pub fn package_ipa(
+        &self,
+        scheme: &str,
+        method: SigningMethod,
+    ) -> Result<PathBuf, BenchError> {
+        let ios_dir = self.project_root.join("ios").join(scheme);
+        let project_path = ios_dir.join(format!("{}.xcodeproj", scheme));
+
+        // Verify Xcode project exists
+        if !project_path.exists() {
+            return Err(BenchError::Build(format!(
+                "Xcode project not found at {:?}. Run `cargo mobench build --target ios` first.",
+                project_path
+            )));
+        }
+
+        let archive_path = self.project_root.join("target/ios").join(format!("{}.xcarchive", scheme));
+        let export_path = self.project_root.join("target/ios");
+        let ipa_path = export_path.join(format!("{}.ipa", scheme));
+
+        // Create target/ios directory if it doesn't exist
+        fs::create_dir_all(&export_path)
+            .map_err(|e| BenchError::Build(format!("Failed to create export directory: {}", e)))?;
+
+        println!("Archiving {} for device...", scheme);
+
+        // Step 1: Create archive
+        let mut cmd = Command::new("xcodebuild");
+        cmd.args(&[
+            "-project", project_path.to_str().unwrap(),
+            "-scheme", scheme,
+            "-sdk", "iphoneos",
+            "-configuration", "Release",
+            "-archivePath", archive_path.to_str().unwrap(),
+            "archive",
+            "CODE_SIGN_STYLE=Automatic",
+            &format!("CODE_SIGN_IDENTITY={}", method.identity()),
+        ]);
+
+        if self.verbose {
+            println!("  Running: {:?}", cmd);
+        }
+
+        run_command(cmd, "xcodebuild archive")?;
+
+        println!("Exporting IPA with {:?} signing...", method);
+
+        // Step 2: Create ExportOptions.plist
+        let export_options_path = export_path.join("ExportOptions.plist");
+        self.create_export_options_plist(&export_options_path, method)?;
+
+        // Step 3: Export IPA
+        let mut cmd = Command::new("xcodebuild");
+        cmd.args(&[
+            "-exportArchive",
+            "-archivePath", archive_path.to_str().unwrap(),
+            "-exportPath", export_path.to_str().unwrap(),
+            "-exportOptionsPlist", export_options_path.to_str().unwrap(),
+        ]);
+
+        if self.verbose {
+            println!("  Running: {:?}", cmd);
+        }
+
+        run_command(cmd, "xcodebuild -exportArchive")?;
+
+        // xcodebuild exports to a subdirectory, move IPA to expected location
+        let exported_ipa = export_path.join(format!("{}.ipa", scheme));
+        if !exported_ipa.exists() {
+            // Check in subdirectory (xcodebuild sometimes puts it there)
+            let subdir_ipa = export_path.join(scheme).join(format!("{}.ipa", scheme));
+            if subdir_ipa.exists() {
+                fs::rename(&subdir_ipa, &ipa_path).map_err(|e| {
+                    BenchError::Build(format!("Failed to move IPA to final location: {}", e))
+                })?;
+            } else {
+                return Err(BenchError::Build(format!(
+                    "IPA not found after export. Expected at {:?} or {:?}",
+                    exported_ipa, subdir_ipa
+                )));
+            }
+        } else if exported_ipa != ipa_path {
+            fs::rename(&exported_ipa, &ipa_path).map_err(|e| {
+                BenchError::Build(format!("Failed to move IPA to final location: {}", e))
+            })?;
+        }
+
+        println!("✓ IPA created: {:?}", ipa_path);
+        Ok(ipa_path)
+    }
+
+    /// Creates an ExportOptions.plist file for xcodebuild -exportArchive
+    fn create_export_options_plist(
+        &self,
+        path: &Path,
+        method: SigningMethod,
+    ) -> Result<(), BenchError> {
+        let plist_content = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>{}</string>
+    <key>compileBitcode</key>
+    <false/>
+    <key>stripSwiftSymbols</key>
+    <true/>
+    <key>uploadSymbols</key>
+    <false/>
+    <key>signingStyle</key>
+    <string>automatic</string>
+</dict>
+</plist>
+"#,
+            method.export_method()
+        );
+
+        let mut file = fs::File::create(path).map_err(|e| {
+            BenchError::Build(format!("Failed to create ExportOptions.plist: {}", e))
+        })?;
+
+        file.write_all(plist_content.as_bytes()).map_err(|e| {
+            BenchError::Build(format!("Failed to write ExportOptions.plist: {}", e))
+        })?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

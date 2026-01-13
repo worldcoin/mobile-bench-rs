@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ⚠️  DEPRECATION WARNING ⚠️
+# This script is legacy tooling for developing this repository.
+#
+# For SDK integrators, use instead:
+#   cargo run -p bench-cli -- build --target android
+#
+# The CLI command automatically handles library copying.
+
 # Copy built Rust .so files into the Android app's jniLibs structure.
 # Run scripts/build-android.sh first.
 

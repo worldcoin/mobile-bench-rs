@@ -8,4 +8,4 @@ pub mod ios;
 
 // Re-export builders
 pub use android::AndroidBuilder;
-pub use ios::IosBuilder;
+pub use ios::{IosBuilder, SigningMethod};

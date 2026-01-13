@@ -12,7 +12,7 @@ mobile-bench-rs is a benchmarking tool for Rust functions on mobile devices (And
 
 The repository is organized as a Cargo workspace with three main crates:
 
-- **`bench-cli`**: CLI orchestrator that drives the entire workflow - building artifacts, uploading to BrowserStack, executing runs, and collecting results. Entry point for all operations.
+- **`mobench`**: CLI orchestrator that drives the entire workflow - building artifacts, uploading to BrowserStack, executing runs, and collecting results. Entry point for all operations.
 - **`bench-runner`**: Lightweight harness library that gets embedded in mobile binaries. Provides timing infrastructure for benchmarks.
 - **`sample-fns`**: Example benchmark functions with UniFFI bindings for mobile platforms. Compiled as `cdylib`, `staticlib`, and `rlib` for different mobile targets.
 
@@ -54,7 +54,7 @@ Quick test commands:
 cargo test --all
 
 # Test host harness
-cargo run -p bench-cli -- demo --iterations 10 --warmup 2
+cargo run -p mobench -- demo --iterations 10 --warmup 2
 
 # Android e2e (requires Android NDK)
 scripts/build-android-app.sh
@@ -151,7 +151,7 @@ Note: UniFFI C headers are generated automatically during the build process and 
 
 #### Local Smoke Test
 ```bash
-cargo run -p bench-cli -- run \
+cargo run -p mobench -- run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 100 \
@@ -162,7 +162,7 @@ cargo run -p bench-cli -- run \
 
 #### BrowserStack Run (Android)
 ```bash
-cargo run -p bench-cli -- run \
+cargo run -p mobench -- run \
   --target android \
   --function sample_fns::checksum \
   --iterations 30 \
@@ -173,7 +173,7 @@ cargo run -p bench-cli -- run \
 
 #### BrowserStack Run (iOS)
 ```bash
-cargo run -p bench-cli -- run \
+cargo run -p mobench -- run \
   --target ios \
   --function sample_fns::fibonacci \
   --iterations 20 \
@@ -186,13 +186,13 @@ cargo run -p bench-cli -- run \
 #### Using Config Files
 ```bash
 # Generate starter config
-cargo run -p bench-cli -- init --output bench-config.toml --target android
+cargo run -p mobench -- init --output bench-config.toml --target android
 
 # Generate device matrix
-cargo run -p bench-cli -- plan --output device-matrix.yaml
+cargo run -p mobench -- plan --output device-matrix.yaml
 
 # Run with config
-cargo run -p bench-cli -- run --config bench-config.toml
+cargo run -p mobench -- run --config bench-config.toml
 ```
 
 ## Key Implementation Details
@@ -392,4 +392,4 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
 - **`ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift`**: iOS FFI wrapper
 - **`ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h`**: Objective-C bridging header for C FFI types
 - **`ios/BenchRunner/project.yml`**: XcodeGen project specification
-- **`crates/bench-cli/src/browserstack.rs`**: BrowserStack REST API client
+- **`crates/mobench/src/browserstack.rs`**: BrowserStack REST API client

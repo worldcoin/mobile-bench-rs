@@ -117,7 +117,7 @@ jobs:
 
       - name: Local bench summary (stub)
         run: |
-          cargo run -p bench-cli -- run \
+          cargo run -p mobench -- run \
             --target android \
             --function sample_fns::fibonacci \
             --iterations 5 \

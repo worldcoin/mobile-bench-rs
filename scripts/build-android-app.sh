@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ⚠️  DEPRECATION WARNING ⚠️
+# This script is legacy tooling for developing this repository.
+#
+# For SDK integrators, use instead:
+#   cargo run -p bench-cli -- build --target android
+#
+# This command does everything this script does, but in pure Rust with no dependencies
+# on having this repo's scripts/ directory locally.
+
 # Convenience wrapper: build Rust libs for all Android ABIs, sync them into the app,
 # then assemble the Android APK.
 #

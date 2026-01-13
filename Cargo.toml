@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/bench-cli",
+    "crates/mobench",
     "crates/bench-runner",
     "crates/bench-macros",
     "crates/bench-sdk",

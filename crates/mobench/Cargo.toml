@@ -1,8 +1,23 @@
 [package]
-name = "bench-cli"
+name = "mobench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Mobile benchmarking CLI for Rust - Run benchmarks on real Android and iOS devices"
+repository = "https://github.com/anthropics/mobile-bench-rs"
+keywords = ["benchmark", "mobile", "android", "ios", "performance"]
+categories = ["development-tools", "command-line-utilities"]
+
+default-run = "mobench"
+
+[[bin]]
+name = "mobench"
+path = "src/main.rs"
+
+[[bin]]
+name = "cargo-mobench"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
