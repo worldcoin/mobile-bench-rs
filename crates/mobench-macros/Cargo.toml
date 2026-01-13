@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Proc macros for bench-sdk - #[benchmark] attribute"
-repository = "https://github.com/dcbuild3r/mobile-bench-rs"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
 keywords = ["benchmark", "mobile", "macro", "procedural"]
 
 [lib]
