@@ -2,7 +2,7 @@
 
 Complete build instructions for Android and iOS targets.
 
-> **For SDK Integrators**: If you're importing `bench-sdk` into your project, use the CLI commands:
+> **For SDK Integrators**: If you're importing `mobench-sdk` into your project, use the CLI commands:
 > - `cargo mobench build --target android` for Android
 > - `cargo mobench build --target ios` for iOS
 >

@@ -636,12 +636,12 @@ impl IosBuilder {
     /// # Example
     ///
     /// ```no_run
-    /// use bench_sdk::builders::{IosBuilder, SigningMethod};
+    /// use mobench_sdk::builders::{IosBuilder, SigningMethod};
     ///
     /// let builder = IosBuilder::new(".", "bench-mobile");
     /// let ipa_path = builder.package_ipa("BenchRunner", SigningMethod::AdHoc)?;
     /// println!("IPA created at: {:?}", ipa_path);
-    /// # Ok::<(), bench_sdk::BenchError>(())
+    /// # Ok::<(), mobench_sdk::BenchError>(())
     /// ```
     pub fn package_ipa(
         &self,

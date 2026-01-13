@@ -149,8 +149,8 @@ pub enum BenchError {
 }
 
 // Convert from bench-sdk types
-impl From<bench_sdk::BenchSpec> for BenchSpec {
-    fn from(spec: bench_sdk::BenchSpec) -> Self {
+impl From<mobench_sdk::BenchSpec> for BenchSpec {
+    fn from(spec: mobench_sdk::BenchSpec) -> Self {
         Self {
             name: spec.name,
             iterations: spec.iterations,
@@ -159,7 +159,7 @@ impl From<bench_sdk::BenchSpec> for BenchSpec {
     }
 }
 
-impl From<BenchSpec> for bench_sdk::BenchSpec {
+impl From<BenchSpec> for mobench_sdk::BenchSpec {
     fn from(spec: BenchSpec) -> Self {
         Self {
             name: spec.name,
@@ -169,16 +169,16 @@ impl From<BenchSpec> for bench_sdk::BenchSpec {
     }
 }
 
-impl From<bench_sdk::BenchSample> for BenchSample {
-    fn from(sample: bench_sdk::BenchSample) -> Self {
+impl From<mobench_sdk::BenchSample> for BenchSample {
+    fn from(sample: mobench_sdk::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
         }
     }
 }
 
-impl From<bench_sdk::RunnerReport> for BenchReport {
-    fn from(report: bench_sdk::RunnerReport) -> Self {
+impl From<mobench_sdk::RunnerReport> for BenchReport {
+    fn from(report: mobench_sdk::RunnerReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
@@ -186,15 +186,15 @@ impl From<bench_sdk::RunnerReport> for BenchReport {
     }
 }
 
-impl From<bench_sdk::BenchError> for BenchError {
-    fn from(err: bench_sdk::BenchError) -> Self {
+impl From<mobench_sdk::BenchError> for BenchError {
+    fn from(err: mobench_sdk::BenchError) -> Self {
         match err {
-            bench_sdk::BenchError::Runner(runner_err) => {
+            mobench_sdk::BenchError::Runner(runner_err) => {
                 BenchError::ExecutionFailed {
                     reason: runner_err.to_string(),
                 }
             }
-            bench_sdk::BenchError::UnknownFunction(name) => {
+            mobench_sdk::BenchError::UnknownFunction(name) => {
                 BenchError::UnknownFunction { name }
             }
             _ => BenchError::ExecutionFailed {
@@ -209,8 +209,8 @@ impl From<bench_sdk::BenchError> for BenchError {
 /// This is the main FFI entry point called from mobile platforms.
 #[uniffi::export]
 pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
-    let sdk_spec: bench_sdk::BenchSpec = spec.into();
-    let report = bench_sdk::run_benchmark(sdk_spec)?;
+    let sdk_spec: mobench_sdk::BenchSpec = spec.into();
+    let report = mobench_sdk::run_benchmark(sdk_spec)?;
     Ok(report.into())
 }
 
@@ -350,7 +350,7 @@ fn generate_example_benchmarks(output_dir: &Path) -> Result<(), BenchError> {
 //!
 //! This file demonstrates how to write benchmarks with bench-sdk.
 
-use bench_sdk::benchmark;
+use mobench_sdk::benchmark;
 
 /// Simple benchmark example
 #[benchmark]

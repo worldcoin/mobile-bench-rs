@@ -31,7 +31,7 @@ inventory::collect!(BenchFunction);
 /// # Example
 ///
 /// ```ignore
-/// use bench_sdk::registry::discover_benchmarks;
+/// use mobench_sdk::registry::discover_benchmarks;
 ///
 /// let benchmarks = discover_benchmarks();
 /// for bench in benchmarks {
@@ -60,7 +60,7 @@ pub fn discover_benchmarks() -> Vec<&'static BenchFunction> {
 /// # Example
 ///
 /// ```ignore
-/// use bench_sdk::registry::find_benchmark;
+/// use mobench_sdk::registry::find_benchmark;
 ///
 /// if let Some(bench) = find_benchmark("fibonacci") {
 ///     println!("Found benchmark: {}", bench.name);
@@ -82,7 +82,7 @@ pub fn find_benchmark(name: &str) -> Option<&'static BenchFunction> {
 /// # Example
 ///
 /// ```ignore
-/// use bench_sdk::registry::list_benchmark_names;
+/// use mobench_sdk::registry::list_benchmark_names;
 ///
 /// let names = list_benchmark_names();
 /// println!("Available benchmarks:");

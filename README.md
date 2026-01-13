@@ -1,12 +1,12 @@
-# mobile-bench-rs → bench-sdk
+# mobile-bench-rs → mobench-sdk
 
 **Mobile benchmarking SDK for Rust** - Run Rust benchmarks on real Android and iOS devices.
 
-> **Phase 1 MVP Complete!** This project has been transformed into an importable library crate (`bench-sdk`) that can be published to crates.io.
+> **Phase 1 MVP Complete!** This project has been transformed into an importable library crate (`mobench-sdk`) that can be published to crates.io.
 
 ## 🎯 For SDK Integrators
 
-**Importing bench-sdk into your project?** You do **NOT** need the `scripts/` directory!
+**Importing mobench-sdk into your project?** You do **NOT** need the `scripts/` directory!
 
 - ✅ Use `cargo mobench build --target <android|ios|both>` for all builds
 - ✅ All build logic is in pure Rust (no shell scripts required)
@@ -21,11 +21,11 @@
 
 ### Library-First Design
 
-Use `bench-sdk` in any Rust project:
+Use `mobench-sdk` in any Rust project:
 
 ```toml
 [dependencies]
-bench-sdk = "0.1"
+mobench-sdk = "0.1"
 inventory = "0.3"  # Required for registry
 ```
 
@@ -34,7 +34,7 @@ inventory = "0.3"  # Required for registry
 Mark functions for benchmarking:
 
 ```rust
-use bench_sdk::benchmark;
+use mobench_sdk::benchmark;
 
 #[benchmark]
 fn my_expensive_operation() {
@@ -61,8 +61,8 @@ cargo mobench list
 
 ### Architecture
 
-- **bench-sdk**: Core library (registry, runner, builders, codegen)
-- **bench-macros**: `#[benchmark]` proc macro
+- **mobench-sdk**: Core library (registry, runner, builders, codegen)
+- **mobench-macros**: `#[benchmark]` proc macro
 - **mobench**: CLI tool for building, testing, and running benchmarks
 - **examples/basic-benchmark**: Example using the new SDK
 

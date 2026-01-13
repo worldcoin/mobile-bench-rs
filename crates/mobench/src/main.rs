@@ -134,12 +134,12 @@ enum SdkTarget {
     Both,
 }
 
-impl From<SdkTarget> for bench_sdk::Target {
+impl From<SdkTarget> for mobench_sdk::Target {
     fn from(target: SdkTarget) -> Self {
         match target {
-            SdkTarget::Android => bench_sdk::Target::Android,
-            SdkTarget::Ios => bench_sdk::Target::Ios,
-            SdkTarget::Both => bench_sdk::Target::Both,
+            SdkTarget::Android => mobench_sdk::Target::Android,
+            SdkTarget::Ios => mobench_sdk::Target::Ios,
+            SdkTarget::Both => mobench_sdk::Target::Both,
         }
     }
 }
@@ -153,11 +153,11 @@ enum IosSigningMethodArg {
     Development,
 }
 
-impl From<IosSigningMethodArg> for bench_sdk::builders::SigningMethod {
+impl From<IosSigningMethodArg> for mobench_sdk::builders::SigningMethod {
     fn from(arg: IosSigningMethodArg) -> Self {
         match arg {
-            IosSigningMethodArg::Adhoc => bench_sdk::builders::SigningMethod::AdHoc,
-            IosSigningMethodArg::Development => bench_sdk::builders::SigningMethod::Development,
+            IosSigningMethodArg::Adhoc => mobench_sdk::builders::SigningMethod::AdHoc,
+            IosSigningMethodArg::Development => mobench_sdk::builders::SigningMethod::Development,
         }
     }
 }
@@ -796,10 +796,10 @@ fn run_ios_build() -> Result<(PathBuf, PathBuf)> {
     let root = repo_root()?;
     let crate_name =
         detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
-    let builder = bench_sdk::builders::IosBuilder::new(&root, crate_name).verbose(true);
-    let cfg = bench_sdk::BuildConfig {
-        target: bench_sdk::Target::Ios,
-        profile: bench_sdk::BuildProfile::Debug,
+    let builder = mobench_sdk::builders::IosBuilder::new(&root, crate_name).verbose(true);
+    let cfg = mobench_sdk::BuildConfig {
+        target: mobench_sdk::Target::Ios,
+        profile: mobench_sdk::BuildProfile::Debug,
         incremental: true,
     };
     let result = builder.build(&cfg)?;
@@ -965,14 +965,14 @@ fn expand_env_var(raw: &str) -> Result<String> {
 }
 
 fn run_local_smoke(spec: &RunSpec) -> Result<Value> {
-    let bench_spec = bench_sdk::BenchSpec {
+    let bench_spec = mobench_sdk::BenchSpec {
         name: spec.function.clone(),
         iterations: spec.iterations,
         warmup: spec.warmup,
     };
 
     let report =
-        bench_sdk::run_benchmark(bench_spec).map_err(|e| anyhow!("benchmark failed: {:?}", e))?;
+        mobench_sdk::run_benchmark(bench_spec).map_err(|e| anyhow!("benchmark failed: {:?}", e))?;
 
     serde_json::to_value(&report).context("serializing benchmark report")
 }
@@ -1015,12 +1015,12 @@ fn run_android_build(_ndk_home: &str) -> Result<PathBuf> {
     let crate_name =
         detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
 
-    let cfg = bench_sdk::BuildConfig {
-        target: bench_sdk::Target::Android,
-        profile: bench_sdk::BuildProfile::Debug,
+    let cfg = mobench_sdk::BuildConfig {
+        target: mobench_sdk::Target::Android,
+        profile: mobench_sdk::BuildProfile::Debug,
         incremental: true,
     };
-    let builder = bench_sdk::builders::AndroidBuilder::new(&root, crate_name).verbose(true);
+    let builder = mobench_sdk::builders::AndroidBuilder::new(&root, crate_name).verbose(true);
     let result = builder.build(&cfg)?;
     Ok(result.app_path)
 }
@@ -1058,26 +1058,26 @@ fn write_file(path: &Path, contents: &[u8]) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("writing file {:?}", path))
 }
 
-/// Initialize a new benchmark project using bench-sdk (Phase 1 MVP)
+/// Initialize a new benchmark project using mobench-sdk (Phase 1 MVP)
 fn cmd_init_sdk(
     target: SdkTarget,
     project_name: String,
     output_dir: PathBuf,
     generate_examples: bool,
 ) -> Result<()> {
-    println!("Initializing benchmark project with bench-sdk...");
+    println!("Initializing benchmark project with mobench-sdk...");
     println!("  Project name: {}", project_name);
     println!("  Target: {:?}", target);
     println!("  Output directory: {:?}", output_dir);
 
-    let config = bench_sdk::InitConfig {
+    let config = mobench_sdk::InitConfig {
         target: target.into(),
         project_name: project_name.clone(),
         output_dir: output_dir.clone(),
         generate_examples,
     };
 
-    bench_sdk::codegen::generate_project(&config).context("Failed to generate project")?;
+    mobench_sdk::codegen::generate_project(&config).context("Failed to generate project")?;
 
     println!("\n✓ Project initialized successfully!");
     println!("\nNext steps:");
@@ -1088,7 +1088,7 @@ fn cmd_init_sdk(
     Ok(())
 }
 
-/// Build mobile artifacts using bench-sdk (Phase 1 MVP)
+/// Build mobile artifacts using mobench-sdk (Phase 1 MVP)
 fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
     println!("Building mobile artifacts...");
     println!("  Target: {:?}", target);
@@ -1098,12 +1098,12 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
     let crate_name = detect_bench_mobile_crate_name(&project_root)
         .unwrap_or_else(|_| "bench-mobile".to_string()); // Fallback for legacy layouts
 
-    let build_config = bench_sdk::BuildConfig {
+    let build_config = mobench_sdk::BuildConfig {
         target: target.into(),
         profile: if release {
-            bench_sdk::BuildProfile::Release
+            mobench_sdk::BuildProfile::Release
         } else {
-            bench_sdk::BuildProfile::Debug
+            mobench_sdk::BuildProfile::Debug
         },
         incremental: true,
     };
@@ -1111,14 +1111,14 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
     match target {
         SdkTarget::Android => {
             let builder =
-                bench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
+                mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
                     .verbose(true);
             let result = builder.build(&build_config)?;
             println!("\n✓ Android build completed!");
             println!("  APK: {:?}", result.app_path);
         }
         SdkTarget::Ios => {
-            let builder = bench_sdk::builders::IosBuilder::new(&project_root, crate_name.clone())
+            let builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name.clone())
                 .verbose(true);
             let result = builder.build(&build_config)?;
             println!("\n✓ iOS build completed!");
@@ -1127,7 +1127,7 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
         SdkTarget::Both => {
             // Build Android
             let android_builder =
-                bench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
+                mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
                     .verbose(true);
             let android_result = android_builder.build(&build_config)?;
             println!("\n✓ Android build completed!");
@@ -1135,7 +1135,7 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
 
             // Build iOS
             let ios_builder =
-                bench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+                mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
             let ios_result = ios_builder.build(&build_config)?;
             println!("\n✓ iOS build completed!");
             println!("  Framework: {:?}", ios_result.app_path);
@@ -1163,13 +1163,13 @@ fn detect_bench_mobile_crate_name(root: &Path) -> Result<String> {
 fn cmd_list() -> Result<()> {
     println!("Discovering benchmark functions...\n");
 
-    let benchmarks = bench_sdk::discover_benchmarks();
+    let benchmarks = mobench_sdk::discover_benchmarks();
 
     if benchmarks.is_empty() {
         println!("No benchmarks found.");
         println!("\nTo add benchmarks:");
         println!("  1. Add #[benchmark] attribute to functions");
-        println!("  2. Make sure bench-sdk is in your dependencies");
+        println!("  2. Make sure mobench-sdk is in your dependencies");
         println!("  3. Rebuild your project");
     } else {
         println!("Found {} benchmark(s):", benchmarks.len());
@@ -1191,9 +1191,9 @@ fn cmd_package_ipa(scheme: &str, method: IosSigningMethodArg) -> Result<()> {
     let crate_name = detect_bench_mobile_crate_name(&project_root)
         .unwrap_or_else(|_| "bench-mobile".to_string());
 
-    let builder = bench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+    let builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
 
-    let signing_method: bench_sdk::builders::SigningMethod = method.into();
+    let signing_method: mobench_sdk::builders::SigningMethod = method.into();
     let ipa_path = builder
         .package_ipa(scheme, signing_method)
         .context("Failed to package IPA")?;
@@ -1212,7 +1212,7 @@ mod tests {
     use super::*;
 
     // Register a lightweight benchmark for tests so the inventory contains at least one entry.
-    #[bench_sdk::benchmark]
+    #[mobench_sdk::benchmark]
     fn noop_benchmark() {
         std::hint::black_box(1u8);
     }

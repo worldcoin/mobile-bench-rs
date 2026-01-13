@@ -2,8 +2,8 @@
 members = [
     "crates/mobench",
     "crates/bench-runner",
-    "crates/bench-macros",
-    "crates/bench-sdk",
+    "crates/mobench-macros",
+    "crates/mobench-sdk",
     "crates/sample-fns",
     "examples/basic-benchmark",
 ]

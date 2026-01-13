@@ -121,8 +121,8 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "basic-benchmark"
 version = "0.1.0"
 dependencies = [
- "bench-sdk",
  "inventory",
+ "mobench-sdk",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -139,35 +139,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "bench-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "bench-runner"
 version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "bench-sdk"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bench-macros",
- "bench-runner",
- "include_dir",
- "inventory",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "toml 0.8.23",
 ]
 
 [[package]]
@@ -820,16 +796,40 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bench-runner",
- "bench-sdk",
  "clap",
  "dotenvy",
  "inventory",
+ "mobench-sdk",
  "reqwest",
  "sample-fns",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "mobench-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "mobench-sdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bench-runner",
+ "include_dir",
+ "inventory",
+ "mobench-macros",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
  "toml 0.8.23",
 ]
 

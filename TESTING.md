@@ -2,7 +2,7 @@
 
 This document provides comprehensive testing instructions for mobile-bench-rs.
 
-> **For SDK Integrators**: If you're importing `bench-sdk` into your project, use:
+> **For SDK Integrators**: If you're importing `mobench-sdk` into your project, use:
 > - `cargo mobench build --target <android|ios>` for builds
 > - Scripts shown below are legacy tooling for this repository
 > - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide

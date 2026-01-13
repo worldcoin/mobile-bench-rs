@@ -1,5 +1,5 @@
 [package]
-name = "bench-sdk"
+name = "mobench-sdk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,7 +15,7 @@ crate-type = ["lib"]
 [dependencies]
 # Core dependencies
 bench-runner = { path = "../bench-runner" }
-bench-macros = { path = "../bench-macros" }
+mobench-macros = { path = "../mobench-macros" }
 
 # Registry
 inventory.workspace = true

@@ -21,7 +21,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-bench-sdk = { path = "../bench-sdk" }
+mobench-sdk = { path = "../mobench-sdk" }
 bench-runner = { path = "../bench-runner" }
 sample-fns = { path = "../sample-fns" }
 clap.workspace = true

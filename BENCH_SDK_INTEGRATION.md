@@ -1,9 +1,9 @@
-# bench-sdk Integration Guide
+# mobench-sdk Integration Guide
 
-This guide shows how to integrate `bench-sdk` into an existing Rust project, run local
+This guide shows how to integrate `mobench-sdk` into an existing Rust project, run local
 mobile benchmarks, and then run them on BrowserStack.
 
-> **Important**: This guide is for integrators importing `bench-sdk` as a library.
+> **Important**: This guide is for integrators importing `mobench-sdk` as a library.
 > You do **NOT** need the `scripts/` directory from this repository.
 > All build functionality is available via `cargo mobench` commands.
 
@@ -25,21 +25,21 @@ Install the following tools (per platform):
     - https://doc.rust-lang.org/rustup/targets.html
   - `xcodegen` (optional): https://github.com/yonaskolb/XcodeGen
 
-## 2) Add bench-sdk to your crate
+## 2) Add mobench-sdk to your crate
 
 In your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-bench-sdk = "0.1"
+mobench-sdk = "0.1"
 ```
 
 ## 3) Annotate benchmark functions
 
-Add `#[bench_sdk::benchmark]` to any function you want to run on devices.
+Add `#[mobench_sdk::benchmark]` to any function you want to run on devices.
 
 ```rust
-use bench_sdk::benchmark;
+use mobench_sdk::benchmark;
 
 #[benchmark]
 fn checksum_bench() {
@@ -64,7 +64,7 @@ cargo mobench init-sdk --target both --project-name my-bench --output-dir .
 This generates:
 - `bench-mobile/` (FFI bridge that links your crate)
 - `android/` and `ios/` app templates
-- `bench-sdk.toml` configuration
+- `mobench-sdk.toml` configuration
 
 ## 5) Local Android testing
 

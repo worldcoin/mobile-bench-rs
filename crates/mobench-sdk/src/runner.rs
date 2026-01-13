@@ -24,7 +24,7 @@ use bench_runner::run_closure;
 /// # Example
 ///
 /// ```ignore
-/// use bench_sdk::{BenchSpec, run_benchmark};
+/// use mobench_sdk::{BenchSpec, run_benchmark};
 ///
 /// let spec = BenchSpec {
 ///     name: "my_benchmark".to_string(),
@@ -57,7 +57,7 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<RunnerReport, BenchError> {
 /// # Example
 ///
 /// ```ignore
-/// use bench_sdk::BenchmarkBuilder;
+/// use mobench_sdk::BenchmarkBuilder;
 ///
 /// let report = BenchmarkBuilder::new("my_benchmark")
 ///     .iterations(100)

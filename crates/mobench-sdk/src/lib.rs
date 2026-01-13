@@ -14,7 +14,7 @@
 //!
 //! 2. Mark functions with `#[benchmark]`:
 //! ```ignore
-//! use bench_sdk::benchmark;
+//! use mobench_sdk::benchmark;
 //!
 //! #[benchmark]
 //! fn my_expensive_operation() {
@@ -47,9 +47,9 @@
 //! # Example: Programmatic Usage
 //!
 //! ```ignore
-//! use bench_sdk::{BenchmarkBuilder, BenchSpec};
+//! use mobench_sdk::{BenchmarkBuilder, BenchSpec};
 //!
-//! fn main() -> Result<(), bench_sdk::BenchError> {
+//! fn main() -> Result<(), mobench_sdk::BenchError> {
 //!     // Using the builder pattern
 //!     let report = BenchmarkBuilder::new("my_benchmark")
 //!         .iterations(100)
@@ -64,7 +64,7 @@
 //!         iterations: 50,
 //!         warmup: 5,
 //!     };
-//!     let report = bench_sdk::run_benchmark(spec)?;
+//!     let report = mobench_sdk::run_benchmark(spec)?;
 //!
 //!     Ok(())
 //! }
@@ -78,7 +78,7 @@ pub mod runner;
 pub mod types;
 
 // Re-export the benchmark macro from bench-macros
-pub use bench_macros::benchmark;
+pub use mobench_macros::benchmark;
 
 // Re-export key types for convenience
 pub use registry::{BenchFunction, discover_benchmarks, find_benchmark, list_benchmark_names};

@@ -16,7 +16,7 @@ use syn::{ItemFn, parse_macro_input};
 /// # Example
 ///
 /// ```ignore
-/// use bench_sdk::benchmark;
+/// use mobench_sdk::benchmark;
 ///
 /// #[benchmark]
 /// fn fibonacci_bench() {
@@ -51,7 +51,7 @@ pub fn benchmark(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         // Register the function with inventory
         ::inventory::submit! {
-            ::bench_sdk::registry::BenchFunction {
+            ::mobench_sdk::registry::BenchFunction {
                 name: ::std::concat!(#module_path, "::", #fn_name_str),
                 invoke: |_args| {
                     #fn_name();
