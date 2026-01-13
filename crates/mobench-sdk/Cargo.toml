@@ -10,7 +10,7 @@ keywords = ["benchmark", "mobile", "android", "ios", "performance"]
 categories = ["development-tools::profiling", "development-tools::testing"]
 include = [
     "src/**/*",
-    "../../templates/**/*",
+    "templates/**/*",
     "Cargo.toml",
     "README.md"
 ]

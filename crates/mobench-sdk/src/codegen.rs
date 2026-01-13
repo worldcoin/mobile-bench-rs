@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use include_dir::{Dir, DirEntry, include_dir};
 
-const ANDROID_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../templates/android");
-const IOS_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../templates/ios");
+const ANDROID_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/android");
+const IOS_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/ios");
 
 /// Template variable that can be replaced in template files
 #[derive(Debug, Clone)]
