@@ -5,7 +5,7 @@
 
 use crate::registry::find_benchmark;
 use crate::types::{BenchError, BenchSpec, RunnerReport};
-use bench_runner::run_closure;
+use mobench_runner::run_closure;
 
 /// Runs a benchmark by name
 ///
@@ -42,7 +42,7 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<RunnerReport, BenchError> {
 
     // Create a closure that invokes the registered function
     let closure =
-        || (bench_fn.invoke)(&[]).map_err(|e| bench_runner::BenchError::Execution(e.to_string()));
+        || (bench_fn.invoke)(&[]).map_err(|e| mobench_runner::BenchError::Execution(e.to_string()));
 
     // Run the benchmark using bench-runner's timing infrastructure
     let report = run_closure(spec, closure)?;

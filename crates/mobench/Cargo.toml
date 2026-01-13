@@ -22,7 +22,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 mobench-sdk = { version = "0.1", path = "../mobench-sdk" }
-bench-runner = { version = "0.1", path = "../bench-runner" }
+mobench-runner = { version = "0.1", path = "../mobench-runner" }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

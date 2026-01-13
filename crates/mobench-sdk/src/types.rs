@@ -1,9 +1,9 @@
 //! Core types for bench-sdk
 //!
-//! This module re-exports types from bench-runner and adds SDK-specific types.
+//! This module re-exports types from mobench-runner and adds SDK-specific types.
 
-// Re-export bench-runner types for convenience
-pub use bench_runner::{
+// Re-export mobench-runner types for convenience
+pub use mobench_runner::{
     BenchError as RunnerError, BenchReport as RunnerReport, BenchSample, BenchSpec,
 };
 
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 pub enum BenchError {
     /// Error from the benchmark runner
     #[error("runner error: {0}")]
-    Runner(#[from] bench_runner::BenchError),
+    Runner(#[from] mobench_runner::BenchError),
 
     /// Benchmark function not found in registry
     #[error("unknown benchmark function: {0}")]

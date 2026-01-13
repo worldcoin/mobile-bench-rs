@@ -1,6 +1,6 @@
 //! Sample benchmark functions for mobile testing using UniFFI (proc macro mode).
 
-use bench_runner::{run_closure, BenchError as BenchRunnerError};
+use mobench_runner::{run_closure, BenchError as BenchRunnerError};
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
 
@@ -43,8 +43,8 @@ pub enum BenchError {
 uniffi::setup_scaffolding!();
 
 // Conversion from bench-runner types
-impl From<bench_runner::BenchSpec> for BenchSpec {
-    fn from(spec: bench_runner::BenchSpec) -> Self {
+impl From<mobench_runner::BenchSpec> for BenchSpec {
+    fn from(spec: mobench_runner::BenchSpec) -> Self {
         Self {
             name: spec.name,
             iterations: spec.iterations,
@@ -53,7 +53,7 @@ impl From<bench_runner::BenchSpec> for BenchSpec {
     }
 }
 
-impl From<BenchSpec> for bench_runner::BenchSpec {
+impl From<BenchSpec> for mobench_runner::BenchSpec {
     fn from(spec: BenchSpec) -> Self {
         Self {
             name: spec.name,
@@ -63,16 +63,16 @@ impl From<BenchSpec> for bench_runner::BenchSpec {
     }
 }
 
-impl From<bench_runner::BenchSample> for BenchSample {
-    fn from(sample: bench_runner::BenchSample) -> Self {
+impl From<mobench_runner::BenchSample> for BenchSample {
+    fn from(sample: mobench_runner::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
         }
     }
 }
 
-impl From<bench_runner::BenchReport> for BenchReport {
-    fn from(report: bench_runner::BenchReport) -> Self {
+impl From<mobench_runner::BenchReport> for BenchReport {
+    fn from(report: mobench_runner::BenchReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
@@ -92,7 +92,7 @@ impl From<BenchRunnerError> for BenchError {
 /// Run a benchmark by name with the given specification.
 #[uniffi::export]
 pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
-    let runner_spec: bench_runner::BenchSpec = spec.into();
+    let runner_spec: mobench_runner::BenchSpec = spec.into();
 
     let report = match runner_spec.name.as_str() {
         "fibonacci" | "fib" | "sample_fns::fibonacci" => {

@@ -88,8 +88,8 @@ pub use types::{
     RunnerReport, Target,
 };
 
-// Re-export bench-runner types for backward compatibility
-pub use bench_runner;
+// Re-export mobench-runner types for backward compatibility
+pub use mobench_runner;
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

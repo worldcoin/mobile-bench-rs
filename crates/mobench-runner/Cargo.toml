@@ -1,11 +1,11 @@
 [package]
-name = "bench-runner"
+name = "mobench-runner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Lightweight benchmarking harness for mobile devices"
-repository = "https://github.com/dcbuild3r/mobile-bench-rs"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
 keywords = ["benchmark", "mobile", "timing", "profiling"]
 
 [dependencies]

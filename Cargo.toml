@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "crates/mobench",
-    "crates/bench-runner",
+    "crates/mobench-runner",
     "crates/mobench-macros",
     "crates/mobench-sdk",
     "crates/sample-fns",

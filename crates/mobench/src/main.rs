@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 #[cfg(test)]
-use bench_runner::{BenchSpec, run_closure};
+use mobench_runner::{BenchSpec, run_closure};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

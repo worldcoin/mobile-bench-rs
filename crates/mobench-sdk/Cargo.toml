@@ -20,7 +20,7 @@ crate-type = ["lib"]
 
 [dependencies]
 # Core dependencies
-bench-runner = { version = "0.1", path = "../bench-runner" }
+mobench-runner = { version = "0.1", path = "../mobench-runner" }
 mobench-macros = { version = "0.1", path = "../mobench-macros" }
 
 # Registry
