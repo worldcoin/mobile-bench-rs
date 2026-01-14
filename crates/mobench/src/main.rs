@@ -231,6 +231,8 @@ struct RunSummary {
     remote_run: Option<RemoteRun>,
     #[serde(skip_serializing_if = "Option::is_none")]
     benchmark_results: Option<std::collections::HashMap<String, Vec<Value>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_metrics: Option<std::collections::HashMap<String, browserstack::PerformanceMetrics>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -347,6 +349,7 @@ fn main() -> Result<()> {
                 local_report,
                 remote_run,
                 benchmark_results: None,
+                performance_metrics: None,
             };
 
             if fetch {
@@ -378,18 +381,18 @@ fn main() -> Result<()> {
                     println!("Waiting for build {} to complete...", build_id);
                     println!("Dashboard: {}", dashboard_url);
 
-                    match client.wait_and_fetch_results(
+                    match client.wait_and_fetch_all_results(
                         build_id,
                         platform,
                         Some(fetch_timeout_secs),
                     ) {
-                        Ok(results) => {
-                            println!("\n✓ Successfully fetched results from {} device(s)", results.len());
+                        Ok((bench_results, perf_metrics)) => {
+                            println!("\n✓ Successfully fetched results from {} device(s)", bench_results.len());
 
-                            // Print summary of results
-                            for (device, bench_results) in &results {
+                            // Print summary of benchmark results
+                            for (device, results) in &bench_results {
                                 println!("\n  Device: {}", device);
-                                for (idx, result) in bench_results.iter().enumerate() {
+                                for (idx, result) in results.iter().enumerate() {
                                     if let Some(function) = result.get("function").and_then(|f| f.as_str()) {
                                         println!("    Benchmark {}: {}", idx + 1, function);
                                     }
@@ -400,13 +403,31 @@ fn main() -> Result<()> {
                                         println!("      Samples: {}", samples.len());
                                     }
                                 }
+
+                                // Print performance metrics if available
+                                if let Some(metrics) = perf_metrics.get(device) {
+                                    if metrics.sample_count > 0 {
+                                        println!("\n    Performance Metrics:");
+                                        if let Some(mem) = &metrics.memory {
+                                            println!("      Memory:");
+                                            println!("        Peak: {:.2} MB", mem.peak_mb);
+                                            println!("        Average: {:.2} MB", mem.average_mb);
+                                        }
+                                        if let Some(cpu) = &metrics.cpu {
+                                            println!("      CPU:");
+                                            println!("        Peak: {:.1}%", cpu.peak_percent);
+                                            println!("        Average: {:.1}%", cpu.average_percent);
+                                        }
+                                    }
+                                }
                             }
 
                             println!("\n  View full results: {}", dashboard_url);
-                            summary.benchmark_results = Some(results);
+                            summary.benchmark_results = Some(bench_results);
+                            summary.performance_metrics = Some(perf_metrics);
                         }
                         Err(e) => {
-                            println!("\nWarning: Failed to fetch benchmark results: {}", e);
+                            println!("\nWarning: Failed to fetch results: {}", e);
                             println!("Build may still be accessible at: {}", dashboard_url);
                         }
                     }

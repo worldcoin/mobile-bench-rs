@@ -31,6 +31,14 @@ We recursively download ALL URLs from session JSON, which typically includes:
 - Timing samples (duration_ns for each iteration)
 - Statistical metrics (mean, median, min, max, stddev)
 
+**Performance Metrics (v0.1.5+):**
+- Extracted from device logs (JSON output with `"type": "performance"` or `memory`/`cpu` fields)
+- Memory usage (used_mb, max_mb, available_mb, total_mb)
+  - Aggregate statistics: peak, average, min
+- CPU usage (usage_percent)
+  - Aggregate statistics: peak, average, min
+- Automatically included in RunSummary when using `--fetch` flag
+
 ### ⚠️ What We DON'T Capture (But BrowserStack Provides)
 
 Based on [BrowserStack App Automate API documentation](https://www.browserstack.com/docs/app-automate/api-reference):
@@ -42,17 +50,17 @@ Based on [BrowserStack App Automate API documentation](https://www.browserstack.
 - `reason` - Failure reason if test failed
 - `build_tag` - Custom build tags
 
-**Performance Metrics (Requires Separate API Calls):**
+**Performance Metrics:**
 
-BrowserStack does NOT provide built-in CPU/Memory/Battery metrics in standard API responses. These would need to be:
+BrowserStack does NOT provide built-in CPU/Memory/Battery metrics in standard API responses. However, **mobench v0.1.5+ now supports extracting these metrics** if your app logs them:
 
-1. **Collected by your app** using Android/iOS APIs:
+1. **Collect metrics in your app** using Android/iOS APIs:
    - Android: `ActivityManager.MemoryInfo`, `Debug.MemoryInfo`
    - iOS: `task_info`, `mach_task_basic_info`
 
-2. **Logged to device logs** in JSON format
+2. **Log to device logs** in JSON format (see example below)
 
-3. **Extracted by our tool** alongside benchmark results
+3. **mobench automatically extracts** them alongside benchmark results when using `--fetch`
 
 ## BrowserStack Limitations
 
@@ -135,42 +143,67 @@ Ensure your app logs performance metrics as JSON to stdout/logcat:
 
 ### Step 3: Extract Metrics with mobench
 
-The `extract_benchmark_results()` function can be enhanced to also extract performance metrics:
+**✅ Implemented in v0.1.5+**
+
+mobench now automatically extracts both benchmark results and performance metrics:
 
 ```rust
-// Current: Only extracts benchmark results
+// Extracts benchmark results
 let results = client.extract_benchmark_results(&logs)?;
 
-// Future: Also extract performance metrics
+// Extracts performance metrics
 let performance = client.extract_performance_metrics(&logs)?;
+
+// Or get both at once
+let (bench_results, perf_metrics) = client.wait_and_fetch_all_results(
+    build_id,
+    platform,
+    Some(timeout_secs),
+)?;
 ```
 
-## Proposed Enhancement
+## Implementation Details
 
-Add performance metric extraction to mobench:
-
-### New API Methods
+### API Methods
 
 ```rust
 impl BrowserStackClient {
     /// Extract performance metrics from device logs
-    pub fn extract_performance_metrics(&self, logs: &str) -> Result<Vec<PerformanceSnapshot>>;
+    pub fn extract_performance_metrics(&self, logs: &str) -> Result<PerformanceMetrics>;
+
+    /// Wait for build completion and fetch both benchmark and performance results
+    pub fn wait_and_fetch_all_results(
+        &self,
+        build_id: &str,
+        platform: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<(
+        HashMap<String, Vec<Value>>,        // benchmark_results
+        HashMap<String, PerformanceMetrics>, // performance_metrics
+    )>;
 }
 
-pub struct PerformanceSnapshot {
-    pub timestamp_ms: u64,
-    pub memory: MemoryMetrics,
-    pub cpu: Option<CpuMetrics>,
+pub struct PerformanceMetrics {
+    pub sample_count: usize,
+    pub memory: Option<AggregateMemoryMetrics>,
+    pub cpu: Option<AggregateCpuMetrics>,
+    pub snapshots: Vec<PerformanceSnapshot>,
 }
 
-pub struct MemoryMetrics {
-    pub used_mb: f64,
-    pub max_mb: f64,
-    pub available_mb: Option<f64>,
+pub struct AggregateMemoryMetrics {
+    pub peak_mb: f64,
+    pub average_mb: f64,
+    pub min_mb: f64,
+}
+
+pub struct AggregateCpuMetrics {
+    pub peak_percent: f64,
+    pub average_percent: f64,
+    pub min_percent: f64,
 }
 ```
 
-### Enhanced RunSummary Output
+### RunSummary Output Format
 
 ```json
 {
@@ -180,15 +213,24 @@ pub struct MemoryMetrics {
   },
   "performance_metrics": {
     "Google Pixel 7-13.0": {
+      "sample_count": 30,
       "memory": {
         "peak_mb": 145.2,
         "average_mb": 128.7,
-        "samples": 30
+        "min_mb": 115.3
       },
       "cpu": {
         "peak_percent": 78.5,
-        "average_percent": 45.2
-      }
+        "average_percent": 45.2,
+        "min_percent": 12.1
+      },
+      "snapshots": [
+        {
+          "timestamp_ms": 1705238400000,
+          "memory": {"used_mb": 128.5, "max_mb": 512.0},
+          "cpu": {"usage_percent": 45.2}
+        }
+      ]
     }
   }
 }

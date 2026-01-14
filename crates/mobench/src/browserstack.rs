@@ -372,6 +372,31 @@ impl BrowserStackClient {
         }
     }
 
+    /// Extract performance metrics from device logs
+    /// Looks for JSON objects with "type":"performance" or similar performance indicators
+    pub fn extract_performance_metrics(&self, logs: &str) -> Result<PerformanceMetrics> {
+        let mut snapshots = Vec::new();
+
+        for line in logs.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
+                    // Check if this looks like a performance metric
+                    if json.get("type").and_then(|t| t.as_str()) == Some("performance")
+                        || json.get("memory").is_some()
+                        || json.get("cpu").is_some()
+                    {
+                        if let Ok(snapshot) = serde_json::from_value::<PerformanceSnapshot>(json) {
+                            snapshots.push(snapshot);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(PerformanceMetrics::from_snapshots(snapshots))
+    }
+
     /// Wait for build completion and fetch all benchmark results
     ///
     /// This is a convenience method that:
@@ -429,6 +454,72 @@ impl BrowserStackClient {
             Ok(results)
         }
     }
+
+    /// Wait for build completion and fetch all results including performance metrics
+    ///
+    /// Returns both benchmark results and performance metrics
+    pub fn wait_and_fetch_all_results(
+        &self,
+        build_id: &str,
+        platform: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<(
+        std::collections::HashMap<String, Vec<Value>>,
+        std::collections::HashMap<String, PerformanceMetrics>,
+    )> {
+        let timeout = timeout_secs.unwrap_or(600);
+
+        println!("Waiting for build {} to complete (timeout: {}s)...", build_id, timeout);
+        let build_status = self.poll_build_completion(build_id, platform, timeout, 10)?;
+
+        println!("Build completed with status: {}", build_status.status);
+        println!("Fetching results from {} device(s)...", build_status.devices.len());
+
+        let mut benchmark_results = std::collections::HashMap::new();
+        let mut performance_metrics = std::collections::HashMap::new();
+
+        for device in &build_status.devices {
+            println!("  Fetching logs for {} (session: {})...", device.device, device.session_id);
+
+            match self.get_device_logs(build_id, &device.session_id, platform) {
+                Ok(logs) => {
+                    // Extract benchmark results
+                    match self.extract_benchmark_results(&logs) {
+                        Ok(bench_results) => {
+                            println!("    Found {} benchmark result(s)", bench_results.len());
+                            benchmark_results.insert(device.device.clone(), bench_results);
+                        }
+                        Err(e) => {
+                            println!("    Warning: No benchmark results - {}", e);
+                        }
+                    }
+
+                    // Extract performance metrics
+                    match self.extract_performance_metrics(&logs) {
+                        Ok(perf_metrics) if perf_metrics.sample_count > 0 => {
+                            println!("    Found {} performance metric snapshot(s)", perf_metrics.sample_count);
+                            performance_metrics.insert(device.device.clone(), perf_metrics);
+                        }
+                        Ok(_) => {
+                            println!("    No performance metrics found");
+                        }
+                        Err(e) => {
+                            println!("    Warning: Failed to extract performance metrics - {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("    Failed to fetch logs: {}", e);
+                }
+            }
+        }
+
+        if benchmark_results.is_empty() {
+            Err(anyhow!("No benchmark results found from any device"))
+        } else {
+            Ok((benchmark_results, performance_metrics))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -454,6 +545,114 @@ pub struct BuildStatus {
     pub status: String,
     pub duration: Option<u64>,
     pub devices: Vec<DeviceSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceSnapshot {
+    #[serde(default)]
+    pub timestamp_ms: Option<u64>,
+    #[serde(flatten)]
+    pub metrics: PerformanceData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<MemoryMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<CpuMetrics>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryMetrics {
+    #[serde(alias = "used_mb", alias = "usedMb")]
+    pub used_mb: Option<f64>,
+    #[serde(alias = "max_mb", alias = "maxMb")]
+    pub max_mb: Option<f64>,
+    #[serde(alias = "available_mb", alias = "availableMb")]
+    pub available_mb: Option<f64>,
+    #[serde(alias = "total_mb", alias = "totalMb")]
+    pub total_mb: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CpuMetrics {
+    #[serde(alias = "usage_percent", alias = "usagePercent")]
+    pub usage_percent: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PerformanceMetrics {
+    pub sample_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<AggregateMemoryMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<AggregateCpuMetrics>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub snapshots: Vec<PerformanceSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateMemoryMetrics {
+    pub peak_mb: f64,
+    pub average_mb: f64,
+    pub min_mb: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateCpuMetrics {
+    pub peak_percent: f64,
+    pub average_percent: f64,
+    pub min_percent: f64,
+}
+
+impl PerformanceMetrics {
+    pub fn from_snapshots(snapshots: Vec<PerformanceSnapshot>) -> Self {
+        if snapshots.is_empty() {
+            return Self::default();
+        }
+
+        let sample_count = snapshots.len();
+
+        // Aggregate memory metrics
+        let memory_values: Vec<f64> = snapshots
+            .iter()
+            .filter_map(|s| s.metrics.memory.as_ref()?.used_mb)
+            .collect();
+
+        let memory = if !memory_values.is_empty() {
+            Some(AggregateMemoryMetrics {
+                peak_mb: memory_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
+                average_mb: memory_values.iter().sum::<f64>() / memory_values.len() as f64,
+                min_mb: memory_values.iter().fold(f64::INFINITY, |a, &b| a.min(b)),
+            })
+        } else {
+            None
+        };
+
+        // Aggregate CPU metrics
+        let cpu_values: Vec<f64> = snapshots
+            .iter()
+            .filter_map(|s| s.metrics.cpu.as_ref()?.usage_percent)
+            .collect();
+
+        let cpu = if !cpu_values.is_empty() {
+            Some(AggregateCpuMetrics {
+                peak_percent: cpu_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
+                average_percent: cpu_values.iter().sum::<f64>() / cpu_values.len() as f64,
+                min_percent: cpu_values.iter().fold(f64::INFINITY, |a, &b| a.min(b)),
+            })
+        } else {
+            None
+        };
+
+        Self {
+            sample_count,
+            memory,
+            cpu,
+            snapshots,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -915,5 +1114,198 @@ Test completed
         let session: DeviceSessionResponse = serde_json::from_str(json).unwrap();
         assert_eq!(session.device, "Pixel 7");
         assert_eq!(session.session_id, "xyz789");
+    }
+
+    #[test]
+    fn extract_performance_metrics_finds_memory_and_cpu() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let logs = r#"
+Some device output
+2026-01-14 12:00:00 Starting test
+{"type": "performance", "timestamp_ms": 1705238400000, "memory": {"used_mb": 128.5, "max_mb": 512.0}, "cpu": {"usage_percent": 45.2}}
+{"type": "performance", "timestamp_ms": 1705238401000, "memory": {"used_mb": 135.0, "max_mb": 512.0}, "cpu": {"usage_percent": 52.1}}
+More output here
+        "#;
+
+        let metrics = client.extract_performance_metrics(logs).unwrap();
+        assert_eq!(metrics.sample_count, 2);
+
+        assert!(metrics.memory.is_some());
+        let mem = metrics.memory.as_ref().unwrap();
+        assert_eq!(mem.peak_mb, 135.0);
+        assert_eq!(mem.average_mb, 131.75); // (128.5 + 135.0) / 2
+        assert_eq!(mem.min_mb, 128.5);
+
+        assert!(metrics.cpu.is_some());
+        let cpu = metrics.cpu.as_ref().unwrap();
+        assert_eq!(cpu.peak_percent, 52.1);
+        assert!((cpu.average_percent - 48.65).abs() < 0.001); // (45.2 + 52.1) / 2
+        assert_eq!(cpu.min_percent, 45.2);
+    }
+
+    #[test]
+    fn extract_performance_metrics_handles_memory_only() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let logs = r#"
+{"memory": {"used_mb": 100.0, "max_mb": 512.0}}
+{"memory": {"used_mb": 120.0, "max_mb": 512.0}}
+        "#;
+
+        let metrics = client.extract_performance_metrics(logs).unwrap();
+        assert_eq!(metrics.sample_count, 2);
+        assert!(metrics.memory.is_some());
+        assert!(metrics.cpu.is_none());
+
+        let mem = metrics.memory.as_ref().unwrap();
+        assert_eq!(mem.peak_mb, 120.0);
+        assert_eq!(mem.average_mb, 110.0);
+    }
+
+    #[test]
+    fn extract_performance_metrics_handles_cpu_only() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let logs = r#"
+{"cpu": {"usage_percent": 30.5}}
+{"cpu": {"usage_percent": 40.5}}
+{"cpu": {"usage_percent": 35.0}}
+        "#;
+
+        let metrics = client.extract_performance_metrics(logs).unwrap();
+        assert_eq!(metrics.sample_count, 3);
+        assert!(metrics.memory.is_none());
+        assert!(metrics.cpu.is_some());
+
+        let cpu = metrics.cpu.as_ref().unwrap();
+        assert_eq!(cpu.peak_percent, 40.5);
+        assert_eq!(cpu.min_percent, 30.5);
+        // Average: (30.5 + 40.5 + 35.0) / 3 = 35.333...
+        assert!((cpu.average_percent - 35.333333).abs() < 0.001);
+    }
+
+    #[test]
+    fn extract_performance_metrics_returns_empty_when_no_metrics() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let logs = r#"
+Just some regular logs
+No performance data here
+Test completed
+        "#;
+
+        let metrics = client.extract_performance_metrics(logs).unwrap();
+        assert_eq!(metrics.sample_count, 0);
+        assert!(metrics.memory.is_none());
+        assert!(metrics.cpu.is_none());
+    }
+
+    #[test]
+    fn extract_performance_metrics_ignores_invalid_json() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let logs = r#"
+{"invalid": "json without performance fields"}
+{"memory": {"used_mb": 100.0}}
+{broken json}
+{"cpu": {"usage_percent": 50.0}}
+        "#;
+
+        let metrics = client.extract_performance_metrics(logs).unwrap();
+        assert_eq!(metrics.sample_count, 2);
+        assert!(metrics.memory.is_some());
+        assert!(metrics.cpu.is_some());
+    }
+
+    #[test]
+    fn extract_performance_metrics_handles_alternative_field_names() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        // Test camelCase variants
+        let logs = r#"
+{"memory": {"usedMb": 128.5, "maxMb": 512.0, "availableMb": 383.5}}
+        "#;
+
+        let metrics = client.extract_performance_metrics(logs).unwrap();
+        assert_eq!(metrics.sample_count, 1);
+
+        let mem = metrics.memory.as_ref().unwrap();
+        assert_eq!(mem.peak_mb, 128.5);
+    }
+
+    #[test]
+    fn performance_metrics_aggregates_correctly_with_mixed_data() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let logs = r#"
+{"memory": {"used_mb": 100.0}}
+{"cpu": {"usage_percent": 30.0}}
+{"memory": {"used_mb": 150.0}, "cpu": {"usage_percent": 50.0}}
+        "#;
+
+        let metrics = client.extract_performance_metrics(logs).unwrap();
+        assert_eq!(metrics.sample_count, 3);
+
+        // Memory should aggregate from snapshots 1 and 3
+        let mem = metrics.memory.as_ref().unwrap();
+        assert_eq!(mem.peak_mb, 150.0);
+        assert_eq!(mem.min_mb, 100.0);
+        assert_eq!(mem.average_mb, 125.0); // (100 + 150) / 2
+
+        // CPU should aggregate from snapshots 2 and 3
+        let cpu = metrics.cpu.as_ref().unwrap();
+        assert_eq!(cpu.peak_percent, 50.0);
+        assert_eq!(cpu.min_percent, 30.0);
+        assert_eq!(cpu.average_percent, 40.0); // (30 + 50) / 2
     }
 }
