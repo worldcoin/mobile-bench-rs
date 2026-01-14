@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">{{APP_NAME}}</string>
+    <string name="loading">Loading Rust benchmarks…</string>
+</resources>

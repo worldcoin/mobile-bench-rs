@@ -4,6 +4,19 @@ options:
 settings:
   base:
     SWIFT_VERSION: 5.9
+schemes:
+  BenchRunner:
+    build:
+      targets:
+        BenchRunner: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - BenchRunnerUITests
+    archive:
+      config: Release
 targets:
   BenchRunner:
     type: application
