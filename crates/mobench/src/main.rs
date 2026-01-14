@@ -287,7 +287,18 @@ fn main() -> Result<()> {
                 println!("JSON summary will be written to {:?}", path);
             }
 
-            let local_report = run_local_smoke(&spec)?;
+            // Only run local smoke for sample_fns functions (linked into CLI binary)
+            // User-defined benchmarks are not linked and will fail inventory lookup
+            let local_report = if spec.function.starts_with("sample_fns::") {
+                run_local_smoke(&spec)?
+            } else {
+                println!("Skipping local smoke test: user benchmarks not linked into CLI binary");
+                println!("Benchmark will run on mobile device");
+                json!({
+                    "skipped": true,
+                    "reason": "User benchmarks not linked into CLI binary (will run on mobile device)"
+                })
+            };
             let mut remote_run = None;
             let artifacts = if local_only {
                 println!("Skipping mobile build: --local-only set");
@@ -947,6 +958,8 @@ fn expand_env_var(raw: &str) -> Result<String> {
 }
 
 fn run_local_smoke(spec: &RunSpec) -> Result<Value> {
+    println!("Running local smoke test for {}...", spec.function);
+
     let bench_spec = mobench_sdk::BenchSpec {
         name: spec.function.clone(),
         iterations: spec.iterations,
