@@ -229,6 +229,8 @@ struct RunSummary {
     artifacts: Option<MobileArtifacts>,
     local_report: Value,
     remote_run: Option<RemoteRun>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    benchmark_results: Option<std::collections::HashMap<String, Vec<Value>>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -339,13 +341,13 @@ fn main() -> Result<()> {
                 }
             };
 
-            let summary = RunSummary {
+            let mut summary = RunSummary {
                 spec,
                 artifacts,
                 local_report,
                 remote_run,
+                benchmark_results: None,
             };
-            write_summary(&summary, output.as_deref())?;
 
             if fetch {
                 if let Some(remote) = &summary.remote_run {
@@ -362,20 +364,47 @@ fn main() -> Result<()> {
                         },
                         creds.project,
                     )?;
+
+                    let platform = match summary.spec.target {
+                        MobileTarget::Android => "espresso",
+                        MobileTarget::Ios => "xcuitest",
+                    };
+
+                    println!("Waiting for build {} to complete...", build_id);
+                    match client.wait_and_fetch_results(
+                        build_id,
+                        platform,
+                        Some(fetch_timeout_secs),
+                    ) {
+                        Ok(results) => {
+                            println!("Successfully fetched results from {} device(s)", results.len());
+                            summary.benchmark_results = Some(results);
+                        }
+                        Err(e) => {
+                            println!("Warning: Failed to fetch benchmark results: {}", e);
+                            println!("Build may still be accessible at: https://app-automate.browserstack.com/dashboard/v2/builds/{}", build_id);
+                        }
+                    }
+
+                    // Also save detailed artifacts to separate directory
                     let output_root = fetch_output_dir.join(build_id);
-                    fetch_browserstack_artifacts(
+                    if let Err(e) = fetch_browserstack_artifacts(
                         &client,
                         summary.spec.target,
                         build_id,
                         &output_root,
-                        true,
+                        false, // Don't wait again, we already did
                         fetch_poll_interval_secs,
                         fetch_timeout_secs,
-                    )?;
+                    ) {
+                        println!("Warning: Failed to fetch detailed artifacts: {}", e);
+                    }
                 } else {
                     println!("No BrowserStack run to fetch (devices not provided?)");
                 }
             }
+
+            write_summary(&summary, output.as_deref())?;
         }
         Command::Init { output, target } => {
             write_config_template(&output, target)?;
