@@ -664,11 +664,7 @@ impl IosBuilder {
     /// println!("IPA created at: {:?}", ipa_path);
     /// # Ok::<(), mobench_sdk::BenchError>(())
     /// ```
-    pub fn package_ipa(
-        &self,
-        scheme: &str,
-        method: SigningMethod,
-    ) -> Result<PathBuf, BenchError> {
+    pub fn package_ipa(&self, scheme: &str, method: SigningMethod) -> Result<PathBuf, BenchError> {
         // For repository structure: ios/BenchRunner/BenchRunner.xcodeproj
         // The directory and scheme happen to have the same name
         let ios_dir = self.project_root.join("ios").join(scheme);
@@ -695,11 +691,16 @@ impl IosBuilder {
         let build_dir = self.project_root.join("target/ios/build");
         let mut cmd = Command::new("xcodebuild");
         cmd.args(&[
-            "-project", project_path.to_str().unwrap(),
-            "-scheme", scheme,
-            "-destination", "generic/platform=iOS",
-            "-configuration", "Release",
-            "-derivedDataPath", build_dir.to_str().unwrap(),
+            "-project",
+            project_path.to_str().unwrap(),
+            "-scheme",
+            scheme,
+            "-destination",
+            "generic/platform=iOS",
+            "-configuration",
+            "Release",
+            "-derivedDataPath",
+            build_dir.to_str().unwrap(),
             "build",
         ]);
 
@@ -708,10 +709,7 @@ impl IosBuilder {
             SigningMethod::AdHoc => {
                 // Ad-hoc signing (works for BrowserStack, no Apple ID needed)
                 // For ad-hoc, we disable signing during build and sign manually after
-                cmd.args(&[
-                    "CODE_SIGNING_REQUIRED=NO",
-                    "CODE_SIGNING_ALLOWED=NO",
-                ]);
+                cmd.args(&["CODE_SIGNING_REQUIRED=NO", "CODE_SIGNING_ALLOWED=NO"]);
             }
             SigningMethod::Development => {
                 // Development signing (requires Apple Developer account)
@@ -754,13 +752,39 @@ impl IosBuilder {
             println!("  App bundle created successfully at {:?}", app_path);
         }
 
+        if matches!(method, SigningMethod::AdHoc) {
+            let output = Command::new("codesign")
+                .arg("--force")
+                .arg("--deep")
+                .arg("--sign")
+                .arg("-")
+                .arg(&app_path)
+                .output();
+
+            match output {
+                Ok(output) if output.status.success() => {
+                    if self.verbose {
+                        println!("  Signed app bundle with ad-hoc identity");
+                    }
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    println!("Warning: Ad-hoc signing failed: {}", stderr);
+                }
+                Err(err) => {
+                    println!("Warning: Could not run codesign: {}", err);
+                }
+            }
+        }
+
         println!("Creating IPA from app bundle...");
 
         // Step 3: Create IPA (which is just a zip of Payload/{app})
         let payload_dir = export_path.join("Payload");
         if payload_dir.exists() {
-            fs::remove_dir_all(&payload_dir)
-                .map_err(|e| BenchError::Build(format!("Failed to remove old Payload dir: {}", e)))?;
+            fs::remove_dir_all(&payload_dir).map_err(|e| {
+                BenchError::Build(format!("Failed to remove old Payload dir: {}", e))
+            })?;
         }
         fs::create_dir_all(&payload_dir)
             .map_err(|e| BenchError::Build(format!("Failed to create Payload dir: {}", e)))?;
@@ -795,24 +819,29 @@ impl IosBuilder {
 
     /// Recursively copies a directory
     fn copy_dir_recursive(&self, src: &Path, dest: &Path) -> Result<(), BenchError> {
-        fs::create_dir_all(dest)
-            .map_err(|e| BenchError::Build(format!("Failed to create directory {:?}: {}", dest, e)))?;
+        fs::create_dir_all(dest).map_err(|e| {
+            BenchError::Build(format!("Failed to create directory {:?}: {}", dest, e))
+        })?;
 
         for entry in fs::read_dir(src)
             .map_err(|e| BenchError::Build(format!("Failed to read directory {:?}: {}", src, e)))?
         {
-            let entry = entry.map_err(|e| BenchError::Build(format!("Failed to read entry: {}", e)))?;
+            let entry =
+                entry.map_err(|e| BenchError::Build(format!("Failed to read entry: {}", e)))?;
             let path = entry.path();
-            let file_name = path.file_name().ok_or_else(|| {
-                BenchError::Build(format!("Invalid file name in {:?}", path))
-            })?;
+            let file_name = path
+                .file_name()
+                .ok_or_else(|| BenchError::Build(format!("Invalid file name in {:?}", path)))?;
             let dest_path = dest.join(file_name);
 
             if path.is_dir() {
                 self.copy_dir_recursive(&path, &dest_path)?;
             } else {
                 fs::copy(&path, &dest_path).map_err(|e| {
-                    BenchError::Build(format!("Failed to copy {:?} to {:?}: {}", path, dest_path, e))
+                    BenchError::Build(format!(
+                        "Failed to copy {:?} to {:?}: {}",
+                        path, dest_path, e
+                    ))
                 })?;
             }
         }

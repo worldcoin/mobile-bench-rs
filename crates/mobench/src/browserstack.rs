@@ -181,7 +181,7 @@ impl BrowserStackClient {
             build_name: self.project.clone(),
             // Specify the test method to run (required by BrowserStack for XCUITest)
             only_testing: Some(vec![
-                "BenchRunnerUITests/BenchRunnerUITests/testLaunchShowsBenchmarkReport".to_string()
+                "BenchRunnerUITests/BenchRunnerUITests/testLaunchShowsBenchmarkReport".to_string(),
             ]),
         };
 
@@ -245,18 +245,14 @@ impl BrowserStackClient {
     pub fn get_espresso_build_status(&self, build_id: &str) -> Result<BuildStatus> {
         let path = format!("app-automate/espresso/v2/builds/{}", build_id);
         let json = self.get_json(&path)?;
-        let response: BuildStatusResponse = serde_json::from_value(json)
-            .context("parsing build status response")?;
-        Ok(response.into())
+        build_status_from_value(json).context("parsing build status response")
     }
 
     /// Get the status of an XCUITest build
     pub fn get_xcuitest_build_status(&self, build_id: &str) -> Result<BuildStatus> {
         let path = format!("app-automate/xcuitest/v2/builds/{}", build_id);
         let json = self.get_json(&path)?;
-        let response: BuildStatusResponse = serde_json::from_value(json)
-            .context("parsing build status response")?;
-        Ok(response.into())
+        build_status_from_value(json).context("parsing build status response")
     }
 
     /// Poll for build completion with timeout
@@ -311,7 +307,12 @@ impl BrowserStackClient {
     }
 
     /// Fetch device logs for a specific session
-    pub fn get_device_logs(&self, build_id: &str, session_id: &str, platform: &str) -> Result<String> {
+    pub fn get_device_logs(
+        &self,
+        build_id: &str,
+        session_id: &str,
+        platform: &str,
+    ) -> Result<String> {
         let path = match platform {
             "espresso" => format!(
                 "app-automate/espresso/v2/builds/{}/sessions/{}/devicelogs",
@@ -411,17 +412,26 @@ impl BrowserStackClient {
     )> {
         let timeout = timeout_secs.unwrap_or(600);
 
-        println!("Waiting for build {} to complete (timeout: {}s)...", build_id, timeout);
+        println!(
+            "Waiting for build {} to complete (timeout: {}s)...",
+            build_id, timeout
+        );
         let build_status = self.poll_build_completion(build_id, platform, timeout, 10)?;
 
         println!("Build completed with status: {}", build_status.status);
-        println!("Fetching results from {} device(s)...", build_status.devices.len());
+        println!(
+            "Fetching results from {} device(s)...",
+            build_status.devices.len()
+        );
 
         let mut benchmark_results = std::collections::HashMap::new();
         let mut performance_metrics = std::collections::HashMap::new();
 
         for device in &build_status.devices {
-            println!("  Fetching logs for {} (session: {})...", device.device, device.session_id);
+            println!(
+                "  Fetching logs for {} (session: {})...",
+                device.device, device.session_id
+            );
 
             match self.get_device_logs(build_id, &device.session_id, platform) {
                 Ok(logs) => {
@@ -439,7 +449,10 @@ impl BrowserStackClient {
                     // Extract performance metrics
                     match self.extract_performance_metrics(&logs) {
                         Ok(perf_metrics) if perf_metrics.sample_count > 0 => {
-                            println!("    Found {} performance metric snapshot(s)", perf_metrics.sample_count);
+                            println!(
+                                "    Found {} performance metric snapshot(s)",
+                                perf_metrics.sample_count
+                            );
                             performance_metrics.insert(device.device.clone(), perf_metrics);
                         }
                         Ok(_) => {
@@ -564,7 +577,9 @@ impl PerformanceMetrics {
 
         let memory = if !memory_values.is_empty() {
             Some(AggregateMemoryMetrics {
-                peak_mb: memory_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
+                peak_mb: memory_values
+                    .iter()
+                    .fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
                 average_mb: memory_values.iter().sum::<f64>() / memory_values.len() as f64,
                 min_mb: memory_values.iter().fold(f64::INFINITY, |a, &b| a.min(b)),
             })
@@ -625,6 +640,66 @@ struct DeviceSessionResponse {
     status: String,
     #[serde(alias = "deviceLogs", alias = "device_logs")]
     device_logs: Option<String>,
+}
+
+fn build_status_from_value(value: Value) -> Result<BuildStatus> {
+    if let Ok(response) = serde_json::from_value::<BuildStatusResponse>(value.clone()) {
+        return Ok(response.into());
+    }
+
+    let build_id = value
+        .get("build_id")
+        .or_else(|| value.get("buildId"))
+        .or_else(|| value.get("id"))
+        .and_then(|val| val.as_str())
+        .ok_or_else(|| anyhow!("build status response missing build id"))?
+        .to_string();
+    let status = value
+        .get("status")
+        .and_then(|val| val.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let duration = value.get("duration").and_then(|val| val.as_u64());
+
+    let mut devices = Vec::new();
+    if let Some(entries) = value.get("devices").and_then(|val| val.as_array()) {
+        for entry in entries {
+            let device_name = entry
+                .get("device")
+                .and_then(|val| val.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            if let Some(sessions) = entry.get("sessions").and_then(|val| val.as_array()) {
+                for session in sessions {
+                    let session_id = session
+                        .get("id")
+                        .or_else(|| session.get("session_id"))
+                        .or_else(|| session.get("sessionId"))
+                        .and_then(|val| val.as_str());
+                    if let Some(session_id) = session_id {
+                        let session_status = session
+                            .get("status")
+                            .and_then(|val| val.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        devices.push(DeviceSession {
+                            device: device_name.clone(),
+                            session_id: session_id.to_string(),
+                            status: session_status,
+                            device_logs: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(BuildStatus {
+        build_id,
+        status,
+        duration,
+        devices,
+    })
 }
 
 impl From<BuildStatusResponse> for BuildStatus {
@@ -918,7 +993,10 @@ Test completed
 
         let results = client.extract_benchmark_results(logs).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].get("function").unwrap().as_str().unwrap(), "sample_fns::fibonacci");
+        assert_eq!(
+            results[0].get("function").unwrap().as_str().unwrap(),
+            "sample_fns::fibonacci"
+        );
         assert_eq!(results[0].get("mean_ns").unwrap().as_u64().unwrap(), 1100);
     }
 
@@ -941,8 +1019,14 @@ Some other output
 
         let results = client.extract_benchmark_results(logs).unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].get("function").unwrap().as_str().unwrap(), "test1");
-        assert_eq!(results[1].get("function").unwrap().as_str().unwrap(), "test2");
+        assert_eq!(
+            results[0].get("function").unwrap().as_str().unwrap(),
+            "test1"
+        );
+        assert_eq!(
+            results[1].get("function").unwrap().as_str().unwrap(),
+            "test2"
+        );
     }
 
     #[test]
@@ -964,7 +1048,12 @@ Test completed
 
         let result = client.extract_benchmark_results(logs);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No benchmark results"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No benchmark results")
+        );
     }
 
     #[test]
@@ -986,7 +1075,10 @@ Test completed
 
         let results = client.extract_benchmark_results(logs).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].get("function").unwrap().as_str().unwrap(), "test1");
+        assert_eq!(
+            results[0].get("function").unwrap().as_str().unwrap(),
+            "test1"
+        );
     }
 
     #[test]
@@ -995,14 +1087,12 @@ Test completed
             build_id: "test123".to_string(),
             status: "done".to_string(),
             duration: Some(120),
-            devices: Some(vec![
-                DeviceSessionResponse {
-                    device: "Pixel 7-13".to_string(),
-                    session_id: "session123".to_string(),
-                    status: "passed".to_string(),
-                    device_logs: Some("https://example.com/logs".to_string()),
-                },
-            ]),
+            devices: Some(vec![DeviceSessionResponse {
+                device: "Pixel 7-13".to_string(),
+                session_id: "session123".to_string(),
+                status: "passed".to_string(),
+                device_logs: Some("https://example.com/logs".to_string()),
+            }]),
         };
 
         let status: BuildStatus = response.into();

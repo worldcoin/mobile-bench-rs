@@ -13,7 +13,10 @@ fn main() {
         Utf8PathBuf::from(path)
     } else {
         let profile = env::var("UNIFFI_PROFILE").unwrap_or_else(|_| "release".to_string());
-        println!("Building library to generate UniFFI metadata (profile={})...", profile);
+        println!(
+            "Building library to generate UniFFI metadata (profile={})...",
+            profile
+        );
         let target_dir = root_dir.join("target").join(&profile);
         let lib_name = if cfg!(target_os = "macos") {
             "libsample_fns.dylib"

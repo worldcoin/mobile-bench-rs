@@ -230,7 +230,8 @@ struct RunSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     benchmark_results: Option<std::collections::HashMap<String, Vec<Value>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    performance_metrics: Option<std::collections::HashMap<String, browserstack::PerformanceMetrics>>,
+    performance_metrics:
+        Option<std::collections::HashMap<String, browserstack::PerformanceMetrics>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -305,13 +306,17 @@ fn main() -> Result<()> {
                     MobileTarget::Android => {
                         let ndk = std::env::var("ANDROID_NDK_HOME")
                             .context("ANDROID_NDK_HOME must be set for Android builds")?;
-                        let apk = run_android_build(&ndk)?;
+                        let build = run_android_build(&ndk)?;
+                        let apk = build.app_path;
                         println!("Built Android APK at {:?}", apk);
                         if spec.devices.is_empty() {
                             println!("Skipping BrowserStack upload/run: no devices provided");
                             Some(MobileArtifacts::Android { apk })
                         } else {
-                            let run = trigger_browserstack_espresso(&spec, &apk)?;
+                            let test_apk = build.test_suite_path.as_ref().context(
+                                "Android test suite APK missing; run ./gradlew assembleDebugAndroidTest",
+                            )?;
+                            let run = trigger_browserstack_espresso(&spec, &apk, test_apk)?;
                             remote_run = Some(run);
                             Some(MobileArtifacts::Android { apk })
                         }
@@ -385,19 +390,32 @@ fn main() -> Result<()> {
                         Some(fetch_timeout_secs),
                     ) {
                         Ok((bench_results, perf_metrics)) => {
-                            println!("\n✓ Successfully fetched results from {} device(s)", bench_results.len());
+                            println!(
+                                "\n✓ Successfully fetched results from {} device(s)",
+                                bench_results.len()
+                            );
 
                             // Print summary of benchmark results
                             for (device, results) in &bench_results {
                                 println!("\n  Device: {}", device);
                                 for (idx, result) in results.iter().enumerate() {
-                                    if let Some(function) = result.get("function").and_then(|f| f.as_str()) {
+                                    if let Some(function) =
+                                        result.get("function").and_then(|f| f.as_str())
+                                    {
                                         println!("    Benchmark {}: {}", idx + 1, function);
                                     }
-                                    if let Some(mean) = result.get("mean_ns").and_then(|m| m.as_u64()) {
-                                        println!("      Mean: {} ns ({:.2} ms)", mean, mean as f64 / 1_000_000.0);
+                                    if let Some(mean) =
+                                        result.get("mean_ns").and_then(|m| m.as_u64())
+                                    {
+                                        println!(
+                                            "      Mean: {} ns ({:.2} ms)",
+                                            mean,
+                                            mean as f64 / 1_000_000.0
+                                        );
                                     }
-                                    if let Some(samples) = result.get("samples").and_then(|s| s.as_array()) {
+                                    if let Some(samples) =
+                                        result.get("samples").and_then(|s| s.as_array())
+                                    {
                                         println!("      Samples: {}", samples.len());
                                     }
                                 }
@@ -414,7 +432,10 @@ fn main() -> Result<()> {
                                         if let Some(cpu) = &metrics.cpu {
                                             println!("      CPU:");
                                             println!("        Peak: {:.1}%", cpu.peak_percent);
-                                            println!("        Average: {:.1}%", cpu.average_percent);
+                                            println!(
+                                                "        Average: {:.1}%",
+                                                cpu.average_percent
+                                            );
                                         }
                                     }
                                 }
@@ -584,19 +605,20 @@ fn fetch_browserstack_artifacts(
     let build_json = client.get_json(&build_path)?;
     write_json(output_root.join("build.json"), &build_json)?;
 
-    let sessions_json = match client.get_json(&sessions_path) {
-        Ok(value) => {
-            write_json(output_root.join("sessions.json"), &value)?;
-            Some(value)
+    let mut session_ids = extract_session_ids(&build_json);
+    if session_ids.is_empty() {
+        match client.get_json(&sessions_path) {
+            Ok(value) => {
+                write_json(output_root.join("sessions.json"), &value)?;
+                session_ids = extract_session_ids(&value);
+            }
+            Err(err) => {
+                let msg = shorten_html_error(&err.to_string());
+                println!("Sessions endpoint unavailable; falling back to build.json: {msg}");
+            }
         }
-        Err(err) => {
-            let msg = shorten_html_error(&err.to_string());
-            println!("Sessions endpoint unavailable; falling back to build.json: {msg}");
-            None
-        }
-    };
+    }
 
-    let session_ids = extract_session_ids(sessions_json.as_ref().unwrap_or(&build_json));
     if session_ids.is_empty() {
         println!("No sessions found for build {}", build_id);
         return Ok(());
@@ -882,7 +904,7 @@ struct ResolvedBrowserStack {
     project: Option<String>,
 }
 
-fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path) -> Result<RemoteRun> {
+fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path, test_apk: &Path) -> Result<RemoteRun> {
     let creds = resolve_browserstack_credentials(spec.browserstack.as_ref())?;
     let client = BrowserStackClient::new(
         BrowserStackAuth {
@@ -896,11 +918,7 @@ fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path) -> Result<RemoteRun
     let upload = client.upload_espresso_app(apk)?;
 
     // Upload the Espresso test-suite APK produced by Gradle.
-    // We rely on the standard androidTest debug output path.
-    let root = repo_root()?;
-    let test_apk =
-        root.join("android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk");
-    let test_upload = client.upload_espresso_test_suite(&test_apk)?;
+    let test_upload = client.upload_espresso_test_suite(test_apk)?;
 
     // Schedule the Espresso build with both app and testSuite, as required by BrowserStack.
     let run = client.schedule_espresso_run(
@@ -1074,7 +1092,7 @@ fn write_summary(summary: &RunSummary, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-fn run_android_build(_ndk_home: &str) -> Result<PathBuf> {
+fn run_android_build(_ndk_home: &str) -> Result<mobench_sdk::BuildResult> {
     let root = repo_root()?;
     let crate_name =
         detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
@@ -1086,7 +1104,7 @@ fn run_android_build(_ndk_home: &str) -> Result<PathBuf> {
     };
     let builder = mobench_sdk::builders::AndroidBuilder::new(&root, crate_name).verbose(true);
     let result = builder.build(&cfg)?;
-    Ok(result.app_path)
+    Ok(result)
 }
 
 fn load_dotenv() {
@@ -1221,7 +1239,12 @@ fn detect_bench_mobile_crate_name(root: &Path) -> Result<String> {
             .get("package")
             .and_then(|pkg| pkg.get("name"))
             .and_then(|n| n.as_str())
-            .ok_or_else(|| anyhow!("bench-mobile package.name missing in {:?}", bench_mobile_path))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "bench-mobile package.name missing in {:?}",
+                    bench_mobile_path
+                )
+            })?;
         return Ok(name.to_string());
     }
 
@@ -1286,7 +1309,10 @@ fn cmd_package_ipa(scheme: &str, method: IosSigningMethodArg) -> Result<()> {
     println!("  Path: {:?}", ipa_path);
     println!("\nYou can now:");
     println!("  - Install on device: Use Xcode or ios-deploy");
-    println!("  - Test on BrowserStack: cargo mobench run --target ios --ios-app {:?}", ipa_path);
+    println!(
+        "  - Test on BrowserStack: cargo mobench run --target ios --ios-app {:?}",
+        ipa_path
+    );
 
     Ok(())
 }

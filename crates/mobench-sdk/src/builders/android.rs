@@ -68,10 +68,14 @@ impl AndroidBuilder {
         println!("Building Android APK with Gradle...");
         let apk_path = self.build_apk(config)?;
 
+        // Step 5: Build Android test APK for BrowserStack
+        println!("Building Android test APK...");
+        let test_suite_path = self.build_test_apk(config)?;
+
         Ok(BuildResult {
             platform: Target::Android,
             app_path: apk_path,
-            test_suite_path: None, // TODO: Add support for building test APK
+            test_suite_path: Some(test_suite_path),
         })
     }
 
@@ -258,10 +262,7 @@ impl AndroidBuilder {
                 BenchError::Build(format!("Failed to create {} directory: {}", android_abi, e))
             })?;
 
-            let dest = dest_dir.join(format!(
-                "lib{}.so",
-                self.crate_name.replace("-", "_")
-            ));
+            let dest = dest_dir.join(format!("lib{}.so", self.crate_name.replace("-", "_")));
 
             if src.exists() {
                 std::fs::copy(&src, &dest).map_err(|e| {
@@ -330,6 +331,61 @@ impl AndroidBuilder {
         if !apk_path.exists() {
             return Err(BenchError::Build(format!(
                 "APK not found at expected location: {:?}",
+                apk_path
+            )));
+        }
+
+        Ok(apk_path)
+    }
+
+    /// Builds the Android test APK using Gradle
+    fn build_test_apk(&self, config: &BuildConfig) -> Result<PathBuf, BenchError> {
+        let android_dir = self.project_root.join("android");
+
+        if !android_dir.exists() {
+            return Err(BenchError::Build(format!(
+                "Android project not found at {:?}",
+                android_dir
+            )));
+        }
+
+        let gradle_task = match config.profile {
+            BuildProfile::Debug => "assembleDebugAndroidTest",
+            BuildProfile::Release => "assembleReleaseAndroidTest",
+        };
+
+        let mut cmd = Command::new("./gradlew");
+        cmd.arg(gradle_task).current_dir(&android_dir);
+
+        if self.verbose {
+            cmd.arg("--info");
+        }
+
+        let output = cmd
+            .output()
+            .map_err(|e| BenchError::Build(format!("Failed to run Gradle: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(BenchError::Build(format!(
+                "Gradle test APK build failed: {}",
+                stderr
+            )));
+        }
+
+        let profile_name = match config.profile {
+            BuildProfile::Debug => "debug",
+            BuildProfile::Release => "release",
+        };
+
+        let apk_path = android_dir
+            .join("app/build/outputs/apk/androidTest")
+            .join(profile_name)
+            .join(format!("app-{}-androidTest.apk", profile_name));
+
+        if !apk_path.exists() {
+            return Err(BenchError::Build(format!(
+                "Android test APK not found at expected location: {:?}",
                 apk_path
             )));
         }
