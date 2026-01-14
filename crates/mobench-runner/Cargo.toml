@@ -6,6 +6,7 @@ license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Lightweight benchmarking harness for mobile devices"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
+readme = "README.md"
 keywords = ["benchmark", "mobile", "timing", "profiling"]
 
 [dependencies]
