@@ -75,16 +75,29 @@ impl AndroidBuilder {
         })
     }
 
+    /// Finds the benchmark crate directory (either bench-mobile/ or crates/{crate_name}/)
+    fn find_crate_dir(&self) -> Result<PathBuf, BenchError> {
+        // Try bench-mobile/ first (SDK projects)
+        let bench_mobile_dir = self.project_root.join("bench-mobile");
+        if bench_mobile_dir.exists() {
+            return Ok(bench_mobile_dir);
+        }
+
+        // Try crates/{crate_name}/ (repository structure)
+        let crates_dir = self.project_root.join("crates").join(&self.crate_name);
+        if crates_dir.exists() {
+            return Ok(crates_dir);
+        }
+
+        Err(BenchError::Build(format!(
+            "Benchmark crate '{}' not found. Tried:\n  - {:?}\n  - {:?}",
+            self.crate_name, bench_mobile_dir, crates_dir
+        )))
+    }
+
     /// Builds Rust libraries for Android using cargo-ndk
     fn build_rust_libraries(&self, config: &BuildConfig) -> Result<(), BenchError> {
-        let bench_mobile_dir = self.project_root.join("bench-mobile");
-
-        if !bench_mobile_dir.exists() {
-            return Err(BenchError::Build(format!(
-                "bench-mobile crate not found at {:?}",
-                bench_mobile_dir
-            )));
-        }
+        let crate_dir = self.find_crate_dir()?;
 
         // Check if cargo-ndk is installed
         self.check_cargo_ndk()?;
@@ -111,7 +124,7 @@ impl AndroidBuilder {
             }
 
             // Set working directory
-            cmd.current_dir(&bench_mobile_dir);
+            cmd.current_dir(&crate_dir);
 
             // Execute build
             let output = cmd
@@ -144,21 +157,51 @@ impl AndroidBuilder {
 
     /// Generates UniFFI Kotlin bindings
     fn generate_uniffi_bindings(&self) -> Result<(), BenchError> {
-        let bench_mobile_dir = self.project_root.join("bench-mobile");
-        if !bench_mobile_dir.exists() {
-            return Err(BenchError::Build(format!(
-                "bench-mobile crate not found at {:?}",
-                bench_mobile_dir
-            )));
+        let crate_dir = self.find_crate_dir()?;
+        let crate_name_underscored = self.crate_name.replace("-", "_");
+
+        // Check if bindings already exist (for repository testing with pre-generated bindings)
+        let bindings_path = self
+            .project_root
+            .join("android")
+            .join("app")
+            .join("src")
+            .join("main")
+            .join("java")
+            .join("uniffi")
+            .join(&crate_name_underscored)
+            .join(format!("{}.kt", crate_name_underscored));
+
+        if bindings_path.exists() {
+            if self.verbose {
+                println!("  Using existing Kotlin bindings at {:?}", bindings_path);
+            }
+            return Ok(());
+        }
+
+        // Check if uniffi-bindgen is available
+        let uniffi_available = Command::new("uniffi-bindgen")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !uniffi_available {
+            return Err(BenchError::Build(
+                "uniffi-bindgen not found and no pre-generated bindings exist.\n\
+                 Install it with: cargo install uniffi-bindgen\n\
+                 Or use pre-generated bindings by copying them to the expected location."
+                    .to_string(),
+            ));
         }
 
         // Build host library to feed uniffi-bindgen
         let mut build_cmd = Command::new("cargo");
         build_cmd.arg("build");
-        build_cmd.current_dir(&bench_mobile_dir);
+        build_cmd.current_dir(&crate_dir);
         run_command(build_cmd, "cargo build (host)")?;
 
-        let lib_path = host_lib_path(&bench_mobile_dir, &self.crate_name)?;
+        let lib_path = host_lib_path(&crate_dir, &self.crate_name)?;
         let out_dir = self
             .project_root
             .join("android")

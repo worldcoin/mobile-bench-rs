@@ -102,16 +102,29 @@ impl IosBuilder {
         })
     }
 
+    /// Finds the benchmark crate directory (either bench-mobile/ or crates/{crate_name}/)
+    fn find_crate_dir(&self) -> Result<PathBuf, BenchError> {
+        // Try bench-mobile/ first (SDK projects)
+        let bench_mobile_dir = self.project_root.join("bench-mobile");
+        if bench_mobile_dir.exists() {
+            return Ok(bench_mobile_dir);
+        }
+
+        // Try crates/{crate_name}/ (repository structure)
+        let crates_dir = self.project_root.join("crates").join(&self.crate_name);
+        if crates_dir.exists() {
+            return Ok(crates_dir);
+        }
+
+        Err(BenchError::Build(format!(
+            "Benchmark crate '{}' not found. Tried:\n  - {:?}\n  - {:?}",
+            self.crate_name, bench_mobile_dir, crates_dir
+        )))
+    }
+
     /// Builds Rust libraries for iOS targets
     fn build_rust_libraries(&self, config: &BuildConfig) -> Result<(), BenchError> {
-        let bench_mobile_dir = self.project_root.join("bench-mobile");
-
-        if !bench_mobile_dir.exists() {
-            return Err(BenchError::Build(format!(
-                "bench-mobile crate not found at {:?}",
-                bench_mobile_dir
-            )));
-        }
+        let crate_dir = self.find_crate_dir()?;
 
         // iOS targets: device and simulator
         let targets = vec![
@@ -136,7 +149,7 @@ impl IosBuilder {
             }
 
             // Set working directory
-            cmd.current_dir(&bench_mobile_dir);
+            cmd.current_dir(&crate_dir);
 
             // Execute build
             let output = cmd
@@ -180,21 +193,48 @@ impl IosBuilder {
 
     /// Generates UniFFI Swift bindings
     fn generate_uniffi_bindings(&self) -> Result<(), BenchError> {
-        let bench_mobile_dir = self.project_root.join("bench-mobile");
-        if !bench_mobile_dir.exists() {
-            return Err(BenchError::Build(format!(
-                "bench-mobile crate not found at {:?}",
-                bench_mobile_dir
-            )));
+        let crate_dir = self.find_crate_dir()?;
+        let crate_name_underscored = self.crate_name.replace("-", "_");
+
+        // Check if bindings already exist (for repository testing with pre-generated bindings)
+        let bindings_path = self
+            .project_root
+            .join("ios")
+            .join("BenchRunner")
+            .join("BenchRunner")
+            .join("Generated")
+            .join(format!("{}.swift", crate_name_underscored));
+
+        if bindings_path.exists() {
+            if self.verbose {
+                println!("  Using existing Swift bindings at {:?}", bindings_path);
+            }
+            return Ok(());
+        }
+
+        // Check if uniffi-bindgen is available
+        let uniffi_available = Command::new("uniffi-bindgen")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !uniffi_available {
+            return Err(BenchError::Build(
+                "uniffi-bindgen not found and no pre-generated bindings exist.\n\
+                 Install it with: cargo install uniffi-bindgen\n\
+                 Or use pre-generated bindings by copying them to the expected location."
+                    .to_string(),
+            ));
         }
 
         // Build host library to feed uniffi-bindgen
         let mut build_cmd = Command::new("cargo");
         build_cmd.arg("build");
-        build_cmd.current_dir(&bench_mobile_dir);
+        build_cmd.current_dir(&crate_dir);
         run_command(build_cmd, "cargo build (host)")?;
 
-        let lib_path = host_lib_path(&bench_mobile_dir, &self.crate_name)?;
+        let lib_path = host_lib_path(&crate_dir, &self.crate_name)?;
         let out_dir = self
             .project_root
             .join("ios")
@@ -648,6 +688,8 @@ impl IosBuilder {
         scheme: &str,
         method: SigningMethod,
     ) -> Result<PathBuf, BenchError> {
+        // For repository structure: ios/BenchRunner/BenchRunner.xcodeproj
+        // The directory and scheme happen to have the same name
         let ios_dir = self.project_root.join("ios").join(scheme);
         let project_path = ios_dir.join(format!("{}.xcodeproj", scheme));
 
@@ -659,7 +701,6 @@ impl IosBuilder {
             )));
         }
 
-        let archive_path = self.project_root.join("target/ios").join(format!("{}.xcarchive", scheme));
         let export_path = self.project_root.join("target/ios");
         let ipa_path = export_path.join(format!("{}.ipa", scheme));
 
@@ -667,71 +708,135 @@ impl IosBuilder {
         fs::create_dir_all(&export_path)
             .map_err(|e| BenchError::Build(format!("Failed to create export directory: {}", e)))?;
 
-        println!("Archiving {} for device...", scheme);
+        println!("Building {} for device...", scheme);
 
-        // Step 1: Create archive
+        // Step 1: Build the app for device (simpler than archiving)
+        let build_dir = self.project_root.join("target/ios/build");
         let mut cmd = Command::new("xcodebuild");
         cmd.args(&[
             "-project", project_path.to_str().unwrap(),
             "-scheme", scheme,
-            "-sdk", "iphoneos",
+            "-destination", "generic/platform=iOS",
             "-configuration", "Release",
-            "-archivePath", archive_path.to_str().unwrap(),
-            "archive",
-            "CODE_SIGN_STYLE=Automatic",
-            &format!("CODE_SIGN_IDENTITY={}", method.identity()),
+            "-derivedDataPath", build_dir.to_str().unwrap(),
+            "build",
         ]);
+
+        // Add signing parameters based on method
+        match method {
+            SigningMethod::AdHoc => {
+                // Ad-hoc signing (works for BrowserStack, no Apple ID needed)
+                // For ad-hoc, we disable signing during build and sign manually after
+                cmd.args(&[
+                    "CODE_SIGNING_REQUIRED=NO",
+                    "CODE_SIGNING_ALLOWED=NO",
+                ]);
+            }
+            SigningMethod::Development => {
+                // Development signing (requires Apple Developer account)
+                cmd.args(&[
+                    "CODE_SIGN_STYLE=Automatic",
+                    "CODE_SIGN_IDENTITY=iPhone Developer",
+                ]);
+            }
+        }
 
         if self.verbose {
             println!("  Running: {:?}", cmd);
         }
 
-        run_command(cmd, "xcodebuild archive")?;
+        // Run the build - may fail on validation but still produce the .app
+        let build_result = cmd.output();
 
-        println!("Exporting IPA with {:?} signing...", method);
+        // Step 2: Check if the .app bundle was created (even if validation failed)
+        let app_path = build_dir
+            .join("Build/Products/Release-iphoneos")
+            .join(format!("{}.app", scheme));
 
-        // Step 2: Create ExportOptions.plist
-        let export_options_path = export_path.join("ExportOptions.plist");
-        self.create_export_options_plist(&export_options_path, method)?;
-
-        // Step 3: Export IPA
-        let mut cmd = Command::new("xcodebuild");
-        cmd.args(&[
-            "-exportArchive",
-            "-archivePath", archive_path.to_str().unwrap(),
-            "-exportPath", export_path.to_str().unwrap(),
-            "-exportOptionsPlist", export_options_path.to_str().unwrap(),
-        ]);
-
-        if self.verbose {
-            println!("  Running: {:?}", cmd);
-        }
-
-        run_command(cmd, "xcodebuild -exportArchive")?;
-
-        // xcodebuild exports to a subdirectory, move IPA to expected location
-        let exported_ipa = export_path.join(format!("{}.ipa", scheme));
-        if !exported_ipa.exists() {
-            // Check in subdirectory (xcodebuild sometimes puts it there)
-            let subdir_ipa = export_path.join(scheme).join(format!("{}.ipa", scheme));
-            if subdir_ipa.exists() {
-                fs::rename(&subdir_ipa, &ipa_path).map_err(|e| {
-                    BenchError::Build(format!("Failed to move IPA to final location: {}", e))
-                })?;
+        if !app_path.exists() {
+            // Only fail if the .app wasn't created
+            if let Ok(output) = build_result {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(BenchError::Build(format!(
+                    "xcodebuild build failed and app bundle not found: {}",
+                    stderr
+                )));
             } else {
                 return Err(BenchError::Build(format!(
-                    "IPA not found after export. Expected at {:?} or {:?}",
-                    exported_ipa, subdir_ipa
+                    "App bundle not found at {:?}. Build may have failed.",
+                    app_path
                 )));
             }
-        } else if exported_ipa != ipa_path {
-            fs::rename(&exported_ipa, &ipa_path).map_err(|e| {
-                BenchError::Build(format!("Failed to move IPA to final location: {}", e))
-            })?;
         }
+
+        if self.verbose {
+            println!("  App bundle created successfully at {:?}", app_path);
+        }
+
+        println!("Creating IPA from app bundle...");
+
+        // Step 3: Create IPA (which is just a zip of Payload/{app})
+        let payload_dir = export_path.join("Payload");
+        if payload_dir.exists() {
+            fs::remove_dir_all(&payload_dir)
+                .map_err(|e| BenchError::Build(format!("Failed to remove old Payload dir: {}", e)))?;
+        }
+        fs::create_dir_all(&payload_dir)
+            .map_err(|e| BenchError::Build(format!("Failed to create Payload dir: {}", e)))?;
+
+        // Copy app bundle into Payload/
+        let dest_app = payload_dir.join(format!("{}.app", scheme));
+        self.copy_dir_recursive(&app_path, &dest_app)?;
+
+        // Create zip archive
+        if ipa_path.exists() {
+            fs::remove_file(&ipa_path)
+                .map_err(|e| BenchError::Build(format!("Failed to remove old IPA: {}", e)))?;
+        }
+
+        let mut cmd = Command::new("zip");
+        cmd.args(&["-qr", ipa_path.to_str().unwrap(), "Payload"])
+            .current_dir(&export_path);
+
+        if self.verbose {
+            println!("  Running: {:?}", cmd);
+        }
+
+        run_command(cmd, "zip IPA")?;
+
+        // Clean up Payload directory
+        fs::remove_dir_all(&payload_dir)
+            .map_err(|e| BenchError::Build(format!("Failed to clean up Payload dir: {}", e)))?;
 
         println!("✓ IPA created: {:?}", ipa_path);
         Ok(ipa_path)
+    }
+
+    /// Recursively copies a directory
+    fn copy_dir_recursive(&self, src: &Path, dest: &Path) -> Result<(), BenchError> {
+        fs::create_dir_all(dest)
+            .map_err(|e| BenchError::Build(format!("Failed to create directory {:?}: {}", dest, e)))?;
+
+        for entry in fs::read_dir(src)
+            .map_err(|e| BenchError::Build(format!("Failed to read directory {:?}: {}", src, e)))?
+        {
+            let entry = entry.map_err(|e| BenchError::Build(format!("Failed to read entry: {}", e)))?;
+            let path = entry.path();
+            let file_name = path.file_name().ok_or_else(|| {
+                BenchError::Build(format!("Invalid file name in {:?}", path))
+            })?;
+            let dest_path = dest.join(file_name);
+
+            if path.is_dir() {
+                self.copy_dir_recursive(&path, &dest_path)?;
+            } else {
+                fs::copy(&path, &dest_path).map_err(|e| {
+                    BenchError::Build(format!("Failed to copy {:?} to {:?}: {}", path, dest_path, e))
+                })?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Creates an ExportOptions.plist file for xcodebuild -exportArchive

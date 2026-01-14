@@ -287,18 +287,13 @@ fn main() -> Result<()> {
                 println!("JSON summary will be written to {:?}", path);
             }
 
-            // Only run local smoke for sample_fns functions (linked into CLI binary)
-            // User-defined benchmarks are not linked and will fail inventory lookup
-            let local_report = if spec.function.starts_with("sample_fns::") {
-                run_local_smoke(&spec)?
-            } else {
-                println!("Skipping local smoke test: user benchmarks not linked into CLI binary");
-                println!("Benchmark will run on mobile device");
-                json!({
-                    "skipped": true,
-                    "reason": "User benchmarks not linked into CLI binary (will run on mobile device)"
-                })
-            };
+            // Skip local smoke test - sample-fns uses direct dispatch, not inventory registry
+            // Benchmarks will run on the actual mobile device
+            println!("Skipping local smoke test - benchmarks will run on mobile device");
+            let local_report = json!({
+                "skipped": true,
+                "reason": "Local smoke test disabled - benchmarks run on mobile device only"
+            });
             let mut remote_run = None;
             let artifacts = if local_only {
                 println!("Skipping mobile build: --local-only set");
@@ -1141,17 +1136,37 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
 }
 
 fn detect_bench_mobile_crate_name(root: &Path) -> Result<String> {
-    let path = root.join("bench-mobile").join("Cargo.toml");
-    let contents = fs::read_to_string(&path)
-        .with_context(|| format!("reading bench-mobile manifest at {:?}", path))?;
-    let value: toml::Value = toml::from_str(&contents)
-        .with_context(|| format!("parsing bench-mobile manifest {:?}", path))?;
-    let name = value
-        .get("package")
-        .and_then(|pkg| pkg.get("name"))
-        .and_then(|n| n.as_str())
-        .ok_or_else(|| anyhow!("bench-mobile package.name missing in {:?}", path))?;
-    Ok(name.to_string())
+    // Try bench-mobile/ first (SDK projects)
+    let bench_mobile_path = root.join("bench-mobile").join("Cargo.toml");
+    if bench_mobile_path.exists() {
+        let contents = fs::read_to_string(&bench_mobile_path)
+            .with_context(|| format!("reading bench-mobile manifest at {:?}", bench_mobile_path))?;
+        let value: toml::Value = toml::from_str(&contents)
+            .with_context(|| format!("parsing bench-mobile manifest {:?}", bench_mobile_path))?;
+        let name = value
+            .get("package")
+            .and_then(|pkg| pkg.get("name"))
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| anyhow!("bench-mobile package.name missing in {:?}", bench_mobile_path))?;
+        return Ok(name.to_string());
+    }
+
+    // Fallback: Try crates/sample-fns (repository testing)
+    let sample_fns_path = root.join("crates").join("sample-fns").join("Cargo.toml");
+    if sample_fns_path.exists() {
+        let contents = fs::read_to_string(&sample_fns_path)
+            .with_context(|| format!("reading sample-fns manifest at {:?}", sample_fns_path))?;
+        let value: toml::Value = toml::from_str(&contents)
+            .with_context(|| format!("parsing sample-fns manifest {:?}", sample_fns_path))?;
+        let name = value
+            .get("package")
+            .and_then(|pkg| pkg.get("name"))
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| anyhow!("sample-fns package.name missing in {:?}", sample_fns_path))?;
+        return Ok(name.to_string());
+    }
+
+    bail!("No benchmark crate found. Expected 'bench-mobile/' or 'crates/sample-fns/'")
 }
 
 /// List all discovered benchmark functions (Phase 1 MVP)
@@ -1182,7 +1197,7 @@ fn cmd_package_ipa(scheme: &str, method: IosSigningMethodArg) -> Result<()> {
     println!("  Scheme: {}", scheme);
     println!("  Method: {:?}", method);
 
-    let project_root = std::env::current_dir().context("Failed to get current directory")?;
+    let project_root = repo_root()?;
     let crate_name = detect_bench_mobile_crate_name(&project_root)
         .unwrap_or_else(|_| "bench-mobile".to_string());
 

@@ -179,6 +179,10 @@ impl BrowserStackClient {
             devices: devices.to_vec(),
             device_logs: true,
             build_name: self.project.clone(),
+            // Specify the test method to run (required by BrowserStack for XCUITest)
+            only_testing: Some(vec![
+                "BenchRunnerUITests/BenchRunnerUITests/testLaunchShowsBenchmarkReport".to_string()
+            ]),
         };
 
         let resp = self
@@ -276,6 +280,8 @@ struct XcuitestBuildRequest {
     device_logs: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
+    #[serde(rename = "only-testing", skip_serializing_if = "Option::is_none")]
+    only_testing: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
