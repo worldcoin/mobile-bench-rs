@@ -1,6 +1,4 @@
 use anyhow::{Context, Result, anyhow, bail};
-#[cfg(test)]
-use mobench_runner::{BenchSpec, run_closure};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1027,6 +1025,7 @@ fn expand_env_var(raw: &str) -> Result<String> {
     Ok(raw.to_string())
 }
 
+#[cfg(test)]
 fn run_local_smoke(spec: &RunSpec) -> Result<Value> {
     println!("Running local smoke test for {}...", spec.function);
 

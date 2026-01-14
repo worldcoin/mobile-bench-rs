@@ -397,64 +397,6 @@ impl BrowserStackClient {
         Ok(PerformanceMetrics::from_snapshots(snapshots))
     }
 
-    /// Wait for build completion and fetch all benchmark results
-    ///
-    /// This is a convenience method that:
-    /// 1. Polls for build completion (with timeout)
-    /// 2. Fetches device logs for all sessions
-    /// 3. Extracts benchmark results from logs
-    ///
-    /// # Arguments
-    /// * `build_id` - The build ID returned from schedule_*_run
-    /// * `platform` - "espresso" or "xcuitest"
-    /// * `timeout_secs` - Maximum time to wait (default: 600)
-    ///
-    /// # Returns
-    /// A map of device names to their benchmark results
-    pub fn wait_and_fetch_results(
-        &self,
-        build_id: &str,
-        platform: &str,
-        timeout_secs: Option<u64>,
-    ) -> Result<std::collections::HashMap<String, Vec<Value>>> {
-        let timeout = timeout_secs.unwrap_or(600);
-
-        println!("Waiting for build {} to complete (timeout: {}s)...", build_id, timeout);
-        let build_status = self.poll_build_completion(build_id, platform, timeout, 10)?;
-
-        println!("Build completed with status: {}", build_status.status);
-        println!("Fetching results from {} device(s)...", build_status.devices.len());
-
-        let mut results = std::collections::HashMap::new();
-
-        for device in &build_status.devices {
-            println!("  Fetching logs for {} (session: {})...", device.device, device.session_id);
-
-            match self.get_device_logs(build_id, &device.session_id, platform) {
-                Ok(logs) => {
-                    match self.extract_benchmark_results(&logs) {
-                        Ok(bench_results) => {
-                            println!("    Found {} benchmark result(s)", bench_results.len());
-                            results.insert(device.device.clone(), bench_results);
-                        }
-                        Err(e) => {
-                            println!("    Warning: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    println!("    Failed to fetch logs: {}", e);
-                }
-            }
-        }
-
-        if results.is_empty() {
-            Err(anyhow!("No benchmark results found from any device"))
-        } else {
-            Ok(results)
-        }
-    }
-
     /// Wait for build completion and fetch all results including performance metrics
     ///
     /// Returns both benchmark results and performance metrics

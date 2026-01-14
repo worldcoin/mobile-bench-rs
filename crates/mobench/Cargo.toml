@@ -12,6 +12,10 @@ categories = ["development-tools", "command-line-utilities"]
 
 default-run = "mobench"
 
+# Dual binary targets allow the tool to work as both:
+# - `mobench run ...` (direct invocation)
+# - `cargo mobench run ...` (cargo subcommand)
+# This is a standard Rust pattern for cargo extensions.
 [[bin]]
 name = "mobench"
 path = "src/main.rs"

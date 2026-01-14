@@ -6,7 +6,6 @@
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -637,24 +636,6 @@ pub enum SigningMethod {
     Development,
 }
 
-impl SigningMethod {
-    /// Returns the CODE_SIGN_IDENTITY value for xcodebuild
-    fn identity(&self) -> &'static str {
-        match self {
-            SigningMethod::AdHoc => "-",
-            SigningMethod::Development => "iPhone Developer",
-        }
-    }
-
-    /// Returns the export method for ExportOptions.plist
-    fn export_method(&self) -> &'static str {
-        match self {
-            SigningMethod::AdHoc => "ad-hoc",
-            SigningMethod::Development => "development",
-        }
-    }
-}
-
 impl IosBuilder {
     /// Packages the iOS app as an IPA file for distribution or testing
     ///
@@ -835,44 +816,6 @@ impl IosBuilder {
                 })?;
             }
         }
-
-        Ok(())
-    }
-
-    /// Creates an ExportOptions.plist file for xcodebuild -exportArchive
-    fn create_export_options_plist(
-        &self,
-        path: &Path,
-        method: SigningMethod,
-    ) -> Result<(), BenchError> {
-        let plist_content = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>method</key>
-    <string>{}</string>
-    <key>compileBitcode</key>
-    <false/>
-    <key>stripSwiftSymbols</key>
-    <true/>
-    <key>uploadSymbols</key>
-    <false/>
-    <key>signingStyle</key>
-    <string>automatic</string>
-</dict>
-</plist>
-"#,
-            method.export_method()
-        );
-
-        let mut file = fs::File::create(path).map_err(|e| {
-            BenchError::Build(format!("Failed to create ExportOptions.plist: {}", e))
-        })?;
-
-        file.write_all(plist_content.as_bytes()).map_err(|e| {
-            BenchError::Build(format!("Failed to write ExportOptions.plist: {}", e))
-        })?;
 
         Ok(())
     }
