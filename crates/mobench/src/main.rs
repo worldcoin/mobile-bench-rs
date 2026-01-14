@@ -370,19 +370,44 @@ fn main() -> Result<()> {
                         MobileTarget::Ios => "xcuitest",
                     };
 
+                    let dashboard_url = format!(
+                        "https://app-automate.browserstack.com/dashboard/v2/builds/{}",
+                        build_id
+                    );
+
                     println!("Waiting for build {} to complete...", build_id);
+                    println!("Dashboard: {}", dashboard_url);
+
                     match client.wait_and_fetch_results(
                         build_id,
                         platform,
                         Some(fetch_timeout_secs),
                     ) {
                         Ok(results) => {
-                            println!("Successfully fetched results from {} device(s)", results.len());
+                            println!("\n✓ Successfully fetched results from {} device(s)", results.len());
+
+                            // Print summary of results
+                            for (device, bench_results) in &results {
+                                println!("\n  Device: {}", device);
+                                for (idx, result) in bench_results.iter().enumerate() {
+                                    if let Some(function) = result.get("function").and_then(|f| f.as_str()) {
+                                        println!("    Benchmark {}: {}", idx + 1, function);
+                                    }
+                                    if let Some(mean) = result.get("mean_ns").and_then(|m| m.as_u64()) {
+                                        println!("      Mean: {} ns ({:.2} ms)", mean, mean as f64 / 1_000_000.0);
+                                    }
+                                    if let Some(samples) = result.get("samples").and_then(|s| s.as_array()) {
+                                        println!("      Samples: {}", samples.len());
+                                    }
+                                }
+                            }
+
+                            println!("\n  View full results: {}", dashboard_url);
                             summary.benchmark_results = Some(results);
                         }
                         Err(e) => {
-                            println!("Warning: Failed to fetch benchmark results: {}", e);
-                            println!("Build may still be accessible at: https://app-automate.browserstack.com/dashboard/v2/builds/{}", build_id);
+                            println!("\nWarning: Failed to fetch benchmark results: {}", e);
+                            println!("Build may still be accessible at: {}", dashboard_url);
                         }
                     }
 
