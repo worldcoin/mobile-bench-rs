@@ -4,17 +4,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mobile-bench-rs is a benchmarking tool for Rust functions on mobile devices (Android/iOS) using BrowserStack AppAutomate. It packages Rust functions into mobile binaries, runs them on real devices, and collects timing metrics.
+mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
+
+**Published on crates.io as the mobench ecosystem (v0.1.4):**
+- **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
+- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with build automation
+- **[mobench-macros](https://crates.io/crates/mobench-macros)** - `#[benchmark]` attribute proc macro
+- **[mobench-runner](https://crates.io/crates/mobench-runner)** - Lightweight timing harness for mobile devices
+
+All packages are licensed under MIT (World Foundation, 2026).
+
+### Quick Start (SDK Users)
+
+```bash
+# Install CLI
+cargo install mobench
+
+# Add to your project
+cargo add mobench-sdk
+
+# Mark functions for benchmarking
+use mobench_sdk::benchmark;
+
+#[benchmark]
+fn my_benchmark() {
+    // Your code here
+}
+```
 
 ## Core Architecture
 
 ### Workspace Structure
 
-The repository is organized as a Cargo workspace with three main crates:
+The repository is organized as a Cargo workspace:
 
-- **`mobench`**: CLI orchestrator that drives the entire workflow - building artifacts, uploading to BrowserStack, executing runs, and collecting results. Entry point for all operations.
-- **`bench-runner`**: Lightweight harness library that gets embedded in mobile binaries. Provides timing infrastructure for benchmarks.
-- **`sample-fns`**: Example benchmark functions with UniFFI bindings for mobile platforms. Compiled as `cdylib`, `staticlib`, and `rlib` for different mobile targets.
+- **`crates/mobench`**: CLI orchestrator that drives the entire workflow - building artifacts, uploading to BrowserStack, executing runs, and collecting results. Entry point for all operations.
+- **`crates/mobench-sdk`**: Core SDK library with registry system, builders (AndroidBuilder, IosBuilder), template generation, and BrowserStack integration.
+- **`crates/mobench-macros`**: Proc macro crate providing the `#[benchmark]` attribute for marking functions.
+- **`crates/mobench-runner`**: Lightweight timing harness library that gets embedded in mobile binaries. Provides timing infrastructure for benchmarks.
+- **`examples/basic-benchmark`**: Example benchmark functions with UniFFI bindings for mobile platforms. Demonstrates the SDK usage pattern.
 
 ### Mobile Integration Flow
 
@@ -53,24 +81,60 @@ Quick test commands:
 # Run all Rust tests
 cargo test --all
 
-# Test host harness
-cargo run -p mobench -- demo --iterations 10 --warmup 2
+# Initialize SDK project
+cargo mobench init --target android --output bench-sdk.toml
 
-# Android e2e (requires Android NDK)
+# Build mobile artifacts (recommended approach)
+cargo mobench build --target android
+cargo mobench build --target ios
+
+# List discovered benchmarks
+cargo mobench list
+
+# Legacy: Direct script usage (for repository development only)
 scripts/build-android-app.sh
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n dev.world.bench/.MainActivity
-
-# iOS e2e (requires Xcode)
 scripts/build-ios.sh
-cd ios/BenchRunner && xcodegen generate && open BenchRunner.xcodeproj
 ```
 
 ## Common Commands
 
-### Building
+### Building with CLI (Recommended)
 
-#### Android
+The `cargo mobench` CLI provides a unified build experience:
+
+```bash
+# Install the CLI
+cargo install mobench
+
+# Initialize project (generates config and scaffolding)
+cargo mobench init --target android --output bench-sdk.toml
+
+# Build for Android
+cargo mobench build --target android
+
+# Build for iOS
+cargo mobench build --target ios
+
+# Build for both platforms
+cargo mobench build --target android
+cargo mobench build --target ios
+
+# Package iOS IPA (for BrowserStack or physical devices)
+cargo mobench package-ipa --method adhoc
+```
+
+**What the CLI does:**
+- Automatically builds Rust libraries with correct targets
+- Generates or updates mobile app projects from embedded templates
+- Syncs native libraries into platform-specific directories
+- Builds APK (Android) or xcframework (iOS)
+- No manual script execution needed
+
+### Legacy Script-Based Building (Repository Development)
+
+**Note:** The `scripts/` directory contains legacy tooling used for developing this repository. SDK users should use `cargo mobench build` instead.
+
+#### Android (Legacy)
 ```bash
 # Build Rust shared libraries for Android (requires Android NDK)
 scripts/build-android.sh
@@ -81,21 +145,22 @@ scripts/sync-android-libs.sh
 # Build complete APK with Gradle
 cd android && gradle :app:assembleDebug
 
-# Or use the full build script
-scripts/build-android-app.sh
+# Or use the all-in-one script
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh
 ```
 
 Requirements:
 - `ANDROID_NDK_HOME` environment variable set
 - `cargo-ndk` installed: `cargo install cargo-ndk`
 - Android SDK/NDK available (API level 24+)
+- Set `UNIFFI_ANDROID_ABI=x86_64` for default Android Studio emulators
 
-#### iOS
+#### iOS (Legacy)
 ```bash
 # Build Rust xcframework for iOS (includes UniFFI headers and automatic signing)
 scripts/build-ios.sh
 
-# Generate Xcode project from project.yml
+# Generate Xcode project from project.yml (if using repository's iOS app)
 cd ios/BenchRunner && xcodegen generate
 
 # Open in Xcode
@@ -105,7 +170,7 @@ open BenchRunner.xcodeproj
 Requirements:
 - Xcode command-line tools
 - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
-- `xcodegen` installed: `brew install xcodegen`
+- `xcodegen` installed: `brew install xcodegen` (only for repository development)
 
 **Important iOS Build Details:**
 
@@ -147,11 +212,12 @@ If automatic signing fails, the script will display a warning with instructions 
 
 Note: UniFFI C headers are generated automatically during the build process and copied into each framework slice.
 
-### Benchmarking
+### Running Benchmarks
 
-#### Local Smoke Test
+#### Local Testing (No BrowserStack)
 ```bash
-cargo run -p mobench -- run \
+# Run benchmark locally on emulator/simulator
+cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 100 \
@@ -162,7 +228,12 @@ cargo run -p mobench -- run \
 
 #### BrowserStack Run (Android)
 ```bash
-cargo run -p mobench -- run \
+# Set credentials
+export BROWSERSTACK_USERNAME="your_username"
+export BROWSERSTACK_ACCESS_KEY="your_access_key"
+
+# Run on real devices
+cargo mobench run \
   --target android \
   --function sample_fns::checksum \
   --iterations 30 \
@@ -173,33 +244,59 @@ cargo run -p mobench -- run \
 
 #### BrowserStack Run (iOS)
 ```bash
-cargo run -p mobench -- run \
+cargo mobench run \
   --target ios \
   --function sample_fns::fibonacci \
   --iterations 20 \
   --warmup 3 \
   --devices "iPhone 14-16" \
   --ios-app target/ios/BenchRunner.ipa \
-  --ios-test-suite target/ios/BenchRunnerUITests.zip
+  --ios-test-suite target/ios/BenchRunnerUITests.zip \
+  --output run-summary.json
 ```
 
 #### Using Config Files
 ```bash
 # Generate starter config
-cargo run -p mobench -- init --output bench-config.toml --target android
+cargo mobench init --output bench-config.toml --target android
 
 # Generate device matrix
-cargo run -p mobench -- plan --output device-matrix.yaml
+cargo mobench plan --output device-matrix.yaml
 
 # Run with config
-cargo run -p mobench -- run --config bench-config.toml
+cargo mobench run --config bench-config.toml
+```
+
+#### Fetch BrowserStack Results
+```bash
+# Download results from previous run
+cargo mobench fetch \
+  --target android \
+  --build-id abc123def456 \
+  --output-dir ./results
 ```
 
 ## Key Implementation Details
 
-### FFI Boundary (`sample-fns`)
+### SDK Integration Pattern
 
-This crate uses **UniFFI proc macros** to generate type-safe bindings for Kotlin and Swift. The API is defined directly in Rust code with attributes:
+Users import `mobench-sdk` and use the `#[benchmark]` macro:
+
+```rust
+use mobench_sdk::benchmark;
+
+#[benchmark]
+fn my_expensive_operation() {
+    let result = compute_something();
+    std::hint::black_box(result);
+}
+```
+
+The macro automatically registers functions at compile time via the `inventory` crate.
+
+### FFI Boundary (`examples/basic-benchmark`)
+
+The example crate uses **UniFFI proc macros** to generate type-safe bindings for Kotlin and Swift. The API is defined directly in Rust code with attributes:
 
 ```rust
 #[derive(uniffi::Record)]
@@ -224,23 +321,35 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
 uniffi::setup_scaffolding!();  // Auto-uses crate name as namespace
 ```
 
-Regenerate bindings after modifying FFI types in `crates/sample-fns/src/lib.rs`:
+Regenerate bindings after modifying FFI types (for repository development):
 ```bash
 # Build library to generate metadata
-cargo build -p sample-fns
+cargo build -p basic-benchmark
 
 # Generate Kotlin + Swift bindings
 ./scripts/generate-bindings.sh
 ```
 
-Generated files (committed to git):
+Generated files (committed to git for the example app):
 - Kotlin: `android/app/src/main/java/uniffi/sample_fns/sample_fns.kt`
 - Swift: `ios/BenchRunner/BenchRunner/Generated/sample_fns.swift`
 - C header: `ios/BenchRunner/BenchRunner/Generated/sample_fnsFFI.h`
 
+### Template System
+
+The SDK embeds Android and iOS app templates using the `include_dir!` macro:
+- Templates located in `crates/mobench-sdk/templates/`
+- Embedded at compile time (no runtime file access needed)
+- Generated projects are created in user's workspace via `cargo mobench init`
+
 ### Mobile Spec Injection
 
 The CLI writes benchmark parameters to `target/mobile-spec/{android,ios}/bench_spec.json` during build. Mobile apps read this at runtime to know which function to benchmark.
+
+When using SDK-generated projects:
+- Templates include spec reading logic
+- Apps automatically parse `bench_spec.json` from assets/bundle
+- Supports runtime parameter override via Intent extras (Android) or environment variables (iOS)
 
 ### BrowserStack Credentials
 
@@ -259,13 +368,44 @@ The workflow supports manual dispatch with platform selection:
 
 ## Development Notes
 
-### Adding New Benchmark Functions
+### Using mobench-sdk in Your Project
 
-1. Add function to `crates/sample-fns/src/lib.rs`
+1. Add dependencies to your `Cargo.toml`:
+```toml
+[dependencies]
+mobench-sdk = "0.1"
+inventory = "0.3"
+```
+
+2. Mark functions with `#[benchmark]`:
+```rust
+use mobench_sdk::benchmark;
+
+#[benchmark]
+fn my_function() {
+    // Your code
+    std::hint::black_box(result);
+}
+```
+
+3. Build for mobile:
+```bash
+cargo mobench build --target android
+cargo mobench build --target ios
+```
+
+4. Run benchmarks:
+```bash
+cargo mobench run --target android --function my_function
+```
+
+### Adding New Benchmark Functions to Repository Example
+
+1. Add function to `examples/basic-benchmark/src/lib.rs`
 2. Add function dispatch to `run_benchmark()` match statement (e.g., `"my_func" => run_closure(spec, || my_func())`)
 3. If adding new FFI types, add proc macro attributes (`#[derive(uniffi::Record)]`, `#[uniffi::export]`, etc.)
 4. Regenerate bindings: `./scripts/generate-bindings.sh`
-5. Rebuild native libraries: `scripts/build-android.sh` and/or `scripts/build-ios.sh`
+5. Rebuild native libraries: `cargo mobench build --target <android|ios>` or use legacy scripts
 6. Mobile apps will automatically use the updated bindings
 
 **Note**: No UDL file needed! Proc macros automatically detect FFI types from Rust code.
@@ -383,13 +523,47 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
 
 ## Important Files
 
-- **`PROJECT_PLAN.md`**: Goals, architecture, task backlog
+### Core SDK Crates
+- **`crates/mobench/`**: CLI tool (published to crates.io)
+  - `src/main.rs`: CLI entry point with commands (init, build, run, fetch, etc.)
+  - `src/browserstack.rs`: BrowserStack REST API client
+- **`crates/mobench-sdk/`**: Core SDK library (published to crates.io)
+  - `src/lib.rs`: Public API surface
+  - `src/registry.rs`: Function discovery via `inventory` crate
+  - `src/runner.rs`: Timing harness integration
+  - `src/builders/android.rs`: Android build automation
+  - `src/builders/ios.rs`: iOS build automation
+  - `src/codegen.rs`: Template generation from embedded files
+  - `templates/`: Embedded Android/iOS app templates (via `include_dir!`)
+- **`crates/mobench-macros/`**: Proc macro crate (published to crates.io)
+  - `src/lib.rs`: `#[benchmark]` attribute implementation
+- **`crates/mobench-runner/`**: Timing harness (published to crates.io)
+  - `src/lib.rs`: Core timing and reporting logic
+
+### Example & Testing
+- **`examples/basic-benchmark/`**: Example benchmark crate demonstrating SDK usage
+  - `src/lib.rs`: Sample benchmark functions with UniFFI bindings
+  - `src/bin/generate-bindings.rs`: Binding generation for Kotlin/Swift
+- **`android/`**: Android test app (for repository development)
+  - `app/src/main/java/dev/world/bench/MainActivity.kt`: Android app entry point
+  - `app/src/main/java/uniffi/sample_fns/sample_fns.kt`: Generated Kotlin bindings
+- **`ios/BenchRunner/`**: iOS test app (for repository development)
+  - `BenchRunner/BenchRunnerFFI.swift`: iOS FFI wrapper
+  - `BenchRunner/BenchRunner-Bridging-Header.h`: Objective-C bridging header
+  - `BenchRunner/Generated/`: UniFFI-generated Swift bindings and C headers
+  - `project.yml`: XcodeGen project specification
+
+### Documentation
+- **`BUILD.md`**: Complete build reference with prerequisites and troubleshooting
 - **`TESTING.md`**: Comprehensive testing guide with detailed troubleshooting
+- **`BENCH_SDK_INTEGRATION.md`**: Integration guide for SDK users
+- **`PROJECT_PLAN.md`**: Goals, architecture, task backlog
+- **`CLAUDE.md`**: This file - developer guide for the codebase
+
+### Legacy Build Scripts (Repository Development Only)
 - **`scripts/build-android.sh`**: Builds Rust libs with cargo-ndk for Android targets
 - **`scripts/build-ios.sh`**: Builds iOS xcframework with correct structure and code signing
 - **`scripts/sync-android-libs.sh`**: Copies .so files into Android jniLibs structure
-- **`android/app/src/main/java/dev/world/bench/MainActivity.kt`**: Android app entry point
-- **`ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift`**: iOS FFI wrapper
-- **`ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h`**: Objective-C bridging header for C FFI types
-- **`ios/BenchRunner/project.yml`**: XcodeGen project specification
-- **`crates/mobench/src/browserstack.rs`**: BrowserStack REST API client
+- **`scripts/generate-bindings.sh`**: Regenerates UniFFI bindings for Kotlin/Swift
+
+**Note**: SDK users should use `cargo mobench build` instead of calling scripts directly.
