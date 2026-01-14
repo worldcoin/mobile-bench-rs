@@ -126,9 +126,6 @@ This crate is part of the [mobench](https://crates.io/crates/mobench) ecosystem 
 
 ## License
 
-Licensed under either of:
+Licensed under the MIT License. See [LICENSE.md](../../LICENSE.md) for details.
 
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-
-at your option.
+Copyright (c) 2026 World Foundation
