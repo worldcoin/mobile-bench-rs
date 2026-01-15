@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ⚠️  DEPRECATION WARNING ⚠️
+# This script is legacy tooling for developing this repository.
+#
+# For SDK integrators, use instead:
+#   cargo run -p bench-cli -- build --target android
+#
+# The CLI command automatically handles library copying.
+
 # Copy built Rust .so files into the Android app's jniLibs structure.
 # Run scripts/build-android.sh first.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_JNILIBS="${ROOT_DIR}/android/app/src/main/jniLibs"
 LIB_NAME="${LIB_NAME:-sample_fns}"
-# JNA expects libuniffi_sample_fns.so, so we rename during copy
-TARGET_LIB_NAME="${TARGET_LIB_NAME:-uniffi_sample_fns}"
+TARGET_LIB_NAME="${TARGET_LIB_NAME:-sample_fns}"
 
 declare -A ABI_MAP=(
   ["aarch64-linux-android"]="arm64-v8a"
@@ -33,6 +40,10 @@ for TRIPLE in "${!ABI_MAP[@]}"; do
   fi
   mkdir -p "${DEST_DIR}"
   cp "${SRC}" "${DEST}"
+  # Keep a compat copy for older loaders that expect uniffi_ prefix.
+  if [[ "${TARGET_LIB_NAME}" == "sample_fns" ]]; then
+    cp "${SRC}" "${DEST_DIR}/libuniffi_sample_fns.so"
+  fi
   echo "Copied ${SRC} -> ${DEST}"
 done
 

@@ -118,37 +118,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "basic-benchmark"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "mobench-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "uniffi",
+]
+
+[[package]]
 name = "basic-toml"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba62675e8242a4c4e806d12f11d136e626e6c8361d6b829310732241652a178a"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "bench-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bench-runner",
- "clap",
- "dotenvy",
- "reqwest",
- "sample-fns",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "bench-runner"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -651,6 +638,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -658,6 +664,15 @@ checksum = "0ad4bb2b565bca0645f4d68c5c9af97fba094e9791da685bf83cb5f3ce74acf2"
 dependencies = [
  "equivalent",
  "hashbrown",
+]
+
+[[package]]
+name = "inventory"
+version = "0.3.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc61209c082fbeb19919bee74b176221b27223e27b65d781eb91af24eb1fb46e"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -765,6 +780,57 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mobench"
+version = "0.1.4"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dotenvy",
+ "inventory",
+ "mobench-runner",
+ "mobench-sdk",
+ "reqwest",
+ "sample-fns",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "mobench-macros"
+version = "0.1.4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "mobench-runner"
+version = "0.1.4"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "mobench-sdk"
+version = "0.1.4"
+dependencies = [
+ "anyhow",
+ "include_dir",
+ "inventory",
+ "mobench-macros",
+ "mobench-runner",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "toml 0.8.23",
 ]
 
 [[package]]
@@ -1068,10 +1134,10 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sample-fns"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
- "bench-runner",
  "camino",
+ "mobench-runner",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1531,7 +1597,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cb08c58c7ed7033150132febe696bef553f891b1ede57424b40d87a89e3c170"
 dependencies = [
  "anyhow",
+ "camino",
  "cargo_metadata",
+ "clap",
  "uniffi_bindgen",
  "uniffi_build",
  "uniffi_core",

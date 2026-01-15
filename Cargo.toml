@@ -1,15 +1,18 @@
 [workspace]
 members = [
-    "crates/bench-cli",
-    "crates/bench-runner",
+    "crates/mobench",
+    "crates/mobench-runner",
+    "crates/mobench-macros",
+    "crates/mobench-sdk",
     "crates/sample-fns",
+    "examples/basic-benchmark",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
-license = "MIT OR Apache-2.0"
-version = "0.1.0"
+license = "MIT"
+version = "0.1.4"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -20,3 +23,12 @@ thiserror = "1"
 serde_yaml = "0.9"
 toml = "0.8"
 uniffi = "0.28"
+
+# Phase 1: Registry and proc macros
+inventory = "0.3"
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+# Phase 1: Template embedding
+include_dir = "0.7"

@@ -1,0 +1,21 @@
+[package]
+name = "basic-benchmark"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[lib]
+name = "basic_benchmark"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+# Use bench-sdk for the #[benchmark] macro and registry
+mobench-sdk = { path = "../../crates/mobench-sdk" }
+inventory.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uniffi = { workspace = true, features = ["cli"] }
+thiserror.workspace = true
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
