@@ -90,7 +90,7 @@ cargo mobench demo --iterations 10 --warmup 2
 
 ### Mobile Testing
 
-For complete end-to-end testing on Android/iOS, see the **[End-to-End Testing](#end-to-end-testing)** section below.
+For complete end-to-end testing on Android/iOS, see the **[BrowserStack Workflow](#browserstack-workflow)** section below.
 
 **Quick commands:**
 

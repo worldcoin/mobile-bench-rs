@@ -377,7 +377,7 @@ mobench-sdk = "0.1"
 inventory = "0.3"
 ```
 
-2. Mark functions with `#[benchmark]`:
+1. Mark functions with `#[benchmark]`:
 ```rust
 use mobench_sdk::benchmark;
 
@@ -388,13 +388,13 @@ fn my_function() {
 }
 ```
 
-3. Build for mobile:
+1. Build for mobile:
 ```bash
 cargo mobench build --target android
 cargo mobench build --target ios
 ```
 
-4. Run benchmarks:
+1. Run benchmarks:
 ```bash
 cargo mobench run --target android --function my_function
 ```

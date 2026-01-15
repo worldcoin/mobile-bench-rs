@@ -6,7 +6,6 @@ This document provides comprehensive testing instructions for mobile-bench-rs.
 > - `cargo mobench build --target <android|ios>` for builds
 > - Scripts shown below are legacy tooling for this repository
 > - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide
-
 > **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
 
 ## Table of Contents
