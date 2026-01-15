@@ -50,9 +50,9 @@ enum Command {
         fetch: bool,
         #[arg(long, default_value = "target/browserstack")]
         fetch_output_dir: PathBuf,
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, default_value_t = 5)]
         fetch_poll_interval_secs: u64,
-        #[arg(long, default_value_t = 1800)]
+        #[arg(long, default_value_t = 300)]
         fetch_timeout_secs: u64,
     },
     /// Scaffold a base config file for the CLI.
@@ -384,10 +384,11 @@ fn main() -> Result<()> {
                     println!("Waiting for build {} to complete...", build_id);
                     println!("Dashboard: {}", dashboard_url);
 
-                    match client.wait_and_fetch_all_results(
+                    match client.wait_and_fetch_all_results_with_poll(
                         build_id,
                         platform,
                         Some(fetch_timeout_secs),
+                        Some(fetch_poll_interval_secs),
                     ) {
                         Ok((bench_results, perf_metrics)) => {
                             println!(
@@ -421,22 +422,19 @@ fn main() -> Result<()> {
                                 }
 
                                 // Print performance metrics if available
-                                if let Some(metrics) = perf_metrics.get(device) {
-                                    if metrics.sample_count > 0 {
-                                        println!("\n    Performance Metrics:");
-                                        if let Some(mem) = &metrics.memory {
-                                            println!("      Memory:");
-                                            println!("        Peak: {:.2} MB", mem.peak_mb);
-                                            println!("        Average: {:.2} MB", mem.average_mb);
-                                        }
-                                        if let Some(cpu) = &metrics.cpu {
-                                            println!("      CPU:");
-                                            println!("        Peak: {:.1}%", cpu.peak_percent);
-                                            println!(
-                                                "        Average: {:.1}%",
-                                                cpu.average_percent
-                                            );
-                                        }
+                                if let Some(metrics) =
+                                    perf_metrics.get(device).filter(|m| m.sample_count > 0)
+                                {
+                                    println!("\n    Performance Metrics:");
+                                    if let Some(mem) = &metrics.memory {
+                                        println!("      Memory:");
+                                        println!("        Peak: {:.2} MB", mem.peak_mb);
+                                        println!("        Average: {:.2} MB", mem.average_mb);
+                                    }
+                                    if let Some(cpu) = &metrics.cpu {
+                                        println!("      CPU:");
+                                        println!("        Peak: {:.1}%", cpu.peak_percent);
+                                        println!("        Average: {:.1}%", cpu.average_percent);
                                     }
                                 }
                             }
@@ -811,6 +809,7 @@ fn shorten_html_error(message: &str) -> String {
     message.to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_run_spec(
     target: MobileTarget,
     function: String,
@@ -846,11 +845,12 @@ fn resolve_run_spec(
         _ => bail!("both --ios-app and --ios-test-suite must be provided together"),
     };
 
-    if target == MobileTarget::Ios && !devices.is_empty() && ios_xcuitest.is_none() {
-        bail!(
-            "iOS BrowserStack runs require --ios-app and --ios-test-suite or an ios_xcuitest config block"
-        );
-    }
+    let ios_xcuitest =
+        if target == MobileTarget::Ios && !devices.is_empty() && ios_xcuitest.is_none() {
+            Some(package_ios_xcuitest_artifacts()?)
+        } else {
+            ios_xcuitest
+        };
 
     Ok(RunSpec {
         target,
@@ -895,6 +895,28 @@ fn run_ios_build() -> Result<(PathBuf, PathBuf)> {
             .unwrap_or("module")
     ));
     Ok((result.app_path, header))
+}
+
+fn package_ios_xcuitest_artifacts() -> Result<IosXcuitestArtifacts> {
+    let root = repo_root()?;
+    let crate_name =
+        detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
+    let builder = mobench_sdk::builders::IosBuilder::new(&root, crate_name).verbose(true);
+    let cfg = mobench_sdk::BuildConfig {
+        target: mobench_sdk::Target::Ios,
+        profile: mobench_sdk::BuildProfile::Debug,
+        incremental: true,
+    };
+    builder
+        .build(&cfg)
+        .context("Failed to build iOS xcframework before packaging")?;
+    let app = builder
+        .package_ipa("BenchRunner", mobench_sdk::builders::SigningMethod::AdHoc)
+        .context("Failed to package iOS IPA for BrowserStack")?;
+    let test_suite = builder
+        .package_xcuitest("BenchRunner")
+        .context("Failed to package iOS XCUITest runner for BrowserStack")?;
+    Ok(IosXcuitestArtifacts { app, test_suite })
 }
 
 #[derive(Debug, Clone)]
