@@ -1,0 +1,45 @@
+[package]
+name = "mobench-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Mobile benchmarking SDK for Rust - run benchmarks on real devices"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
+readme = "README.md"
+keywords = ["benchmark", "mobile", "android", "ios", "performance"]
+categories = ["development-tools::profiling", "development-tools::testing"]
+include = [
+    "src/**/*",
+    "templates/**/*",
+    "Cargo.toml",
+    "README.md"
+]
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+# Core dependencies
+mobench-runner = { version = "0.1", path = "../mobench-runner" }
+mobench-macros = { version = "0.1", path = "../mobench-macros" }
+
+# Registry
+inventory.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Template embedding (Phase 1)
+include_dir.workspace = true
+
+# Build automation (Phase 1)
+toml.workspace = true
+
+[dev-dependencies]
+# Test dependencies will be added as needed

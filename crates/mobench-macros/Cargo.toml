@@ -1,0 +1,18 @@
+[package]
+name = "mobench-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Proc macros for bench-sdk - #[benchmark] attribute"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
+readme = "README.md"
+keywords = ["benchmark", "mobile", "macro", "procedural"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true

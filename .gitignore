@@ -19,3 +19,7 @@ target/ios/
 run-summary.json
 bench-config.toml
 device-matrix.yaml
+run-*.json
+browserstack-*.log
+BROWSERSTACK_RUN_*.md
+bench-mobile

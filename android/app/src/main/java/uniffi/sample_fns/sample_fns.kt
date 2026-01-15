@@ -374,7 +374,7 @@ private fun findLibraryName(componentName: String): String {
     if (libOverride != null) {
         return libOverride
     }
-    return "uniffi_sample_fns"
+    return "sample_fns"
 }
 
 private inline fun <reified Lib : Library> loadIndirect(
@@ -861,7 +861,7 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
-    if (lib.uniffi_sample_fns_checksum_func_run_benchmark() != 35019.toShort()) {
+    if (lib.uniffi_sample_fns_checksum_func_run_benchmark() != 38523.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1016,6 +1016,9 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
 
 
 
+/**
+ * Complete benchmark report with spec and timing samples.
+ */
 data class BenchReport (
     var `spec`: BenchSpec, 
     var `samples`: List<BenchSample>
@@ -1048,6 +1051,9 @@ public object FfiConverterTypeBenchReport: FfiConverterRustBuffer<BenchReport> {
 
 
 
+/**
+ * A single benchmark sample with timing information.
+ */
 data class BenchSample (
     var `durationNs`: kotlin.ULong
 ) {
@@ -1076,6 +1082,9 @@ public object FfiConverterTypeBenchSample: FfiConverterRustBuffer<BenchSample> {
 
 
 
+/**
+ * Specification for a benchmark run.
+ */
 data class BenchSpec (
     var `name`: kotlin.String, 
     var `iterations`: kotlin.UInt, 
@@ -1114,6 +1123,9 @@ public object FfiConverterTypeBenchSpec: FfiConverterRustBuffer<BenchSpec> {
 
 
 
+/**
+ * Error types for benchmark operations.
+ */
 sealed class BenchException(message: String): kotlin.Exception(message) {
         
         class InvalidIterations(message: String) : BenchException(message)
@@ -1193,6 +1205,9 @@ public object FfiConverterSequenceTypeBenchSample: FfiConverterRustBuffer<List<B
         }
     }
 }
+        /**
+         * Run a benchmark by name with the given specification.
+         */
     @Throws(BenchException::class) fun `runBenchmark`(`spec`: BenchSpec): BenchReport {
             return FfiConverterTypeBenchReport.lift(
     uniffiRustCallWithError(BenchException) { _status ->

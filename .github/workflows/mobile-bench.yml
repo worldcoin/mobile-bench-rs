@@ -8,6 +8,9 @@ on:
         required: false
         default: "android"
 
+permissions:
+  contents: read
+
 jobs:
   tests:
     name: Host tests
@@ -117,7 +120,7 @@ jobs:
 
       - name: Local bench summary (stub)
         run: |
-          cargo run -p bench-cli -- run \
+          cargo run -p mobench -- run \
             --target android \
             --function sample_fns::fibonacci \
             --iterations 5 \

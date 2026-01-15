@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ⚠️  DEPRECATION WARNING ⚠️
+# This script is legacy tooling for developing this repository.
+#
+# For SDK integrators, use instead:
+#   cargo run -p bench-cli -- build --target ios
+#
+# The CLI command handles all build steps automatically including xcframework
+# creation, binding generation, and code signing.
+
 # Build the Rust library for iOS targets and package as xcframework.
 # UniFFI-generated headers (sample_fnsFFI.h) are used for the C ABI.
 #
@@ -172,6 +181,16 @@ cat > "${XCFRAMEWORK_PATH}/Info.plist" <<EOF
 EOF
 
 echo "✓ iOS build complete. XCFramework created at: ${XCFRAMEWORK_PATH}"
+
+# Copy public header for CLI consumers (matches bench-cli expectation)
+INCLUDE_DIR="${OUTPUT_DIR}/include"
+mkdir -p "${INCLUDE_DIR}"
+if [[ -f "${UNIFFI_HEADER}" ]]; then
+  cp "${UNIFFI_HEADER}" "${INCLUDE_DIR}/sample_fns.h"
+else
+  echo "Error: UniFFI header still missing at ${UNIFFI_HEADER}" >&2
+  exit 1
+fi
 
 # Code-sign the xcframework (required for Xcode)
 echo "Signing xcframework..."

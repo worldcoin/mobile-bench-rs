@@ -1,0 +1,12 @@
+import XCTest
+
+final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
+    func testLaunchShowsBenchmarkReport() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let report = app.staticTexts["benchmarkReport"]
+        let exists = report.waitForExistence(timeout: 30.0)
+        XCTAssertTrue(exists, "Benchmark report text should appear after launch")
+    }
+}
