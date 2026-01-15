@@ -2,6 +2,13 @@
 
 Complete build instructions for Android and iOS targets.
 
+> **For SDK Integrators**: If you're importing `mobench-sdk` into your project, use the CLI commands:
+> - `cargo mobench build --target android` for Android
+> - `cargo mobench build --target ios` for iOS
+>
+> The scripts shown below are legacy tooling for developing this repository.
+> See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide.
+
 ## Table of Contents
 - [Prerequisites](#prerequisites)
 - [Android Build](#android-build)
@@ -19,10 +26,13 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustc --version
 cargo --version
 ```
+Download: https://www.rust-lang.org/tools/install
 
 ### Android
 ```bash
 # Install Android NDK via Android Studio or sdkmanager
+# Android Studio: https://developer.android.com/studio
+# Android NDK: https://developer.android.com/ndk/downloads
 # Set environment variable (add to ~/.zshrc or ~/.bashrc)
 export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
 
@@ -31,6 +41,11 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 
 # Install cargo-ndk
 cargo install cargo-ndk
+## cargo-ndk: https://github.com/bbqsrc/cargo-ndk
+
+# Install JDK 17+ (for Gradle; any distribution)
+# https://openjdk.org/install/
+# Note: Android Gradle Plugin (AGP) officially supports Java 17.
 
 # Verify NDK installation
 ls $ANDROID_NDK_HOME
@@ -39,15 +54,18 @@ ls $ANDROID_NDK_HOME
 ### iOS (macOS only)
 ```bash
 # Install Xcode from App Store
+# https://developer.apple.com/xcode/
 
 # Install command-line tools
 xcode-select --install
 
 # Install xcodegen
 brew install xcodegen
+## https://github.com/yonaskolb/XcodeGen
 
 # Install required Rust targets
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+## https://doc.rust-lang.org/rustup/targets.html
 
 # Verify installation
 xcodegen --version
@@ -59,7 +77,8 @@ xcodebuild -version
 ### Quick Start (Recommended)
 ```bash
 # Build everything and create APK in one command
-./scripts/build-android-app.sh
+# For Android Studio emulators, use UNIFFI_ANDROID_ABI=x86_64
+UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
 
 # Install on connected device or emulator
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -70,9 +89,10 @@ adb shell am start -n dev.world.bench/.MainActivity
 
 ### Step-by-Step Build
 
-#### Step 1: Build Rust Libraries
+#### Step 1: Build Rust Libraries + Bindings
 ```bash
-./scripts/build-android.sh
+# ABI-aware binding generation to avoid UniFFI checksum mismatches.
+UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
 ```
 
 This compiles Rust code for three Android ABIs:
@@ -82,14 +102,9 @@ This compiles Rust code for three Android ABIs:
 
 Output: `target/android/{abi}/release/libsample_fns.so`
 
-#### Step 2: Sync Libraries to Android Project
-```bash
-./scripts/sync-android-libs.sh
-```
-
 This copies `.so` files to `android/app/src/main/jniLibs/{abi}/libsample_fns.so` where Android's build system expects them.
 
-#### Step 3: Build APK with Gradle
+#### Step 2: Build APK with Gradle
 ```bash
 cd android
 ./gradlew :app:assembleDebug
@@ -98,7 +113,7 @@ cd ..
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk`
 
-#### Step 4: Install and Run
+#### Step 3: Install and Run
 ```bash
 # Install
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -381,13 +396,18 @@ xcodegen generate
 - Check `scripts/build-ios.sh` uses `dev.world.sample-fns` for framework
 - App uses `dev.world.bench`
 
-## UniFFI Bindings
+## UniFFI Bindings (Proc Macros)
 
-If you modify the Rust API (`crates/sample-fns/src/sample_fns.udl`):
+This project uses UniFFI **proc macros** - no UDL file needed! FFI types are defined with attributes in Rust code.
+
+If you modify FFI types in Rust (`crates/sample-fns/src/lib.rs`):
 
 ```bash
-# Regenerate bindings
-cargo run --bin generate-bindings --features bindgen
+# Build library to generate metadata
+cargo build -p sample-fns
+
+# Regenerate bindings from proc macros
+./scripts/generate-bindings.sh
 
 # This updates:
 # - android/app/src/main/java/uniffi/sample_fns/sample_fns.kt (Kotlin)
@@ -395,21 +415,35 @@ cargo run --bin generate-bindings --features bindgen
 # - ios/BenchRunner/BenchRunner/Generated/sample_fnsFFI.h (C header)
 
 # Then rebuild mobile apps
-./scripts/build-android-app.sh  # Android
-./scripts/build-ios.sh          # iOS
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh  # Android
+./scripts/build-ios.sh          # iOS (includes automatic code signing)
 ```
+
+**Example**: Adding a new FFI type:
+```rust
+#[derive(uniffi::Record)]
+pub struct MyNewType {
+    pub field: String,
+}
+
+#[uniffi::export]
+pub fn my_new_function(arg: MyNewType) -> Result<String, BenchError> {
+    Ok(arg.field)
+}
+```
+
+Then regenerate bindings as shown above.
 
 ## Performance Testing
 
 Run benchmarks locally without mobile builds:
 ```bash
-cargo run -p bench-cli -- demo --iterations 100 --warmup 10
+cargo mobench demo --iterations 100 --warmup 10
 ```
 
 ## Additional Documentation
 
 - **`TESTING.md`**: Comprehensive testing guide with troubleshooting
 - **`README.md`**: Project overview and quick start
-- **`CLAUDE.md`**: Developer guide for working with this codebase
+- **`CLAUDE.md`**: Developer guide for this codebase
 - **`PROJECT_PLAN.md`**: Architecture and roadmap

@@ -1,35 +1,57 @@
 use camino::Utf8PathBuf;
 use std::env;
 use std::fs;
-use std::process;
 use uniffi_bindgen::bindings::{KotlinBindingGenerator, SwiftBindingGenerator};
+use uniffi_bindgen::library_mode::generate_bindings;
 
 fn main() {
     let manifest_dir = Utf8PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let root_dir = manifest_dir.parent().unwrap().parent().unwrap();
-    let udl_file = manifest_dir.join("src/sample_fns.udl");
 
-    if !udl_file.exists() {
-        eprintln!("Error: UDL file not found at {:?}", udl_file);
-        process::exit(1);
+    let lib_file = if let Ok(path) = env::var("UNIFFI_LIBRARY_PATH") {
+        println!("Using UniFFI library from UNIFFI_LIBRARY_PATH");
+        Utf8PathBuf::from(path)
+    } else {
+        let profile = env::var("UNIFFI_PROFILE").unwrap_or_else(|_| "release".to_string());
+        println!(
+            "Building library to generate UniFFI metadata (profile={})...",
+            profile
+        );
+        let target_dir = root_dir.join("target").join(&profile);
+        let lib_name = if cfg!(target_os = "macos") {
+            "libsample_fns.dylib"
+        } else if cfg!(target_os = "linux") {
+            "libsample_fns.so"
+        } else {
+            "sample_fns.dll"
+        };
+        target_dir.join(lib_name)
+    };
+
+    println!("Using library: {:?}", lib_file);
+    if !lib_file.exists() {
+        eprintln!(
+            "UniFFI library not found at {:?}. Build it first or set UNIFFI_LIBRARY_PATH.",
+            lib_file
+        );
+        std::process::exit(1);
     }
-
-    println!("Using UDL file: {:?}", udl_file);
 
     // Generate Kotlin bindings
     let kotlin_out = root_dir.join("android/app/src/main/java");
     fs::create_dir_all(&kotlin_out).unwrap();
     println!("Generating Kotlin bindings to {:?}", kotlin_out);
 
-    uniffi_bindgen::generate_bindings(
-        &udl_file,
-        None, // config file
-        KotlinBindingGenerator,
-        Some(kotlin_out.as_ref()),
-        None, // lib file
-        None, // crate name
+    generate_bindings(
+        &lib_file,
+        None, // crate name (auto-detect)
+        &KotlinBindingGenerator,
+        &uniffi_bindgen::cargo_metadata::CrateConfigSupplier::default(),
+        None, // config override path
+        &kotlin_out,
         false, // try_format_code
-    ).unwrap();
+    )
+    .unwrap();
 
     println!("✓ Kotlin bindings generated");
 
@@ -38,15 +60,16 @@ fn main() {
     fs::create_dir_all(&swift_out).unwrap();
     println!("Generating Swift bindings to {:?}", swift_out);
 
-    uniffi_bindgen::generate_bindings(
-        &udl_file,
-        None, // config file
-        SwiftBindingGenerator,
-        Some(swift_out.as_ref()),
-        None, // lib file
-        None, // crate name
+    generate_bindings(
+        &lib_file,
+        None, // crate name (auto-detect)
+        &SwiftBindingGenerator,
+        &uniffi_bindgen::cargo_metadata::CrateConfigSupplier::default(),
+        None, // config override path
+        &swift_out,
         false, // try_format_code
-    ).unwrap();
+    )
+    .unwrap();
 
     println!("✓ Swift bindings generated");
 

@@ -2,6 +2,11 @@
 
 This document provides comprehensive testing instructions for mobile-bench-rs.
 
+> **For SDK Integrators**: If you're importing `mobench-sdk` into your project, use:
+> - `cargo mobench build --target <android|ios>` for builds
+> - Scripts shown below are legacy tooling for this repository
+> - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide
+
 > **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
 
 ## Table of Contents
@@ -17,18 +22,25 @@ This document provides comprehensive testing instructions for mobile-bench-rs.
 ```bash
 # Install Rust if not already installed
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# https://www.rust-lang.org/tools/install
 
 # Install required targets
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+# https://doc.rust-lang.org/rustup/targets.html
 
 # Install cargo-ndk for Android builds
 cargo install cargo-ndk
+# https://github.com/bbqsrc/cargo-ndk
 ```
 
 ### Android
 ```bash
 # Install Android SDK and NDK (via Android Studio or command line)
+# Android Studio: https://developer.android.com/studio
+# Android NDK: https://developer.android.com/ndk/downloads
+# JDK 17+ (for Gradle; any distribution): https://openjdk.org/install/
+# Note: Android Gradle Plugin (AGP) officially supports Java 17.
 # Set environment variable (add to ~/.zshrc or ~/.bashrc)
 export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
 
@@ -39,10 +51,13 @@ ls $ANDROID_NDK_HOME
 ### iOS (macOS only)
 ```bash
 # Install Xcode from App Store
+# https://developer.apple.com/xcode/
 # Install command-line tools
 xcode-select --install
 
 # Install xcodegen
+brew install xcodegen
+# https://github.com/yonaskolb/XcodeGen
 brew install xcodegen
 ```
 
@@ -59,7 +74,7 @@ Expected output: All tests pass (11 tests total as of UniFFI migration).
 ### CLI Demo
 Test the benchmarking harness without mobile builds:
 ```bash
-cargo run -p bench-cli -- demo --iterations 10 --warmup 2
+cargo mobench demo --iterations 10 --warmup 2
 ```
 
 Expected output: JSON report with timing samples for `fibonacci` function.
@@ -67,7 +82,7 @@ Expected output: JSON report with timing samples for `fibonacci` function.
 ### Testing Different Functions
 ```bash
 # Test fibonacci (default)
-cargo run -p bench-cli -- demo --iterations 5 --warmup 1
+cargo mobench demo --iterations 5 --warmup 1
 
 # Currently supports:
 # - fibonacci / fib / sample_fns::fibonacci
@@ -80,7 +95,8 @@ cargo run -p bench-cli -- demo --iterations 5 --warmup 1
 
 ```bash
 # Build everything and create APK
-scripts/build-android-app.sh
+# For Android Studio emulators, use UNIFFI_ANDROID_ABI=x86_64
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh
 
 # Install on connected device/emulator
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -92,20 +108,10 @@ adb shell am start -n dev.world.bench/.MainActivity
 ### Method 2: Step-by-Step Build
 
 ```bash
-# Step 1: Build Rust libraries for Android
-scripts/build-android.sh
+# Step 1: Build Rust libraries + bindings (ABI-aware)
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh
 
-# This compiles for three ABIs:
-# - aarch64-linux-android (arm64-v8a)
-# - armv7-linux-androideabi (armeabi-v7a)
-# - x86_64-linux-android (x86_64, for emulator)
-
-# Step 2: Copy .so files to Android project
-scripts/sync-android-libs.sh
-
-# This copies from target/android/{abi}/release/ to android/app/src/main/jniLibs/{abi}/
-
-# Step 3: Build APK
+# Step 2: Build APK
 cd android
 ./gradlew :app:assembleDebug
 cd ..
@@ -436,16 +442,17 @@ codesign --force --deep --sign - target/ios/sample_fns.xcframework
 - Trust developer certificate on device: Settings → General → VPN & Device Management
 - The xcframework must be signed: `codesign --force --deep --sign - target/ios/sample_fns.xcframework`
 
-### UniFFI Bindings
+### UniFFI Bindings (Proc Macros)
 
-**Problem**: Changes to `sample_fns.udl` not reflected in mobile apps
+**Problem**: Changes to FFI types in `crates/sample-fns/src/lib.rs` not reflected in mobile apps
 ```bash
-# Solution: Regenerate bindings
-cargo run --bin generate-bindings --features bindgen
+# Solution: Rebuild library and regenerate bindings
+cargo build -p sample-fns
+./scripts/generate-bindings.sh
 
 # Then rebuild mobile apps
-scripts/build-android-app.sh  # For Android
-scripts/build-ios.sh          # For iOS
+UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh  # For Android
+scripts/build-ios.sh          # For iOS (includes signing)
 ```
 
 **Problem**: "error: cannot find type `BenchSpec` in the crate root"
@@ -464,7 +471,7 @@ cargo test --all
 
 # Common causes:
 # - Missing serde dependency (check Cargo.toml)
-# - API signature changes (update UDL and regenerate bindings)
+# - API signature changes (update FFI types with proc macros and regenerate bindings)
 # - Test assertions need updating
 ```
 
@@ -485,7 +492,7 @@ See the main [README.md](README.md) for BrowserStack testing instructions.
 Compare benchmark results across builds:
 ```bash
 # Run benchmark and save results
-cargo run -p bench-cli -- run \
+cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 100 \
@@ -493,7 +500,7 @@ cargo run -p bench-cli -- run \
   --output results-v1.json
 
 # After changes, run again
-cargo run -p bench-cli -- run \
+cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 100 \
@@ -561,4 +568,4 @@ To trigger manually:
 - [Android NDK Documentation](https://developer.android.com/ndk)
 - [Rust Cross-Compilation Guide](https://rust-lang.github.io/rustup/cross-compilation.html)
 - [PROJECT_PLAN.md](PROJECT_PLAN.md) - Roadmap and architecture
-- [CLAUDE.md](CLAUDE.md) - Developer guide for working with this codebase
+- [CLAUDE.md](CLAUDE.md) - Developer guide for this codebase

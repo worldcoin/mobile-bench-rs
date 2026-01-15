@@ -1,0 +1,8 @@
+//
+//  {{PROJECT_NAME_PASCAL}}-Bridging-Header.h
+//  {{PROJECT_NAME_PASCAL}}
+//
+//  Bridge to import C FFI from Rust (UniFFI-generated)
+//
+
+#import "{{LIBRARY_NAME}}FFI.h"

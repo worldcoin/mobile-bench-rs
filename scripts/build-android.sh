@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ⚠️  DEPRECATION WARNING ⚠️
+# This script is legacy tooling for developing this repository.
+#
+# For SDK integrators, use instead:
+#   cargo run -p bench-cli -- build --target android
+#
+# The CLI command handles all build steps automatically.
+
 # Build Rust shared libraries for Android targets using cargo-ndk.
 #
 # NOTE: If you modify the Rust API (sample_fns.udl), run:
