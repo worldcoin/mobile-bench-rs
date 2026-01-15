@@ -826,12 +826,11 @@ impl IosBuilder {
                     "xcodebuild build failed and app bundle not found: {}",
                     stderr
                 )));
-            } else {
-                return Err(BenchError::Build(format!(
-                    "App bundle not found at {:?}. Build may have failed.",
-                    app_path
-                )));
             }
+            return Err(BenchError::Build(format!(
+                "App bundle not found at {:?}. Build may have failed.",
+                app_path
+            )));
         }
 
         if self.verbose {
