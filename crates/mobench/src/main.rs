@@ -1731,7 +1731,7 @@ mod tests {
 
     #[test]
     fn ios_requires_artifacts_for_browserstack() {
-        let err = resolve_run_spec(
+        let spec = resolve_run_spec(
             MobileTarget::Ios,
             "sample_fns::fibonacci".into(),
             1,
@@ -1741,10 +1741,14 @@ mod tests {
             None,
             None,
         )
-        .unwrap_err();
+        .expect("should auto-package iOS artifacts when missing");
+        let ios_artifacts = spec
+            .ios_xcuitest
+            .expect("iOS artifacts should be populated");
+        assert!(ios_artifacts.app.exists(), "iOS app artifact missing");
         assert!(
-            err.to_string()
-                .contains("iOS BrowserStack runs require --ios-app and --ios-test-suite")
+            ios_artifacts.test_suite.exists(),
+            "iOS test suite artifact missing"
         );
     }
 }
