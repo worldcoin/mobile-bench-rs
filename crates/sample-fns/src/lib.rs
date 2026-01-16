@@ -42,7 +42,7 @@ pub enum BenchError {
 // Generate UniFFI scaffolding from proc macros
 uniffi::setup_scaffolding!();
 
-// Conversion from bench-runner types
+// Conversion from mobench-runner types
 impl From<mobench_runner::BenchSpec> for BenchSpec {
     fn from(spec: mobench_runner::BenchSpec) -> Self {
         Self {
