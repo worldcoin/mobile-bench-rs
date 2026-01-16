@@ -42,7 +42,8 @@ The repository is organized as a Cargo workspace:
 - **`crates/mobench-sdk`**: Core SDK library with registry system, builders (AndroidBuilder, IosBuilder), template generation, and BrowserStack integration.
 - **`crates/mobench-macros`**: Proc macro crate providing the `#[benchmark]` attribute for marking functions.
 - **`crates/mobench-runner`**: Lightweight timing harness library that gets embedded in mobile binaries. Provides timing infrastructure for benchmarks.
-- **`examples/basic-benchmark`**: Example benchmark functions with UniFFI bindings for mobile platforms. Demonstrates the SDK usage pattern.
+- **`examples/basic-benchmark`**: Minimal SDK usage example with `#[benchmark]`.
+- **`examples/ffi-benchmark`**: Full UniFFI surface example (types + `run_benchmark`).
 
 ### Mobile Integration Flow
 
@@ -91,9 +92,6 @@ cargo mobench build --target ios
 # List discovered benchmarks
 cargo mobench list
 
-# Legacy: Direct script usage (for repository development only)
-scripts/build-android-app.sh
-scripts/build-ios.sh
 ```
 
 ## Common Commands
@@ -130,47 +128,10 @@ cargo mobench package-ipa --method adhoc
 - Builds APK (Android) or xcframework (iOS)
 - No manual script execution needed
 
-### Legacy Script-Based Building (Repository Development)
+### Repository Development Builds
 
-**Note:** The `scripts/` directory contains legacy tooling used for developing this repository. SDK users should use `cargo mobench build` instead.
-
-#### Android (Legacy)
-```bash
-# Build Rust shared libraries for Android (requires Android NDK)
-scripts/build-android.sh
-
-# Sync .so files into Android project structure
-scripts/sync-android-libs.sh
-
-# Build complete APK with Gradle
-cd android && gradle :app:assembleDebug
-
-# Or use the all-in-one script
-UNIFFI_ANDROID_ABI=x86_64 scripts/build-android-app.sh
-```
-
-Requirements:
-- `ANDROID_NDK_HOME` environment variable set
-- `cargo-ndk` installed: `cargo install cargo-ndk`
-- Android SDK/NDK available (API level 24+)
-- Set `UNIFFI_ANDROID_ABI=x86_64` for default Android Studio emulators
-
-#### iOS (Legacy)
-```bash
-# Build Rust xcframework for iOS (includes UniFFI headers and automatic signing)
-scripts/build-ios.sh
-
-# Generate Xcode project from project.yml (if using repository's iOS app)
-cd ios/BenchRunner && xcodegen generate
-
-# Open in Xcode
-open BenchRunner.xcodeproj
-```
-
-Requirements:
-- Xcode command-line tools
-- Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
-- `xcodegen` installed: `brew install xcodegen` (only for repository development)
+Use `cargo mobench build --target <android|ios>` for local or CI builds. The CLI handles
+library builds, binding generation, and app packaging without extra scripts.
 
 **Important iOS Build Details:**
 
@@ -293,7 +254,7 @@ fn my_expensive_operation() {
 
 The macro automatically registers functions at compile time via the `inventory` crate.
 
-### FFI Boundary (`examples/basic-benchmark`)
+### FFI Boundary (`examples/ffi-benchmark`)
 
 The example crate uses **UniFFI proc macros** to generate type-safe bindings for Kotlin and Swift. The API is defined directly in Rust code with attributes:
 
@@ -323,10 +284,10 @@ uniffi::setup_scaffolding!();  // Auto-uses crate name as namespace
 Regenerate bindings after modifying FFI types (for repository development):
 ```bash
 # Build library to generate metadata
-cargo build -p basic-benchmark
+cargo build -p ffi-benchmark
 
 # Generate Kotlin + Swift bindings
-./scripts/generate-bindings.sh
+cargo mobench build --target android
 ```
 
 Generated files (committed to git for the example app):
@@ -400,11 +361,11 @@ cargo mobench run --target android --function my_function
 
 ### Adding New Benchmark Functions to Repository Example
 
-1. Add function to `examples/basic-benchmark/src/lib.rs`
+1. Add function to `crates/sample-fns/src/lib.rs`
 2. Add function dispatch to `run_benchmark()` match statement (e.g., `"my_func" => run_closure(spec, || my_func())`)
 3. If adding new FFI types, add proc macro attributes (`#[derive(uniffi::Record)]`, `#[uniffi::export]`, etc.)
-4. Regenerate bindings: `./scripts/generate-bindings.sh`
-5. Rebuild native libraries: `cargo mobench build --target <android|ios>` or use legacy scripts
+4. Regenerate bindings: `cargo mobench build --target android`
+5. Rebuild native libraries: `cargo mobench build --target <android|ios>`
 6. Mobile apps will automatically use the updated bindings
 
 **Note**: No UDL file needed! Proc macros automatically detect FFI types from Rust code.
@@ -416,7 +377,7 @@ cargo mobench run --target android --function my_function
 
 ### XCFramework Structure
 
-`scripts/build-ios.sh` manually constructs an xcframework (not using `xcodebuild -create-xcframework`) by creating framework slices for each target with proper Info.plist and module.modulemap files.
+The mobench iOS builder manually constructs an xcframework (not using `xcodebuild -create-xcframework`) by creating framework slices for each target with proper Info.plist and module.modulemap files.
 
 **Critical Implementation Details:**
 1. **Directory Structure**: Each framework must be in `{LibraryIdentifier}/{FrameworkName}.framework/`, not directly at the root. For example: `ios-simulator-arm64/sample_fns.framework/`, not `ios-simulator-arm64.framework/`.
@@ -540,9 +501,8 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
   - `src/lib.rs`: Core timing and reporting logic
 
 ### Example & Testing
-- **`examples/basic-benchmark/`**: Example benchmark crate demonstrating SDK usage
-  - `src/lib.rs`: Sample benchmark functions with UniFFI bindings
-  - `src/bin/generate-bindings.rs`: Binding generation for Kotlin/Swift
+- **`examples/basic-benchmark/`**: Minimal SDK usage example
+- **`examples/ffi-benchmark/`**: Full UniFFI surface example
 - **`android/`**: Android test app (for repository development)
   - `app/src/main/java/dev/world/bench/MainActivity.kt`: Android app entry point
   - `app/src/main/java/uniffi/sample_fns/sample_fns.kt`: Generated Kotlin bindings
@@ -559,10 +519,6 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
 - **`PROJECT_PLAN.md`**: Goals, architecture, task backlog
 - **`CLAUDE.md`**: This file - developer guide for the codebase
 
-### Legacy Build Scripts (Repository Development Only)
-- **`scripts/build-android.sh`**: Builds Rust libs with cargo-ndk for Android targets
-- **`scripts/build-ios.sh`**: Builds iOS xcframework with correct structure and code signing
-- **`scripts/sync-android-libs.sh`**: Copies .so files into Android jniLibs structure
-- **`scripts/generate-bindings.sh`**: Regenerates UniFFI bindings for Kotlin/Swift
-
-**Note**: SDK users should use `cargo mobench build` instead of calling scripts directly.
+### Build Tooling
+Use `cargo mobench build --target <android|ios>` for repository development and CI. The CLI
+handles native builds, binding generation, and packaging.

@@ -52,6 +52,6 @@
 
 ## In-Repo Placeholders (current)
 
-- Scripts: `scripts/build-android.sh`, `scripts/build-ios.sh` for manual/CI builds (require Android NDK / cargo-apple).
+- CLI: `cargo mobench build --target <android|ios>` for manual/CI builds (requires Android NDK/Xcode as appropriate).
 - Android demo app: `android/` Gradle project that loads the Rust demo cdylib (`sample-fns`) and displays results.
 - Workflow: `.github/workflows/mobile-bench.yml` manual build for Android; extend with BrowserStack upload/run and iOS job.
