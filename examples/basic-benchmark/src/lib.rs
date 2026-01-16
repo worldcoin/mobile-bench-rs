@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn test_discover_benchmarks() {
-        let benchmarks = mobench_sdk::discover_benchmarks();
+        let benchmarks: Vec<&mobench_sdk::BenchFunction> = mobench_sdk::discover_benchmarks();
         assert!(benchmarks.len() >= 2, "Should find at least 2 benchmarks");
     }
 
