@@ -286,8 +286,8 @@ impl BrowserStackClient {
                 _ => return Err(anyhow!("unsupported platform: {}", platform)),
             };
 
-            match status.status.as_str() {
-                "done" => return Ok(status),
+            match status.status.to_lowercase().as_str() {
+                "done" | "passed" | "completed" => return Ok(status),
                 "failed" | "error" | "timeout" => {
                     return Err(anyhow!(
                         "Build {} failed with status: {}",
