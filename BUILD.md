@@ -304,7 +304,7 @@ xcodegen generate
 
 This makes C types (`RustBuffer`, `RustCallStatus`, etc.) available to Swift without explicit imports.
 
-**Code Signing**: The build script (`build-ios.sh`) automatically signs the xcframework. If you build manually or signing fails, sign with:
+**Code Signing**: The build step automatically signs the xcframework. If signing fails, sign with:
 ```bash
 codesign --force --deep --sign - target/ios/sample_fns.xcframework
 ```
