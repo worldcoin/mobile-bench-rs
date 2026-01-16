@@ -27,22 +27,31 @@
 - Benchmark a single exported Rust function with configurable iterations.
 - Build Android APK + iOS app/xcframework locally and in CI.
 - Trigger one Android device run on BrowserStack and capture timing JSON.
-- CLI command: `mobench run --target android --function path::to::fn --devices "pixel_7"` producing a report.
+- CLI command: `mobench run --target android --function path::to::fn --devices "Google Pixel 7-13.0"` producing a report.
 
-## Task Backlog (initial)
+## Task Backlog
 
-- [ ] Repo bootstrap: Cargo workspace, `mobench` binary crate, `bench-runner` library crate, example `sample-fns` crate.
-- [ ] Define FFI boundary: macro/attribute to mark benchmarkable Rust functions; export through C ABI; basic timing harness.
-- [ ] Android packaging: cargo-ndk config, Kotlin wrapper module, minimal test/activity to trigger Rust bench entrypoint.
-- [ ] iOS packaging: xcframework build script (cargo lipo or cargo-apple), C header generation (cbindgen), Swift wrapper, test host.
-- [ ] CLI scaffolding: parse config (function path, iterations, warmups, device matrix), invoke build scripts, prepare artifacts.
-- [ ] BrowserStack integration: AppAutomate REST client (upload builds, start sessions, poll status, download logs/artifacts).
-- [ ] Result handling: normalize timing output to JSON, aggregate across iterations/devices, emit markdown/CSV summary.
-- [ ] CI: GitHub Actions workflow covering build, artifact upload, BrowserStack-triggered run (behind secrets), and report upload.
-- [ ] Developer UX: local smoke test runners, sample bench functions, docs with step-by-step usage.
+- [x] Repo bootstrap: Cargo workspace, `mobench` binary crate, `bench-runner` library crate, example `sample-fns` crate.
+- [x] Define FFI boundary: macro/attribute to mark benchmarkable Rust functions; export through C ABI; basic timing harness.
+- [x] Android packaging: cargo-ndk config, Kotlin wrapper module, minimal test/activity to trigger Rust bench entrypoint.
+- [x] iOS packaging: xcframework build script (cargo lipo or cargo-apple), C header generation (cbindgen), Swift wrapper, test host.
+- [x] CLI scaffolding: parse config (function path, iterations, warmups, device matrix), invoke build scripts, prepare artifacts.
+- [x] BrowserStack integration: AppAutomate REST client (upload builds, start sessions, poll status, download logs/artifacts).
+- [x] Result handling: normalize timing output to JSON, aggregate across iterations/devices, emit markdown/CSV summary.
+- [x] CI: GitHub Actions workflow covering build, artifact upload, BrowserStack-triggered run (behind secrets), and report upload.
+- [x] Developer UX: local smoke test runners, sample bench functions, docs with step-by-step usage.
+- [x] Add markdown + CSV summary output for `mobench run` results.
+- [x] Wire device matrix config into `mobench run` (load devices by tag).
+- [x] Replace BrowserStack stub run in CI with real AppAutomate run and fetch.
+- [x] Add GH Actions summary/annotations for benchmark results.
+- [x] Add regression comparison command (compare two JSON summaries).
+
+## Suggested Next Tasks
+
 - [ ] Stretch: parallel device runs, retries, percentile stats, optional energy/thermal readings where available.
 
 ## In-Repo Placeholders (current)
+
 - Scripts: `scripts/build-android.sh`, `scripts/build-ios.sh` for manual/CI builds (require Android NDK / cargo-apple).
 - Android demo app: `android/` Gradle project that loads the Rust demo cdylib (`sample-fns`) and displays results.
 - Workflow: `.github/workflows/mobile-bench.yml` manual build for Android; extend with BrowserStack upload/run and iOS job.

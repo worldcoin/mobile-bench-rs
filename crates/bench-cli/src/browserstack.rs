@@ -1,7 +1,7 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
@@ -39,7 +39,7 @@ impl BrowserStackClient {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]  // Used in tests to verify URL construction
+    #[allow(dead_code)] // Used in tests to verify URL construction
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
@@ -364,7 +364,10 @@ mod tests {
         .unwrap();
 
         let url = client.api("app-automate/espresso/v2/app");
-        assert_eq!(url, "https://api-cloud.browserstack.com/app-automate/espresso/v2/app");
+        assert_eq!(
+            url,
+            "https://api-cloud.browserstack.com/app-automate/espresso/v2/app"
+        );
     }
 
     #[test]
@@ -379,7 +382,10 @@ mod tests {
         .unwrap();
 
         let url = client.api("/app-automate/builds");
-        assert_eq!(url, "https://api-cloud.browserstack.com/app-automate/builds");
+        assert_eq!(
+            url,
+            "https://api-cloud.browserstack.com/app-automate/builds"
+        );
     }
 
     #[test]
@@ -409,11 +415,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_espresso_run(
-            &[],
-            "bs://app123",
-            "bs://test456",
-        );
+        let result = client.schedule_espresso_run(&[], "bs://app123", "bs://test456");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
@@ -430,11 +432,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_espresso_run(
-            &["Pixel 7-13".to_string()],
-            "",
-            "bs://test456",
-        );
+        let result =
+            client.schedule_espresso_run(&["Google Pixel 7-13.0".to_string()], "", "bs://test456");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("app_url"));
@@ -452,7 +451,7 @@ mod tests {
         .unwrap();
 
         let result = client.schedule_espresso_run(
-            &["Pixel 7-13".to_string()],
+            &["Google Pixel 7-13.0".to_string()],
             "bs://app123",
             "",
         );
@@ -472,11 +471,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_xcuitest_run(
-            &[],
-            "bs://app123",
-            "bs://test456",
-        );
+        let result = client.schedule_xcuitest_run(&[], "bs://app123", "bs://test456");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));

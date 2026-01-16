@@ -266,6 +266,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
+name = "deranged"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ececcb659e7ba858fb4f10388c250a7252eb0a27373f1a72b8748afdd248e587"
+dependencies = [
+ "powerfmt",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -784,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "mobench"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -798,12 +807,13 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "time",
  "toml 0.8.23",
 ]
 
 [[package]]
 name = "mobench-macros"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -812,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-runner"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -820,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-sdk"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "include_dir",
@@ -842,6 +852,12 @@ dependencies = [
  "memchr",
  "minimal-lexical",
 ]
+
+[[package]]
+name = "num-conv"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
 
 [[package]]
 name = "once_cell"
@@ -893,6 +909,12 @@ checksum = "b73949432f5e2a09657003c25bca5e19a0e9c84f8058ca374f49e0ebe605af77"
 dependencies = [
  "zerovec",
 ]
+
+[[package]]
+name = "powerfmt"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "ppv-lite86"
@@ -1134,7 +1156,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sample-fns"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "camino",
  "mobench-runner",
@@ -1407,6 +1429,37 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "time"
+version = "0.3.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9e442fc33d7fdb45aa9bfeb312c095964abdf596f7567261062b2a7107aaabd"
+dependencies = [
+ "deranged",
+ "itoa",
+ "num-conv",
+ "powerfmt",
+ "serde_core",
+ "time-core",
+ "time-macros",
+]
+
+[[package]]
+name = "time-core"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b36ee98fd31ec7426d599183e8fe26932a8dc1fb76ddb6214d05493377d34ca"
+
+[[package]]
+name = "time-macros"
+version = "0.2.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e552d1249bf61ac2a52db88179fd0673def1e1ad8243a00d9ec9ed71fee3dd"
+dependencies = [
+ "num-conv",
+ "time-core",
 ]
 
 [[package]]

@@ -372,6 +372,7 @@ impl IosBuilder {
         framework_name: &str,
         platform: &str,
     ) -> Result<(), BenchError> {
+        let bundle_id = framework_name.replace('_', "-");
         let plist_content = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -398,7 +399,7 @@ impl IosBuilder {
 </dict>
 </plist>"#,
             framework_name,
-            framework_name,
+            bundle_id,
             framework_name,
             if platform == "ios" {
                 "iPhoneOS"
@@ -582,7 +583,7 @@ impl IosBuilder {
 }
 
 // Shared helpers (duplicated with android builder)
-fn host_lib_path(project_dir: &PathBuf, crate_name: &str) -> Result<PathBuf, BenchError> {
+fn host_lib_path(project_dir: &Path, crate_name: &str) -> Result<PathBuf, BenchError> {
     let lib_prefix = if cfg!(target_os = "windows") {
         ""
     } else {
@@ -623,6 +624,91 @@ fn run_command(mut cmd: Command, description: &str) -> Result<(), BenchError> {
             "{} failed: {}",
             description, stderr
         )));
+    }
+    Ok(())
+}
+
+#[allow(clippy::collapsible_if)]
+fn find_codesign_identity() -> Option<String> {
+    let output = Command::new("security")
+        .args(["find-identity", "-v", "-p", "codesigning"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut identities = Vec::new();
+    for line in stdout.lines() {
+        if let Some(start) = line.find('"') {
+            if let Some(end) = line[start + 1..].find('"') {
+                identities.push(line[start + 1..start + 1 + end].to_string());
+            }
+        }
+    }
+    let preferred = [
+        "Apple Distribution",
+        "iPhone Distribution",
+        "Apple Development",
+        "iPhone Developer",
+    ];
+    for label in preferred {
+        if let Some(identity) = identities.iter().find(|i| i.contains(label)) {
+            return Some(identity.clone());
+        }
+    }
+    identities.first().cloned()
+}
+
+#[allow(clippy::collapsible_if)]
+fn find_provisioning_profile() -> Option<PathBuf> {
+    if let Ok(path) = env::var("MOBENCH_IOS_PROFILE") {
+        let profile = PathBuf::from(path);
+        if profile.exists() {
+            return Some(profile);
+        }
+    }
+    let home = env::var("HOME").ok()?;
+    let profiles_dir = PathBuf::from(home).join("Library/MobileDevice/Provisioning Profiles");
+    let entries = fs::read_dir(&profiles_dir).ok()?;
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("mobileprovision") {
+            continue;
+        }
+        if let Ok(metadata) = entry.metadata()
+            && let Ok(modified) = metadata.modified()
+        {
+            match &newest {
+                Some((current, _)) if *current >= modified => {}
+                _ => newest = Some((modified, path)),
+            }
+        }
+    }
+    newest.map(|(_, path)| path)
+}
+
+fn embed_provisioning_profile(app_path: &Path, profile: &Path) -> Result<(), BenchError> {
+    let dest = app_path.join("embedded.mobileprovision");
+    fs::copy(profile, &dest).map_err(|e| {
+        BenchError::Build(format!(
+            "Failed to embed provisioning profile {:?}: {}",
+            dest, e
+        ))
+    })?;
+    Ok(())
+}
+
+fn codesign_bundle(app_path: &Path, identity: &str) -> Result<(), BenchError> {
+    let output = Command::new("codesign")
+        .args(["--force", "--deep", "--sign", identity])
+        .arg(app_path)
+        .output()
+        .map_err(|e| BenchError::Build(format!("Failed to run codesign: {}", e)))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BenchError::Build(format!("codesign failed: {}", stderr)));
     }
     Ok(())
 }
@@ -689,8 +775,9 @@ impl IosBuilder {
 
         // Step 1: Build the app for device (simpler than archiving)
         let build_dir = self.project_root.join("target/ios/build");
+        let build_configuration = "Debug";
         let mut cmd = Command::new("xcodebuild");
-        cmd.args(&[
+        cmd.args([
             "-project",
             project_path.to_str().unwrap(),
             "-scheme",
@@ -698,7 +785,7 @@ impl IosBuilder {
             "-destination",
             "generic/platform=iOS",
             "-configuration",
-            "Release",
+            build_configuration,
             "-derivedDataPath",
             build_dir.to_str().unwrap(),
             "build",
@@ -709,11 +796,11 @@ impl IosBuilder {
             SigningMethod::AdHoc => {
                 // Ad-hoc signing (works for BrowserStack, no Apple ID needed)
                 // For ad-hoc, we disable signing during build and sign manually after
-                cmd.args(&["CODE_SIGNING_REQUIRED=NO", "CODE_SIGNING_ALLOWED=NO"]);
+                cmd.args(["CODE_SIGNING_REQUIRED=NO", "CODE_SIGNING_ALLOWED=NO"]);
             }
             SigningMethod::Development => {
                 // Development signing (requires Apple Developer account)
-                cmd.args(&[
+                cmd.args([
                     "CODE_SIGN_STYLE=Automatic",
                     "CODE_SIGN_IDENTITY=iPhone Developer",
                 ]);
@@ -729,7 +816,7 @@ impl IosBuilder {
 
         // Step 2: Check if the .app bundle was created (even if validation failed)
         let app_path = build_dir
-            .join("Build/Products/Release-iphoneos")
+            .join(format!("Build/Products/{}-iphoneos", build_configuration))
             .join(format!("{}.app", scheme));
 
         if !app_path.exists() {
@@ -740,12 +827,11 @@ impl IosBuilder {
                     "xcodebuild build failed and app bundle not found: {}",
                     stderr
                 )));
-            } else {
-                return Err(BenchError::Build(format!(
-                    "App bundle not found at {:?}. Build may have failed.",
-                    app_path
-                )));
             }
+            return Err(BenchError::Build(format!(
+                "App bundle not found at {:?}. Build may have failed.",
+                app_path
+            )));
         }
 
         if self.verbose {
@@ -753,26 +839,38 @@ impl IosBuilder {
         }
 
         if matches!(method, SigningMethod::AdHoc) {
-            let output = Command::new("codesign")
-                .arg("--force")
-                .arg("--deep")
-                .arg("--sign")
-                .arg("-")
-                .arg(&app_path)
-                .output();
-
-            match output {
-                Ok(output) if output.status.success() => {
+            let profile = find_provisioning_profile();
+            let identity = find_codesign_identity();
+            match (profile.as_ref(), identity.as_ref()) {
+                (Some(profile), Some(identity)) => {
+                    embed_provisioning_profile(&app_path, profile)?;
+                    codesign_bundle(&app_path, identity)?;
                     if self.verbose {
-                        println!("  Signed app bundle with ad-hoc identity");
+                        println!("  Signed app bundle with identity {}", identity);
                     }
                 }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    println!("Warning: Ad-hoc signing failed: {}", stderr);
-                }
-                Err(err) => {
-                    println!("Warning: Could not run codesign: {}", err);
+                _ => {
+                    let output = Command::new("codesign")
+                        .arg("--force")
+                        .arg("--deep")
+                        .arg("--sign")
+                        .arg("-")
+                        .arg(&app_path)
+                        .output();
+                    match output {
+                        Ok(output) if output.status.success() => {
+                            println!(
+                                "Warning: Signed app bundle without provisioning profile; BrowserStack install may fail."
+                            );
+                        }
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            println!("Warning: Ad-hoc signing failed: {}", stderr);
+                        }
+                        Err(err) => {
+                            println!("Warning: Could not run codesign: {}", err);
+                        }
+                    }
                 }
             }
         }
@@ -800,7 +898,7 @@ impl IosBuilder {
         }
 
         let mut cmd = Command::new("zip");
-        cmd.args(&["-qr", ipa_path.to_str().unwrap(), "Payload"])
+        cmd.args(["-qr", ipa_path.to_str().unwrap(), "Payload"])
             .current_dir(&export_path);
 
         if self.verbose {
@@ -815,6 +913,135 @@ impl IosBuilder {
 
         println!("✓ IPA created: {:?}", ipa_path);
         Ok(ipa_path)
+    }
+
+    /// Packages the XCUITest runner app into a zip for BrowserStack.
+    ///
+    /// This requires the app project to be generated first with `build()`.
+    /// The resulting zip can be supplied to BrowserStack as the test suite.
+    pub fn package_xcuitest(&self, scheme: &str) -> Result<PathBuf, BenchError> {
+        let ios_dir = self.project_root.join("ios").join(scheme);
+        let project_path = ios_dir.join(format!("{}.xcodeproj", scheme));
+
+        if !project_path.exists() {
+            return Err(BenchError::Build(format!(
+                "Xcode project not found at {:?}. Run `cargo mobench build --target ios` first.",
+                project_path
+            )));
+        }
+
+        let export_path = self.project_root.join("target/ios");
+        fs::create_dir_all(&export_path)
+            .map_err(|e| BenchError::Build(format!("Failed to create export directory: {}", e)))?;
+
+        let build_dir = self.project_root.join("target/ios/build");
+        println!("Building XCUITest runner for {}...", scheme);
+
+        let mut cmd = Command::new("xcodebuild");
+        cmd.args([
+            "build-for-testing",
+            "-project",
+            project_path.to_str().unwrap(),
+            "-scheme",
+            scheme,
+            "-destination",
+            "generic/platform=iOS",
+            "-sdk",
+            "iphoneos",
+            "-configuration",
+            "Release",
+            "-derivedDataPath",
+            build_dir.to_str().unwrap(),
+            "VALIDATE_PRODUCT=NO",
+            "CODE_SIGN_STYLE=Manual",
+            "CODE_SIGN_IDENTITY=",
+            "CODE_SIGNING_ALLOWED=NO",
+            "CODE_SIGNING_REQUIRED=NO",
+            "DEVELOPMENT_TEAM=",
+            "PROVISIONING_PROFILE_SPECIFIER=",
+            "ENABLE_BITCODE=NO",
+            "BITCODE_GENERATION_MODE=none",
+            "STRIP_BITCODE_FROM_COPIED_FILES=NO",
+        ]);
+
+        if self.verbose {
+            println!("  Running: {:?}", cmd);
+        }
+
+        let runner_name = format!("{}UITests-Runner.app", scheme);
+        let runner_path = build_dir
+            .join("Build/Products/Release-iphoneos")
+            .join(&runner_name);
+
+        let build_result = cmd.output();
+        let log_path = export_path.join("xcuitest-build.log");
+        if let Ok(output) = &build_result
+            && !output.status.success()
+        {
+            let mut log = String::new();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log.push_str("STDOUT:\n");
+            log.push_str(&stdout);
+            log.push_str("\n\nSTDERR:\n");
+            log.push_str(&stderr);
+            let _ = fs::write(&log_path, log);
+            println!("xcodebuild log written to {:?}", log_path);
+            if runner_path.exists() {
+                println!(
+                    "Warning: xcodebuild build-for-testing failed, but runner exists: {}",
+                    stderr
+                );
+            }
+        }
+
+        if !runner_path.exists() {
+            if let Ok(output) = build_result {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(BenchError::Build(format!(
+                    "xcodebuild build-for-testing failed and runner not found: {}",
+                    stderr
+                )));
+            }
+            return Err(BenchError::Build(format!(
+                "XCUITest runner not found at {:?}. Build may have failed.",
+                runner_path
+            )));
+        }
+
+        let profile = find_provisioning_profile();
+        let identity = find_codesign_identity();
+        if let (Some(profile), Some(identity)) = (profile.as_ref(), identity.as_ref()) {
+            embed_provisioning_profile(&runner_path, profile)?;
+            codesign_bundle(&runner_path, identity)?;
+            if self.verbose {
+                println!("  Signed XCUITest runner with identity {}", identity);
+            }
+        } else {
+            println!(
+                "Warning: No provisioning profile/identity found; XCUITest runner may not install."
+            );
+        }
+
+        let zip_path = export_path.join(format!("{}UITests.zip", scheme));
+        if zip_path.exists() {
+            fs::remove_file(&zip_path)
+                .map_err(|e| BenchError::Build(format!("Failed to remove old zip: {}", e)))?;
+        }
+
+        let mut zip_cmd = Command::new("zip");
+        zip_cmd
+            .args(["-qr", zip_path.to_str().unwrap(), runner_name.as_str()])
+            .current_dir(runner_path.parent().unwrap());
+
+        if self.verbose {
+            println!("  Running: {:?}", zip_cmd);
+        }
+
+        run_command(zip_cmd, "zip XCUITest runner")?;
+        println!("✓ XCUITest runner packaged: {:?}", zip_path);
+
+        Ok(zip_path)
     }
 
     /// Recursively copies a directory

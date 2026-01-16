@@ -1,15 +1,15 @@
 //! Mobile Benchmark SDK for Rust
 //!
-//! `bench-sdk` is a library for benchmarking Rust functions on real mobile devices
+//! `mobench-sdk` is a library for benchmarking Rust functions on real mobile devices
 //! (Android and iOS) via BrowserStack. It provides a simple API similar to criterion.rs
 //! but targets mobile platforms.
 //!
 //! # Quick Start
 //!
-//! 1. Add bench-sdk to your project:
+//! 1. Add mobench-sdk to your project:
 //! ```toml
 //! [dependencies]
-//! bench-sdk = "0.1"
+//! mobench-sdk = "0.1"
 //! ```
 //!
 //! 2. Mark functions with `#[benchmark]`:
@@ -26,13 +26,13 @@
 //!
 //! 3. Initialize mobile project:
 //! ```bash
-//! cargo bench-sdk init --target android
+//! cargo mobench init --target android
 //! ```
 //!
 //! 4. Build and run:
 //! ```bash
-//! cargo bench-sdk build --target android
-//! cargo bench-sdk run my_expensive_operation --target android
+//! cargo mobench build --target android
+//! cargo mobench run --target android --function my_expensive_operation
 //! ```
 //!
 //! # Architecture
