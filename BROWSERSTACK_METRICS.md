@@ -8,7 +8,7 @@ This document describes what device metrics BrowserStack provides and what we cu
 
 **Build-level:**
 - Build ID
-- Build status (running, done, failed, error, timeout)
+- Build status (running, done, passed, completed, failed, error, timeout)
 - Build duration (total time in seconds)
 
 **Session-level:**
@@ -262,19 +262,15 @@ For CI/benchmarking on BrowserStack:
 
 1. **Implement custom metric collection** in your app
 2. **Log metrics as JSON** to stdout/logcat
-3. **Extend mobench** to extract performance metrics (future enhancement)
+3. **Use mobench `--fetch`** to extract performance metrics from logs
 4. **Focus on metrics that matter** for your use case:
    - Memory: Peak usage, allocations during benchmark
    - CPU: Usage spikes during computation
    - Time: Already well-captured by benchmark harness
 
-## Current Workaround
+## Manual Inspection
 
-Until performance metric extraction is built-in:
-
-1. Log performance metrics from your app as JSON
-2. Use `--fetch` to download device logs
-3. Manually parse performance data from logs:
+If you need to inspect raw logs, you can still parse them directly:
 
 ```bash
 cargo mobench run --fetch --output results.json

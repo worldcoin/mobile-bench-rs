@@ -1,4 +1,4 @@
-//! Procedural macros for bench-sdk
+//! Procedural macros for mobench-sdk
 //!
 //! This crate provides the `#[benchmark]` attribute macro for marking functions
 //! as benchmarkable. Functions marked with this attribute are automatically
@@ -11,7 +11,7 @@ use syn::{ItemFn, parse_macro_input};
 /// Marks a function as a benchmark.
 ///
 /// This macro registers the function in the global benchmark registry and
-/// makes it available for execution via the bench-sdk runtime.
+/// makes it available for execution via the mobench-sdk runtime.
 ///
 /// # Example
 ///

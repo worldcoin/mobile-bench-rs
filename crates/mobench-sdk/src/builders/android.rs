@@ -5,7 +5,7 @@
 
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Android builder that handles the complete build pipeline
@@ -395,7 +395,7 @@ impl AndroidBuilder {
 }
 
 // Shared helpers
-fn host_lib_path(project_dir: &PathBuf, crate_name: &str) -> Result<PathBuf, BenchError> {
+fn host_lib_path(project_dir: &Path, crate_name: &str) -> Result<PathBuf, BenchError> {
     let lib_prefix = if cfg!(target_os = "windows") {
         ""
     } else {

@@ -434,11 +434,11 @@ pub fn my_new_function(arg: MyNewType) -> Result<String, BenchError> {
 
 Then regenerate bindings as shown above.
 
-## Performance Testing
+## Host Testing
 
-Run benchmarks locally without mobile builds:
+Run host-side Rust tests:
 ```bash
-cargo mobench demo --iterations 100 --warmup 10
+cargo test --all
 ```
 
 ## Additional Documentation

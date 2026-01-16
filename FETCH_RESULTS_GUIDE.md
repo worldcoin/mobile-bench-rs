@@ -23,7 +23,7 @@ When `--fetch` is enabled:
 
 1. **Builds and uploads** artifacts to BrowserStack
 2. **Schedules** test run on specified devices
-3. **Polls** for build completion (checks every 10 seconds)
+3. **Polls** for build completion (checks every 5 seconds)
 4. **Fetches** device logs from all sessions
 5. **Extracts** benchmark results as JSON
 6. **Merges** results into output file
@@ -71,7 +71,7 @@ With `--fetch`, the output JSON includes a `benchmark_results` field:
 
 ### Timeout
 
-Control how long to wait for build completion (default: 1800 seconds / 30 minutes):
+Control how long to wait for build completion (default: 300 seconds / 5 minutes):
 
 ```bash
 cargo mobench run \
@@ -84,7 +84,7 @@ cargo mobench run \
 
 ### Poll Interval
 
-Control how often to check build status (default: 10 seconds):
+Control how often to check build status (default: 5 seconds):
 
 ```bash
 cargo mobench run \

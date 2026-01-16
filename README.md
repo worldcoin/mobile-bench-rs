@@ -80,17 +80,17 @@ cargo mobench list
 
 ## Quick Start
 
-### Host Demo (No Mobile Build Required)
+### Host Testing (No Mobile Build Required)
 
-Test the benchmarking harness locally:
+Run the host-side Rust tests:
 
 ```bash
-cargo mobench demo --iterations 10 --warmup 2
+cargo test --all
 ```
 
 ### Mobile Testing
 
-For complete end-to-end testing on Android/iOS, see the **[End-to-End Testing](#end-to-end-testing)** section below.
+For complete end-to-end testing on Android/iOS, see the **[BrowserStack Workflow](#browserstack-workflow)** section below.
 
 **Quick commands:**
 
@@ -103,6 +103,12 @@ For complete end-to-end testing on Android/iOS, see the **[End-to-End Testing](#
 cargo mobench init --output bench-config.toml
 cargo mobench plan --output device-matrix.yaml
 ```
+
+### Run Outputs
+
+`cargo mobench run` writes a JSON summary to `run-summary.json` by default and
+produces a Markdown summary alongside it (`run-summary.md`). Use `--output` to
+change the base filename and `--summary-csv` to emit a CSV summary.
 
 ## UniFFI Bindings (Proc Macro Mode)
 
@@ -160,6 +166,14 @@ mobile-bench-rs supports two testing workflows:
 2. **[BrowserStack Testing](#browserstack-workflow)**: Test on real devices in the cloud using BrowserStack App Automate
 
 ---
+
+## Deferred QoL (Post-Feedback)
+
+These improvements are intentionally deferred until we have real usage feedback:
+
+- Parallel device runs and retry policies
+- Additional percentile/statistics enhancements
+- Energy or thermal readings where supported
 
 ## Local Development Workflow
 
@@ -333,7 +347,7 @@ cargo mobench run \
   --function sample_fns::fibonacci \
   --iterations 100 \
   --warmup 10 \
-  --devices "Pixel 7-13" \
+  --devices "Google Pixel 7-13.0" \
   --output run-summary.json
 ```
 
@@ -451,11 +465,11 @@ project = "mobile-bench-rs"
 **device-matrix.yaml:**
 ```yaml
 devices:
-  - name: Pixel 7
+  - name: Google Pixel 7-13.0
     os: android
     os_version: "13.0"
     tags: [default, pixel]
-  - name: Samsung Galaxy S23
+  - name: Samsung Galaxy S23-13.0
     os: android
     os_version: "13.0"
     tags: [samsung]
