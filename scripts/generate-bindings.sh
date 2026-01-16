@@ -5,7 +5,7 @@ set -euo pipefail
 # This script is legacy tooling for developing this repository.
 #
 # For SDK integrators, bindings are automatically generated during:
-#   cargo run -p bench-cli -- build --target <android|ios>
+#   cargo mobench build --target <android|ios>
 #
 # You don't need to call this script separately.
 

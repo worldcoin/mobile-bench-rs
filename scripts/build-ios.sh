@@ -5,7 +5,7 @@ set -euo pipefail
 # This script is legacy tooling for developing this repository.
 #
 # For SDK integrators, use instead:
-#   cargo run -p bench-cli -- build --target ios
+#   cargo mobench build --target ios
 #
 # The CLI command handles all build steps automatically including xcframework
 # creation, binding generation, and code signing.
@@ -182,7 +182,7 @@ EOF
 
 echo "✓ iOS build complete. XCFramework created at: ${XCFRAMEWORK_PATH}"
 
-# Copy public header for CLI consumers (matches bench-cli expectation)
+# Copy public header for CLI consumers (matches mobench output layout)
 INCLUDE_DIR="${OUTPUT_DIR}/include"
 mkdir -p "${INCLUDE_DIR}"
 if [[ -f "${UNIFFI_HEADER}" ]]; then

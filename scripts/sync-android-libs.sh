@@ -5,7 +5,7 @@ set -euo pipefail
 # This script is legacy tooling for developing this repository.
 #
 # For SDK integrators, use instead:
-#   cargo run -p bench-cli -- build --target android
+#   cargo mobench build --target android
 #
 # The CLI command automatically handles library copying.
 
