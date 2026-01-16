@@ -38,7 +38,7 @@ println!("Build ID: {}", run.build_id);
 println!("Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}", run.build_id);
 
 // 4. Wait for completion and fetch results
-let results = client.wait_and_fetch_results(&run.build_id, "espresso", Some(600))?;
+let (results, _performance) = client.wait_and_fetch_all_results(&run.build_id, "espresso", Some(600))?;
 
 // 5. Process results
 for (device, bench_results) in results {
@@ -53,18 +53,16 @@ for (device, bench_results) in results {
 
 ### Using `mobench run` with Result Fetching
 
-The CLI can be extended to wait for results:
-
 ```bash
-# Run and wait for results (not yet implemented in CLI)
+# Run and fetch results
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 30 \
   --warmup 5 \
   --devices "Google Pixel 7-13.0" \
-  --wait \
-  --timeout 600 \
+  --fetch \
+  --fetch-timeout-secs 600 \
   --output results.json
 ```
 
@@ -107,7 +105,7 @@ let status = client.get_xcuitest_build_status(build_id)?;
 
 **Build Status Values:**
 - `"running"` - Tests are executing
-- `"done"` - Tests completed successfully
+- `"done"` / `"passed"` / `"completed"` - Tests completed successfully
 - `"failed"` - Tests failed
 - `"error"` - Build error occurred
 - `"timeout"` - Exceeded time limit
@@ -140,7 +138,7 @@ for result in results {
 ```rust
 use std::collections::HashMap;
 
-let results: HashMap<String, Vec<Value>> = client.wait_and_fetch_results(
+let (results, _performance) = client.wait_and_fetch_all_results(
     build_id,
     "espresso",
     Some(600), // 10 minute timeout
@@ -185,15 +183,15 @@ jobs:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
         run: |
-          # Build and run (waits for completion)
+          # Build and run (fetches results)
           cargo mobench run \
             --target android \
             --function my_crate::my_benchmark \
             --iterations 30 \
             --warmup 5 \
             --devices "Google Pixel 7-13.0" \
-            --wait \
-            --timeout 600 \
+            --fetch \
+            --fetch-timeout-secs 600 \
             --output results.json
 
           # Extract metrics for comparison
@@ -261,8 +259,8 @@ fn process_benchmark_results(
 ## Error Handling
 
 ```rust
-match client.wait_and_fetch_results(build_id, "espresso", Some(600)) {
-    Ok(results) => {
+match client.wait_and_fetch_all_results(build_id, "espresso", Some(600)) {
+    Ok((results, _performance)) => {
         println!("Successfully fetched results from {} devices", results.len());
     }
     Err(e) if e.to_string().contains("Timeout") => {

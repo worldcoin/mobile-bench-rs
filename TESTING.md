@@ -6,7 +6,6 @@ This document provides comprehensive testing instructions for mobile-bench-rs.
 > - `cargo mobench build --target <android|ios>` for builds
 > - Scripts shown below are legacy tooling for this repository
 > - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide
-
 > **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
 
 ## Table of Contents
@@ -71,23 +70,14 @@ cargo test --all
 
 Expected output: All tests pass (11 tests total as of UniFFI migration).
 
-### CLI Demo
-Test the benchmarking harness without mobile builds:
-```bash
-cargo mobench demo --iterations 10 --warmup 2
-```
+### CLI Note
+The CLI does not currently expose a host-only demo command. Use `cargo test --all` for host
+validation and use `cargo mobench run` to execute benchmarks on devices.
 
-Expected output: JSON report with timing samples for `fibonacci` function.
-
-### Testing Different Functions
-```bash
-# Test fibonacci (default)
-cargo mobench demo --iterations 5 --warmup 1
-
-# Currently supports:
-# - fibonacci / fib / sample_fns::fibonacci
-# - checksum / checksum_1k / sample_fns::checksum
-```
+### CI Artifacts
+The `Mobile Bench (manual)` workflow uploads summary artifacts:
+- `host-run-summary` (JSON + Markdown + optional CSV from host-only run)
+- `browserstack-run-summary` (JSON + Markdown + optional CSV + fetched logs when secrets are set)
 
 ## Android Testing
 
@@ -495,20 +485,27 @@ Compare benchmark results across builds:
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
+  --devices "Google Pixel 7-13.0" \
   --iterations 100 \
-  --local-only \
-  --output results-v1.json
+  --fetch \
+  --output results-v1.json \
+  --summary-csv
 
 # After changes, run again
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
+  --devices "Google Pixel 7-13.0" \
   --iterations 100 \
-  --local-only \
-  --output results-v2.json
+  --fetch \
+  --output results-v2.json \
+  --summary-csv
 
-# Compare results (requires jq)
-jq -s '.[0].local_report.samples, .[1].local_report.samples' results-v1.json results-v2.json
+# Compare summaries
+cargo mobench compare \
+  --baseline results-v1.json \
+  --candidate results-v2.json \
+  --output comparison.md
 ```
 
 ### Adding New Test Functions

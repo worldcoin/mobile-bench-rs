@@ -3,6 +3,10 @@ use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+type BrowserStackResults = (
+    std::collections::HashMap<String, Vec<Value>>,
+    std::collections::HashMap<String, PerformanceMetrics>,
+);
 use std::path::Path;
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
@@ -282,8 +286,8 @@ impl BrowserStackClient {
                 _ => return Err(anyhow!("unsupported platform: {}", platform)),
             };
 
-            match status.status.as_str() {
-                "done" => return Ok(status),
+            match status.status.to_lowercase().as_str() {
+                "done" | "passed" | "completed" => return Ok(status),
                 "failed" | "error" | "timeout" => {
                     return Err(anyhow!(
                         "Build {} failed with status: {}",
@@ -354,15 +358,14 @@ impl BrowserStackClient {
         // Look for JSON objects that contain benchmark-related fields
         for line in logs.lines() {
             let trimmed = line.trim();
-            if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-                || (trimmed.contains("\"function\"") && trimmed.contains("\"samples\""))
+            let looks_like_json = trimmed.starts_with('{') && trimmed.ends_with('}');
+            let looks_like_bench =
+                trimmed.contains("\"function\"") && trimmed.contains("\"samples\"");
+            if (looks_like_json || looks_like_bench)
+                && let Ok(json) = serde_json::from_str::<Value>(trimmed)
+                && (json.get("function").is_some() || json.get("samples").is_some())
             {
-                if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-                    // Check if this looks like a benchmark report
-                    if json.get("function").is_some() || json.get("samples").is_some() {
-                        results.push(json);
-                    }
-                }
+                results.push(json);
             }
         }
 
@@ -380,18 +383,15 @@ impl BrowserStackClient {
 
         for line in logs.lines() {
             let trimmed = line.trim();
-            if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-                    // Check if this looks like a performance metric
-                    if json.get("type").and_then(|t| t.as_str()) == Some("performance")
-                        || json.get("memory").is_some()
-                        || json.get("cpu").is_some()
-                    {
-                        if let Ok(snapshot) = serde_json::from_value::<PerformanceSnapshot>(json) {
-                            snapshots.push(snapshot);
-                        }
-                    }
-                }
+            let looks_like_json = trimmed.starts_with('{') && trimmed.ends_with('}');
+            if looks_like_json
+                && let Ok(json) = serde_json::from_str::<Value>(trimmed)
+                && (json.get("type").and_then(|t| t.as_str()) == Some("performance")
+                    || json.get("memory").is_some()
+                    || json.get("cpu").is_some())
+                && let Ok(snapshot) = serde_json::from_value::<PerformanceSnapshot>(json)
+            {
+                snapshots.push(snapshot);
             }
         }
 
@@ -401,22 +401,32 @@ impl BrowserStackClient {
     /// Wait for build completion and fetch all results including performance metrics
     ///
     /// Returns both benchmark results and performance metrics
+    #[allow(dead_code)]
     pub fn wait_and_fetch_all_results(
         &self,
         build_id: &str,
         platform: &str,
         timeout_secs: Option<u64>,
-    ) -> Result<(
-        std::collections::HashMap<String, Vec<Value>>,
-        std::collections::HashMap<String, PerformanceMetrics>,
-    )> {
-        let timeout = timeout_secs.unwrap_or(600);
+    ) -> Result<BrowserStackResults> {
+        self.wait_and_fetch_all_results_with_poll(build_id, platform, timeout_secs, None)
+    }
+
+    pub fn wait_and_fetch_all_results_with_poll(
+        &self,
+        build_id: &str,
+        platform: &str,
+        timeout_secs: Option<u64>,
+        poll_interval_secs: Option<u64>,
+    ) -> Result<BrowserStackResults> {
+        let timeout = timeout_secs.unwrap_or(300);
+        let poll_interval = poll_interval_secs.unwrap_or(5);
 
         println!(
-            "Waiting for build {} to complete (timeout: {}s)...",
-            build_id, timeout
+            "Waiting for build {} to complete (timeout: {}s, poll: {}s)...",
+            build_id, timeout, poll_interval
         );
-        let build_status = self.poll_build_completion(build_id, platform, timeout, 10)?;
+        let build_status =
+            self.poll_build_completion(build_id, platform, timeout, poll_interval)?;
 
         println!("Build completed with status: {}", build_status.status);
         println!(
@@ -902,7 +912,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_espresso_run(&["Pixel 7-13".to_string()], "", "bs://test456");
+        let result =
+            client.schedule_espresso_run(&["Google Pixel 7-13.0".to_string()], "", "bs://test456");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("app_url"));
@@ -919,7 +930,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_espresso_run(&["Pixel 7-13".to_string()], "bs://app123", "");
+        let result =
+            client.schedule_espresso_run(&["Google Pixel 7-13.0".to_string()], "bs://app123", "");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("test_suite_url"));
@@ -1088,7 +1100,7 @@ Test completed
             status: "done".to_string(),
             duration: Some(120),
             devices: Some(vec![DeviceSessionResponse {
-                device: "Pixel 7-13".to_string(),
+                device: "Google Pixel 7-13.0".to_string(),
                 session_id: "session123".to_string(),
                 status: "passed".to_string(),
                 device_logs: Some("https://example.com/logs".to_string()),
@@ -1100,7 +1112,7 @@ Test completed
         assert_eq!(status.status, "done");
         assert_eq!(status.duration, Some(120));
         assert_eq!(status.devices.len(), 1);
-        assert_eq!(status.devices[0].device, "Pixel 7-13");
+        assert_eq!(status.devices[0].device, "Google Pixel 7-13.0");
         assert_eq!(status.devices[0].session_id, "session123");
     }
 

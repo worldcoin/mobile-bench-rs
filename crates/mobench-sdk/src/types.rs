@@ -1,4 +1,4 @@
-//! Core types for bench-sdk
+//! Core types for mobench-sdk
 //!
 //! This module re-exports types from mobench-runner and adds SDK-specific types.
 
@@ -9,7 +9,7 @@ pub use mobench_runner::{
 
 use std::path::PathBuf;
 
-/// Error types for bench-sdk operations
+/// Error types for mobench-sdk operations
 #[derive(Debug, thiserror::Error)]
 pub enum BenchError {
     /// Error from the benchmark runner
