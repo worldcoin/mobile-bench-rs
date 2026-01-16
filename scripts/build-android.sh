@@ -11,7 +11,7 @@ set -euo pipefail
 
 # Build Rust shared libraries for Android targets using cargo-ndk.
 #
-# NOTE: If you modify the Rust API (sample_fns.udl), run:
+# NOTE: If you modify the Rust API, run:
 #   cargo run --bin generate-bindings --features bindgen
 # before running this script to regenerate Kotlin bindings.
 #

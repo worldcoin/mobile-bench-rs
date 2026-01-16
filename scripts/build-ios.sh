@@ -13,7 +13,7 @@ set -euo pipefail
 # Build the Rust library for iOS targets and package as xcframework.
 # UniFFI-generated headers (sample_fnsFFI.h) are used for the C ABI.
 #
-# NOTE: If you modify the Rust API (sample_fns.udl), run:
+# NOTE: If you modify the Rust API, run:
 #   cargo run --bin generate-bindings --features bindgen
 # before running this script to regenerate Swift bindings and headers.
 #
