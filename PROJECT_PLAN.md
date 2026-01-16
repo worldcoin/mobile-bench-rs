@@ -16,7 +16,7 @@
 ## Architecture Outline
 
 - `mobench`: Orchestrates builds, packaging, upload, AppAutomate sessions, and result collation.
-- `bench-runner`: Minimal Rust harness compiled into mobile libs; exposes FFI entrypoints for target functions and collects timings.
+- `mobench-runner`: Minimal Rust harness compiled into mobile libs; exposes FFI entrypoints for target functions and collects timings.
 - Mobile bindings:
   - Android: Kotlin wrapper + APK test harness embedding Rust lib (cargo-ndk); uses Espresso/Appium-style entrypoints for AppAutomate.
   - iOS: Swift wrapper + test host app/xcframework; invokes Rust via C-ABI bindings.
@@ -31,7 +31,7 @@
 
 ## Task Backlog
 
-- [x] Repo bootstrap: Cargo workspace, `mobench` binary crate, `bench-runner` library crate, example `sample-fns` crate.
+- [x] Repo bootstrap: Cargo workspace, `mobench` binary crate, `mobench-runner` library crate, example `sample-fns` crate.
 - [x] Define FFI boundary: macro/attribute to mark benchmarkable Rust functions; export through C ABI; basic timing harness.
 - [x] Android packaging: cargo-ndk config, Kotlin wrapper module, minimal test/activity to trigger Rust bench entrypoint.
 - [x] iOS packaging: xcframework build script (cargo lipo or cargo-apple), C header generation (cbindgen), Swift wrapper, test host.

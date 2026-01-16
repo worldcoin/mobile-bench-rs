@@ -44,7 +44,7 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<RunnerReport, BenchError> {
     let closure =
         || (bench_fn.invoke)(&[]).map_err(|e| mobench_runner::BenchError::Execution(e.to_string()));
 
-    // Run the benchmark using bench-runner's timing infrastructure
+    // Run the benchmark using mobench-runner's timing infrastructure
     let report = run_closure(spec, closure)?;
 
     Ok(report)
