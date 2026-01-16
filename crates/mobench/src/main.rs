@@ -324,6 +324,7 @@ fn main() -> Result<()> {
                 config.as_deref(),
                 ios_app,
                 ios_test_suite,
+                local_only,
             )?;
             let summary_paths = resolve_summary_paths(output.as_deref())?;
             println!(
@@ -880,6 +881,7 @@ fn resolve_run_spec(
     config: Option<&Path>,
     ios_app: Option<PathBuf>,
     ios_test_suite: Option<PathBuf>,
+    local_only: bool,
 ) -> Result<RunSpec> {
     if let Some(cfg_path) = config {
         let cfg = load_config(cfg_path)?;
@@ -909,12 +911,15 @@ fn resolve_run_spec(
         _ => bail!("both --ios-app and --ios-test-suite must be provided together"),
     };
 
-    let ios_xcuitest =
-        if target == MobileTarget::Ios && !devices.is_empty() && ios_xcuitest.is_none() {
-            Some(package_ios_xcuitest_artifacts()?)
-        } else {
-            ios_xcuitest
-        };
+    let ios_xcuitest = if target == MobileTarget::Ios
+        && !local_only
+        && !devices.is_empty()
+        && ios_xcuitest.is_none()
+    {
+        Some(package_ios_xcuitest_artifacts()?)
+    } else {
+        ios_xcuitest
+    };
 
     Ok(RunSpec {
         target,
@@ -1903,6 +1908,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(spec.function, "sample_fns::fibonacci");
@@ -1940,6 +1946,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         )
         .expect("should auto-package iOS artifacts when missing");
         let ios_artifacts = spec

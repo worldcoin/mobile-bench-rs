@@ -775,6 +775,7 @@ impl IosBuilder {
 
         // Step 1: Build the app for device (simpler than archiving)
         let build_dir = self.project_root.join("target/ios/build");
+        let build_configuration = "Debug";
         let mut cmd = Command::new("xcodebuild");
         cmd.args([
             "-project",
@@ -784,7 +785,7 @@ impl IosBuilder {
             "-destination",
             "generic/platform=iOS",
             "-configuration",
-            "Debug",
+            build_configuration,
             "-derivedDataPath",
             build_dir.to_str().unwrap(),
             "build",
@@ -815,7 +816,7 @@ impl IosBuilder {
 
         // Step 2: Check if the .app bundle was created (even if validation failed)
         let app_path = build_dir
-            .join("Build/Products/Release-iphoneos")
+            .join(format!("Build/Products/{}-iphoneos", build_configuration))
             .join(format!("{}.app", scheme));
 
         if !app_path.exists() {
