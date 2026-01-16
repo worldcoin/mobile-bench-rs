@@ -31,16 +31,24 @@
 
 ## Task Backlog (initial)
 
-- [ ] Repo bootstrap: Cargo workspace, `mobench` binary crate, `bench-runner` library crate, example `sample-fns` crate.
-- [ ] Define FFI boundary: macro/attribute to mark benchmarkable Rust functions; export through C ABI; basic timing harness.
-- [ ] Android packaging: cargo-ndk config, Kotlin wrapper module, minimal test/activity to trigger Rust bench entrypoint.
-- [ ] iOS packaging: xcframework build script (cargo lipo or cargo-apple), C header generation (cbindgen), Swift wrapper, test host.
-- [ ] CLI scaffolding: parse config (function path, iterations, warmups, device matrix), invoke build scripts, prepare artifacts.
-- [ ] BrowserStack integration: AppAutomate REST client (upload builds, start sessions, poll status, download logs/artifacts).
+- [x] Repo bootstrap: Cargo workspace, `mobench` binary crate, `bench-runner` library crate, example `sample-fns` crate.
+- [x] Define FFI boundary: macro/attribute to mark benchmarkable Rust functions; export through C ABI; basic timing harness.
+- [x] Android packaging: cargo-ndk config, Kotlin wrapper module, minimal test/activity to trigger Rust bench entrypoint.
+- [x] iOS packaging: xcframework build script (cargo lipo or cargo-apple), C header generation (cbindgen), Swift wrapper, test host.
+- [x] CLI scaffolding: parse config (function path, iterations, warmups, device matrix), invoke build scripts, prepare artifacts.
+- [x] BrowserStack integration: AppAutomate REST client (upload builds, start sessions, poll status, download logs/artifacts).
 - [ ] Result handling: normalize timing output to JSON, aggregate across iterations/devices, emit markdown/CSV summary.
 - [ ] CI: GitHub Actions workflow covering build, artifact upload, BrowserStack-triggered run (behind secrets), and report upload.
-- [ ] Developer UX: local smoke test runners, sample bench functions, docs with step-by-step usage.
+- [x] Developer UX: local smoke test runners, sample bench functions, docs with step-by-step usage.
 - [ ] Stretch: parallel device runs, retries, percentile stats, optional energy/thermal readings where available.
+
+## Suggested Next Tasks
+
+- [ ] Add markdown + CSV summary output for `mobench run` results.
+- [ ] Wire device matrix config into `mobench run` (load devices by tag).
+- [ ] Replace BrowserStack stub run in CI with real AppAutomate run and fetch.
+- [ ] Add GH Actions summary/annotations for benchmark results.
+- [ ] Add regression comparison command (compare two JSON summaries).
 
 ## In-Repo Placeholders (current)
 - Scripts: `scripts/build-android.sh`, `scripts/build-ios.sh` for manual/CI builds (require Android NDK / cargo-apple).

@@ -80,12 +80,12 @@ cargo mobench list
 
 ## Quick Start
 
-### Host Demo (No Mobile Build Required)
+### Host Testing (No Mobile Build Required)
 
-Test the benchmarking harness locally:
+Run the host-side Rust tests:
 
 ```bash
-cargo mobench demo --iterations 10 --warmup 2
+cargo test --all
 ```
 
 ### Mobile Testing

@@ -35,7 +35,7 @@ cargo mobench init --target both
 This creates:
 - `bench-mobile/` - FFI wrapper crate with UniFFI bindings
 - `android/` or `ios/` - Platform-specific app projects
-- `bench-sdk.toml` - Configuration file
+- `bench-config.toml` - Configuration file
 - `benches/example.rs` - Example benchmarks (with `--generate-examples`)
 
 ### 2. Write Benchmarks
@@ -71,9 +71,9 @@ cargo mobench build --target ios
 
 ### 4. Run Benchmarks
 
-Local emulator/simulator:
+Local device workflow (builds artifacts and writes the run spec; launch the app manually):
 ```bash
-cargo mobench run fibonacci_30 --local-only --iterations 50
+cargo mobench run --target android --function fibonacci_30 --iterations 50
 ```
 
 On real devices via BrowserStack:
@@ -81,7 +81,9 @@ On real devices via BrowserStack:
 export BROWSERSTACK_USERNAME=your_username
 export BROWSERSTACK_ACCESS_KEY=your_access_key
 
-cargo mobench run fibonacci_30 \
+cargo mobench run \
+  --target android \
+  --function fibonacci_30 \
   --devices "Pixel 7-13" \
   --iterations 100 \
   --warmup 10
@@ -99,7 +101,7 @@ cargo mobench init [OPTIONS]
 
 **Options:**
 - `--target <android|ios|both>` - Target platform (default: android)
-- `--output <FILE>` - Config file path (default: bench-sdk.toml)
+- `--output <FILE>` - Config file path (default: bench-config.toml)
 
 **Example:**
 ```bash
@@ -116,12 +118,12 @@ cargo mobench build --target <android|ios> [OPTIONS]
 
 **Options:**
 - `--target <android|ios>` - Platform to build for (required)
-- `--profile <debug|release>` - Build profile (default: debug)
+- `--release` - Build in release mode (default: debug)
 
 **Examples:**
 ```bash
 # Build Android APK in release mode
-cargo mobench build --target android --profile release
+cargo mobench build --target android --release
 
 # Build iOS xcframework
 cargo mobench build --target ios
@@ -136,7 +138,7 @@ cargo mobench build --target ios
 Execute benchmarks on devices:
 
 ```bash
-cargo mobench run <FUNCTION> [OPTIONS]
+cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 ```
 
 **Options:**
@@ -145,25 +147,30 @@ cargo mobench run <FUNCTION> [OPTIONS]
 - `--iterations <N>` - Number of iterations (default: 100)
 - `--warmup <N>` - Warmup iterations (default: 10)
 - `--devices <LIST>` - Comma-separated device list for BrowserStack
-- `--local-only` - Skip BrowserStack, run locally only
+- `--local-only` - Skip mobile builds (no device run)
+- `--config <FILE>` - Load run spec from config file
+- `--ios-app <FILE>` - iOS .ipa or zipped .app for BrowserStack
+- `--ios-test-suite <FILE>` - iOS XCUITest runner (.zip or .ipa)
 - `--output <FILE>` - Save results to JSON file
 - `--fetch` - Fetch BrowserStack results after completion
 
 **Examples:**
 ```bash
-# Run locally
-cargo mobench run fibonacci_30 --target android --local-only
+# Run locally (no BrowserStack devices specified)
+cargo mobench run --target android --function fibonacci_30
 
 # Run on BrowserStack devices
-cargo mobench run sha256_hash \
+cargo mobench run \
   --target android \
+  --function sha256_hash \
   --devices "Pixel 7-13,Galaxy S23-13" \
   --iterations 50 \
   --output results.json
 
 # Run on iOS with auto-fetch
-cargo mobench run json_parse \
+cargo mobench run \
   --target ios \
+  --function json_parse \
   --devices "iPhone 14-16,iPhone 15-17" \
   --fetch
 ```
@@ -214,6 +221,14 @@ devices:
     tags: [default, iphone]
 ```
 
+### `list` - List Benchmarks
+
+Show benchmarks discovered via `#[benchmark]`:
+
+```bash
+cargo mobench list
+```
+
 ### `fetch` - Fetch Results
 
 Download BrowserStack build artifacts:
@@ -237,7 +252,7 @@ cargo mobench fetch \
 
 ## Configuration
 
-### Config File Format (`bench-sdk.toml`)
+### Config File Format (`bench-config.toml`)
 
 ```toml
 [project]
@@ -335,11 +350,12 @@ fn sha256_1kb() {
 EOF
 
 # Build
-cargo mobench build --target android --profile release
+cargo mobench build --target android --release
 
 # Run on multiple devices
-cargo mobench run sha256_1kb \
+cargo mobench run \
   --target android \
+  --function sha256_1kb \
   --devices "Pixel 7-13,Galaxy S23-13,OnePlus 11-13" \
   --iterations 200 \
   --output crypto-results.json
@@ -349,8 +365,9 @@ cargo mobench run sha256_1kb \
 
 ```bash
 # Run same benchmark on different iOS versions
-cargo mobench run json_parse \
+cargo mobench run \
   --target ios \
+  --function json_parse \
   --devices "iPhone 13-15,iPhone 14-16,iPhone 15-17" \
   --iterations 100 \
   --fetch \
@@ -380,15 +397,16 @@ jobs:
           ndk-version: r25c
 
       - name: Build
-        run: cargo mobench build --target android --profile release
+        run: cargo mobench build --target android --release
 
       - name: Run benchmarks
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
         run: |
-          cargo mobench run my_benchmark \
+          cargo mobench run \
             --target android \
+            --function my_benchmark \
             --devices "Pixel 7-13" \
             --iterations 50 \
             --output results.json \

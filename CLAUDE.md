@@ -70,7 +70,7 @@ The CLI supports both Espresso (Android) and XCUITest (iOS) test automation fram
 
 For comprehensive testing instructions, see **`TESTING.md`** which includes:
 - Prerequisites and setup
-- Host testing (cargo test, CLI demo)
+- Host testing (cargo test)
 - Android testing (emulator, device, Android Studio; use `UNIFFI_ANDROID_ABI=x86_64` for default emulators)
 - iOS testing (simulator, device, Xcode)
 - Troubleshooting common issues
@@ -82,7 +82,7 @@ Quick test commands:
 cargo test --all
 
 # Initialize SDK project
-cargo mobench init --target android --output bench-sdk.toml
+cargo mobench init --target android --output bench-config.toml
 
 # Build mobile artifacts (recommended approach)
 cargo mobench build --target android
@@ -107,7 +107,7 @@ The `cargo mobench` CLI provides a unified build experience:
 cargo install mobench
 
 # Initialize project (generates config and scaffolding)
-cargo mobench init --target android --output bench-sdk.toml
+cargo mobench init --target android --output bench-config.toml
 
 # Build for Android
 cargo mobench build --target android
@@ -216,13 +216,12 @@ Note: UniFFI C headers are generated automatically during the build process and 
 
 #### Local Testing (No BrowserStack)
 ```bash
-# Run benchmark locally on emulator/simulator
+# Build artifacts and write bench_spec.json (launch the app manually)
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 100 \
   --warmup 10 \
-  --local-only \
   --output run-summary.json
 ```
 

@@ -70,23 +70,9 @@ cargo test --all
 
 Expected output: All tests pass (11 tests total as of UniFFI migration).
 
-### CLI Demo
-Test the benchmarking harness without mobile builds:
-```bash
-cargo mobench demo --iterations 10 --warmup 2
-```
-
-Expected output: JSON report with timing samples for `fibonacci` function.
-
-### Testing Different Functions
-```bash
-# Test fibonacci (default)
-cargo mobench demo --iterations 5 --warmup 1
-
-# Currently supports:
-# - fibonacci / fib / sample_fns::fibonacci
-# - checksum / checksum_1k / sample_fns::checksum
-```
+### CLI Note
+The CLI does not currently expose a host-only demo command. Use `cargo test --all` for host
+validation and use `cargo mobench run` to execute benchmarks on devices.
 
 ## Android Testing
 
@@ -494,16 +480,18 @@ Compare benchmark results across builds:
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
+  --devices "Pixel 7-13" \
   --iterations 100 \
-  --local-only \
+  --fetch \
   --output results-v1.json
 
 # After changes, run again
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
+  --devices "Pixel 7-13" \
   --iterations 100 \
-  --local-only \
+  --fetch \
   --output results-v2.json
 
 # Compare results (requires jq)

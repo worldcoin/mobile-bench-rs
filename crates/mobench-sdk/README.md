@@ -101,9 +101,9 @@ cargo mobench build --target android
 
 ### 4. Run on Devices
 
-Local emulator:
+Local device workflow (builds artifacts and writes the run spec; launch the app manually):
 ```bash
-cargo mobench run my_benchmark --local-only
+cargo mobench run --target android --function my_benchmark
 ```
 
 BrowserStack:
@@ -111,7 +111,7 @@ BrowserStack:
 export BROWSERSTACK_USERNAME=your_username
 export BROWSERSTACK_ACCESS_KEY=your_key
 
-cargo mobench run my_benchmark --devices "Pixel 7-13,iPhone 14-16"
+cargo mobench run --target android --function my_benchmark --devices "Pixel 7-13"
 ```
 
 ## API Documentation
