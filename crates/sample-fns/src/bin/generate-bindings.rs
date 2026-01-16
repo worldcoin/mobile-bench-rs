@@ -83,15 +83,13 @@ mod bindgen {
 
     fn list_files_recursively(dir: &Utf8PathBuf) {
         if let Ok(entries) = fs::read_dir(dir.as_std_path()) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        println!("  Directory: {}", path.display());
-                        list_files_recursively(&Utf8PathBuf::from_path_buf(path).unwrap());
-                    } else {
-                        println!("  File: {}", path.display());
-                    }
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    println!("  Directory: {}", path.display());
+                    list_files_recursively(&Utf8PathBuf::from_path_buf(path).unwrap());
+                } else {
+                    println!("  File: {}", path.display());
                 }
             }
         }
