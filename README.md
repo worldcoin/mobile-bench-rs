@@ -104,6 +104,12 @@ cargo mobench init --output bench-config.toml
 cargo mobench plan --output device-matrix.yaml
 ```
 
+### Run Outputs
+
+`cargo mobench run` writes a JSON summary to `run-summary.json` by default and
+produces a Markdown summary alongside it (`run-summary.md`). Use `--output` to
+change the base filename and `--summary-csv` to emit a CSV summary.
+
 ## UniFFI Bindings (Proc Macro Mode)
 
 This project uses [UniFFI](https://mozilla.github.io/uniffi-rs/) with **proc macros** to generate type-safe Kotlin and Swift bindings from Rust code.
@@ -160,6 +166,14 @@ mobile-bench-rs supports two testing workflows:
 2. **[BrowserStack Testing](#browserstack-workflow)**: Test on real devices in the cloud using BrowserStack App Automate
 
 ---
+
+## Deferred QoL (Post-Feedback)
+
+These improvements are intentionally deferred until we have real usage feedback:
+
+- Parallel device runs and retry policies
+- Additional percentile/statistics enhancements
+- Energy or thermal readings where supported
 
 ## Local Development Workflow
 

@@ -151,8 +151,14 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 - `--config <FILE>` - Load run spec from config file
 - `--ios-app <FILE>` - iOS .ipa or zipped .app for BrowserStack
 - `--ios-test-suite <FILE>` - iOS XCUITest runner (.zip or .ipa)
-- `--output <FILE>` - Save results to JSON file
+- `--output <FILE>` - Save results to JSON file (default: run-summary.json)
+- `--summary-csv` - Write CSV summary alongside JSON/Markdown
 - `--fetch` - Fetch BrowserStack results after completion
+
+**Outputs:**
+- JSON summary (default: `run-summary.json`)
+- Markdown summary (same base name, `.md`)
+- CSV summary (same base name, `.csv`, when `--summary-csv` is set)
 
 **Examples:**
 ```bash

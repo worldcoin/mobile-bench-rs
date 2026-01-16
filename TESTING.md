@@ -74,6 +74,11 @@ Expected output: All tests pass (11 tests total as of UniFFI migration).
 The CLI does not currently expose a host-only demo command. Use `cargo test --all` for host
 validation and use `cargo mobench run` to execute benchmarks on devices.
 
+### CI Artifacts
+The `Mobile Bench (manual)` workflow uploads summary artifacts:
+- `host-run-summary` (JSON + Markdown + optional CSV from host-only run)
+- `browserstack-run-summary` (JSON + Markdown + optional CSV + fetched logs when secrets are set)
+
 ## Android Testing
 
 ### Method 1: Quick All-in-One Build
@@ -483,7 +488,8 @@ cargo mobench run \
   --devices "Pixel 7-13" \
   --iterations 100 \
   --fetch \
-  --output results-v1.json
+  --output results-v1.json \
+  --summary-csv
 
 # After changes, run again
 cargo mobench run \
@@ -492,10 +498,12 @@ cargo mobench run \
   --devices "Pixel 7-13" \
   --iterations 100 \
   --fetch \
-  --output results-v2.json
+  --output results-v2.json \
+  --summary-csv
 
-# Compare results (requires jq)
-jq -s '.[0].local_report.samples, .[1].local_report.samples' results-v1.json results-v2.json
+# Compare summary stats (requires jq)
+jq -s '.[0].summary.device_summaries, .[1].summary.device_summaries' \
+  results-v1.json results-v2.json
 ```
 
 ### Adding New Test Functions

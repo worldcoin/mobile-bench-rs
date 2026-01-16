@@ -2,10 +2,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::env;
+use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use browserstack::{BrowserStackAuth, BrowserStackClient};
 
@@ -37,6 +41,8 @@ enum Command {
         config: Option<PathBuf>,
         #[arg(long, help = "Optional output path for JSON report")]
         output: Option<PathBuf>,
+        #[arg(long, help = "Write CSV summary alongside JSON")]
+        summary_csv: bool,
         #[arg(long, help = "Skip mobile builds and only run the host harness")]
         local_only: bool,
         #[arg(
@@ -227,11 +233,41 @@ struct RunSummary {
     artifacts: Option<MobileArtifacts>,
     local_report: Value,
     remote_run: Option<RemoteRun>,
+    summary: SummaryReport,
     #[serde(skip_serializing_if = "Option::is_none")]
-    benchmark_results: Option<std::collections::HashMap<String, Vec<Value>>>,
+    benchmark_results: Option<BTreeMap<String, Vec<Value>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     performance_metrics:
-        Option<std::collections::HashMap<String, browserstack::PerformanceMetrics>>,
+        Option<BTreeMap<String, browserstack::PerformanceMetrics>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SummaryReport {
+    generated_at: String,
+    generated_at_unix: u64,
+    target: MobileTarget,
+    function: String,
+    iterations: u32,
+    warmup: u32,
+    devices: Vec<String>,
+    device_summaries: Vec<DeviceSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct DeviceSummary {
+    device: String,
+    benchmarks: Vec<BenchmarkStats>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct BenchmarkStats {
+    function: String,
+    samples: usize,
+    mean_ns: Option<u64>,
+    median_ns: Option<u64>,
+    p95_ns: Option<u64>,
+    min_ns: Option<u64>,
+    max_ns: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -260,6 +296,7 @@ fn main() -> Result<()> {
             devices,
             config,
             output,
+            summary_csv,
             local_only,
             ios_app,
             ios_test_suite,
@@ -278,6 +315,7 @@ fn main() -> Result<()> {
                 ios_app,
                 ios_test_suite,
             )?;
+            let summary_paths = resolve_summary_paths(output.as_deref())?;
             println!(
                 "Preparing benchmark run for {:?}: {} (iterations={}, warmup={})",
                 spec.target, spec.function, spec.iterations, spec.warmup
@@ -286,8 +324,10 @@ fn main() -> Result<()> {
             if !spec.devices.is_empty() {
                 println!("Devices: {}", spec.devices.join(", "));
             }
-            if let Some(path) = &output {
-                println!("JSON summary will be written to {:?}", path);
+            println!("JSON summary will be written to {:?}", summary_paths.json);
+            println!("Markdown summary will be written to {:?}", summary_paths.markdown);
+            if summary_csv {
+                println!("CSV summary will be written to {:?}", summary_paths.csv);
             }
 
             // Skip local smoke test - sample-fns uses direct dispatch, not inventory registry
@@ -346,23 +386,25 @@ fn main() -> Result<()> {
                 }
             };
 
-            let mut summary = RunSummary {
+            let summary_placeholder = empty_summary(&spec);
+            let mut run_summary = RunSummary {
                 spec,
                 artifacts,
                 local_report,
                 remote_run,
+                summary: summary_placeholder,
                 benchmark_results: None,
                 performance_metrics: None,
             };
 
             if fetch {
-                if let Some(remote) = &summary.remote_run {
+                if let Some(remote) = &run_summary.remote_run {
                     let build_id = match remote {
                         RemoteRun::Android { build_id, .. } => build_id,
                         RemoteRun::Ios { build_id, .. } => build_id,
                     };
                     let creds =
-                        resolve_browserstack_credentials(summary.spec.browserstack.as_ref())?;
+                        resolve_browserstack_credentials(run_summary.spec.browserstack.as_ref())?;
                     let client = BrowserStackClient::new(
                         BrowserStackAuth {
                             username: creds.username,
@@ -371,7 +413,7 @@ fn main() -> Result<()> {
                         creds.project,
                     )?;
 
-                    let platform = match summary.spec.target {
+                    let platform = match run_summary.spec.target {
                         MobileTarget::Android => "espresso",
                         MobileTarget::Ios => "xcuitest",
                     };
@@ -440,8 +482,10 @@ fn main() -> Result<()> {
                             }
 
                             println!("\n  View full results: {}", dashboard_url);
-                            summary.benchmark_results = Some(bench_results);
-                            summary.performance_metrics = Some(perf_metrics);
+                            run_summary.benchmark_results =
+                                Some(bench_results.into_iter().collect());
+                            run_summary.performance_metrics =
+                                Some(perf_metrics.into_iter().collect());
                         }
                         Err(e) => {
                             println!("\nWarning: Failed to fetch results: {}", e);
@@ -453,7 +497,7 @@ fn main() -> Result<()> {
                     let output_root = fetch_output_dir.join(build_id);
                     if let Err(e) = fetch_browserstack_artifacts(
                         &client,
-                        summary.spec.target,
+                        run_summary.spec.target,
                         build_id,
                         &output_root,
                         false, // Don't wait again, we already did
@@ -467,7 +511,8 @@ fn main() -> Result<()> {
                 }
             }
 
-            write_summary(&summary, output.as_deref())?;
+            run_summary.summary = build_summary(&run_summary)?;
+            write_summary(&run_summary, &summary_paths, summary_csv)?;
         }
         Command::Init { output, target } => {
             write_config_template(&output, target)?;
@@ -1103,15 +1148,313 @@ fn persist_mobile_spec(spec: &RunSpec) -> Result<()> {
     Ok(())
 }
 
-fn write_summary(summary: &RunSummary, output: Option<&Path>) -> Result<()> {
+#[derive(Debug)]
+struct SummaryPaths {
+    json: PathBuf,
+    markdown: PathBuf,
+    csv: PathBuf,
+}
+
+fn resolve_summary_paths(output: Option<&Path>) -> Result<SummaryPaths> {
+    let json = output
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| PathBuf::from("run-summary.json"));
+    let markdown = json.with_extension("md");
+    let csv = json.with_extension("csv");
+    Ok(SummaryPaths {
+        json,
+        markdown,
+        csv,
+    })
+}
+
+fn empty_summary(spec: &RunSpec) -> SummaryReport {
+    SummaryReport {
+        generated_at: "pending".to_string(),
+        generated_at_unix: 0,
+        target: spec.target,
+        function: spec.function.clone(),
+        iterations: spec.iterations,
+        warmup: spec.warmup,
+        devices: spec.devices.clone(),
+        device_summaries: Vec::new(),
+    }
+}
+
+fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
+    let generated_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("generating timestamp")?
+        .as_secs();
+    let generated_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| generated_at_unix.to_string());
+
+    let mut device_summaries = Vec::new();
+
+    if let Some(results) = &run_summary.benchmark_results {
+        for (device, entries) in results {
+            let mut benchmarks = Vec::new();
+            for entry in entries {
+                let function = entry
+                    .get("function")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let samples = extract_samples(entry);
+                let stats = compute_sample_stats(&samples);
+                let mean_ns = stats
+                    .as_ref()
+                    .map(|s| s.mean_ns)
+                    .or_else(|| entry.get("mean_ns").and_then(|m| m.as_u64()));
+
+                benchmarks.push(BenchmarkStats {
+                    function,
+                    samples: samples.len(),
+                    mean_ns,
+                    median_ns: stats.as_ref().map(|s| s.median_ns),
+                    p95_ns: stats.as_ref().map(|s| s.p95_ns),
+                    min_ns: stats.as_ref().map(|s| s.min_ns),
+                    max_ns: stats.as_ref().map(|s| s.max_ns),
+                });
+            }
+
+            benchmarks.sort_by(|a, b| a.function.cmp(&b.function));
+            device_summaries.push(DeviceSummary {
+                device: device.clone(),
+                benchmarks,
+            });
+        }
+    }
+
+    if device_summaries.is_empty()
+        && let Some(local_summary) = summarize_local_report(run_summary)
+    {
+        device_summaries.push(local_summary);
+    }
+
+    Ok(SummaryReport {
+        generated_at,
+        generated_at_unix,
+        target: run_summary.spec.target,
+        function: run_summary.spec.function.clone(),
+        iterations: run_summary.spec.iterations,
+        warmup: run_summary.spec.warmup,
+        devices: run_summary.spec.devices.clone(),
+        device_summaries,
+    })
+}
+
+fn write_summary(summary: &RunSummary, paths: &SummaryPaths, summary_csv: bool) -> Result<()> {
     let json = serde_json::to_string_pretty(summary)?;
-    if let Some(path) = output {
-        write_file(path, json.as_bytes())?;
-        println!("Wrote run summary to {:?}", path);
-    } else {
-        println!("{json}");
+    ensure_parent_dir(&paths.json)?;
+    write_file(&paths.json, json.as_bytes())?;
+    println!("Wrote run summary to {:?}", paths.json);
+
+    let markdown = render_markdown_summary(&summary.summary);
+    ensure_parent_dir(&paths.markdown)?;
+    write_file(&paths.markdown, markdown.as_bytes())?;
+    println!("Wrote markdown summary to {:?}", paths.markdown);
+
+    if summary_csv {
+        let csv = render_csv_summary(&summary.summary);
+        ensure_parent_dir(&paths.csv)?;
+        write_file(&paths.csv, csv.as_bytes())?;
+        println!("Wrote CSV summary to {:?}", paths.csv);
     }
     Ok(())
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating directory {:?}", parent))?;
+    }
+    Ok(())
+}
+
+fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
+    let samples = extract_samples(&run_summary.local_report);
+    if samples.is_empty() {
+        return None;
+    }
+    let stats = compute_sample_stats(&samples)?;
+    let function = run_summary
+        .local_report
+        .get("spec")
+        .and_then(|spec| spec.get("name"))
+        .and_then(|name| name.as_str())
+        .unwrap_or(&run_summary.spec.function)
+        .to_string();
+
+    Some(DeviceSummary {
+        device: "local".to_string(),
+        benchmarks: vec![BenchmarkStats {
+            function,
+            samples: samples.len(),
+            mean_ns: Some(stats.mean_ns),
+            median_ns: Some(stats.median_ns),
+            p95_ns: Some(stats.p95_ns),
+            min_ns: Some(stats.min_ns),
+            max_ns: Some(stats.max_ns),
+        }],
+    })
+}
+
+#[derive(Clone, Debug)]
+struct SampleStats {
+    mean_ns: u64,
+    median_ns: u64,
+    p95_ns: u64,
+    min_ns: u64,
+    max_ns: u64,
+}
+
+fn compute_sample_stats(samples: &[u64]) -> Option<SampleStats> {
+    if samples.is_empty() {
+        return None;
+    }
+
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let len = sorted.len();
+
+    let mean_ns = (sorted.iter().map(|v| *v as u128).sum::<u128>() / len as u128) as u64;
+    let median_ns = if len % 2 == 1 {
+        sorted[len / 2]
+    } else {
+        let lower = sorted[(len / 2) - 1];
+        let upper = sorted[len / 2];
+        (lower + upper) / 2
+    };
+    let p95_index = percentile_index(len, 0.95);
+    let p95_ns = sorted[p95_index];
+    let min_ns = sorted[0];
+    let max_ns = sorted[len - 1];
+
+    Some(SampleStats {
+        mean_ns,
+        median_ns,
+        p95_ns,
+        min_ns,
+        max_ns,
+    })
+}
+
+fn percentile_index(len: usize, percentile: f64) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let rank = (percentile * len as f64).ceil() as usize;
+    let index = rank.saturating_sub(1);
+    index.min(len - 1)
+}
+
+fn extract_samples(value: &Value) -> Vec<u64> {
+    let Some(samples) = value.get("samples").and_then(|s| s.as_array()) else {
+        return Vec::new();
+    };
+    let mut durations = Vec::with_capacity(samples.len());
+    for sample in samples {
+        if let Some(duration) = sample
+            .get("duration_ns")
+            .and_then(|duration| duration.as_u64())
+        {
+            durations.push(duration);
+        } else if let Some(duration) = sample.as_u64() {
+            durations.push(duration);
+        }
+    }
+    durations
+}
+
+fn render_markdown_summary(summary: &SummaryReport) -> String {
+    let mut output = String::new();
+    let devices = if summary.devices.is_empty() {
+        "none".to_string()
+    } else {
+        summary.devices.join(", ")
+    };
+
+    let _ = writeln!(output, "# Benchmark Summary");
+    let _ = writeln!(output);
+    let _ = writeln!(output, "- Generated: {}", summary.generated_at);
+    let _ = writeln!(output, "- Target: {:?}", summary.target);
+    let _ = writeln!(output, "- Function: {}", summary.function);
+    let _ = writeln!(
+        output,
+        "- Iterations/Warmup: {} / {}",
+        summary.iterations, summary.warmup
+    );
+    let _ = writeln!(output, "- Devices: {}", devices);
+    let _ = writeln!(output);
+
+    if summary.device_summaries.is_empty() {
+        let _ = writeln!(output, "No benchmark samples were collected.");
+        return output;
+    }
+
+    for device in &summary.device_summaries {
+        let _ = writeln!(output, "## Device: {}", device.device);
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
+        );
+        let _ = writeln!(
+            output,
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+        );
+        for bench in &device.benchmarks {
+            let _ = writeln!(
+                output,
+                "| {} | {} | {} | {} | {} | {} | {} |",
+                bench.function,
+                bench.samples,
+                format_ms(bench.mean_ns),
+                format_ms(bench.median_ns),
+                format_ms(bench.p95_ns),
+                format_ms(bench.min_ns),
+                format_ms(bench.max_ns)
+            );
+        }
+        let _ = writeln!(output);
+    }
+
+    output
+}
+
+fn render_csv_summary(summary: &SummaryReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns"
+    );
+    for device in &summary.device_summaries {
+        for bench in &device.benchmarks {
+            let _ = writeln!(
+                output,
+                "{},{},{},{},{},{},{},{}",
+                device.device,
+                bench.function,
+                bench.samples,
+                bench.mean_ns.map_or(String::from(""), |v| v.to_string()),
+                bench.median_ns.map_or(String::from(""), |v| v.to_string()),
+                bench.p95_ns.map_or(String::from(""), |v| v.to_string()),
+                bench.min_ns.map_or(String::from(""), |v| v.to_string()),
+                bench.max_ns.map_or(String::from(""), |v| v.to_string())
+            );
+        }
+    }
+    output
+}
+
+fn format_ms(value: Option<u64>) -> String {
+    value
+        .map(|ns| format!("{:.3}", ns as f64 / 1_000_000.0))
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn run_android_build(_ndk_home: &str) -> Result<mobench_sdk::BuildResult> {

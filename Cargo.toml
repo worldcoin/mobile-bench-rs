@@ -23,6 +23,7 @@ thiserror = "1"
 serde_yaml = "0.9"
 toml = "0.8"
 uniffi = "0.28"
+time = { version = "0.3", features = ["formatting"] }
 
 # Phase 1: Registry and proc macros
 inventory = "0.3"
