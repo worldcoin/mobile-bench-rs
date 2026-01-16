@@ -8,8 +8,8 @@ use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use browserstack::{BrowserStackAuth, BrowserStackClient};
 
@@ -87,6 +87,15 @@ enum Command {
         poll_interval_secs: u64,
         #[arg(long, default_value_t = 1800)]
         timeout_secs: u64,
+    },
+    /// Compare two run summaries for regressions.
+    Compare {
+        #[arg(long, help = "Baseline JSON summary to compare against")]
+        baseline: PathBuf,
+        #[arg(long, help = "Candidate JSON summary to compare")]
+        candidate: PathBuf,
+        #[arg(long, help = "Optional output path for markdown report")]
+        output: Option<PathBuf>,
     },
     /// Initialize a new benchmark project with SDK (Phase 1 MVP).
     InitSdk {
@@ -180,6 +189,8 @@ struct BenchConfig {
     iterations: u32,
     warmup: u32,
     device_matrix: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_tags: Option<Vec<String>>,
     browserstack: BrowserStackConfig,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     ios_xcuitest: Option<IosXcuitestArtifacts>,
@@ -237,8 +248,7 @@ struct RunSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     benchmark_results: Option<BTreeMap<String, Vec<Value>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    performance_metrics:
-        Option<BTreeMap<String, browserstack::PerformanceMetrics>>,
+    performance_metrics: Option<BTreeMap<String, browserstack::PerformanceMetrics>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -325,7 +335,10 @@ fn main() -> Result<()> {
                 println!("Devices: {}", spec.devices.join(", "));
             }
             println!("JSON summary will be written to {:?}", summary_paths.json);
-            println!("Markdown summary will be written to {:?}", summary_paths.markdown);
+            println!(
+                "Markdown summary will be written to {:?}",
+                summary_paths.markdown
+            );
             if summary_csv {
                 println!("CSV summary will be written to {:?}", summary_paths.csv);
             }
@@ -397,118 +410,112 @@ fn main() -> Result<()> {
                 performance_metrics: None,
             };
 
-            if fetch {
-                if let Some(remote) = &run_summary.remote_run {
-                    let build_id = match remote {
-                        RemoteRun::Android { build_id, .. } => build_id,
-                        RemoteRun::Ios { build_id, .. } => build_id,
-                    };
-                    let creds =
-                        resolve_browserstack_credentials(run_summary.spec.browserstack.as_ref())?;
-                    let client = BrowserStackClient::new(
-                        BrowserStackAuth {
-                            username: creds.username,
-                            access_key: creds.access_key,
-                        },
-                        creds.project,
-                    )?;
+            if fetch && let Some(remote) = &run_summary.remote_run {
+                let build_id = match remote {
+                    RemoteRun::Android { build_id, .. } => build_id,
+                    RemoteRun::Ios { build_id, .. } => build_id,
+                };
+                let creds =
+                    resolve_browserstack_credentials(run_summary.spec.browserstack.as_ref())?;
+                let client = BrowserStackClient::new(
+                    BrowserStackAuth {
+                        username: creds.username,
+                        access_key: creds.access_key,
+                    },
+                    creds.project,
+                )?;
 
-                    let platform = match run_summary.spec.target {
-                        MobileTarget::Android => "espresso",
-                        MobileTarget::Ios => "xcuitest",
-                    };
+                let platform = match run_summary.spec.target {
+                    MobileTarget::Android => "espresso",
+                    MobileTarget::Ios => "xcuitest",
+                };
 
-                    let dashboard_url = format!(
-                        "https://app-automate.browserstack.com/dashboard/v2/builds/{}",
-                        build_id
-                    );
+                let dashboard_url = format!(
+                    "https://app-automate.browserstack.com/dashboard/v2/builds/{}",
+                    build_id
+                );
 
-                    println!("Waiting for build {} to complete...", build_id);
-                    println!("Dashboard: {}", dashboard_url);
+                println!("Waiting for build {} to complete...", build_id);
+                println!("Dashboard: {}", dashboard_url);
 
-                    match client.wait_and_fetch_all_results_with_poll(
-                        build_id,
-                        platform,
-                        Some(fetch_timeout_secs),
-                        Some(fetch_poll_interval_secs),
-                    ) {
-                        Ok((bench_results, perf_metrics)) => {
-                            println!(
-                                "\n✓ Successfully fetched results from {} device(s)",
-                                bench_results.len()
-                            );
+                match client.wait_and_fetch_all_results_with_poll(
+                    build_id,
+                    platform,
+                    Some(fetch_timeout_secs),
+                    Some(fetch_poll_interval_secs),
+                ) {
+                    Ok((bench_results, perf_metrics)) => {
+                        println!(
+                            "\n✓ Successfully fetched results from {} device(s)",
+                            bench_results.len()
+                        );
 
-                            // Print summary of benchmark results
-                            for (device, results) in &bench_results {
-                                println!("\n  Device: {}", device);
-                                for (idx, result) in results.iter().enumerate() {
-                                    if let Some(function) =
-                                        result.get("function").and_then(|f| f.as_str())
-                                    {
-                                        println!("    Benchmark {}: {}", idx + 1, function);
-                                    }
-                                    if let Some(mean) =
-                                        result.get("mean_ns").and_then(|m| m.as_u64())
-                                    {
-                                        println!(
-                                            "      Mean: {} ns ({:.2} ms)",
-                                            mean,
-                                            mean as f64 / 1_000_000.0
-                                        );
-                                    }
-                                    if let Some(samples) =
-                                        result.get("samples").and_then(|s| s.as_array())
-                                    {
-                                        println!("      Samples: {}", samples.len());
-                                    }
-                                }
-
-                                // Print performance metrics if available
-                                if let Some(metrics) =
-                                    perf_metrics.get(device).filter(|m| m.sample_count > 0)
+                        // Print summary of benchmark results
+                        for (device, results) in &bench_results {
+                            println!("\n  Device: {}", device);
+                            for (idx, result) in results.iter().enumerate() {
+                                if let Some(function) =
+                                    result.get("function").and_then(|f| f.as_str())
                                 {
-                                    println!("\n    Performance Metrics:");
-                                    if let Some(mem) = &metrics.memory {
-                                        println!("      Memory:");
-                                        println!("        Peak: {:.2} MB", mem.peak_mb);
-                                        println!("        Average: {:.2} MB", mem.average_mb);
-                                    }
-                                    if let Some(cpu) = &metrics.cpu {
-                                        println!("      CPU:");
-                                        println!("        Peak: {:.1}%", cpu.peak_percent);
-                                        println!("        Average: {:.1}%", cpu.average_percent);
-                                    }
+                                    println!("    Benchmark {}: {}", idx + 1, function);
+                                }
+                                if let Some(mean) = result.get("mean_ns").and_then(|m| m.as_u64()) {
+                                    println!(
+                                        "      Mean: {} ns ({:.2} ms)",
+                                        mean,
+                                        mean as f64 / 1_000_000.0
+                                    );
+                                }
+                                if let Some(samples) =
+                                    result.get("samples").and_then(|s| s.as_array())
+                                {
+                                    println!("      Samples: {}", samples.len());
                                 }
                             }
 
-                            println!("\n  View full results: {}", dashboard_url);
-                            run_summary.benchmark_results =
-                                Some(bench_results.into_iter().collect());
-                            run_summary.performance_metrics =
-                                Some(perf_metrics.into_iter().collect());
+                            // Print performance metrics if available
+                            if let Some(metrics) =
+                                perf_metrics.get(device).filter(|m| m.sample_count > 0)
+                            {
+                                println!("\n    Performance Metrics:");
+                                if let Some(mem) = &metrics.memory {
+                                    println!("      Memory:");
+                                    println!("        Peak: {:.2} MB", mem.peak_mb);
+                                    println!("        Average: {:.2} MB", mem.average_mb);
+                                }
+                                if let Some(cpu) = &metrics.cpu {
+                                    println!("      CPU:");
+                                    println!("        Peak: {:.1}%", cpu.peak_percent);
+                                    println!("        Average: {:.1}%", cpu.average_percent);
+                                }
+                            }
                         }
-                        Err(e) => {
-                            println!("\nWarning: Failed to fetch results: {}", e);
-                            println!("Build may still be accessible at: {}", dashboard_url);
-                        }
-                    }
 
-                    // Also save detailed artifacts to separate directory
-                    let output_root = fetch_output_dir.join(build_id);
-                    if let Err(e) = fetch_browserstack_artifacts(
-                        &client,
-                        run_summary.spec.target,
-                        build_id,
-                        &output_root,
-                        false, // Don't wait again, we already did
-                        fetch_poll_interval_secs,
-                        fetch_timeout_secs,
-                    ) {
-                        println!("Warning: Failed to fetch detailed artifacts: {}", e);
+                        println!("\n  View full results: {}", dashboard_url);
+                        run_summary.benchmark_results = Some(bench_results.into_iter().collect());
+                        run_summary.performance_metrics = Some(perf_metrics.into_iter().collect());
                     }
-                } else {
-                    println!("No BrowserStack run to fetch (devices not provided?)");
+                    Err(e) => {
+                        println!("\nWarning: Failed to fetch results: {}", e);
+                        println!("Build may still be accessible at: {}", dashboard_url);
+                    }
                 }
+
+                // Also save detailed artifacts to separate directory
+                let output_root = fetch_output_dir.join(build_id);
+                if let Err(e) = fetch_browserstack_artifacts(
+                    &client,
+                    run_summary.spec.target,
+                    build_id,
+                    &output_root,
+                    false, // Don't wait again, we already did
+                    fetch_poll_interval_secs,
+                    fetch_timeout_secs,
+                ) {
+                    println!("Warning: Failed to fetch detailed artifacts: {}", e);
+                }
+            } else if fetch {
+                println!("No BrowserStack run to fetch (devices not provided?)");
             }
 
             run_summary.summary = build_summary(&run_summary)?;
@@ -548,6 +555,14 @@ fn main() -> Result<()> {
                 poll_interval_secs,
                 timeout_secs,
             )?;
+        }
+        Command::Compare {
+            baseline,
+            candidate,
+            output,
+        } => {
+            let report = compare_summaries(&baseline, &candidate)?;
+            write_compare_report(&report, output.as_deref())?;
         }
         Command::InitSdk {
             target,
@@ -589,6 +604,7 @@ fn write_config_template(path: &Path, target: MobileTarget) -> Result<()> {
         iterations: 100,
         warmup: 10,
         device_matrix: PathBuf::from("device-matrix.yaml"),
+        device_tags: Some(vec!["default".into()]),
         browserstack: BrowserStackConfig {
             app_automate_username: "${BROWSERSTACK_USERNAME}".into(),
             app_automate_access_key: "${BROWSERSTACK_ACCESS_KEY}".into(),
@@ -868,7 +884,10 @@ fn resolve_run_spec(
     if let Some(cfg_path) = config {
         let cfg = load_config(cfg_path)?;
         let matrix = load_device_matrix(&cfg.device_matrix)?;
-        let device_names = matrix.devices.into_iter().map(|d| d.name).collect();
+        let device_names = match &cfg.device_tags {
+            Some(tags) if !tags.is_empty() => filter_devices_by_tags(matrix.devices, tags)?,
+            _ => matrix.devices.into_iter().map(|d| d.name).collect(),
+        };
         return Ok(RunSpec {
             target: cfg.target,
             function: cfg.function,
@@ -918,6 +937,39 @@ fn load_device_matrix(path: &Path) -> Result<DeviceMatrix> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("reading device matrix {:?}", path))?;
     serde_yaml::from_str(&contents).with_context(|| format!("parsing device matrix {:?}", path))
+}
+
+fn filter_devices_by_tags(devices: Vec<DeviceEntry>, tags: &[String]) -> Result<Vec<String>> {
+    let wanted: Vec<String> = tags
+        .iter()
+        .map(|tag| tag.trim().to_lowercase())
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    if wanted.is_empty() {
+        return Ok(devices.into_iter().map(|d| d.name).collect());
+    }
+
+    let mut matched = Vec::new();
+    for device in devices {
+        let Some(device_tags) = device.tags.as_ref() else {
+            continue;
+        };
+        let has_match = device_tags.iter().any(|tag| {
+            let candidate = tag.trim().to_lowercase();
+            wanted.iter().any(|wanted_tag| wanted_tag == &candidate)
+        });
+        if has_match {
+            matched.push(device.name);
+        }
+    }
+
+    if matched.is_empty() {
+        bail!(
+            "no devices matched tags [{}] in device matrix",
+            wanted.join(", ")
+        );
+    }
+    Ok(matched)
 }
 
 fn run_ios_build() -> Result<(PathBuf, PathBuf)> {
@@ -1269,10 +1321,161 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating directory {:?}", parent))?;
+        fs::create_dir_all(parent).with_context(|| format!("creating directory {:?}", parent))?;
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct CompareReport {
+    baseline: PathBuf,
+    candidate: PathBuf,
+    rows: Vec<CompareRow>,
+}
+
+#[derive(Debug)]
+struct CompareRow {
+    device: String,
+    function: String,
+    baseline_median_ns: Option<u64>,
+    candidate_median_ns: Option<u64>,
+    median_delta_pct: Option<f64>,
+    baseline_p95_ns: Option<u64>,
+    candidate_p95_ns: Option<u64>,
+    p95_delta_pct: Option<f64>,
+}
+
+fn compare_summaries(baseline: &Path, candidate: &Path) -> Result<CompareReport> {
+    let baseline_summary = load_run_summary(baseline)?;
+    let candidate_summary = load_run_summary(candidate)?;
+
+    let baseline_map = summary_lookup(&baseline_summary.summary);
+    let candidate_map = summary_lookup(&candidate_summary.summary);
+
+    let mut rows = Vec::new();
+    let mut devices: BTreeMap<String, ()> = BTreeMap::new();
+    devices.extend(baseline_map.keys().map(|k| (k.clone(), ())));
+    devices.extend(candidate_map.keys().map(|k| (k.clone(), ())));
+
+    for device in devices.keys() {
+        let mut functions: BTreeMap<String, ()> = BTreeMap::new();
+        if let Some(entry) = baseline_map.get(device) {
+            functions.extend(entry.keys().map(|k| (k.clone(), ())));
+        }
+        if let Some(entry) = candidate_map.get(device) {
+            functions.extend(entry.keys().map(|k| (k.clone(), ())));
+        }
+
+        for function in functions.keys() {
+            let baseline_stats = baseline_map
+                .get(device)
+                .and_then(|entry| entry.get(function));
+            let candidate_stats = candidate_map
+                .get(device)
+                .and_then(|entry| entry.get(function));
+
+            let baseline_median = baseline_stats.and_then(|s| s.median_ns);
+            let candidate_median = candidate_stats.and_then(|s| s.median_ns);
+            let median_delta = percent_delta(baseline_median, candidate_median);
+
+            let baseline_p95 = baseline_stats.and_then(|s| s.p95_ns);
+            let candidate_p95 = candidate_stats.and_then(|s| s.p95_ns);
+            let p95_delta = percent_delta(baseline_p95, candidate_p95);
+
+            rows.push(CompareRow {
+                device: device.clone(),
+                function: function.clone(),
+                baseline_median_ns: baseline_median,
+                candidate_median_ns: candidate_median,
+                median_delta_pct: median_delta,
+                baseline_p95_ns: baseline_p95,
+                candidate_p95_ns: candidate_p95,
+                p95_delta_pct: p95_delta,
+            });
+        }
+    }
+
+    Ok(CompareReport {
+        baseline: baseline.to_path_buf(),
+        candidate: candidate.to_path_buf(),
+        rows,
+    })
+}
+
+fn load_run_summary(path: &Path) -> Result<RunSummary> {
+    let contents = fs::read_to_string(path).with_context(|| format!("reading {:?}", path))?;
+    serde_json::from_str(&contents).with_context(|| format!("parsing summary {:?}", path))
+}
+
+fn summary_lookup(summary: &SummaryReport) -> BTreeMap<String, BTreeMap<String, BenchmarkStats>> {
+    let mut map = BTreeMap::new();
+    for device in &summary.device_summaries {
+        let mut functions = BTreeMap::new();
+        for bench in &device.benchmarks {
+            functions.insert(bench.function.clone(), bench.clone());
+        }
+        map.insert(device.device.clone(), functions);
+    }
+    map
+}
+
+fn percent_delta(baseline: Option<u64>, candidate: Option<u64>) -> Option<f64> {
+    let baseline = baseline? as f64;
+    let candidate = candidate? as f64;
+    if baseline == 0.0 {
+        return None;
+    }
+    Some(((candidate - baseline) / baseline) * 100.0)
+}
+
+fn write_compare_report(report: &CompareReport, output: Option<&Path>) -> Result<()> {
+    let markdown = render_compare_markdown(report);
+    if let Some(path) = output {
+        ensure_parent_dir(path)?;
+        write_file(path, markdown.as_bytes())?;
+        println!("Wrote compare report to {:?}", path);
+    } else {
+        println!("{markdown}");
+    }
+    Ok(())
+}
+
+fn render_compare_markdown(report: &CompareReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "# Benchmark Comparison");
+    let _ = writeln!(output);
+    let _ = writeln!(output, "- Baseline: {}", report.baseline.display());
+    let _ = writeln!(output, "- Candidate: {}", report.candidate.display());
+    let _ = writeln!(output);
+    let _ = writeln!(
+        output,
+        "| Device | Function | Median (base ms) | Median (cand ms) | Median Δ% | P95 (base ms) | P95 (cand ms) | P95 Δ% |"
+    );
+    let _ = writeln!(
+        output,
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+    );
+    for row in &report.rows {
+        let _ = writeln!(
+            output,
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+            row.device,
+            row.function,
+            format_ms(row.baseline_median_ns),
+            format_ms(row.candidate_median_ns),
+            format_delta(row.median_delta_pct),
+            format_ms(row.baseline_p95_ns),
+            format_ms(row.candidate_p95_ns),
+            format_delta(row.p95_delta_pct)
+        );
+    }
+    output
+}
+
+fn format_delta(value: Option<f64>) -> String {
+    value
+        .map(|delta| format!("{:+.2}%", delta))
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
@@ -1403,10 +1606,7 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
             output,
             "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
         );
-        let _ = writeln!(
-            output,
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
-        );
+        let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
         for bench in &device.benchmarks {
             let _ = writeln!(
                 output,

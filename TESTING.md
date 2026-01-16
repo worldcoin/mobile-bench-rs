@@ -501,9 +501,11 @@ cargo mobench run \
   --output results-v2.json \
   --summary-csv
 
-# Compare summary stats (requires jq)
-jq -s '.[0].summary.device_summaries, .[1].summary.device_summaries' \
-  results-v1.json results-v2.json
+# Compare summaries
+cargo mobench compare \
+  --baseline results-v1.json \
+  --candidate results-v2.json \
+  --output comparison.md
 ```
 
 ### Adding New Test Functions

@@ -256,34 +256,51 @@ cargo mobench fetch \
   --output-dir ./results
 ```
 
+### `compare` - Compare Summaries
+
+Compare two JSON run summaries and emit a Markdown report:
+
+```bash
+cargo mobench compare \
+  --baseline results-v1.json \
+  --candidate results-v2.json \
+  --output comparison.md
+```
+
 ## Configuration
 
 ### Config File Format (`bench-config.toml`)
 
 ```toml
-[project]
-name = "my-benchmarks"
-target = "both"  # android, ios, or both
-
-[build]
-profile = "release"  # or "debug"
+target = "android"
+function = "sample_fns::fibonacci"
+iterations = 100
+warmup = 10
+device_matrix = "device-matrix.yaml"
+device_tags = ["default"] # optional; filter devices by tag
 
 [browserstack]
-username = "${BROWSERSTACK_USERNAME}"
-access_key = "${BROWSERSTACK_ACCESS_KEY}"
+app_automate_username = "${BROWSERSTACK_USERNAME}"
+app_automate_access_key = "${BROWSERSTACK_ACCESS_KEY}"
 project = "my-project-benchmarks"
 
-[[devices]]
-name = "Pixel 7"
-os = "android"
-os_version = "13.0"
-tags = ["default"]
+[ios_xcuitest]
+app = "target/ios/BenchRunner.ipa"
+test_suite = "target/ios/BenchRunnerUITests.zip"
+```
 
-[[devices]]
-name = "iPhone 14"
-os = "ios"
-os_version = "16"
-tags = ["default"]
+### Device Matrix Format (`device-matrix.yaml`)
+
+```yaml
+devices:
+  - name: "Pixel 7-13"
+    os: "android"
+    os_version: "13.0"
+    tags: ["default", "pixel"]
+  - name: "iPhone 14-16"
+    os: "ios"
+    os_version: "16"
+    tags: ["default", "iphone"]
 ```
 
 ### Environment Variables

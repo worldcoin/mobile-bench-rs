@@ -36,6 +36,14 @@ jobs:
             --output run-summary.json \
             --summary-csv
 
+      - name: Publish host summary
+        if: ${{ always() }}
+        run: |
+          if [ -f run-summary.md ]; then
+            cat run-summary.md >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Host benchmark summary::Published to job summary"
+          fi
+
       - name: Upload host summaries
         uses: actions/upload-artifact@v4
         with:
@@ -160,6 +168,14 @@ jobs:
             --fetch \
             --output run-summary.json \
             --summary-csv
+
+      - name: Publish BrowserStack summary
+        if: ${{ always() }}
+        run: |
+          if [ -f run-summary.md ]; then
+            cat run-summary.md >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=BrowserStack benchmark summary::Published to job summary"
+          fi
 
       - name: Upload BrowserStack summaries
         uses: actions/upload-artifact@v4
