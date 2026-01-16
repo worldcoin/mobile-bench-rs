@@ -9,7 +9,7 @@ name = "basic_benchmark"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-# Use bench-sdk for the #[benchmark] macro and registry
+# Use mobench-sdk for the #[benchmark] macro and registry
 mobench-sdk = { path = "../../crates/mobench-sdk" }
 inventory.workspace = true
 serde = { version = "1", features = ["derive"] }

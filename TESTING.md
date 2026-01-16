@@ -485,7 +485,7 @@ Compare benchmark results across builds:
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
-  --devices "Pixel 7-13" \
+  --devices "Google Pixel 7-13.0" \
   --iterations 100 \
   --fetch \
   --output results-v1.json \
@@ -495,7 +495,7 @@ cargo mobench run \
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
-  --devices "Pixel 7-13" \
+  --devices "Google Pixel 7-13.0" \
   --iterations 100 \
   --fetch \
   --output results-v2.json \

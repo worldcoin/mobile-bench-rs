@@ -432,7 +432,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_espresso_run(&["Pixel 7-13".to_string()], "", "bs://test456");
+        let result =
+            client.schedule_espresso_run(&["Google Pixel 7-13.0".to_string()], "", "bs://test456");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("app_url"));
@@ -449,7 +450,11 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_espresso_run(&["Pixel 7-13".to_string()], "bs://app123", "");
+        let result = client.schedule_espresso_run(
+            &["Google Pixel 7-13.0".to_string()],
+            "bs://app123",
+            "",
+        );
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("test_suite_url"));

@@ -27,7 +27,7 @@
 - Benchmark a single exported Rust function with configurable iterations.
 - Build Android APK + iOS app/xcframework locally and in CI.
 - Trigger one Android device run on BrowserStack and capture timing JSON.
-- CLI command: `mobench run --target android --function path::to::fn --devices "pixel_7"` producing a report.
+- CLI command: `mobench run --target android --function path::to::fn --devices "Google Pixel 7-13.0"` producing a report.
 
 ## Task Backlog
 

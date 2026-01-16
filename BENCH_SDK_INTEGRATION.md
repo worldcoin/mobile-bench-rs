@@ -64,7 +64,7 @@ cargo mobench init-sdk --target both --project-name my-bench --output-dir .
 This generates:
 - `bench-mobile/` (FFI bridge that links your crate)
 - `android/` and `ios/` app templates
-- `mobench-sdk.toml` configuration
+- `bench-config.toml` configuration
 
 ## 5) Local Android testing
 
@@ -138,7 +138,7 @@ cargo mobench run \
   --function my_crate::checksum_bench \
   --iterations 100 \
   --warmup 10 \
-  --devices "Pixel 7-13.0"
+  --devices "Google Pixel 7-13.0"
 ```
 
 The CLI will automatically:

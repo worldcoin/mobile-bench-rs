@@ -84,7 +84,7 @@ export BROWSERSTACK_ACCESS_KEY=your_access_key
 cargo mobench run \
   --target android \
   --function fibonacci_30 \
-  --devices "Pixel 7-13" \
+  --devices "Google Pixel 7-13.0" \
   --iterations 100 \
   --warmup 10
 ```
@@ -169,7 +169,7 @@ cargo mobench run --target android --function fibonacci_30
 cargo mobench run \
   --target android \
   --function sha256_hash \
-  --devices "Pixel 7-13,Galaxy S23-13" \
+  --devices "Google Pixel 7-13.0,Samsung Galaxy S23-13.0" \
   --iterations 50 \
   --output results.json
 
@@ -217,11 +217,11 @@ cargo mobench plan --output devices.yaml
 
 ```yaml
 devices:
-  - name: Pixel 7
+  - name: Google Pixel 7-13.0
     os: android
     os_version: "13.0"
     tags: [default, pixel]
-  - name: iPhone 14
+  - name: iPhone 14-16
     os: ios
     os_version: "16"
     tags: [default, iphone]
@@ -293,7 +293,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
 
 ```yaml
 devices:
-  - name: "Pixel 7-13"
+  - name: "Google Pixel 7-13.0"
     os: "android"
     os_version: "13.0"
     tags: ["default", "pixel"]
@@ -379,7 +379,7 @@ cargo mobench build --target android --release
 cargo mobench run \
   --target android \
   --function sha256_1kb \
-  --devices "Pixel 7-13,Galaxy S23-13,OnePlus 11-13" \
+  --devices "Google Pixel 7-13.0,Samsung Galaxy S23-13.0,OnePlus 11-13.0" \
   --iterations 200 \
   --output crypto-results.json
 ```
@@ -430,7 +430,7 @@ jobs:
           cargo mobench run \
             --target android \
             --function my_benchmark \
-            --devices "Pixel 7-13" \
+            --devices "Google Pixel 7-13.0" \
             --iterations 50 \
             --output results.json \
             --fetch

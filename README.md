@@ -347,7 +347,7 @@ cargo mobench run \
   --function sample_fns::fibonacci \
   --iterations 100 \
   --warmup 10 \
-  --devices "Pixel 7-13" \
+  --devices "Google Pixel 7-13.0" \
   --output run-summary.json
 ```
 
@@ -465,11 +465,11 @@ project = "mobile-bench-rs"
 **device-matrix.yaml:**
 ```yaml
 devices:
-  - name: Pixel 7
+  - name: Google Pixel 7-13.0
     os: android
     os_version: "13.0"
     tags: [default, pixel]
-  - name: Samsung Galaxy S23
+  - name: Samsung Galaxy S23-13.0
     os: android
     os_version: "13.0"
     tags: [samsung]

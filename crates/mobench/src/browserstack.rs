@@ -912,7 +912,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_espresso_run(&["Pixel 7-13".to_string()], "", "bs://test456");
+        let result =
+            client.schedule_espresso_run(&["Google Pixel 7-13.0".to_string()], "", "bs://test456");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("app_url"));
@@ -929,7 +930,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = client.schedule_espresso_run(&["Pixel 7-13".to_string()], "bs://app123", "");
+        let result =
+            client.schedule_espresso_run(&["Google Pixel 7-13.0".to_string()], "bs://app123", "");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("test_suite_url"));
@@ -1098,7 +1100,7 @@ Test completed
             status: "done".to_string(),
             duration: Some(120),
             devices: Some(vec![DeviceSessionResponse {
-                device: "Pixel 7-13".to_string(),
+                device: "Google Pixel 7-13.0".to_string(),
                 session_id: "session123".to_string(),
                 status: "passed".to_string(),
                 device_logs: Some("https://example.com/logs".to_string()),
@@ -1110,7 +1112,7 @@ Test completed
         assert_eq!(status.status, "done");
         assert_eq!(status.duration, Some(120));
         assert_eq!(status.devices.len(), 1);
-        assert_eq!(status.devices[0].device, "Pixel 7-13");
+        assert_eq!(status.devices[0].device, "Google Pixel 7-13.0");
         assert_eq!(status.devices[0].session_id, "session123");
     }
 

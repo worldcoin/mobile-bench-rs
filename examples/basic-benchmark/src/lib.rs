@@ -1,6 +1,6 @@
-//! Basic benchmark examples demonstrating bench-sdk usage
+//! Basic benchmark examples demonstrating mobench-sdk usage
 //!
-//! This example crate shows how to write benchmarks using the bench-sdk
+//! This example crate shows how to write benchmarks using the mobench-sdk
 //! with the #[benchmark] attribute macro.
 
 use mobench_sdk::benchmark;
@@ -45,7 +45,7 @@ pub enum BenchError {
 // Generate UniFFI scaffolding from proc macros
 uniffi::setup_scaffolding!();
 
-// Conversion from bench-sdk types
+// Conversion from mobench-sdk types
 impl From<mobench_sdk::BenchSpec> for BenchSpec {
     fn from(spec: mobench_sdk::BenchSpec) -> Self {
         Self {
@@ -100,7 +100,7 @@ impl From<mobench_sdk::BenchError> for BenchError {
 /// Run a benchmark by name with the given specification
 ///
 /// This is the main FFI entry point called from mobile platforms.
-/// It uses bench-sdk's registry to discover and execute benchmarks.
+/// It uses mobench-sdk's registry to discover and execute benchmarks.
 #[uniffi::export]
 pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
     let sdk_spec: mobench_sdk::BenchSpec = spec.into();
@@ -144,7 +144,7 @@ pub fn checksum(bytes: &[u8]) -> u64 {
 // Benchmark Functions
 // ============================================================================
 // These functions are marked with #[benchmark] and automatically registered
-// with bench-sdk's registry system.
+// with mobench-sdk's registry system.
 
 /// Benchmark: Fibonacci calculation (30th number, 1000 iterations)
 #[benchmark]

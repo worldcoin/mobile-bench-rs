@@ -90,7 +90,7 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-bench-sdk = {{ path = ".." }}
+mobench-sdk = {{ path = ".." }}
 uniffi = "0.28"
 {} = {{ path = ".." }}
 
@@ -116,7 +116,7 @@ use uniffi;
 // Ensure the user crate is linked so benchmark registrations are pulled in.
 extern crate {{USER_CRATE}} as _bench_user_crate;
 
-// Re-export bench-sdk types with UniFFI annotations
+// Re-export mobench-sdk types with UniFFI annotations
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchSpec {
     pub name: String,
@@ -148,7 +148,7 @@ pub enum BenchError {
     ExecutionFailed { reason: String },
 }
 
-// Convert from bench-sdk types
+// Convert from mobench-sdk types
 impl From<mobench_sdk::BenchSpec> for BenchSpec {
     fn from(spec: mobench_sdk::BenchSpec) -> Self {
         Self {
@@ -297,46 +297,36 @@ fn generate_ios_project(
     Ok(())
 }
 
-/// Generates bench-sdk.toml configuration file
+/// Generates bench-config.toml configuration file
 fn generate_config_file(output_dir: &Path, config: &InitConfig) -> Result<(), BenchError> {
+    let config_target = match config.target {
+        Target::Ios => "ios",
+        Target::Android | Target::Both => "android",
+    };
     let config_content = format!(
-        r#"# Bench SDK Configuration
-# This file controls how benchmarks are built and executed
+        r#"# mobench configuration
+# This file controls how benchmarks are executed on devices.
 
-[project]
-name = "{}"
 target = "{}"
+function = "example_fibonacci"
+iterations = 100
+warmup = 10
+device_matrix = "device-matrix.yaml"
+device_tags = ["default"]
 
-[build]
-profile = "debug"  # or "release"
+[browserstack]
+app_automate_username = "${{BROWSERSTACK_USERNAME}}"
+app_automate_access_key = "${{BROWSERSTACK_ACCESS_KEY}}"
+project = "{}-benchmarks"
 
-# BrowserStack configuration (optional)
-# Uncomment and fill in your credentials to use BrowserStack
-# [browserstack]
-# username = "${{BROWSERSTACK_USERNAME}}"
-# access_key = "${{BROWSERSTACK_ACCESS_KEY}}"
-# project = "{}-benchmarks"
-
-# Device matrix (optional)
-# Uncomment to specify devices for BrowserStack runs
-# [[devices]]
-# name = "Pixel 7"
-# os = "android"
-# os_version = "13.0"
-# tags = ["default"]
-
-# [[devices]]
-# name = "iPhone 14"
-# os = "ios"
-# os_version = "16"
-# tags = ["default"]
+[ios_xcuitest]
+app = "target/ios/BenchRunner.ipa"
+test_suite = "target/ios/BenchRunnerUITests.zip"
 "#,
-        config.project_name,
-        config.target.as_str(),
-        config.project_name
+        config_target, config.project_name
     );
 
-    fs::write(output_dir.join("bench-sdk.toml"), config_content)?;
+    fs::write(output_dir.join("bench-config.toml"), config_content)?;
 
     Ok(())
 }
@@ -348,7 +338,7 @@ fn generate_example_benchmarks(output_dir: &Path) -> Result<(), BenchError> {
 
     let example_content = r#"//! Example benchmarks
 //!
-//! This file demonstrates how to write benchmarks with bench-sdk.
+//! This file demonstrates how to write benchmarks with mobench-sdk.
 
 use mobench_sdk::benchmark;
 
@@ -484,7 +474,7 @@ mod tests {
 
     #[test]
     fn test_generate_bench_mobile_crate() {
-        let temp_dir = env::temp_dir().join("bench-sdk-test");
+        let temp_dir = env::temp_dir().join("mobench-sdk-test");
         fs::create_dir_all(&temp_dir).unwrap();
 
         let result = generate_bench_mobile_crate(&temp_dir, "test_project");

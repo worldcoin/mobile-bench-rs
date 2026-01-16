@@ -80,7 +80,7 @@ cargo mobench init --target android  # or ios, or both
 This creates:
 - `bench-mobile/` - FFI wrapper crate
 - `android/` or `ios/` - Mobile app projects
-- `bench-sdk.toml` - Configuration file
+- `bench-config.toml` - Configuration file
 
 ### 2. Add Benchmarks
 
@@ -111,7 +111,7 @@ BrowserStack:
 export BROWSERSTACK_USERNAME=your_username
 export BROWSERSTACK_ACCESS_KEY=your_key
 
-cargo mobench run --target android --function my_benchmark --devices "Pixel 7-13"
+cargo mobench run --target android --function my_benchmark --devices "Google Pixel 7-13.0"
 ```
 
 ## API Documentation
@@ -340,30 +340,38 @@ fn btreemap_insert_1000() {
 
 ## Configuration
 
-### `bench-sdk.toml`
+### `bench-config.toml`
 
 ```toml
-[project]
-name = "my-benchmarks"
-target = "both"  # android, ios, or both
-
-[build]
-profile = "release"  # or "debug"
+target = "android"
+function = "sample_fns::fibonacci"
+iterations = 100
+warmup = 10
+device_matrix = "device-matrix.yaml"
+device_tags = ["default"] # optional; filter devices by tag
 
 [browserstack]
-username = "${BROWSERSTACK_USERNAME}"
-access_key = "${BROWSERSTACK_ACCESS_KEY}"
+app_automate_username = "${BROWSERSTACK_USERNAME}"
+app_automate_access_key = "${BROWSERSTACK_ACCESS_KEY}"
 project = "my-project-benchmarks"
 
-[[devices]]
-name = "Pixel 7"
-os = "android"
-os_version = "13.0"
+[ios_xcuitest]
+app = "target/ios/BenchRunner.ipa"
+test_suite = "target/ios/BenchRunnerUITests.zip"
+```
 
-[[devices]]
-name = "iPhone 14"
-os = "ios"
-os_version = "16"
+### `device-matrix.yaml`
+
+```yaml
+devices:
+  - name: "Google Pixel 7-13.0"
+    os: "android"
+    os_version: "13.0"
+    tags: ["default", "pixel"]
+  - name: "iPhone 14-16"
+    os: "ios"
+    os_version: "16"
+    tags: ["default", "iphone"]
 ```
 
 ## Requirements
