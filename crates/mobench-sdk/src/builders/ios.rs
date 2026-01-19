@@ -1,7 +1,74 @@
-//! iOS build automation
+//! iOS build automation.
 //!
-//! This module provides functionality to build Rust libraries for iOS and
-//! create an xcframework that can be used in Xcode projects.
+//! This module provides [`IosBuilder`] which handles the complete pipeline for
+//! building Rust libraries for iOS and packaging them into an xcframework that
+//! can be used in Xcode projects.
+//!
+//! ## Build Pipeline
+//!
+//! The builder performs these steps:
+//!
+//! 1. **Project scaffolding** - Auto-generates iOS project if missing
+//! 2. **Rust compilation** - Builds static libraries for device and simulator targets
+//! 3. **Binding generation** - Generates UniFFI Swift bindings and C headers
+//! 4. **XCFramework creation** - Creates properly structured xcframework with slices
+//! 5. **Code signing** - Signs the xcframework for Xcode acceptance
+//! 6. **Xcode project generation** - Runs xcodegen if `project.yml` exists
+//!
+//! ## Requirements
+//!
+//! - Xcode with command line tools (`xcode-select --install`)
+//! - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
+//! - `uniffi-bindgen` for Swift binding generation
+//! - `xcodegen` (optional, `brew install xcodegen`)
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use mobench_sdk::builders::{IosBuilder, SigningMethod};
+//! use mobench_sdk::{BuildConfig, BuildProfile, Target};
+//!
+//! let builder = IosBuilder::new(".", "my-bench-crate")
+//!     .verbose(true)
+//!     .dry_run(false);
+//!
+//! let config = BuildConfig {
+//!     target: Target::Ios,
+//!     profile: BuildProfile::Release,
+//!     incremental: true,
+//! };
+//!
+//! let result = builder.build(&config)?;
+//! println!("XCFramework at: {:?}", result.app_path);
+//!
+//! // Package IPA for BrowserStack or device testing
+//! let ipa_path = builder.package_ipa("BenchRunner", SigningMethod::AdHoc)?;
+//! # Ok::<(), mobench_sdk::BenchError>(())
+//! ```
+//!
+//! ## Dry-Run Mode
+//!
+//! Use `dry_run(true)` to preview the build plan without making changes:
+//!
+//! ```ignore
+//! let builder = IosBuilder::new(".", "my-bench")
+//!     .dry_run(true);
+//!
+//! // This will print the build plan but not execute anything
+//! builder.build(&config)?;
+//! ```
+//!
+//! ## IPA Packaging
+//!
+//! After building the xcframework, you can package an IPA for device testing:
+//!
+//! ```ignore
+//! // Ad-hoc signing (works for BrowserStack, no Apple ID needed)
+//! let ipa = builder.package_ipa("BenchRunner", SigningMethod::AdHoc)?;
+//!
+//! // Development signing (requires Apple Developer account)
+//! let ipa = builder.package_ipa("BenchRunner", SigningMethod::Development)?;
+//! ```
 
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use super::common::{get_cargo_target_dir, host_lib_path, run_command};
@@ -10,7 +77,34 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// iOS builder that handles the complete build pipeline
+/// iOS builder that handles the complete build pipeline.
+///
+/// This builder automates the process of compiling Rust code to iOS static
+/// libraries, generating UniFFI Swift bindings, creating an xcframework,
+/// and optionally packaging an IPA for device deployment.
+///
+/// # Example
+///
+/// ```ignore
+/// use mobench_sdk::builders::{IosBuilder, SigningMethod};
+/// use mobench_sdk::{BuildConfig, BuildProfile, Target};
+///
+/// let builder = IosBuilder::new(".", "my-bench")
+///     .verbose(true)
+///     .output_dir("target/mobench");
+///
+/// let config = BuildConfig {
+///     target: Target::Ios,
+///     profile: BuildProfile::Release,
+///     incremental: true,
+/// };
+///
+/// let result = builder.build(&config)?;
+///
+/// // Optional: Package IPA for device testing
+/// let ipa = builder.package_ipa("BenchRunner", SigningMethod::AdHoc)?;
+/// # Ok::<(), mobench_sdk::BenchError>(())
+/// ```
 pub struct IosBuilder {
     /// Root directory of the project
     project_root: PathBuf,

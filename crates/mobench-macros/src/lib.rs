@@ -1,5 +1,9 @@
 //! # mobench-macros
 //!
+//! [![Crates.io](https://img.shields.io/crates/v/mobench-macros.svg)](https://crates.io/crates/mobench-macros)
+//! [![Documentation](https://docs.rs/mobench-macros/badge.svg)](https://docs.rs/mobench-macros)
+//! [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/worldcoin/mobile-bench-rs/blob/main/LICENSE)
+//!
 //! Procedural macros for the mobench mobile benchmarking SDK.
 //!
 //! This crate provides the [`#[benchmark]`](macro@benchmark) attribute macro
@@ -71,6 +75,8 @@
 //! - **[`mobench-sdk`](https://crates.io/crates/mobench-sdk)** - Core SDK with timing harness (re-exports this macro)
 //! - **[`mobench`](https://crates.io/crates/mobench)** - CLI tool
 //! - **`mobench-macros`** (this crate) - Proc macros
+//!
+//! Note: The `mobench-runner` crate has been consolidated into `mobench-sdk` as the `timing` module.
 
 use proc_macro::TokenStream;
 use quote::quote;
