@@ -15,6 +15,10 @@ mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that ena
 
 All packages are licensed under MIT (World Foundation, 2026).
 
+### Commit Guidelines
+
+Do not add "Co-Authored-By" lines to commit messages.
+
 ### Quick Start (SDK Users)
 
 ```bash
