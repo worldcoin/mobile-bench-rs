@@ -65,20 +65,34 @@
 //!
 //! | Module | Description |
 //! |--------|-------------|
-//! | [`registry`] | Runtime discovery of `#[benchmark]` functions |
-//! | [`runner`] | Benchmark execution and timing infrastructure |
-//! | [`builders`] | Android and iOS build automation |
-//! | [`codegen`] | Mobile app template generation |
+//! | [`timing`] | Core timing infrastructure (always available) |
+//! | [`registry`] | Runtime discovery of `#[benchmark]` functions (requires `full` feature) |
+//! | [`runner`] | Benchmark execution engine (requires `full` feature) |
+//! | [`builders`] | Android and iOS build automation (requires `full` feature) |
+//! | [`codegen`] | Mobile app template generation (requires `full` feature) |
 //! | [`types`] | Common types and error definitions |
 //!
 //! ## Crate Ecosystem
 //!
-//! The mobench ecosystem consists of four crates:
+//! The mobench ecosystem consists of three crates:
 //!
-//! - **`mobench-sdk`** (this crate) - Core SDK library with build automation
+//! - **`mobench-sdk`** (this crate) - Core SDK library with timing harness and build automation
 //! - **[`mobench`](https://crates.io/crates/mobench)** - CLI tool for building and running benchmarks
 //! - **[`mobench-macros`](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
-//! - **[`mobench-runner`](https://crates.io/crates/mobench-runner)** - Lightweight timing harness
+//!
+//! ## Feature Flags
+//!
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `full` | Yes | Full SDK with build automation, templates, and registry |
+//! | `runner-only` | No | Minimal timing-only mode for mobile binaries |
+//!
+//! For mobile binaries where binary size matters, use `runner-only`:
+//!
+//! ```toml
+//! [dependencies]
+//! mobench-sdk = { version = "0.1", default-features = false, features = ["runner-only"] }
+//! ```
 //!
 //! ## Programmatic Usage
 //!
@@ -255,35 +269,43 @@
 //! - **Iterations**: 50-100 for stable statistics
 //! - Mobile devices may have more variance than desktop
 //!
-//! ## Feature Flags
-//!
-//! Currently, `mobench-sdk` has no optional feature flags. All functionality
-//! is included by default.
-//!
 //! ## License
 //!
 //! MIT License - see repository for details.
 
-// Public modules
-pub mod builders;
-pub mod codegen;
-pub mod registry;
-pub mod runner;
+// Core timing module - always available
+pub mod timing;
 pub mod types;
 
-// Re-export the benchmark macro from bench-macros
+// Full SDK modules - only with "full" feature
+#[cfg(feature = "full")]
+pub mod builders;
+#[cfg(feature = "full")]
+pub mod codegen;
+#[cfg(feature = "full")]
+pub mod registry;
+#[cfg(feature = "full")]
+pub mod runner;
+
+// Re-export the benchmark macro from bench-macros (only with full feature)
+#[cfg(feature = "full")]
 pub use mobench_macros::benchmark;
 
-// Re-export key types for convenience
+// Re-export key types for convenience (full feature)
+#[cfg(feature = "full")]
 pub use registry::{BenchFunction, discover_benchmarks, find_benchmark, list_benchmark_names};
+#[cfg(feature = "full")]
 pub use runner::{BenchmarkBuilder, run_benchmark};
-pub use types::{
-    BenchError, BenchSample, BenchSpec, BuildConfig, BuildProfile, BuildResult, InitConfig,
-    RunnerReport, Target,
-};
 
-// Re-export mobench-runner types for backward compatibility
-pub use mobench_runner;
+// Re-export types that are always available
+pub use types::{BenchError, BenchSample, BenchSpec, RunnerReport};
+
+// Re-export types that require full feature
+#[cfg(feature = "full")]
+pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, Target};
+
+// Re-export timing types at the crate root for convenience
+pub use timing::{run_closure, TimingError};
 
 /// Library version, matching `Cargo.toml`.
 ///
@@ -303,6 +325,7 @@ mod tests {
         assert!(!VERSION.is_empty());
     }
 
+    #[cfg(feature = "full")]
     #[test]
     fn test_discover_benchmarks_compiles() {
         // This test just ensures the function is accessible

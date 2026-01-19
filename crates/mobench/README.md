@@ -517,9 +517,8 @@ Ensure:
 This CLI is part of the mobench ecosystem:
 
 - **[mobench](https://crates.io/crates/mobench)** - This crate (CLI tool)
-- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - SDK library
+- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - SDK library with timing harness and build automation
 - **[mobench-macros](https://crates.io/crates/mobench-macros)** - Proc macros
-- **[mobench-runner](https://crates.io/crates/mobench-runner)** - Timing harness
 
 ## See Also
 

@@ -4,6 +4,7 @@
 //! create an xcframework that can be used in Xcode projects.
 
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
+use super::common::{get_cargo_target_dir, host_lib_path, run_command};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,10 @@ pub struct IosBuilder {
     crate_name: String,
     /// Whether to use verbose output
     verbose: bool,
+    /// Optional explicit crate directory (overrides auto-detection)
+    crate_dir: Option<PathBuf>,
+    /// Whether to run in dry-run mode (print what would be done without making changes)
+    dry_run: bool,
 }
 
 impl IosBuilder {
@@ -35,6 +40,8 @@ impl IosBuilder {
             project_root: root,
             crate_name: crate_name.into(),
             verbose: false,
+            crate_dir: None,
+            dry_run: false,
         }
     }
 
@@ -47,15 +54,37 @@ impl IosBuilder {
         self
     }
 
+    /// Sets the explicit crate directory
+    ///
+    /// By default, the builder searches for the crate in:
+    /// - `{project_root}/bench-mobile/`
+    /// - `{project_root}/crates/{crate_name}/`
+    ///
+    /// Use this to override auto-detection and point directly to the crate.
+    pub fn crate_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.crate_dir = Some(dir.into());
+        self
+    }
+
     /// Enables verbose output
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
 
+    /// Enables dry-run mode
+    ///
+    /// In dry-run mode, the builder prints what would be done without actually
+    /// making any changes. Useful for previewing the build process.
+    pub fn dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
     /// Builds the iOS app with the given configuration
     ///
     /// This performs the following steps:
+    /// 0. Auto-generate project scaffolding if missing
     /// 1. Build Rust libraries for iOS targets (device + simulator)
     /// 2. Generate UniFFI Swift bindings and C headers
     /// 3. Create xcframework with proper structure
@@ -68,6 +97,38 @@ impl IosBuilder {
     /// * `Err(BenchError)` if the build fails
     pub fn build(&self, config: &BuildConfig) -> Result<BuildResult, BenchError> {
         let framework_name = self.crate_name.replace("-", "_");
+        let ios_dir = self.output_dir.join("ios");
+        let xcframework_path = ios_dir.join(format!("{}.xcframework", framework_name));
+
+        if self.dry_run {
+            println!("\n[dry-run] iOS build plan:");
+            println!("  Step 0: Check/generate iOS project scaffolding at {:?}", ios_dir.join("BenchRunner"));
+            println!("  Step 1: Build Rust libraries for iOS targets");
+            println!("    Command: cargo build --target aarch64-apple-ios --lib {}",
+                if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
+            println!("    Command: cargo build --target aarch64-apple-ios-sim --lib {}",
+                if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
+            println!("  Step 2: Generate UniFFI Swift bindings");
+            println!("    Output: {:?}", ios_dir.join("BenchRunner/BenchRunner/Generated"));
+            println!("  Step 3: Create xcframework at {:?}", xcframework_path);
+            println!("    - ios-arm64/{}.framework (device)", framework_name);
+            println!("    - ios-simulator-arm64/{}.framework (simulator)", framework_name);
+            println!("  Step 4: Code-sign xcframework");
+            println!("    Command: codesign --force --deep --sign - {:?}", xcframework_path);
+            println!("  Step 5: Generate Xcode project with xcodegen (if project.yml exists)");
+            println!("    Command: xcodegen generate");
+
+            // Return a placeholder result for dry-run
+            return Ok(BuildResult {
+                platform: Target::Ios,
+                app_path: xcframework_path,
+                test_suite_path: None,
+            });
+        }
+
+        // Step 0: Ensure iOS project scaffolding exists
+        crate::codegen::ensure_ios_project(&self.output_dir, &self.crate_name)?;
+
         // Step 1: Build Rust libraries
         println!("Building Rust libraries for iOS...");
         self.build_rust_libraries(config)?;
@@ -94,12 +155,17 @@ impl IosBuilder {
                 ))
             })?;
         let include_dir = self.output_dir.join("ios/include");
-        fs::create_dir_all(&include_dir)
-            .map_err(|e| BenchError::Build(format!("Failed to create include dir: {}", e)))?;
+        fs::create_dir_all(&include_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create include dir at {}: {}. Check output directory permissions.",
+                include_dir.display(),
+                e
+            ))
+        })?;
         let header_dest = include_dir.join(format!("{}.h", framework_name));
         fs::copy(&header_src, &header_dest).map_err(|e| {
             BenchError::Build(format!(
-                "Failed to copy UniFFI header to {:?}: {}",
+                "Failed to copy UniFFI header to {:?}: {}. Check output directory permissions.",
                 header_dest, e
             ))
         })?;
@@ -116,6 +182,18 @@ impl IosBuilder {
 
     /// Finds the benchmark crate directory (either bench-mobile/ or crates/{crate_name}/)
     fn find_crate_dir(&self) -> Result<PathBuf, BenchError> {
+        // If explicit crate_dir was provided, use it
+        if let Some(ref dir) = self.crate_dir {
+            if dir.exists() {
+                return Ok(dir.clone());
+            }
+            return Err(BenchError::Build(format!(
+                "Specified crate path does not exist: {:?}.\n\n\
+                 Tip: pass --crate-path pointing at a directory containing Cargo.toml.",
+                dir
+            )));
+        }
+
         // Try bench-mobile/ first (SDK projects)
         let bench_mobile_dir = self.project_root.join("bench-mobile");
         if bench_mobile_dir.exists() {
@@ -128,9 +206,25 @@ impl IosBuilder {
             return Ok(crates_dir);
         }
 
+        let bench_mobile_manifest = bench_mobile_dir.join("Cargo.toml");
+        let crates_manifest = crates_dir.join("Cargo.toml");
         Err(BenchError::Build(format!(
-            "Benchmark crate '{}' not found. Tried:\n  - {:?}\n  - {:?}",
-            self.crate_name, bench_mobile_dir, crates_dir
+            "Benchmark crate '{}' not found.\n\n\
+             Searched locations:\n\
+             - {}\n\
+             - {}\n\n\
+             To fix this:\n\
+             1. Create a bench-mobile/ directory with your benchmark crate, or\n\
+             2. Use --crate-path to specify the benchmark crate location:\n\
+                cargo mobench build --target ios --crate-path ./my-benchmarks\n\n\
+             Common issues:\n\
+             - Typo in crate name (check Cargo.toml [package] name)\n\
+             - Wrong working directory (run from project root)\n\
+             - Missing Cargo.toml in the crate directory\n\n\
+             Run 'cargo mobench init-sdk --help' to generate a new benchmark project.",
+            self.crate_name,
+            bench_mobile_manifest.display(),
+            crates_manifest.display()
         )))
     }
 
@@ -146,6 +240,11 @@ impl IosBuilder {
 
         // Check if targets are installed
         self.check_rust_targets(&targets)?;
+        let release_flag = if matches!(config.profile, BuildProfile::Release) {
+            "--release"
+        } else {
+            ""
+        };
 
         for target in targets {
             if self.verbose {
@@ -156,23 +255,53 @@ impl IosBuilder {
             cmd.arg("build").arg("--target").arg(target).arg("--lib");
 
             // Add release flag if needed
-            if matches!(config.profile, BuildProfile::Release) {
-                cmd.arg("--release");
+            if !release_flag.is_empty() {
+                cmd.arg(release_flag);
             }
 
             // Set working directory
             cmd.current_dir(&crate_dir);
 
             // Execute build
+            let command_hint = if release_flag.is_empty() {
+                format!("cargo build --target {} --lib", target)
+            } else {
+                format!("cargo build --target {} --lib {}", target, release_flag)
+            };
             let output = cmd
                 .output()
-                .map_err(|e| BenchError::Build(format!("Failed to run cargo: {}", e)))?;
+                .map_err(|e| BenchError::Build(format!(
+                    "Failed to run cargo for {}.\n\n\
+                     Command: {}\n\
+                     Crate directory: {}\n\
+                     Error: {}\n\n\
+                     Tip: ensure cargo is installed and on PATH.",
+                    target,
+                    command_hint,
+                    crate_dir.display(),
+                    e
+                )))?;
 
             if !output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(BenchError::Build(format!(
-                    "cargo build failed for {}: {}",
-                    target, stderr
+                    "cargo build failed for {}.\n\n\
+                     Command: {}\n\
+                     Crate directory: {}\n\
+                     Exit status: {}\n\n\
+                     Stdout:\n{}\n\n\
+                     Stderr:\n{}\n\n\
+                     Tips:\n\
+                     - Ensure Xcode command line tools are installed (xcode-select --install)\n\
+                     - Confirm Rust targets are installed (rustup target add {})",
+                    target,
+                    command_hint,
+                    crate_dir.display(),
+                    output.status,
+                    stdout,
+                    stderr,
+                    target
                 )));
             }
         }
@@ -187,14 +316,25 @@ impl IosBuilder {
             .arg("list")
             .arg("--installed")
             .output()
-            .map_err(|e| BenchError::Build(format!("Failed to check rustup targets: {}", e)))?;
+            .map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to check rustup targets: {}. Ensure rustup is installed and on PATH.",
+                    e
+                ))
+            })?;
 
         let installed = String::from_utf8_lossy(&output.stdout);
 
         for target in targets {
             if !installed.contains(target) {
                 return Err(BenchError::Build(format!(
-                    "Rust target {} is not installed. Install it with: rustup target add {}",
+                    "Rust target '{}' is not installed.\n\n\
+                     This target is required to compile for iOS.\n\n\
+                     To install:\n\
+                       rustup target add {}\n\n\
+                     For a complete iOS setup, you need both:\n\
+                       rustup target add aarch64-apple-ios        # Device\n\
+                       rustup target add aarch64-apple-ios-sim    # Simulator (Apple Silicon)",
                     target, target
                 )));
             }
@@ -224,22 +364,6 @@ impl IosBuilder {
             return Ok(());
         }
 
-        // Check if uniffi-bindgen is available
-        let uniffi_available = Command::new("uniffi-bindgen")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        if !uniffi_available {
-            return Err(BenchError::Build(
-                "uniffi-bindgen not found and no pre-generated bindings exist.\n\
-                 Install it with: cargo install uniffi-bindgen\n\
-                 Or use pre-generated bindings by copying them to the expected location."
-                    .to_string(),
-            ));
-        }
-
         // Build host library to feed uniffi-bindgen
         let mut build_cmd = Command::new("cargo");
         build_cmd.arg("build");
@@ -254,18 +378,68 @@ impl IosBuilder {
             .join("BenchRunner")
             .join("Generated");
         fs::create_dir_all(&out_dir).map_err(|e| {
-            BenchError::Build(format!("Failed to create Swift bindings dir: {}", e))
+            BenchError::Build(format!(
+                "Failed to create Swift bindings dir at {}: {}. Check output directory permissions.",
+                out_dir.display(),
+                e
+            ))
         })?;
 
-        let mut cmd = Command::new("uniffi-bindgen");
-        cmd.arg("generate")
+        // Try cargo run first (works if crate has uniffi-bindgen binary target)
+        let cargo_run_result = Command::new("cargo")
+            .args(["run", "-p", &self.crate_name, "--bin", "uniffi-bindgen", "--"])
+            .arg("generate")
             .arg("--library")
             .arg(&lib_path)
             .arg("--language")
             .arg("swift")
             .arg("--out-dir")
-            .arg(&out_dir);
-        run_command(cmd, "uniffi-bindgen swift")?;
+            .arg(&out_dir)
+            .current_dir(&crate_dir)
+            .output();
+
+        let use_cargo_run = cargo_run_result
+            .as_ref()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if use_cargo_run {
+            if self.verbose {
+                println!("  Generated bindings using cargo run uniffi-bindgen");
+            }
+        } else {
+            // Fall back to global uniffi-bindgen
+            let uniffi_available = Command::new("uniffi-bindgen")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if !uniffi_available {
+                return Err(BenchError::Build(
+                    "uniffi-bindgen not found and no pre-generated bindings exist.\n\n\
+                     To fix this, either:\n\
+                     1. Add a uniffi-bindgen binary to your crate:\n\
+                        [[bin]]\n\
+                        name = \"uniffi-bindgen\"\n\
+                        path = \"src/bin/uniffi-bindgen.rs\"\n\n\
+                     2. Or install uniffi-bindgen globally:\n\
+                        cargo install uniffi-bindgen\n\n\
+                     3. Or pre-generate bindings and commit them."
+                        .to_string(),
+                ));
+            }
+
+            let mut cmd = Command::new("uniffi-bindgen");
+            cmd.arg("generate")
+                .arg("--library")
+                .arg(&lib_path)
+                .arg("--language")
+                .arg("swift")
+                .arg("--out-dir")
+                .arg(&out_dir);
+            run_command(cmd, "uniffi-bindgen swift")?;
+        }
 
         if self.verbose {
             println!("  Generated UniFFI Swift bindings at {:?}", out_dir);
@@ -281,7 +455,8 @@ impl IosBuilder {
             BuildProfile::Release => "release",
         };
 
-        let target_dir = self.project_root.join("target");
+        let crate_dir = self.find_crate_dir()?;
+        let target_dir = get_cargo_target_dir(&crate_dir)?;
         let xcframework_dir = self.output_dir.join("ios");
         let framework_name = &self.crate_name.replace("-", "_");
         let xcframework_path = xcframework_dir.join(format!("{}.xcframework", framework_name));
@@ -289,13 +464,21 @@ impl IosBuilder {
         // Remove existing xcframework if it exists
         if xcframework_path.exists() {
             fs::remove_dir_all(&xcframework_path).map_err(|e| {
-                BenchError::Build(format!("Failed to remove old xcframework: {}", e))
+                BenchError::Build(format!(
+                    "Failed to remove old xcframework at {}: {}. Close any tools using it and retry.",
+                    xcframework_path.display(),
+                    e
+                ))
             })?;
         }
 
         // Create xcframework directory
         fs::create_dir_all(&xcframework_dir).map_err(|e| {
-            BenchError::Build(format!("Failed to create xcframework directory: {}", e))
+            BenchError::Build(format!(
+                "Failed to create xcframework directory at {}: {}. Check output directory permissions.",
+                xcframework_dir.display(),
+                e
+            ))
         })?;
 
         // Build framework structure for each platform
@@ -332,7 +515,11 @@ impl IosBuilder {
 
         // Create directories
         fs::create_dir_all(&headers_dir).map_err(|e| {
-            BenchError::Build(format!("Failed to create framework directories: {}", e))
+            BenchError::Build(format!(
+                "Failed to create framework directories at {}: {}. Check output directory permissions.",
+                headers_dir.display(),
+                e
+            ))
         })?;
 
         // Copy static library
@@ -341,13 +528,21 @@ impl IosBuilder {
 
         if !src_lib.exists() {
             return Err(BenchError::Build(format!(
-                "Static library not found: {:?}",
-                src_lib
+                "Static library not found at {}.\n\n\
+                 Expected output from cargo build --target <target> --lib.\n\
+                 Ensure your crate has [lib] crate-type = [\"staticlib\"].",
+                src_lib.display()
             )));
         }
 
-        fs::copy(&src_lib, &dest_lib)
-            .map_err(|e| BenchError::Build(format!("Failed to copy static library: {}", e)))?;
+        fs::copy(&src_lib, &dest_lib).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to copy static library from {} to {}: {}. Check output directory permissions.",
+                src_lib.display(),
+                dest_lib.display(),
+                e
+            ))
+        })?;
 
         // Copy UniFFI-generated header into the framework
         let header_name = format!("{}FFI.h", framework_name);
@@ -357,10 +552,13 @@ impl IosBuilder {
                 header_name
             ))
         })?;
-        fs::copy(&header_path, headers_dir.join(&header_name)).map_err(|e| {
+        let dest_header = headers_dir.join(&header_name);
+        fs::copy(&header_path, &dest_header).map_err(|e| {
             BenchError::Build(format!(
-                "Failed to copy UniFFI header from {:?}: {}",
-                header_path, e
+                "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
+                header_path.display(),
+                dest_header.display(),
+                e
             ))
         })?;
 
@@ -369,8 +567,14 @@ impl IosBuilder {
             "framework module {} {{\n  umbrella header \"{}FFI.h\"\n  export *\n  module * {{ export * }}\n}}",
             framework_name, framework_name
         );
-        fs::write(headers_dir.join("module.modulemap"), modulemap_content)
-            .map_err(|e| BenchError::Build(format!("Failed to write module.modulemap: {}", e)))?;
+        let modulemap_path = headers_dir.join("module.modulemap");
+        fs::write(&modulemap_path, modulemap_content).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write module.modulemap at {}: {}. Check output directory permissions.",
+                modulemap_path.display(),
+                e
+            ))
+        })?;
 
         // Create framework Info.plist
         self.create_framework_plist(&framework_dir, framework_name, platform)?;
@@ -421,8 +625,13 @@ impl IosBuilder {
             }
         );
 
-        fs::write(framework_dir.join("Info.plist"), plist_content).map_err(|e| {
-            BenchError::Build(format!("Failed to write framework Info.plist: {}", e))
+        let plist_path = framework_dir.join("Info.plist");
+        fs::write(&plist_path, plist_content).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write framework Info.plist at {}: {}. Check output directory permissions.",
+                plist_path.display(),
+                e
+            ))
         })?;
 
         Ok(())
@@ -477,8 +686,13 @@ impl IosBuilder {
             framework_name, framework_name
         );
 
-        fs::write(xcframework_path.join("Info.plist"), plist_content).map_err(|e| {
-            BenchError::Build(format!("Failed to write xcframework Info.plist: {}", e))
+        let plist_path = xcframework_path.join("Info.plist");
+        fs::write(&plist_path, plist_content).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write xcframework Info.plist at {}: {}. Check output directory permissions.",
+                plist_path.display(),
+                e
+            ))
         })?;
 
         Ok(())
@@ -531,16 +745,30 @@ impl IosBuilder {
             println!("  Generating Xcode project with xcodegen");
         }
 
+        let project_dir = ios_dir.join("BenchRunner");
         let output = Command::new("xcodegen")
             .arg("generate")
-            .current_dir(ios_dir.join("BenchRunner"))
+            .current_dir(&project_dir)
             .output();
 
         match output {
             Ok(output) if output.status.success() => Ok(()),
             Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                Err(BenchError::Build(format!("xcodegen failed: {}", stderr)))
+                Err(BenchError::Build(format!(
+                    "xcodegen failed.\n\n\
+                     Command: xcodegen generate\n\
+                     Working directory: {}\n\
+                     Exit status: {}\n\n\
+                     Stdout:\n{}\n\n\
+                     Stderr:\n{}\n\n\
+                     Tip: install xcodegen with: brew install xcodegen",
+                    project_dir.display(),
+                    output.status,
+                    stdout,
+                    stderr
+                )))
             }
             Err(e) => {
                 println!("Warning: xcodegen not found or failed: {}", e);
@@ -561,7 +789,9 @@ impl IosBuilder {
             return Some(candidate_swift);
         }
 
-        let target_dir = self.project_root.join("target");
+        // Get the actual target directory (handles workspace case)
+        let crate_dir = self.find_crate_dir().ok()?;
+        let target_dir = get_cargo_target_dir(&crate_dir).ok()?;
         // Common UniFFI output location when using uniffi::generate_scaffolding
         let candidate = target_dir.join("uniffi").join(header_name);
         if candidate.exists() {
@@ -593,52 +823,6 @@ impl IosBuilder {
 
         None
     }
-}
-
-// Shared helpers (duplicated with android builder)
-fn host_lib_path(project_dir: &Path, crate_name: &str) -> Result<PathBuf, BenchError> {
-    let lib_prefix = if cfg!(target_os = "windows") {
-        ""
-    } else {
-        "lib"
-    };
-    let lib_ext = match env::consts::OS {
-        "macos" => "dylib",
-        "linux" => "so",
-        other => {
-            return Err(BenchError::Build(format!(
-                "unsupported host OS for binding generation: {}",
-                other
-            )));
-        }
-    };
-    let path = project_dir.join("target").join("debug").join(format!(
-        "{}{}.{}",
-        lib_prefix,
-        crate_name.replace('-', "_"),
-        lib_ext
-    ));
-    if !path.exists() {
-        return Err(BenchError::Build(format!(
-            "host library for UniFFI not found at {:?}",
-            path
-        )));
-    }
-    Ok(path)
-}
-
-fn run_command(mut cmd: Command, description: &str) -> Result<(), BenchError> {
-    let output = cmd
-        .output()
-        .map_err(|e| BenchError::Build(format!("Failed to run {}: {}", description, e)))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(BenchError::Build(format!(
-            "{} failed: {}",
-            description, stderr
-        )));
-    }
-    Ok(())
 }
 
 #[allow(clippy::collapsible_if)]
@@ -706,7 +890,7 @@ fn embed_provisioning_profile(app_path: &Path, profile: &Path) -> Result<(), Ben
     let dest = app_path.join("embedded.mobileprovision");
     fs::copy(profile, &dest).map_err(|e| {
         BenchError::Build(format!(
-            "Failed to embed provisioning profile {:?}: {}",
+            "Failed to embed provisioning profile at {:?}: {}. Check the profile path and file permissions.",
             dest, e
         ))
     })?;
@@ -718,10 +902,18 @@ fn codesign_bundle(app_path: &Path, identity: &str) -> Result<(), BenchError> {
         .args(["--force", "--deep", "--sign", identity])
         .arg(app_path)
         .output()
-        .map_err(|e| BenchError::Build(format!("Failed to run codesign: {}", e)))?;
+        .map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to run codesign: {}. Ensure Xcode command line tools are installed.",
+                e
+            ))
+        })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(BenchError::Build(format!("codesign failed: {}", stderr)));
+        return Err(BenchError::Build(format!(
+            "codesign failed: {}. Verify you have a valid signing identity.",
+            stderr
+        )));
     }
     Ok(())
 }
@@ -772,8 +964,9 @@ impl IosBuilder {
         // Verify Xcode project exists
         if !project_path.exists() {
             return Err(BenchError::Build(format!(
-                "Xcode project not found at {:?}. Run `cargo mobench build --target ios` first.",
-                project_path
+                "Xcode project not found at {}.\n\n\
+                 Run `cargo mobench build --target ios` first or check --output-dir.",
+                project_path.display()
             )));
         }
 
@@ -781,8 +974,13 @@ impl IosBuilder {
         let ipa_path = export_path.join(format!("{}.ipa", scheme));
 
         // Create target/ios directory if it doesn't exist
-        fs::create_dir_all(&export_path)
-            .map_err(|e| BenchError::Build(format!("Failed to create export directory: {}", e)))?;
+        fs::create_dir_all(&export_path).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create export directory at {}: {}. Check output directory permissions.",
+                export_path.display(),
+                e
+            ))
+        })?;
 
         println!("Building {} for device...", scheme);
 
@@ -833,18 +1031,39 @@ impl IosBuilder {
             .join(format!("{}.app", scheme));
 
         if !app_path.exists() {
-            // Only fail if the .app wasn't created
-            if let Ok(output) = build_result {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(BenchError::Build(format!(
-                    "xcodebuild build failed and app bundle not found: {}",
-                    stderr
-                )));
+            match build_result {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(BenchError::Build(format!(
+                        "xcodebuild build failed and app bundle was not created.\n\n\
+                         Project: {}\n\
+                         Scheme: {}\n\
+                         Configuration: {}\n\
+                         Derived data: {}\n\
+                         Exit status: {}\n\n\
+                         Stdout:\n{}\n\n\
+                         Stderr:\n{}\n\n\
+                         Tip: run xcodebuild manually to inspect the failure.",
+                        project_path.display(),
+                        scheme,
+                        build_configuration,
+                        build_dir.display(),
+                        output.status,
+                        stdout,
+                        stderr
+                    )));
+                }
+                Err(err) => {
+                    return Err(BenchError::Build(format!(
+                        "Failed to run xcodebuild: {}.\n\n\
+                         App bundle not found at {}.\n\
+                         Check that Xcode command line tools are installed.",
+                        err,
+                        app_path.display()
+                    )));
+                }
             }
-            return Err(BenchError::Build(format!(
-                "App bundle not found at {:?}. Build may have failed.",
-                app_path
-            )));
         }
 
         if self.verbose {
@@ -894,11 +1113,20 @@ impl IosBuilder {
         let payload_dir = export_path.join("Payload");
         if payload_dir.exists() {
             fs::remove_dir_all(&payload_dir).map_err(|e| {
-                BenchError::Build(format!("Failed to remove old Payload dir: {}", e))
+                BenchError::Build(format!(
+                    "Failed to remove old Payload dir at {}: {}. Close any tools using it and retry.",
+                    payload_dir.display(),
+                    e
+                ))
             })?;
         }
-        fs::create_dir_all(&payload_dir)
-            .map_err(|e| BenchError::Build(format!("Failed to create Payload dir: {}", e)))?;
+        fs::create_dir_all(&payload_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create Payload dir at {}: {}. Check output directory permissions.",
+                payload_dir.display(),
+                e
+            ))
+        })?;
 
         // Copy app bundle into Payload/
         let dest_app = payload_dir.join(format!("{}.app", scheme));
@@ -906,8 +1134,13 @@ impl IosBuilder {
 
         // Create zip archive
         if ipa_path.exists() {
-            fs::remove_file(&ipa_path)
-                .map_err(|e| BenchError::Build(format!("Failed to remove old IPA: {}", e)))?;
+            fs::remove_file(&ipa_path).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to remove old IPA at {}: {}. Check file permissions.",
+                    ipa_path.display(),
+                    e
+                ))
+            })?;
         }
 
         let mut cmd = Command::new("zip");
@@ -921,8 +1154,13 @@ impl IosBuilder {
         run_command(cmd, "zip IPA")?;
 
         // Clean up Payload directory
-        fs::remove_dir_all(&payload_dir)
-            .map_err(|e| BenchError::Build(format!("Failed to clean up Payload dir: {}", e)))?;
+        fs::remove_dir_all(&payload_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to clean up Payload dir at {}: {}. Check file permissions.",
+                payload_dir.display(),
+                e
+            ))
+        })?;
 
         println!("✓ IPA created: {:?}", ipa_path);
         Ok(ipa_path)
@@ -938,14 +1176,20 @@ impl IosBuilder {
 
         if !project_path.exists() {
             return Err(BenchError::Build(format!(
-                "Xcode project not found at {:?}. Run `cargo mobench build --target ios` first.",
-                project_path
+                "Xcode project not found at {}.\n\n\
+                 Run `cargo mobench build --target ios` first or check --output-dir.",
+                project_path.display()
             )));
         }
 
         let export_path = self.output_dir.join("ios");
-        fs::create_dir_all(&export_path)
-            .map_err(|e| BenchError::Build(format!("Failed to create export directory: {}", e)))?;
+        fs::create_dir_all(&export_path).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create export directory at {}: {}. Check output directory permissions.",
+                export_path.display(),
+                e
+            ))
+        })?;
 
         let build_dir = self.output_dir.join("ios/build");
         println!("Building XCUITest runner for {}...", scheme);
@@ -1009,17 +1253,39 @@ impl IosBuilder {
         }
 
         if !runner_path.exists() {
-            if let Ok(output) = build_result {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(BenchError::Build(format!(
-                    "xcodebuild build-for-testing failed and runner not found: {}",
-                    stderr
-                )));
+            match build_result {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(BenchError::Build(format!(
+                        "xcodebuild build-for-testing failed and runner was not created.\n\n\
+                         Project: {}\n\
+                         Scheme: {}\n\
+                         Derived data: {}\n\
+                         Exit status: {}\n\
+                         Log: {}\n\n\
+                         Stdout:\n{}\n\n\
+                         Stderr:\n{}\n\n\
+                         Tip: open the log file above for more context.",
+                        project_path.display(),
+                        scheme,
+                        build_dir.display(),
+                        output.status,
+                        log_path.display(),
+                        stdout,
+                        stderr
+                    )));
+                }
+                Err(err) => {
+                    return Err(BenchError::Build(format!(
+                        "Failed to run xcodebuild: {}.\n\n\
+                         XCUITest runner not found at {}.\n\
+                         Check that Xcode command line tools are installed.",
+                        err,
+                        runner_path.display()
+                    )));
+                }
             }
-            return Err(BenchError::Build(format!(
-                "XCUITest runner not found at {:?}. Build may have failed.",
-                runner_path
-            )));
         }
 
         let profile = find_provisioning_profile();
@@ -1038,8 +1304,13 @@ impl IosBuilder {
 
         let zip_path = export_path.join(format!("{}UITests.zip", scheme));
         if zip_path.exists() {
-            fs::remove_file(&zip_path)
-                .map_err(|e| BenchError::Build(format!("Failed to remove old zip: {}", e)))?;
+            fs::remove_file(&zip_path).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to remove old zip at {}: {}. Check file permissions.",
+                    zip_path.display(),
+                    e
+                ))
+            })?;
         }
 
         let mut zip_cmd = Command::new("zip");

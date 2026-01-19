@@ -53,12 +53,9 @@ class MainActivity : AppCompatActivity() {
             }
             logBenchReport(report)
             formatBenchReport(report)
-        } catch (e: BenchException.InvalidIterations) {
-            "Error: ${e.message}"
-        } catch (e: BenchException.UnknownFunction) {
-            "Error: ${e.message}"
-        } catch (e: BenchException.ExecutionFailed) {
-            "Error: ${e.message}"
+        } catch (e: BenchException) {
+            // Generic handler for all benchmark errors (InvalidIterations, UnknownFunction, etc.)
+            "Benchmark error: ${e.message}"
         } catch (e: Exception) {
             "Unexpected error: ${e.message}"
         }

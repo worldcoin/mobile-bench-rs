@@ -341,6 +341,26 @@ unzip -l target/mobench/android/app/build/outputs/apk/debug/app-debug.apk | grep
 - Check function name is correct: `fibonacci`, `checksum`, `sample_fns::fibonacci`, `sample_fns::checksum`
 - Function names are case-sensitive
 
+**Issue**: `aws-lc-sys` fails to compile for Android NDK
+```
+error occurred in cc-rs: command did not execute successfully
+.../clang ... --target=aarch64-linux-android24 ... getentropy.c
+```
+
+This happens because `rustls` 0.23+ uses `aws-lc-rs` as the default crypto backend, which doesn't compile for Android NDK targets.
+
+**Solution**: Configure rustls to use the `ring` crypto backend instead. Add this to your root `Cargo.toml`:
+```toml
+[workspace.dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+```
+
+Then in each crate that uses rustls (directly or transitively):
+```toml
+[dependencies]
+rustls = { workspace = true }
+```
+
 ### iOS
 
 **Issue**: `xcodegen: command not found`

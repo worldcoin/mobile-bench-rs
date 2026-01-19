@@ -402,9 +402,8 @@ devices:
 This is the core SDK of the mobench ecosystem:
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool (recommended for most users)
-- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - This crate (SDK library)
+- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - This crate (SDK library with timing harness)
 - **[mobench-macros](https://crates.io/crates/mobench-macros)** - Proc macros
-- **[mobench-runner](https://crates.io/crates/mobench-runner)** - Timing harness
 
 ## See Also
 
