@@ -157,7 +157,8 @@ class MainActivity : AppCompatActivity() {
                     json.optInt("warmup", DEFAULT_WARMUP.toInt()).toUInt(),
                 )
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Failed to load bench_spec.json from assets", e)
             null
         }
     }
