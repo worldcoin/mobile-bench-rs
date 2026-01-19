@@ -807,7 +807,6 @@ dependencies = [
  "clap",
  "dotenvy",
  "inventory",
- "mobench-runner",
  "mobench-sdk",
  "reqwest",
  "sample-fns",
@@ -829,15 +828,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mobench-runner"
-version = "0.1.8"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "mobench-sdk"
 version = "0.1.8"
 dependencies = [
@@ -845,7 +835,6 @@ dependencies = [
  "include_dir",
  "inventory",
  "mobench-macros",
- "mobench-runner",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1168,7 +1157,7 @@ name = "sample-fns"
 version = "0.1.8"
 dependencies = [
  "camino",
- "mobench-runner",
+ "mobench-sdk",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

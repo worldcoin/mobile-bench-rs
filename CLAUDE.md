@@ -6,12 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.7):**
+**Published on crates.io as the mobench ecosystem (v0.1.8):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
-- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with build automation
+- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
 - **[mobench-macros](https://crates.io/crates/mobench-macros)** - `#[benchmark]` attribute proc macro
-- **[mobench-runner](https://crates.io/crates/mobench-runner)** - Lightweight timing harness for mobile devices
 
 All packages are licensed under MIT (World Foundation, 2026).
 
@@ -44,9 +43,8 @@ fn my_benchmark() {
 The repository is organized as a Cargo workspace:
 
 - **`crates/mobench`**: CLI orchestrator that drives the entire workflow - building artifacts, uploading to BrowserStack, executing runs, and collecting results. Entry point for all operations.
-- **`crates/mobench-sdk`**: Core SDK library with registry system, builders (AndroidBuilder, IosBuilder), template generation, and BrowserStack integration.
+- **`crates/mobench-sdk`**: Core SDK library with timing harness, registry system, builders (AndroidBuilder, IosBuilder), template generation, and BrowserStack integration. Includes the `timing` module for lightweight benchmarking (can be used standalone with `runner-only` feature).
 - **`crates/mobench-macros`**: Proc macro crate providing the `#[benchmark]` attribute for marking functions.
-- **`crates/mobench-runner`**: Lightweight timing harness library that gets embedded in mobile binaries. Provides timing infrastructure for benchmarks.
 - **`examples/basic-benchmark`**: Minimal SDK usage example with `#[benchmark]`.
 - **`examples/ffi-benchmark`**: Full UniFFI surface example (types + `run_benchmark`).
 
@@ -537,16 +535,15 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
   - `src/browserstack.rs`: BrowserStack REST API client
 - **`crates/mobench-sdk/`**: Core SDK library (published to crates.io)
   - `src/lib.rs`: Public API surface
+  - `src/timing.rs`: Lightweight timing harness (BenchSpec, BenchReport, run_closure)
   - `src/registry.rs`: Function discovery via `inventory` crate
-  - `src/runner.rs`: Timing harness integration
+  - `src/runner.rs`: Benchmark execution engine using timing module
   - `src/builders/android.rs`: Android build automation
   - `src/builders/ios.rs`: iOS build automation
   - `src/codegen.rs`: Template generation from embedded files
   - `templates/`: Embedded Android/iOS app templates (via `include_dir!`)
 - **`crates/mobench-macros/`**: Proc macro crate (published to crates.io)
   - `src/lib.rs`: `#[benchmark]` attribute implementation
-- **`crates/mobench-runner/`**: Timing harness (published to crates.io)
-  - `src/lib.rs`: Core timing and reporting logic
 
 ### Example & Testing
 

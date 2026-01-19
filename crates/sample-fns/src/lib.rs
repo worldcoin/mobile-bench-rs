@@ -1,6 +1,6 @@
 //! Sample benchmark functions for mobile testing using UniFFI (proc macro mode).
 
-use mobench_runner::{run_closure, BenchError as BenchRunnerError};
+use mobench_sdk::timing::{run_closure, TimingError};
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
 
@@ -42,9 +42,9 @@ pub enum BenchError {
 // Generate UniFFI scaffolding from proc macros
 uniffi::setup_scaffolding!();
 
-// Conversion from mobench-runner types
-impl From<mobench_runner::BenchSpec> for BenchSpec {
-    fn from(spec: mobench_runner::BenchSpec) -> Self {
+// Conversion from mobench-sdk timing types
+impl From<mobench_sdk::timing::BenchSpec> for BenchSpec {
+    fn from(spec: mobench_sdk::timing::BenchSpec) -> Self {
         Self {
             name: spec.name,
             iterations: spec.iterations,
@@ -53,7 +53,7 @@ impl From<mobench_runner::BenchSpec> for BenchSpec {
     }
 }
 
-impl From<BenchSpec> for mobench_runner::BenchSpec {
+impl From<BenchSpec> for mobench_sdk::timing::BenchSpec {
     fn from(spec: BenchSpec) -> Self {
         Self {
             name: spec.name,
@@ -63,16 +63,16 @@ impl From<BenchSpec> for mobench_runner::BenchSpec {
     }
 }
 
-impl From<mobench_runner::BenchSample> for BenchSample {
-    fn from(sample: mobench_runner::BenchSample) -> Self {
+impl From<mobench_sdk::timing::BenchSample> for BenchSample {
+    fn from(sample: mobench_sdk::timing::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
         }
     }
 }
 
-impl From<mobench_runner::BenchReport> for BenchReport {
-    fn from(report: mobench_runner::BenchReport) -> Self {
+impl From<mobench_sdk::timing::BenchReport> for BenchReport {
+    fn from(report: mobench_sdk::timing::BenchReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
@@ -80,11 +80,11 @@ impl From<mobench_runner::BenchReport> for BenchReport {
     }
 }
 
-impl From<BenchRunnerError> for BenchError {
-    fn from(err: BenchRunnerError) -> Self {
+impl From<TimingError> for BenchError {
+    fn from(err: TimingError) -> Self {
         match err {
-            BenchRunnerError::NoIterations => BenchError::InvalidIterations,
-            BenchRunnerError::Execution(msg) => BenchError::ExecutionFailed { reason: msg },
+            TimingError::NoIterations => BenchError::InvalidIterations,
+            TimingError::Execution(msg) => BenchError::ExecutionFailed { reason: msg },
         }
     }
 }
@@ -92,20 +92,20 @@ impl From<BenchRunnerError> for BenchError {
 /// Run a benchmark by name with the given specification.
 #[uniffi::export]
 pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
-    let runner_spec: mobench_runner::BenchSpec = spec.into();
+    let timing_spec: mobench_sdk::timing::BenchSpec = spec.into();
 
-    let report = match runner_spec.name.as_str() {
+    let report = match timing_spec.name.as_str() {
         "fibonacci" | "fib" | "sample_fns::fibonacci" => {
-            run_closure(runner_spec, || {
+            run_closure(timing_spec, || {
                 let result = fibonacci_batch(30, 1000);
                 // Use the result to prevent optimization
                 std::hint::black_box(result);
                 Ok(())
             })
-            .map_err(|e: BenchRunnerError| -> BenchError { e.into() })?
+            .map_err(|e: TimingError| -> BenchError { e.into() })?
         }
         "checksum" | "checksum_1k" | "sample_fns::checksum" => {
-            run_closure(runner_spec, || {
+            run_closure(timing_spec, || {
                 // Run checksum 10000 times to make it measurable
                 let mut sum = 0u64;
                 for _ in 0..10000 {
@@ -115,11 +115,11 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
                 std::hint::black_box(sum);
                 Ok(())
             })
-            .map_err(|e: BenchRunnerError| -> BenchError { e.into() })?
+            .map_err(|e: TimingError| -> BenchError { e.into() })?
         }
         _ => {
             return Err(BenchError::UnknownFunction {
-                name: runner_spec.name.clone(),
+                name: timing_spec.name.clone(),
             })
         }
     };

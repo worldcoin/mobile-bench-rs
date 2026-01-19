@@ -1,25 +1,23 @@
-//! # mobench-runner
+//! Lightweight benchmarking harness for mobile platforms.
 //!
-//! A lightweight benchmarking harness designed for mobile platforms.
-//!
-//! This crate provides the core timing infrastructure for the mobench ecosystem.
+//! This module provides the core timing infrastructure for the mobench ecosystem.
 //! It's designed to be minimal and portable, with no platform-specific dependencies,
 //! making it suitable for compilation to Android and iOS targets.
 //!
 //! ## Overview
 //!
-//! The runner executes benchmark functions with:
+//! The timing module executes benchmark functions with:
 //! - Configurable warmup iterations
 //! - Precise nanosecond-resolution timing
 //! - Simple, serializable results
 //!
 //! ## Usage
 //!
-//! Most users should use this crate via [`mobench-sdk`](https://crates.io/crates/mobench-sdk).
-//! Direct usage is typically only needed for custom integrations:
+//! Most users should use this via the higher-level [`crate::run_benchmark`] function
+//! or [`crate::BenchmarkBuilder`]. Direct usage is for custom integrations:
 //!
 //! ```
-//! use mobench_runner::{BenchSpec, run_closure, BenchError};
+//! use mobench_sdk::timing::{BenchSpec, run_closure, TimingError};
 //!
 //! // Define a benchmark specification
 //! let spec = BenchSpec::new("my_benchmark", 100, 10)?;
@@ -38,7 +36,7 @@
 //!     .sum::<u64>() / report.samples.len() as u64;
 //!
 //! println!("Mean: {} ns", mean_ns);
-//! # Ok::<(), BenchError>(())
+//! # Ok::<(), TimingError>(())
 //! ```
 //!
 //! ## Types
@@ -48,16 +46,18 @@
 //! | [`BenchSpec`] | Benchmark configuration (name, iterations, warmup) |
 //! | [`BenchSample`] | Single timing measurement in nanoseconds |
 //! | [`BenchReport`] | Complete results with all samples |
-//! | [`BenchError`] | Error conditions during benchmarking |
+//! | [`TimingError`] | Error conditions during benchmarking |
 //!
-//! ## Crate Ecosystem
+//! ## Feature Flags
 //!
-//! This crate is part of the mobench ecosystem:
+//! This module is always available. When using `mobench-sdk` with default features,
+//! you also get build automation and template generation. For minimal binary size
+//! (e.g., on mobile targets), use the `runner-only` feature:
 //!
-//! - **[`mobench-sdk`](https://crates.io/crates/mobench-sdk)** - Core SDK with build automation
-//! - **[`mobench`](https://crates.io/crates/mobench)** - CLI tool
-//! - **[`mobench-macros`](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
-//! - **`mobench-runner`** (this crate) - Timing harness
+//! ```toml
+//! [dependencies]
+//! mobench-sdk = { version = "0.1", default-features = false, features = ["runner-only"] }
+//! ```
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -71,7 +71,7 @@ use thiserror::Error;
 /// # Example
 ///
 /// ```
-/// use mobench_runner::BenchSpec;
+/// use mobench_sdk::timing::BenchSpec;
 ///
 /// // Create a spec for 100 iterations with 10 warmup runs
 /// let spec = BenchSpec::new("sorting_benchmark", 100, 10)?;
@@ -79,7 +79,7 @@ use thiserror::Error;
 /// assert_eq!(spec.name, "sorting_benchmark");
 /// assert_eq!(spec.iterations, 100);
 /// assert_eq!(spec.warmup, 10);
-/// # Ok::<(), mobench_runner::BenchError>(())
+/// # Ok::<(), mobench_sdk::timing::TimingError>(())
 /// ```
 ///
 /// # Serialization
@@ -87,7 +87,7 @@ use thiserror::Error;
 /// `BenchSpec` implements `Serialize` and `Deserialize` for JSON persistence:
 ///
 /// ```
-/// use mobench_runner::BenchSpec;
+/// use mobench_sdk::timing::BenchSpec;
 ///
 /// let spec = BenchSpec {
 ///     name: "my_bench".to_string(),
@@ -131,12 +131,12 @@ impl BenchSpec {
     ///
     /// # Errors
     ///
-    /// Returns [`BenchError::NoIterations`] if `iterations` is zero.
+    /// Returns [`TimingError::NoIterations`] if `iterations` is zero.
     ///
     /// # Example
     ///
     /// ```
-    /// use mobench_runner::BenchSpec;
+    /// use mobench_sdk::timing::BenchSpec;
     ///
     /// let spec = BenchSpec::new("test", 100, 10)?;
     /// assert_eq!(spec.iterations, 100);
@@ -144,11 +144,11 @@ impl BenchSpec {
     /// // Zero iterations is an error
     /// let err = BenchSpec::new("test", 0, 10);
     /// assert!(err.is_err());
-    /// # Ok::<(), mobench_runner::BenchError>(())
+    /// # Ok::<(), mobench_sdk::timing::TimingError>(())
     /// ```
-    pub fn new(name: impl Into<String>, iterations: u32, warmup: u32) -> Result<Self, BenchError> {
+    pub fn new(name: impl Into<String>, iterations: u32, warmup: u32) -> Result<Self, TimingError> {
         if iterations == 0 {
-            return Err(BenchError::NoIterations);
+            return Err(TimingError::NoIterations);
         }
 
         Ok(Self {
@@ -167,7 +167,7 @@ impl BenchSpec {
 /// # Example
 ///
 /// ```
-/// use mobench_runner::BenchSample;
+/// use mobench_sdk::timing::BenchSample;
 ///
 /// let sample = BenchSample { duration_ns: 1_500_000 };
 ///
@@ -200,7 +200,7 @@ impl BenchSample {
 /// # Example
 ///
 /// ```
-/// use mobench_runner::{BenchSpec, run_closure};
+/// use mobench_sdk::timing::{BenchSpec, run_closure};
 ///
 /// let spec = BenchSpec::new("example", 50, 5)?;
 /// let report = run_closure(spec, || {
@@ -218,7 +218,7 @@ impl BenchSample {
 /// let mean = samples.iter().sum::<u64>() / samples.len() as u64;
 ///
 /// println!("Min: {} ns, Max: {} ns, Mean: {} ns", min, max, mean);
-/// # Ok::<(), mobench_runner::BenchError>(())
+/// # Ok::<(), mobench_sdk::timing::TimingError>(())
 /// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BenchReport {
@@ -236,14 +236,14 @@ pub struct BenchReport {
 /// # Example
 ///
 /// ```
-/// use mobench_runner::{BenchSpec, BenchError};
+/// use mobench_sdk::timing::{BenchSpec, TimingError};
 ///
 /// // Zero iterations produces an error
 /// let result = BenchSpec::new("test", 0, 10);
-/// assert!(matches!(result, Err(BenchError::NoIterations)));
+/// assert!(matches!(result, Err(TimingError::NoIterations)));
 /// ```
 #[derive(Debug, Error)]
-pub enum BenchError {
+pub enum TimingError {
     /// The iteration count was zero.
     ///
     /// At least one iteration is required to produce a measurement.
@@ -268,17 +268,17 @@ pub enum BenchError {
 /// # Arguments
 ///
 /// * `spec` - Benchmark configuration specifying iterations and warmup
-/// * `f` - Closure to benchmark; must return `Result<(), BenchError>`
+/// * `f` - Closure to benchmark; must return `Result<(), TimingError>`
 ///
 /// # Returns
 ///
-/// A [`BenchReport`] containing all timing samples, or a [`BenchError`] if
+/// A [`BenchReport`] containing all timing samples, or a [`TimingError`] if
 /// the benchmark fails.
 ///
 /// # Example
 ///
 /// ```
-/// use mobench_runner::{BenchSpec, run_closure, BenchError};
+/// use mobench_sdk::timing::{BenchSpec, run_closure, TimingError};
 ///
 /// let spec = BenchSpec::new("sum_benchmark", 100, 10)?;
 ///
@@ -294,7 +294,7 @@ pub enum BenchError {
 /// let total_ns: u64 = report.samples.iter().map(|s| s.duration_ns).sum();
 /// let mean_ns = total_ns / report.samples.len() as u64;
 /// println!("Mean: {} ns", mean_ns);
-/// # Ok::<(), BenchError>(())
+/// # Ok::<(), TimingError>(())
 /// ```
 ///
 /// # Error Handling
@@ -302,28 +302,28 @@ pub enum BenchError {
 /// If the closure returns an error, the benchmark stops immediately:
 ///
 /// ```
-/// use mobench_runner::{BenchSpec, run_closure, BenchError};
+/// use mobench_sdk::timing::{BenchSpec, run_closure, TimingError};
 ///
 /// let spec = BenchSpec::new("failing_bench", 100, 0)?;
 ///
 /// let result = run_closure(spec, || {
-///     Err(BenchError::Execution("simulated failure".into()))
+///     Err(TimingError::Execution("simulated failure".into()))
 /// });
 ///
 /// assert!(result.is_err());
-/// # Ok::<(), BenchError>(())
+/// # Ok::<(), TimingError>(())
 /// ```
 ///
 /// # Timing Precision
 ///
 /// Uses [`std::time::Instant`] for timing, which provides monotonic,
 /// nanosecond-resolution measurements on most platforms.
-pub fn run_closure<F>(spec: BenchSpec, mut f: F) -> Result<BenchReport, BenchError>
+pub fn run_closure<F>(spec: BenchSpec, mut f: F) -> Result<BenchReport, TimingError>
 where
-    F: FnMut() -> Result<(), BenchError>,
+    F: FnMut() -> Result<(), TimingError>,
 {
     if spec.iterations == 0 {
-        return Err(BenchError::NoIterations);
+        return Err(TimingError::NoIterations);
     }
 
     // Warmup phase - not measured
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn rejects_zero_iterations() {
         let result = BenchSpec::new("test", 0, 10);
-        assert!(matches!(result, Err(BenchError::NoIterations)));
+        assert!(matches!(result, Err(TimingError::NoIterations)));
     }
 
     #[test]

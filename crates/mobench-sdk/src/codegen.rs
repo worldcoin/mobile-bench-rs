@@ -80,6 +80,8 @@ fn generate_bench_mobile_crate(output_dir: &Path, project_name: &str) -> Result<
     let crate_name = format!("{}-bench-mobile", project_name);
 
     // Generate Cargo.toml
+    // Note: We configure rustls to use 'ring' instead of 'aws-lc-rs' (default in rustls 0.23+)
+    // because aws-lc-rs doesn't compile for Android NDK targets.
     let cargo_toml = format!(
         r#"[package]
 name = "{}"
@@ -99,6 +101,23 @@ default = []
 
 [build-dependencies]
 uniffi = {{ version = "0.28", features = ["build"] }}
+
+# Binary for generating UniFFI bindings (used by mobench build)
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+# IMPORTANT: If your project uses rustls (directly or transitively), you must configure
+# it to use the 'ring' crypto backend instead of 'aws-lc-rs' (the default in rustls 0.23+).
+# aws-lc-rs doesn't compile for Android NDK targets due to C compilation issues.
+#
+# Add this to your root Cargo.toml:
+# [workspace.dependencies]
+# rustls = {{ version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }}
+#
+# Then in each crate that uses rustls:
+# [dependencies]
+# rustls = {{ workspace = true }}
 "#,
         crate_name, project_name
     );
@@ -235,11 +254,28 @@ uniffi::setup_scaffolding!();
 
     fs::write(crate_dir.join("build.rs"), build_rs)?;
 
+    // Generate uniffi-bindgen binary (used by mobench build)
+    let bin_dir = crate_dir.join("src/bin");
+    fs::create_dir_all(&bin_dir)?;
+    let uniffi_bindgen_rs = r#"fn main() {
+    uniffi::uniffi_bindgen_main()
+}
+"#;
+    fs::write(bin_dir.join("uniffi-bindgen.rs"), uniffi_bindgen_rs)?;
+
     Ok(())
 }
 
-/// Generates Android project structure
-fn generate_android_project(output_dir: &Path, project_slug: &str) -> Result<(), BenchError> {
+/// Generates Android project structure from templates
+///
+/// This function can be called standalone to generate just the Android
+/// project scaffolding, useful for auto-generation during build.
+///
+/// # Arguments
+///
+/// * `output_dir` - Directory to write the `android/` project into
+/// * `project_slug` - Project name (e.g., "bench-mobile" -> "bench_mobile")
+pub fn generate_android_project(output_dir: &Path, project_slug: &str) -> Result<(), BenchError> {
     let target_dir = output_dir.join("android");
     let vars = vec![
         TemplateVar {
@@ -263,8 +299,18 @@ fn generate_android_project(output_dir: &Path, project_slug: &str) -> Result<(),
     Ok(())
 }
 
-/// Generates iOS project structure
-fn generate_ios_project(
+/// Generates iOS project structure from templates
+///
+/// This function can be called standalone to generate just the iOS
+/// project scaffolding, useful for auto-generation during build.
+///
+/// # Arguments
+///
+/// * `output_dir` - Directory to write the `ios/` project into
+/// * `project_slug` - Project name (e.g., "bench-mobile" -> "bench_mobile")
+/// * `project_pascal` - PascalCase version of project name (e.g., "BenchMobile")
+/// * `bundle_prefix` - iOS bundle ID prefix (e.g., "dev.world.bench")
+pub fn generate_ios_project(
     output_dir: &Path,
     project_slug: &str,
     project_pascal: &str,
@@ -454,7 +500,8 @@ fn sanitize_package_name(name: &str) -> String {
         .replace("--", "-")
 }
 
-fn to_pascal_case(input: &str) -> String {
+/// Converts a string to PascalCase
+pub fn to_pascal_case(input: &str) -> String {
     input
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|s| !s.is_empty())
@@ -465,6 +512,65 @@ fn to_pascal_case(input: &str) -> String {
             format!("{}{}", first, rest)
         })
         .collect::<String>()
+}
+
+/// Checks if the Android project scaffolding exists at the given output directory
+///
+/// Returns true if the `android/build.gradle` or `android/build.gradle.kts` file exists.
+pub fn android_project_exists(output_dir: &Path) -> bool {
+    let android_dir = output_dir.join("android");
+    android_dir.join("build.gradle").exists() || android_dir.join("build.gradle.kts").exists()
+}
+
+/// Checks if the iOS project scaffolding exists at the given output directory
+///
+/// Returns true if the `ios/BenchRunner/project.yml` file exists.
+pub fn ios_project_exists(output_dir: &Path) -> bool {
+    output_dir.join("ios/BenchRunner/project.yml").exists()
+}
+
+/// Auto-generates Android project scaffolding from a crate name
+///
+/// This is a convenience function that derives template variables from the
+/// crate name and generates the Android project structure.
+///
+/// # Arguments
+///
+/// * `output_dir` - Directory to write the `android/` project into
+/// * `crate_name` - Name of the benchmark crate (e.g., "bench-mobile")
+pub fn ensure_android_project(output_dir: &Path, crate_name: &str) -> Result<(), BenchError> {
+    if android_project_exists(output_dir) {
+        return Ok(());
+    }
+
+    println!("Android project not found, generating scaffolding...");
+    let project_slug = crate_name.replace('-', "_");
+    generate_android_project(output_dir, &project_slug)?;
+    println!("  Generated Android project at {:?}", output_dir.join("android"));
+    Ok(())
+}
+
+/// Auto-generates iOS project scaffolding from a crate name
+///
+/// This is a convenience function that derives template variables from the
+/// crate name and generates the iOS project structure.
+///
+/// # Arguments
+///
+/// * `output_dir` - Directory to write the `ios/` project into
+/// * `crate_name` - Name of the benchmark crate (e.g., "bench-mobile")
+pub fn ensure_ios_project(output_dir: &Path, crate_name: &str) -> Result<(), BenchError> {
+    if ios_project_exists(output_dir) {
+        return Ok(());
+    }
+
+    println!("iOS project not found, generating scaffolding...");
+    let project_slug = crate_name.replace('-', "_");
+    let project_pascal = to_pascal_case(&project_slug);
+    let bundle_prefix = format!("dev.world.{}", project_slug.replace('_', "-"));
+    generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix)?;
+    println!("  Generated iOS project at {:?}", output_dir.join("ios"));
+    Ok(())
 }
 
 #[cfg(test)]

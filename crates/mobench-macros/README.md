@@ -177,9 +177,8 @@ fn hash_and_encode() {
 This crate is part of the mobench ecosystem for mobile benchmarking:
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for running benchmarks
-- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - SDK for integrating benchmarks
+- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - SDK with timing harness for integrating benchmarks
 - **[mobench-macros](https://crates.io/crates/mobench-macros)** - This crate (proc macros)
-- **[mobench-runner](https://crates.io/crates/mobench-runner)** - Timing harness
 
 ## See Also
 

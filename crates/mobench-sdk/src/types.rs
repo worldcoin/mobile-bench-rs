@@ -8,17 +8,17 @@
 //! - [`BuildResult`] - Output from build operations
 //! - [`InitConfig`] - Project initialization settings
 //!
-//! ## Re-exports from mobench-runner
+//! ## Re-exports from timing module
 //!
-//! For convenience, this module also re-exports types from [`mobench_runner`]:
+//! For convenience, this module also re-exports types from [`crate::timing`]:
 //!
 //! - [`BenchSpec`] - Benchmark specification (name, iterations, warmup)
 //! - [`BenchSample`] - Single timing measurement
 //! - [`RunnerReport`] - Complete benchmark results
 
-// Re-export mobench-runner types for convenience
-pub use mobench_runner::{
-    BenchError as RunnerError, BenchReport as RunnerReport, BenchSample, BenchSpec,
+// Re-export timing types for convenience
+pub use crate::timing::{
+    BenchReport as RunnerReport, BenchSample, BenchSpec, TimingError as RunnerError,
 };
 
 use std::path::PathBuf;
@@ -51,44 +51,46 @@ use std::path::PathBuf;
 pub enum BenchError {
     /// Error from the underlying benchmark runner.
     ///
-    /// This wraps errors from [`mobench_runner::BenchError`], such as
+    /// This wraps errors from [`crate::timing::TimingError`], such as
     /// zero iterations or execution failures.
-    #[error("runner error: {0}")]
-    Runner(#[from] mobench_runner::BenchError),
+    #[error("benchmark runner error: {0}")]
+    Runner(#[from] crate::timing::TimingError),
 
     /// The requested benchmark function was not found in the registry.
     ///
     /// This occurs when calling [`run_benchmark`](crate::run_benchmark) with
     /// a function name that hasn't been registered via `#[benchmark]`.
-    #[error("unknown benchmark function: {0}")]
+    #[error(
+        "unknown benchmark function: {0}. Ensure it is annotated with #[benchmark] and the crate is linked into the bench-mobile build"
+    )]
     UnknownFunction(String),
 
     /// An error occurred during benchmark execution.
     ///
     /// This is a catch-all for execution-time errors that don't fit
     /// other categories.
-    #[error("execution error: {0}")]
+    #[error("benchmark execution failed: {0}")]
     Execution(String),
 
     /// An I/O error occurred.
     ///
     /// Common causes include missing files, permission issues, or
     /// disk space problems during build operations.
-    #[error("I/O error: {0}")]
+    #[error("I/O error: {0}. Check file paths and permissions")]
     Io(#[from] std::io::Error),
 
     /// JSON serialization or deserialization failed.
     ///
     /// This can occur when reading/writing benchmark specifications
     /// or configuration files.
-    #[error("serialization error: {0}")]
+    #[error("serialization error: {0}. Ensure the input is valid JSON")]
     Serialization(#[from] serde_json::Error),
 
     /// A configuration error occurred.
     ///
     /// This indicates invalid or missing configuration, such as
     /// malformed TOML files or missing required fields.
-    #[error("configuration error: {0}")]
+    #[error("configuration error: {0}. Check mobench.toml or CLI flags")]
     Config(String),
 
     /// A build error occurred.

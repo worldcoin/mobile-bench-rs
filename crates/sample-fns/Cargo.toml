@@ -11,7 +11,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-mobench-runner = { path = "../mobench-runner" }
+mobench-sdk = { path = "../mobench-sdk", default-features = false, features = ["runner-only"] }
 uniffi = { workspace = true, features = ["cli"] }
 thiserror.workspace = true
 uniffi_bindgen = { version = "0.28", optional = true }

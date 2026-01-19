@@ -106,13 +106,8 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
     }
 
     private static func formatBenchError(_ error: BenchError) -> String {
-        switch error {
-        case .InvalidIterations(let message):
-            return "Error (InvalidIterations): \(message)"
-        case .UnknownFunction(let message):
-            return "Error (UnknownFunction): \(message)"
-        case .ExecutionFailed(let message):
-            return "Error (ExecutionFailed): \(message)"
-        }
+        // Generic error formatting - works with any BenchError variant
+        // This avoids hardcoding specific error cases that may not exist in all schemas
+        return "Benchmark error: \(error.localizedDescription)"
     }
 }

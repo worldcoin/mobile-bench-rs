@@ -5,6 +5,7 @@
 
 pub mod android;
 pub mod ios;
+mod common;
 
 // Re-export builders
 pub use android::AndroidBuilder;
