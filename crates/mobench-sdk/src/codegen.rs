@@ -291,6 +291,7 @@ pub fn generate_android_project(
     let target_dir = output_dir.join("android");
     let library_name = project_slug.replace('-', "_");
     let project_pascal = to_pascal_case(project_slug);
+    let package_name = format!("dev.world.{}", project_slug);
     let vars = vec![
         TemplateVar {
             name: "PROJECT_NAME",
@@ -306,7 +307,7 @@ pub fn generate_android_project(
         },
         TemplateVar {
             name: "PACKAGE_NAME",
-            value: format!("dev.world.{}", project_slug),
+            value: package_name.clone(),
         },
         TemplateVar {
             name: "UNIFFI_NAMESPACE",
@@ -322,6 +323,73 @@ pub fn generate_android_project(
         },
     ];
     render_dir(&ANDROID_TEMPLATES, &target_dir, &vars)?;
+
+    // Move Kotlin files to the correct package directory structure
+    // The package "dev.world.{project_slug}" maps to directory "dev/world/{project_slug}/"
+    move_kotlin_files_to_package_dir(&target_dir, &package_name)?;
+
+    Ok(())
+}
+
+/// Moves Kotlin source files to the correct package directory structure
+///
+/// Android requires source files to be in directories matching their package declaration.
+/// For example, a file with `package dev.world.my_project` must be in
+/// `app/src/main/java/dev/world/my_project/`.
+///
+/// This function moves:
+/// - MainActivity.kt from `app/src/main/java/` to `app/src/main/java/{package_path}/`
+/// - MainActivityTest.kt from `app/src/androidTest/java/` to `app/src/androidTest/java/{package_path}/`
+fn move_kotlin_files_to_package_dir(android_dir: &Path, package_name: &str) -> Result<(), BenchError> {
+    // Convert package name to directory path (e.g., "dev.world.my_project" -> "dev/world/my_project")
+    let package_path = package_name.replace('.', "/");
+
+    // Move main source files
+    let main_java_dir = android_dir.join("app/src/main/java");
+    let main_package_dir = main_java_dir.join(&package_path);
+    move_kotlin_file(&main_java_dir, &main_package_dir, "MainActivity.kt")?;
+
+    // Move test source files
+    let test_java_dir = android_dir.join("app/src/androidTest/java");
+    let test_package_dir = test_java_dir.join(&package_path);
+    move_kotlin_file(&test_java_dir, &test_package_dir, "MainActivityTest.kt")?;
+
+    Ok(())
+}
+
+/// Moves a single Kotlin file from source directory to package directory
+fn move_kotlin_file(src_dir: &Path, dest_dir: &Path, filename: &str) -> Result<(), BenchError> {
+    let src_file = src_dir.join(filename);
+    if !src_file.exists() {
+        // File doesn't exist in source, nothing to move
+        return Ok(());
+    }
+
+    // Create the package directory if it doesn't exist
+    fs::create_dir_all(dest_dir).map_err(|e| {
+        BenchError::Build(format!(
+            "Failed to create package directory {:?}: {}",
+            dest_dir, e
+        ))
+    })?;
+
+    let dest_file = dest_dir.join(filename);
+
+    // Move the file (copy + delete for cross-filesystem compatibility)
+    fs::copy(&src_file, &dest_file).map_err(|e| {
+        BenchError::Build(format!(
+            "Failed to copy {} to {:?}: {}",
+            filename, dest_file, e
+        ))
+    })?;
+
+    fs::remove_file(&src_file).map_err(|e| {
+        BenchError::Build(format!(
+            "Failed to remove original file {:?}: {}",
+            src_file, e
+        ))
+    })?;
+
     Ok(())
 }
 
@@ -354,7 +422,9 @@ pub fn generate_ios_project(
             .collect::<Vec<_>>()
             .join(".")
     };
-    let sanitized_project_slug = sanitize_bundle_id_component(project_slug);
+    // Use the actual app name (project_pascal, e.g., "BenchRunner") for the bundle ID suffix,
+    // not the crate name again. This prevents duplication like "dev.world.benchmobile.benchmobile"
+    // and produces the correct "dev.world.benchmobile.BenchRunner"
     let vars = vec![
         TemplateVar {
             name: "DEFAULT_FUNCTION",
@@ -370,7 +440,7 @@ pub fn generate_ios_project(
         },
         TemplateVar {
             name: "BUNDLE_ID",
-            value: format!("{}.{}", sanitized_bundle_prefix, sanitized_project_slug),
+            value: format!("{}.{}", sanitized_bundle_prefix, project_pascal),
         },
         TemplateVar {
             name: "LIBRARY_NAME",
@@ -958,6 +1028,32 @@ mod tests {
             "strings.xml should contain app name with Benchmark"
         );
 
+        // Verify Kotlin files are in the correct package directory structure
+        // For package "dev.world.my-bench-project", files should be in "dev/world/my-bench-project/"
+        let main_activity_path = android_dir.join("app/src/main/java/dev/world/my-bench-project/MainActivity.kt");
+        assert!(
+            main_activity_path.exists(),
+            "MainActivity.kt should be in package directory: {:?}",
+            main_activity_path
+        );
+
+        let test_activity_path = android_dir.join("app/src/androidTest/java/dev/world/my-bench-project/MainActivityTest.kt");
+        assert!(
+            test_activity_path.exists(),
+            "MainActivityTest.kt should be in package directory: {:?}",
+            test_activity_path
+        );
+
+        // Verify the files are NOT in the root java directory
+        assert!(
+            !android_dir.join("app/src/main/java/MainActivity.kt").exists(),
+            "MainActivity.kt should not be in root java directory"
+        );
+        assert!(
+            !android_dir.join("app/src/androidTest/java/MainActivityTest.kt").exists(),
+            "MainActivityTest.kt should not be in root java directory"
+        );
+
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -1099,5 +1195,50 @@ pub fn public_bench() {
         assert_eq!(sanitize_bundle_id_component("BenchMobile"), "benchmobile");
         // Complex case
         assert_eq!(sanitize_bundle_id_component("My-Complex_Project-123"), "mycomplexproject123");
+    }
+
+    #[test]
+    fn test_generate_ios_project_bundle_id_not_duplicated() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-bundle-test");
+        // Clean up any previous test run
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Use a crate name that would previously cause duplication
+        let crate_name = "bench-mobile";
+        let bundle_prefix = "dev.world.benchmobile";
+        let project_pascal = "BenchRunner";
+
+        let result = generate_ios_project(
+            &temp_dir,
+            crate_name,
+            project_pascal,
+            bundle_prefix,
+            "bench_mobile::test_func",
+        );
+        assert!(result.is_ok(), "generate_ios_project failed: {:?}", result.err());
+
+        // Verify project.yml was created
+        let project_yml_path = temp_dir.join("ios/BenchRunner/project.yml");
+        assert!(project_yml_path.exists(), "project.yml should exist");
+
+        // Read and verify the bundle ID is correct (not duplicated)
+        let project_yml = fs::read_to_string(&project_yml_path).unwrap();
+
+        // The bundle ID should be "dev.world.benchmobile.BenchRunner"
+        // NOT "dev.world.benchmobile.benchmobile"
+        assert!(
+            project_yml.contains("dev.world.benchmobile.BenchRunner"),
+            "Bundle ID should be 'dev.world.benchmobile.BenchRunner', got:\n{}",
+            project_yml
+        );
+        assert!(
+            !project_yml.contains("dev.world.benchmobile.benchmobile"),
+            "Bundle ID should NOT be duplicated as 'dev.world.benchmobile.benchmobile', got:\n{}",
+            project_yml
+        );
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
     }
 }
