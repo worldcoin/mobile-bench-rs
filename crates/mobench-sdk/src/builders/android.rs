@@ -1,7 +1,59 @@
-//! Android build automation
+//! Android build automation.
 //!
-//! This module provides functionality to build Rust libraries for Android and
-//! package them into an APK using Gradle.
+//! This module provides [`AndroidBuilder`] which handles the complete pipeline for
+//! building Rust libraries for Android and packaging them into an APK using Gradle.
+//!
+//! ## Build Pipeline
+//!
+//! The builder performs these steps:
+//!
+//! 1. **Project scaffolding** - Auto-generates Android project if missing
+//! 2. **Rust compilation** - Builds native `.so` libraries for Android ABIs using `cargo-ndk`
+//! 3. **Binding generation** - Generates UniFFI Kotlin bindings
+//! 4. **Library packaging** - Copies `.so` files to `jniLibs/` directories
+//! 5. **APK building** - Runs Gradle to build the app APK
+//! 6. **Test APK building** - Builds the androidTest APK for BrowserStack Espresso
+//!
+//! ## Requirements
+//!
+//! - Android NDK (set `ANDROID_NDK_HOME` environment variable)
+//! - `cargo-ndk` (`cargo install cargo-ndk`)
+//! - Rust targets: `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`
+//! - Java JDK (for Gradle)
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use mobench_sdk::builders::AndroidBuilder;
+//! use mobench_sdk::{BuildConfig, BuildProfile, Target};
+//!
+//! let builder = AndroidBuilder::new(".", "my-bench-crate")
+//!     .verbose(true)
+//!     .dry_run(false);  // Set to true to preview without building
+//!
+//! let config = BuildConfig {
+//!     target: Target::Android,
+//!     profile: BuildProfile::Release,
+//!     incremental: true,
+//! };
+//!
+//! let result = builder.build(&config)?;
+//! println!("APK at: {:?}", result.app_path);
+//! println!("Test APK at: {:?}", result.test_suite_path);
+//! # Ok::<(), mobench_sdk::BenchError>(())
+//! ```
+//!
+//! ## Dry-Run Mode
+//!
+//! Use `dry_run(true)` to preview the build plan without making changes:
+//!
+//! ```ignore
+//! let builder = AndroidBuilder::new(".", "my-bench")
+//!     .dry_run(true);
+//!
+//! // This will print the build plan but not execute anything
+//! builder.build(&config)?;
+//! ```
 
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use super::common::{get_cargo_target_dir, host_lib_path, run_command};
@@ -10,7 +62,31 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Android builder that handles the complete build pipeline
+/// Android builder that handles the complete build pipeline.
+///
+/// This builder automates the process of compiling Rust code to Android native
+/// libraries, generating UniFFI Kotlin bindings, and packaging everything into
+/// an APK ready for deployment.
+///
+/// # Example
+///
+/// ```ignore
+/// use mobench_sdk::builders::AndroidBuilder;
+/// use mobench_sdk::{BuildConfig, BuildProfile, Target};
+///
+/// let builder = AndroidBuilder::new(".", "my-bench")
+///     .verbose(true)
+///     .output_dir("target/mobench");
+///
+/// let config = BuildConfig {
+///     target: Target::Android,
+///     profile: BuildProfile::Release,
+///     incremental: true,
+/// };
+///
+/// let result = builder.build(&config)?;
+/// # Ok::<(), mobench_sdk::BenchError>(())
+/// ```
 pub struct AndroidBuilder {
     /// Root directory of the project
     project_root: PathBuf,

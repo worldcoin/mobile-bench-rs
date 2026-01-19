@@ -17,12 +17,8 @@ maintenance = { status = "actively-developed" }
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
-include = [
-    "src/**/*",
-    "templates/**/*",
-    "Cargo.toml",
-    "README.md"
-]
+# Build on default target for docs.rs
+targets = ["x86_64-unknown-linux-gnu"]
 
 [lib]
 crate-type = ["lib"]

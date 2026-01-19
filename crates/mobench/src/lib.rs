@@ -1,5 +1,9 @@
 //! # mobench
 //!
+//! [![Crates.io](https://img.shields.io/crates/v/mobench.svg)](https://crates.io/crates/mobench)
+//! [![Documentation](https://docs.rs/mobench/badge.svg)](https://docs.rs/mobench)
+//! [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/worldcoin/mobile-bench-rs/blob/main/LICENSE)
+//!
 //! Command-line tool for building and running Rust benchmarks on mobile devices.
 //!
 //! ## Overview
@@ -93,6 +97,21 @@
 //! - **`mobench`** (this crate) - CLI tool
 //! - **[`mobench-sdk`](https://crates.io/crates/mobench-sdk)** - Core SDK with timing harness and build automation
 //! - **[`mobench-macros`](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
+//!
+//! Note: The `mobench-runner` crate has been consolidated into `mobench-sdk` as its `timing` module.
+//!
+//! ## CLI Flags
+//!
+//! Global flags available on all commands:
+//!
+//! - **`--dry-run`** - Preview what would be done without making changes
+//! - **`--verbose` / `-v`** - Enable detailed output showing all commands
+//!
+//! ## Modules
+//!
+//! - [`config`] - Configuration file support for `mobench.toml`
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};

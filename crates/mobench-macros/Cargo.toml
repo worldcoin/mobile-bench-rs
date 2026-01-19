@@ -16,6 +16,8 @@ maintenance = { status = "actively-developed" }
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+# Build on default target for docs.rs
+targets = ["x86_64-unknown-linux-gnu"]
 
 [lib]
 proc-macro = true

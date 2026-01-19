@@ -9,7 +9,7 @@ mobench provides a Rust API and a CLI for running benchmarks on real mobile devi
 ## How mobench works
 
 - `#[benchmark]` marks functions and registers them via `inventory`
-- `mobench-sdk` builds mobile artifacts and generates app templates from embedded assets
+- `mobench-sdk` builds mobile artifacts, provides the timing harness, and generates app templates from embedded assets
 - UniFFI proc macros generate Kotlin and Swift bindings directly from Rust types
 - The CLI writes a benchmark spec (function, iterations, warmup) and packages it into the app
 - Mobile apps call `run_benchmark` via the generated bindings and return timing samples
@@ -18,7 +18,7 @@ mobench provides a Rust API and a CLI for running benchmarks on real mobile devi
 ## Workspace crates
 
 - `crates/mobench` ([mobench](https://crates.io/crates/mobench)): CLI tool that builds, runs, and fetches benchmarks
-- `crates/mobench-sdk` ([mobench-sdk](https://crates.io/crates/mobench-sdk)): core SDK (timing harness, builders, registry, codegen)
+- `crates/mobench-sdk` ([mobench-sdk](https://crates.io/crates/mobench-sdk)): core SDK with timing harness, builders, registry, and codegen
 - `crates/mobench-macros` ([mobench-macros](https://crates.io/crates/mobench-macros)): `#[benchmark]` proc macro
 - `crates/sample-fns`: sample benchmarks and UniFFI bindings
 - `examples/basic-benchmark`: minimal SDK integration example
@@ -33,13 +33,38 @@ cargo install mobench
 # Add the SDK to your project
 cargo add mobench-sdk inventory
 
-# Build artifacts
+# Build artifacts (outputs to target/mobench/ by default)
 cargo mobench build --target android
 cargo mobench build --target ios
 
 # Run a benchmark
 cargo mobench run --target android --function sample_fns::fibonacci
 ```
+
+## Configuration
+
+mobench supports a `mobench.toml` configuration file for project settings:
+
+```toml
+[project]
+crate = "bench-mobile"
+library_name = "bench_mobile"
+
+[android]
+package = "com.example.bench"
+min_sdk = 24
+
+[ios]
+bundle_id = "com.example.bench"
+deployment_target = "15.0"
+
+[benchmarks]
+default_function = "my_crate::my_benchmark"
+default_iterations = 100
+default_warmup = 10
+```
+
+CLI flags override config file values when provided.
 
 ## Project docs
 
