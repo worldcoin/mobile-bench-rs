@@ -57,7 +57,6 @@ xcode-select --install
 # Install xcodegen
 brew install xcodegen
 # https://github.com/yonaskolb/XcodeGen
-brew install xcodegen
 ```
 
 ## Host Testing
@@ -88,7 +87,7 @@ The `Mobile Bench (manual)` workflow uploads summary artifacts:
 cargo mobench build --target android
 
 # Install on connected device/emulator
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r target/mobench/android/app/build/outputs/apk/debug/app-debug.apk
 
 # Launch app
 adb shell am start -n dev.world.bench/.MainActivity
@@ -101,12 +100,12 @@ adb shell am start -n dev.world.bench/.MainActivity
 cargo mobench build --target android
 
 # Step 2: Build APK
-cd android
+cd target/mobench/android
 ./gradlew :app:assembleDebug
-cd ..
+cd ../../..
 
-# Step 4: Install and launch
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+# Step 3: Install and launch
+adb install -r target/mobench/android/app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n dev.world.bench/.MainActivity
 ```
 
@@ -117,7 +116,7 @@ adb shell am start -n dev.world.bench/.MainActivity
    cargo mobench build --target android
    ```
 
-2. Open `android/` directory in Android Studio
+2. Open `target/mobench/android/` directory in Android Studio
 
 3. Let Gradle sync complete
 
@@ -185,7 +184,7 @@ cargo mobench build --target ios
 # This script:
 # - Compiles Rust for aarch64-apple-ios (device) and aarch64-apple-ios-sim (simulator)
 # - Creates xcframework with proper structure:
-#   target/ios/sample_fns.xcframework/
+#   target/mobench/ios/sample_fns.xcframework/
 #     ├── Info.plist
 #     ├── ios-arm64/
 #     │   └── sample_fns.framework/
@@ -206,7 +205,7 @@ cargo mobench build --target ios
 # - Automatically code-signs the xcframework
 
 # Step 2: Generate Xcode project from project.yml
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodegen generate
 
 # Step 3: Open in Xcode
@@ -244,10 +243,10 @@ In Xcode:
 First, build and install to simulator:
 ```bash
 # Build for simulator
-xcodebuild -project ios/BenchRunner/BenchRunner.xcodeproj \
+xcodebuild -project target/mobench/ios/BenchRunner/BenchRunner.xcodeproj \
   -scheme BenchRunner \
   -destination 'platform=iOS Simulator,name=iPhone 15' \
-  -derivedDataPath ios/build
+  -derivedDataPath target/mobench/ios/build
 
 # Launch with arguments
 xcrun simctl launch booted dev.world.bench.BenchRunner \
@@ -259,7 +258,7 @@ xcrun simctl launch booted dev.world.bench.BenchRunner \
 #### Method 3: Edit bench_spec.json Bundle Resource
 
 Add `bench_spec.json` to the app bundle:
-1. Create `ios/BenchRunner/BenchRunner/Resources/bench_spec.json`:
+1. Create `target/mobench/ios/BenchRunner/BenchRunner/Resources/bench_spec.json`:
    ```json
    {
      "function": "sample_fns::checksum",
@@ -320,7 +319,7 @@ cargo mobench build --target android
 ```bash
 # Solution: Ensure .so files are in the APK
 cargo mobench build --target android
-cd android && ./gradlew clean assembleDebug
+cd target/mobench/android && ./gradlew clean assembleDebug
 ```
 
 **Problem**: App shows "Error: UnknownFunction"
@@ -338,11 +337,11 @@ brew install xcodegen
 **Problem**: "The Framework 'sample_fns.xcframework' is unsigned"
 ```bash
 # Solution: Code-sign the xcframework
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 
 # The build step includes signing, but if you built manually:
 cargo mobench build --target ios
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodegen generate
 # Clean build in Xcode (⌘+Shift+K) then build (⌘+B)
 ```
@@ -358,10 +357,10 @@ xcodegen generate
 ```bash
 # Solution: Ensure the bridging header is configured
 # Check that BenchRunner-Bridging-Header.h exists at:
-# ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h
+# target/mobench/ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h
 
 # If missing, create it with:
-cat > ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h << 'EOF'
+cat > target/mobench/ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h << 'EOF'
 //
 //  BenchRunner-Bridging-Header.h
 //  BenchRunner
@@ -373,19 +372,19 @@ cat > ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h << 'EOF'
 EOF
 
 # Then regenerate the Xcode project:
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodegen generate
 ```
 
 **Problem**: Build fails with "library not found for -lsample_fns" or "framework 'ios-simulator-arm64' not found"
 ```bash
 # Solution: Ensure xcframework was built correctly with proper structure
-rm -rf target/ios/sample_fns.xcframework
+rm -rf target/mobench/ios/sample_fns.xcframework
 cargo mobench build --target ios
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 
 # Verify structure:
-ls -la target/ios/sample_fns.xcframework/
+ls -la target/mobench/ios/sample_fns.xcframework/
 # Should show:
 #   ios-arm64/sample_fns.framework/
 #   ios-simulator-arm64/sample_fns.framework/
@@ -395,12 +394,12 @@ ls -la target/ios/sample_fns.xcframework/
 **Problem**: "While building for iOS Simulator, no library for this platform was found"
 ```bash
 # Solution: Rebuild the xcframework - the structure may be incorrect
-rm -rf target/ios/sample_fns.xcframework
+rm -rf target/mobench/ios/sample_fns.xcframework
 cargo mobench build --target ios
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 
 # Clean Xcode build folder
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodebuild clean -project BenchRunner.xcodeproj -scheme BenchRunner
 # Then build in Xcode
 ```
@@ -411,7 +410,7 @@ xcodebuild clean -project BenchRunner.xcodeproj -scheme BenchRunner
 # Check the iOS builder uses `dev.world.sample-fns` for the framework
 # Rebuild:
 cargo mobench build --target ios
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 ```
 
 **Problem**: Simulator crashes with "Symbol not found"
@@ -419,7 +418,7 @@ codesign --force --deep --sign - target/ios/sample_fns.xcframework
 # Solution: Clean and rebuild for simulator architecture
 cargo clean
 cargo mobench build --target ios
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 
 # In Xcode, clean (⌘+Shift+K) then build (⌘+B)
 ```
@@ -428,7 +427,7 @@ codesign --force --deep --sign - target/ios/sample_fns.xcframework
 - Ensure proper code signing is configured in Xcode
 - Select your development team in Xcode → Project Settings → Signing & Capabilities
 - Trust developer certificate on device: Settings → General → VPN & Device Management
-- The xcframework must be signed: `codesign --force --deep --sign - target/ios/sample_fns.xcframework`
+- The xcframework must be signed: `codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework`
 
 ### UniFFI Bindings (Proc Macros)
 

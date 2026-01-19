@@ -307,6 +307,6 @@ match client.wait_and_fetch_all_results(build_id, "espresso", Some(600)) {
 
 ## Next Steps
 
-- See `BROWSERSTACK_RUN_2.md` for current test run results
+- See `BROWSERSTACK_METRICS.md` for metrics and performance documentation
 - Check `crates/mobench/src/browserstack.rs` for full API documentation
 - Run `cargo doc --open -p mobench` for detailed API docs
