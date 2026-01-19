@@ -268,5 +268,5 @@ cargo mobench run \
 ## See Also
 
 - `BROWSERSTACK_CI_INTEGRATION.md` - Programmatic API for custom workflows
-- `BROWSERSTACK_RUN_2.md` - Example test run documentation
+- `BROWSERSTACK_METRICS.md` - Metrics and performance documentation
 - `cargo mobench run --help` - Full CLI options

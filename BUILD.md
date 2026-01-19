@@ -79,7 +79,7 @@ xcodebuild -version
 cargo mobench build --target android
 
 # Install on connected device or emulator
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r target/mobench/android/app/build/outputs/apk/debug/app-debug.apk
 
 # Launch the app
 adb shell am start -n dev.world.bench/.MainActivity
@@ -146,7 +146,7 @@ adb shell am start -n dev.world.bench/.MainActivity \
 cargo mobench build --target android
 
 # If only Kotlin/Java changed
-cd android && ./gradlew :app:assembleDebug
+cd target/mobench/android && ./gradlew :app:assembleDebug
 
 # Full clean rebuild
 cargo clean
@@ -161,7 +161,7 @@ cargo mobench build --target android
 cargo mobench build --target ios
 
 # Generate Xcode project
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodegen generate
 
 # Open in Xcode
@@ -257,10 +257,10 @@ The app will launch and display benchmark results.
 #### Method 2: Command Line (Simulator)
 ```bash
 # Build for simulator
-xcodebuild -project ios/BenchRunner/BenchRunner.xcodeproj \
+xcodebuild -project target/mobench/ios/BenchRunner/BenchRunner.xcodeproj \
   -scheme BenchRunner \
   -destination 'platform=iOS Simulator,name=iPhone 15' \
-  -derivedDataPath ios/build
+  -derivedDataPath target/mobench/ios/build
 
 # Launch with arguments
 xcrun simctl launch booted dev.world.bench \
@@ -277,14 +277,14 @@ cargo mobench build --target ios
 # If Swift code changed, just rebuild in Xcode (⌘+B)
 
 # If project.yml changed
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodegen generate
 open BenchRunner.xcodeproj
 
 # Full clean rebuild
 cargo clean
 cargo mobench build --target ios
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodegen generate
 # Clean in Xcode (⌘+Shift+K) then build (⌘+B)
 ```
@@ -426,9 +426,9 @@ cargo build -p sample-fns
 cargo mobench build --target android
 
 # This updates:
-# - android/app/src/main/java/uniffi/sample_fns/sample_fns.kt (Kotlin)
-# - ios/BenchRunner/BenchRunner/Generated/sample_fns.swift (Swift)
-# - ios/BenchRunner/BenchRunner/Generated/sample_fnsFFI.h (C header)
+# - target/mobench/android/app/src/main/java/uniffi/sample_fns/sample_fns.kt (Kotlin)
+# - target/mobench/ios/BenchRunner/BenchRunner/Generated/sample_fns.swift (Swift)
+# - target/mobench/ios/BenchRunner/BenchRunner/Generated/sample_fnsFFI.h (C header)
 
 # Then rebuild mobile apps
 cargo mobench build --target android

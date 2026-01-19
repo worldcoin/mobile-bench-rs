@@ -346,7 +346,7 @@ impl AndroidBuilder {
              - Typo in crate name (check Cargo.toml [package] name)\n\
              - Wrong working directory (run from project root)\n\
              - Missing Cargo.toml in the crate directory\n\n\
-             Run 'cargo mobench init-sdk --help' to generate a new benchmark project.",
+             Run 'cargo mobench init --help' to generate a new benchmark project.",
             self.crate_name,
             bench_mobile_manifest.display(),
             crates_manifest.display()
@@ -829,7 +829,7 @@ impl AndroidBuilder {
             return Err(BenchError::Build(format!(
                 "Android project not found at {}.\n\n\
                  Expected a Gradle project under the output directory.\n\
-                 Run `cargo mobench init-sdk --target android` or `cargo mobench build --target android` from the project root to generate it.",
+                 Run `cargo mobench init --target android` or `cargo mobench build --target android` from the project root to generate it.",
                 android_dir.display()
             )));
         }
@@ -922,7 +922,7 @@ impl AndroidBuilder {
             return Err(BenchError::Build(format!(
                 "Android project not found at {}.\n\n\
                  Expected a Gradle project under the output directory.\n\
-                 Run `cargo mobench init-sdk --target android` or `cargo mobench build --target android` from the project root to generate it.",
+                 Run `cargo mobench init --target android` or `cargo mobench build --target android` from the project root to generate it.",
                 android_dir.display()
             )));
         }
