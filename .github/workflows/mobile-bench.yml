@@ -86,14 +86,14 @@ jobs:
           gradle-version: 8.7
 
       - name: Assemble APK
-        working-directory: android
+        working-directory: target/mobench/android
         run: gradle :app:assembleDebug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: mobile-bench-android-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: target/mobench/android/app/build/outputs/apk/debug/*.apk
 
   ios:
     if: ${{ github.event.inputs.platform == 'ios' || github.event.inputs.platform == 'both' || github.event.inputs.platform == '' }}
@@ -116,9 +116,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mobile-bench-ios
-          path: |
-            target/ios/sample_fns.xcframework
-            target/ios/include/sample_fns.h
+          path: target/mobench/ios/sample_fns.xcframework
 
   browserstack:
     name: BrowserStack run
