@@ -12,6 +12,8 @@ use std::process::Command;
 pub struct AndroidBuilder {
     /// Root directory of the project
     project_root: PathBuf,
+    /// Output directory for mobile artifacts (defaults to target/mobench)
+    output_dir: PathBuf,
     /// Name of the bench-mobile crate
     crate_name: String,
     /// Whether to use verbose output
@@ -26,11 +28,22 @@ impl AndroidBuilder {
     /// * `project_root` - Root directory containing the bench-mobile crate
     /// * `crate_name` - Name of the bench-mobile crate (e.g., "my-project-bench-mobile")
     pub fn new(project_root: impl Into<PathBuf>, crate_name: impl Into<String>) -> Self {
+        let root = project_root.into();
         Self {
-            project_root: project_root.into(),
+            output_dir: root.join("target/mobench"),
+            project_root: root,
             crate_name: crate_name.into(),
             verbose: false,
         }
+    }
+
+    /// Sets the output directory for mobile artifacts
+    ///
+    /// By default, artifacts are written to `{project_root}/target/mobench/`.
+    /// Use this to customize the output location.
+    pub fn output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.output_dir = dir.into();
+        self
     }
 
     /// Enables verbose output
@@ -166,7 +179,7 @@ impl AndroidBuilder {
 
         // Check if bindings already exist (for repository testing with pre-generated bindings)
         let bindings_path = self
-            .project_root
+            .output_dir
             .join("android")
             .join("app")
             .join("src")
@@ -207,7 +220,7 @@ impl AndroidBuilder {
 
         let lib_path = host_lib_path(&crate_dir, &self.crate_name)?;
         let out_dir = self
-            .project_root
+            .output_dir
             .join("android")
             .join("app")
             .join("src")
@@ -238,7 +251,7 @@ impl AndroidBuilder {
         };
 
         let target_dir = self.project_root.join("target");
-        let jni_libs_dir = self.project_root.join("android/app/src/main/jniLibs");
+        let jni_libs_dir = self.output_dir.join("android/app/src/main/jniLibs");
 
         // Create jniLibs directories if they don't exist
         std::fs::create_dir_all(&jni_libs_dir)
@@ -282,7 +295,7 @@ impl AndroidBuilder {
 
     /// Builds the Android APK using Gradle
     fn build_apk(&self, config: &BuildConfig) -> Result<PathBuf, BenchError> {
-        let android_dir = self.project_root.join("android");
+        let android_dir = self.output_dir.join("android");
 
         if !android_dir.exists() {
             return Err(BenchError::Build(format!(
@@ -340,7 +353,7 @@ impl AndroidBuilder {
 
     /// Builds the Android test APK using Gradle
     fn build_test_apk(&self, config: &BuildConfig) -> Result<PathBuf, BenchError> {
-        let android_dir = self.project_root.join("android");
+        let android_dir = self.output_dir.join("android");
 
         if !android_dir.exists() {
             return Err(BenchError::Build(format!(
@@ -448,11 +461,22 @@ mod tests {
     fn test_android_builder_creation() {
         let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
         assert!(!builder.verbose);
+        assert_eq!(
+            builder.output_dir,
+            PathBuf::from("/tmp/test-project/target/mobench")
+        );
     }
 
     #[test]
     fn test_android_builder_verbose() {
         let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile").verbose(true);
         assert!(builder.verbose);
+    }
+
+    #[test]
+    fn test_android_builder_custom_output_dir() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile")
+            .output_dir("/custom/output");
+        assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
     }
 }
