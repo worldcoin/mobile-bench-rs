@@ -34,18 +34,68 @@ struct BenchParams {
 
     static func fromProcessInfo() -> BenchParams {
         let info = ProcessInfo.processInfo
-        var function = info.environment["BENCH_FUNCTION"] ?? defaultFunction
-        var iterations = UInt32(info.environment["BENCH_ITERATIONS"] ?? "") ?? defaultIterations
-        var warmup = UInt32(info.environment["BENCH_WARMUP"] ?? "") ?? defaultWarmup
+        var function = defaultFunction
+        var iterations = defaultIterations
+        var warmup = defaultWarmup
+        var sources: [String] = []
 
+        // Check environment variables
+        if let envFunction = info.environment["BENCH_FUNCTION"], !envFunction.isEmpty {
+            function = envFunction
+            sources.append("function from BENCH_FUNCTION env")
+        }
+
+        if let envIterations = info.environment["BENCH_ITERATIONS"], !envIterations.isEmpty {
+            if let parsed = UInt32(envIterations) {
+                iterations = parsed
+                sources.append("iterations from BENCH_ITERATIONS env")
+            } else {
+                print("[BenchRunner] WARNING: Failed to parse BENCH_ITERATIONS='\(envIterations)' as integer, using default: \(defaultIterations)")
+            }
+        }
+
+        if let envWarmup = info.environment["BENCH_WARMUP"], !envWarmup.isEmpty {
+            if let parsed = UInt32(envWarmup) {
+                warmup = parsed
+                sources.append("warmup from BENCH_WARMUP env")
+            } else {
+                print("[BenchRunner] WARNING: Failed to parse BENCH_WARMUP='\(envWarmup)' as integer, using default: \(defaultWarmup)")
+            }
+        }
+
+        // Check launch arguments (override environment variables)
         for arg in info.arguments {
             if arg.hasPrefix("--bench-function=") {
-                function = String(arg.split(separator: "=", maxSplits: 1).last ?? Substring(function))
+                if let value = arg.split(separator: "=", maxSplits: 1).last {
+                    function = String(value)
+                    sources.append("function from --bench-function arg")
+                }
             } else if arg.hasPrefix("--bench-iterations=") {
-                iterations = UInt32(arg.split(separator: "=", maxSplits: 1).last ?? "") ?? iterations
+                if let value = arg.split(separator: "=", maxSplits: 1).last {
+                    if let parsed = UInt32(value) {
+                        iterations = parsed
+                        sources.append("iterations from --bench-iterations arg")
+                    } else {
+                        print("[BenchRunner] WARNING: Failed to parse --bench-iterations='\(value)' as integer, using current value: \(iterations)")
+                    }
+                }
             } else if arg.hasPrefix("--bench-warmup=") {
-                warmup = UInt32(arg.split(separator: "=", maxSplits: 1).last ?? "") ?? warmup
+                if let value = arg.split(separator: "=", maxSplits: 1).last {
+                    if let parsed = UInt32(value) {
+                        warmup = parsed
+                        sources.append("warmup from --bench-warmup arg")
+                    } else {
+                        print("[BenchRunner] WARNING: Failed to parse --bench-warmup='\(value)' as integer, using current value: \(warmup)")
+                    }
+                }
             }
+        }
+
+        // Log resolution source
+        if sources.isEmpty {
+            print("[BenchRunner] Using hardcoded defaults: function=\(function), iterations=\(iterations), warmup=\(warmup)")
+        } else {
+            print("[BenchRunner] Resolved params from process info: function=\(function), iterations=\(iterations), warmup=\(warmup) (sources: \(sources.joined(separator: ", ")))")
         }
 
         return BenchParams(function: function, iterations: iterations, warmup: warmup)
@@ -76,8 +126,10 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             let report = try runBenchmark(spec: spec)
             return formatBenchReport(report)
         } catch let error as BenchError {
+            print("[BenchRunner] ERROR: Benchmark failed: \(error)")
             return formatBenchError(error)
         } catch {
+            print("[BenchRunner] ERROR: Unexpected error during benchmark execution: \(error)")
             return "Unexpected error: \(error.localizedDescription)"
         }
     }
