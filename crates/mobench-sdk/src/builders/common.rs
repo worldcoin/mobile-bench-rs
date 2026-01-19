@@ -23,6 +23,60 @@ use std::process::Command;
 
 use crate::types::BenchError;
 
+/// Validates that the project root is a valid directory for building.
+///
+/// This function checks that:
+/// - The path exists
+/// - The path is a directory
+/// - The directory contains a Cargo.toml file (or has a crate directory with one)
+///
+/// # Arguments
+/// * `project_root` - The project root directory to validate
+/// * `crate_name` - The name of the crate being built (used to check crate directories)
+///
+/// # Returns
+/// `Ok(())` if validation passes, or a descriptive `BenchError` if it fails.
+pub fn validate_project_root(project_root: &Path, crate_name: &str) -> Result<(), BenchError> {
+    // Check if path exists
+    if !project_root.exists() {
+        return Err(BenchError::Build(format!(
+            "Project root does not exist: {}\n\n\
+             Ensure you are running from the correct directory or specify --project-root.",
+            project_root.display()
+        )));
+    }
+
+    // Check if path is a directory
+    if !project_root.is_dir() {
+        return Err(BenchError::Build(format!(
+            "Project root is not a directory: {}\n\n\
+             Expected a directory containing your Rust project.",
+            project_root.display()
+        )));
+    }
+
+    // Check for Cargo.toml in project root or standard crate locations
+    let root_cargo = project_root.join("Cargo.toml");
+    let bench_mobile_cargo = project_root.join("bench-mobile/Cargo.toml");
+    let crates_cargo = project_root.join(format!("crates/{}/Cargo.toml", crate_name));
+
+    if !root_cargo.exists() && !bench_mobile_cargo.exists() && !crates_cargo.exists() {
+        return Err(BenchError::Build(format!(
+            "No Cargo.toml found in project root or expected crate locations.\n\n\
+             Searched:\n\
+             - {}\n\
+             - {}\n\
+             - {}\n\n\
+             Ensure you are in a Rust project directory or use --crate-path to specify the crate location.",
+            root_cargo.display(),
+            bench_mobile_cargo.display(),
+            crates_cargo.display()
+        )));
+    }
+
+    Ok(())
+}
+
 /// Detects the actual Cargo target directory using `cargo metadata`.
 ///
 /// This correctly handles Cargo workspaces where the target directory
@@ -33,6 +87,10 @@ use crate::types::BenchError;
 ///
 /// # Returns
 /// The path to the target directory, or falls back to `crate_dir/target` if detection fails.
+///
+/// # Warnings
+/// Prints a warning to stderr if falling back to the default target directory due to
+/// cargo metadata failures or parsing issues.
 pub fn get_cargo_target_dir(crate_dir: &Path) -> Result<PathBuf, BenchError> {
     let output = Command::new("cargo")
         .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -51,7 +109,17 @@ pub fn get_cargo_target_dir(crate_dir: &Path) -> Result<PathBuf, BenchError> {
 
     if !output.status.success() {
         // Fall back to crate_dir/target if cargo metadata fails
-        return Ok(crate_dir.join("target"));
+        let fallback = crate_dir.join("target");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!(
+            "Warning: cargo metadata failed (exit {}), falling back to {}.\n\
+             Stderr: {}\n\
+             This may cause build issues if you are in a Cargo workspace.",
+            output.status,
+            fallback.display(),
+            stderr.lines().take(3).collect::<Vec<_>>().join("\n")
+        );
+        return Ok(fallback);
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -69,7 +137,14 @@ pub fn get_cargo_target_dir(crate_dir: &Path) -> Result<PathBuf, BenchError> {
     }
 
     // Fall back to crate_dir/target if parsing fails
-    Ok(crate_dir.join("target"))
+    let fallback = crate_dir.join("target");
+    eprintln!(
+        "Warning: Failed to parse target_directory from cargo metadata output, \
+         falling back to {}.\n\
+         This may cause build issues if you are in a Cargo workspace.",
+        fallback.display()
+    );
+    Ok(fallback)
 }
 
 /// Finds the host library path for UniFFI binding generation.
