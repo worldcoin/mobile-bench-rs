@@ -894,24 +894,116 @@ impl AndroidBuilder {
             BuildProfile::Release => "release",
         };
 
-        let apk_path = android_dir
-            .join("app/build/outputs/apk")
-            .join(profile_name)
-            .join(format!("app-{}.apk", profile_name));
+        let apk_dir = android_dir.join("app/build/outputs/apk").join(profile_name);
 
-        if !apk_path.exists() {
-            return Err(BenchError::Build(format!(
-                "APK not found at expected location: {}.\n\n\
-                 Gradle task {} reported success but no APK was produced.\n\
-                 Check app/build/outputs/apk/{} and rerun ./gradlew {} if needed.",
-                apk_path.display(),
-                gradle_task,
-                profile_name,
-                gradle_task
-            )));
-        }
+        // Try to find APK - check multiple possible filenames
+        // Gradle produces different names depending on signing configuration:
+        // - app-release.apk (signed)
+        // - app-release-unsigned.apk (unsigned release)
+        // - app-debug.apk (debug)
+        let apk_path = self.find_apk(&apk_dir, profile_name, gradle_task)?;
 
         Ok(apk_path)
+    }
+
+    /// Finds the APK file in the build output directory
+    ///
+    /// Gradle produces different APK filenames depending on signing configuration:
+    /// - `app-release.apk` - signed release build
+    /// - `app-release-unsigned.apk` - unsigned release build
+    /// - `app-debug.apk` - debug build
+    ///
+    /// This method also checks for `output-metadata.json` which contains the actual
+    /// output filename when present.
+    fn find_apk(&self, apk_dir: &Path, profile_name: &str, gradle_task: &str) -> Result<PathBuf, BenchError> {
+        // First, try to read output-metadata.json for the actual APK name
+        let metadata_path = apk_dir.join("output-metadata.json");
+        if metadata_path.exists() {
+            if let Ok(metadata_content) = fs::read_to_string(&metadata_path) {
+                // Parse the JSON to find the outputFile
+                // Format: {"elements":[{"outputFile":"app-release-unsigned.apk",...}]}
+                if let Some(apk_name) = self.parse_output_metadata(&metadata_content) {
+                    let apk_path = apk_dir.join(&apk_name);
+                    if apk_path.exists() {
+                        if self.verbose {
+                            println!("  Found APK from output-metadata.json: {}", apk_path.display());
+                        }
+                        return Ok(apk_path);
+                    }
+                }
+            }
+        }
+
+        // Define candidates in order of preference
+        let candidates = if profile_name == "release" {
+            vec![
+                format!("app-{}.apk", profile_name),           // Signed release
+                format!("app-{}-unsigned.apk", profile_name),  // Unsigned release
+            ]
+        } else {
+            vec![
+                format!("app-{}.apk", profile_name),           // Debug
+            ]
+        };
+
+        // Check each candidate
+        for candidate in &candidates {
+            let apk_path = apk_dir.join(candidate);
+            if apk_path.exists() {
+                if self.verbose {
+                    println!("  Found APK: {}", apk_path.display());
+                }
+                return Ok(apk_path);
+            }
+        }
+
+        // No APK found - provide helpful error message
+        Err(BenchError::Build(format!(
+            "APK not found in {}.\n\n\
+             Gradle task {} reported success but no APK was produced.\n\
+             Searched for:\n{}\n\n\
+             Check the build output directory and rerun ./gradlew {} if needed.",
+            apk_dir.display(),
+            gradle_task,
+            candidates.iter().map(|c| format!("  - {}", c)).collect::<Vec<_>>().join("\n"),
+            gradle_task
+        )))
+    }
+
+    /// Parses output-metadata.json to extract the APK filename
+    ///
+    /// The JSON format is:
+    /// ```json
+    /// {
+    ///   "elements": [
+    ///     {
+    ///       "outputFile": "app-release-unsigned.apk",
+    ///       ...
+    ///     }
+    ///   ]
+    /// }
+    /// ```
+    fn parse_output_metadata(&self, content: &str) -> Option<String> {
+        // Simple JSON parsing without external dependencies
+        // Look for "outputFile":"<filename>"
+        let pattern = "\"outputFile\"";
+        if let Some(pos) = content.find(pattern) {
+            let after_key = &content[pos + pattern.len()..];
+            // Skip whitespace and colon
+            let after_colon = after_key.trim_start().strip_prefix(':')?;
+            let after_ws = after_colon.trim_start();
+            // Extract the string value
+            if after_ws.starts_with('"') {
+                let value_start = &after_ws[1..];
+                if let Some(end_quote) = value_start.find('"') {
+                    let filename = &value_start[..end_quote];
+                    if filename.ends_with(".apk") {
+                        return Some(filename.to_string());
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Builds the Android test APK using Gradle
@@ -981,24 +1073,59 @@ impl AndroidBuilder {
             BuildProfile::Release => "release",
         };
 
-        let apk_path = android_dir
+        let test_apk_dir = android_dir
             .join("app/build/outputs/apk/androidTest")
-            .join(profile_name)
-            .join(format!("app-{}-androidTest.apk", profile_name));
+            .join(profile_name);
 
-        if !apk_path.exists() {
-            return Err(BenchError::Build(format!(
-                "Android test APK not found at expected location: {}.\n\n\
-                 Gradle task {} reported success but no test APK was produced.\n\
-                 Check app/build/outputs/apk/androidTest/{} and rerun ./gradlew {} if needed.",
-                apk_path.display(),
-                gradle_task,
-                profile_name,
-                gradle_task
-            )));
-        }
+        // Find the test APK - use similar logic to main APK
+        let apk_path = self.find_test_apk(&test_apk_dir, profile_name, gradle_task)?;
 
         Ok(apk_path)
+    }
+
+    /// Finds the test APK file in the build output directory
+    ///
+    /// Test APKs can have different naming patterns depending on the build:
+    /// - `app-debug-androidTest.apk`
+    /// - `app-release-androidTest.apk`
+    fn find_test_apk(&self, apk_dir: &Path, profile_name: &str, gradle_task: &str) -> Result<PathBuf, BenchError> {
+        // First, try to read output-metadata.json for the actual APK name
+        let metadata_path = apk_dir.join("output-metadata.json");
+        if metadata_path.exists() {
+            if let Ok(metadata_content) = fs::read_to_string(&metadata_path) {
+                if let Some(apk_name) = self.parse_output_metadata(&metadata_content) {
+                    let apk_path = apk_dir.join(&apk_name);
+                    if apk_path.exists() {
+                        if self.verbose {
+                            println!("  Found test APK from output-metadata.json: {}", apk_path.display());
+                        }
+                        return Ok(apk_path);
+                    }
+                }
+            }
+        }
+
+        // Check standard naming pattern
+        let apk_path = apk_dir.join(format!("app-{}-androidTest.apk", profile_name));
+        if apk_path.exists() {
+            if self.verbose {
+                println!("  Found test APK: {}", apk_path.display());
+            }
+            return Ok(apk_path);
+        }
+
+        // No test APK found
+        Err(BenchError::Build(format!(
+            "Android test APK not found in {}.\n\n\
+             Gradle task {} reported success but no test APK was produced.\n\
+             Expected: app-{}-androidTest.apk\n\n\
+             Check app/build/outputs/apk/androidTest/{} and rerun ./gradlew {} if needed.",
+            apk_dir.display(),
+            gradle_task,
+            profile_name,
+            profile_name,
+            gradle_task
+        )))
     }
 }
 
@@ -1027,5 +1154,37 @@ mod tests {
         let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile")
             .output_dir("/custom/output");
         assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
+    }
+
+    #[test]
+    fn test_parse_output_metadata_unsigned() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let metadata = r#"{"version":3,"artifactType":{"type":"APK","kind":"Directory"},"applicationId":"dev.world.bench","variantName":"release","elements":[{"type":"SINGLE","filters":[],"attributes":[],"versionCode":1,"versionName":"0.1","outputFile":"app-release-unsigned.apk"}],"elementType":"File"}"#;
+        let result = builder.parse_output_metadata(metadata);
+        assert_eq!(result, Some("app-release-unsigned.apk".to_string()));
+    }
+
+    #[test]
+    fn test_parse_output_metadata_signed() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let metadata = r#"{"version":3,"elements":[{"outputFile":"app-release.apk"}]}"#;
+        let result = builder.parse_output_metadata(metadata);
+        assert_eq!(result, Some("app-release.apk".to_string()));
+    }
+
+    #[test]
+    fn test_parse_output_metadata_no_apk() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let metadata = r#"{"version":3,"elements":[]}"#;
+        let result = builder.parse_output_metadata(metadata);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_output_metadata_invalid_json() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let metadata = "not valid json";
+        let result = builder.parse_output_metadata(metadata);
+        assert_eq!(result, None);
     }
 }

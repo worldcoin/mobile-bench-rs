@@ -17,13 +17,17 @@ struct BenchParams {
 
     static func fromBundle() -> BenchParams? {
         guard let url = Bundle.main.url(forResource: "bench_spec", withExtension: "json") else {
+            print("[BenchRunner] No bench_spec.json found in bundle, will use process info or defaults")
             return nil
         }
         do {
             let data = try Data(contentsOf: url)
             let decoded = try JSONDecoder().decode(EncodedBenchSpec.self, from: data)
+            print("[BenchRunner] Loaded config from bench_spec.json: function=\(decoded.function), iterations=\(decoded.iterations), warmup=\(decoded.warmup)")
             return BenchParams(function: decoded.function, iterations: decoded.iterations, warmup: decoded.warmup)
         } catch {
+            print("[BenchRunner] ERROR: Failed to parse bench_spec.json: \(error)")
+            print("[BenchRunner] Will fall back to process info or defaults")
             return nil
         }
     }
