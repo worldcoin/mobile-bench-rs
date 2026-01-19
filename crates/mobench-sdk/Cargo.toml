@@ -32,7 +32,7 @@ runner-only = []
 
 [dependencies]
 # Proc macros (only with full feature)
-mobench-macros = { version = "0.1.8", path = "../mobench-macros", optional = true }
+mobench-macros = { version = "0.1.9", path = "../mobench-macros", optional = true }
 
 # Registry (only with full feature)
 inventory = { workspace = true, optional = true }
