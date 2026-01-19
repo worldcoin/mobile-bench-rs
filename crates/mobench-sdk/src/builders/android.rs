@@ -651,8 +651,13 @@ impl AndroidBuilder {
     /// Ensures local.properties exists with sdk.dir set
     ///
     /// Gradle requires this file to know where the Android SDK is located.
-    /// This function auto-generates the file if missing by detecting the SDK path
-    /// from environment variables or common installation locations.
+    /// This function only generates the file if ANDROID_HOME or ANDROID_SDK_ROOT
+    /// environment variables are set. We intentionally avoid probing filesystem
+    /// paths to prevent writing machine-specific paths that would break builds
+    /// on other machines.
+    ///
+    /// If neither environment variable is set, we skip generating the file and
+    /// let Android Studio or Gradle handle SDK detection.
     fn ensure_local_properties(&self, android_dir: &Path) -> Result<(), BenchError> {
         let local_props = android_dir.join("local.properties");
 
@@ -661,81 +666,63 @@ impl AndroidBuilder {
             return Ok(());
         }
 
-        // Try to find Android SDK path
-        let sdk_dir = self.find_android_sdk()?;
+        // Only generate local.properties if an environment variable is set.
+        // This avoids writing machine-specific paths that break on other machines.
+        let sdk_dir = self.find_android_sdk_from_env();
 
-        // Write local.properties
-        let content = format!("sdk.dir={}\n", sdk_dir.display());
-        fs::write(&local_props, content).map_err(|e| {
-            BenchError::Build(format!(
-                "Failed to write local.properties at {:?}: {}. Check output directory permissions.",
-                local_props, e
-            ))
-        })?;
+        match sdk_dir {
+            Some(path) => {
+                // Write local.properties with the SDK path from env var
+                let content = format!("sdk.dir={}\n", path.display());
+                fs::write(&local_props, content).map_err(|e| {
+                    BenchError::Build(format!(
+                        "Failed to write local.properties at {:?}: {}. Check output directory permissions.",
+                        local_props, e
+                    ))
+                })?;
 
-        if self.verbose {
-            println!("  Generated local.properties with sdk.dir={}", sdk_dir.display());
+                if self.verbose {
+                    println!("  Generated local.properties with sdk.dir={}", path.display());
+                }
+            }
+            None => {
+                // No env var set - skip generating local.properties
+                // Gradle/Android Studio will auto-detect the SDK or prompt the user
+                if self.verbose {
+                    println!("  Skipping local.properties generation (ANDROID_HOME/ANDROID_SDK_ROOT not set)");
+                    println!("  Gradle will auto-detect SDK or you can create local.properties manually");
+                }
+            }
         }
 
         Ok(())
     }
 
-    /// Finds the Android SDK installation path
-    fn find_android_sdk(&self) -> Result<PathBuf, BenchError> {
-        let mut searched = Vec::new();
-
+    /// Finds the Android SDK installation path from environment variables only
+    ///
+    /// Returns Some(path) if ANDROID_HOME or ANDROID_SDK_ROOT is set and the path exists.
+    /// Returns None if neither is set or the paths don't exist.
+    ///
+    /// We intentionally avoid probing common filesystem locations to prevent
+    /// writing machine-specific paths that would break builds on other machines.
+    fn find_android_sdk_from_env(&self) -> Option<PathBuf> {
         // Check ANDROID_HOME first (standard)
         if let Ok(path) = env::var("ANDROID_HOME") {
             let sdk_path = PathBuf::from(&path);
             if sdk_path.exists() {
-                return Ok(sdk_path);
+                return Some(sdk_path);
             }
-            searched.push(sdk_path);
         }
 
         // Check ANDROID_SDK_ROOT (alternative)
         if let Ok(path) = env::var("ANDROID_SDK_ROOT") {
             let sdk_path = PathBuf::from(&path);
             if sdk_path.exists() {
-                return Ok(sdk_path);
-            }
-            searched.push(sdk_path);
-        }
-
-        // Check common installation locations
-        if let Ok(home) = env::var("HOME") {
-            let home_path = PathBuf::from(home);
-            let candidates = [
-                home_path.join("Library/Android/sdk"),  // macOS (Android Studio)
-                home_path.join("Android/Sdk"),          // Linux (Android Studio)
-                home_path.join(".android/sdk"),         // Alternative Linux
-            ];
-
-            for candidate in &candidates {
-                if candidate.exists() {
-                    return Ok(candidate.clone());
-                }
-                searched.push(candidate.clone());
+                return Some(sdk_path);
             }
         }
 
-        let searched_list = if searched.is_empty() {
-            "  - (no candidates found)".to_string()
-        } else {
-            searched
-                .iter()
-                .map(|path| format!("  - {}", path.display()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-
-        Err(BenchError::Build(format!(
-            "Android SDK not found.\n\n\
-             Searched:\n{}\n\n\
-             Set ANDROID_HOME or ANDROID_SDK_ROOT to your SDK path (for example: $HOME/Library/Android/sdk).\n\
-             You can also install the SDK via Android Studio.",
-            searched_list
-        )))
+        None
     }
 
     /// Ensures the Gradle wrapper (gradlew) exists in the Android project
