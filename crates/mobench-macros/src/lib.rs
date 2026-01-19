@@ -68,10 +68,9 @@
 //!
 //! This crate is part of the mobench ecosystem:
 //!
-//! - **[`mobench-sdk`](https://crates.io/crates/mobench-sdk)** - Core SDK (re-exports this macro)
+//! - **[`mobench-sdk`](https://crates.io/crates/mobench-sdk)** - Core SDK with timing harness (re-exports this macro)
 //! - **[`mobench`](https://crates.io/crates/mobench)** - CLI tool
 //! - **`mobench-macros`** (this crate) - Proc macros
-//! - **[`mobench-runner`](https://crates.io/crates/mobench-runner)** - Timing harness
 
 use proc_macro::TokenStream;
 use quote::quote;

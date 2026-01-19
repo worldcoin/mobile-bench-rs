@@ -18,9 +18,8 @@ mobench provides a Rust API and a CLI for running benchmarks on real mobile devi
 ## Workspace crates
 
 - `crates/mobench` ([mobench](https://crates.io/crates/mobench)): CLI tool that builds, runs, and fetches benchmarks
-- `crates/mobench-sdk` ([mobench-sdk](https://crates.io/crates/mobench-sdk)): core SDK (builders, registry, codegen)
+- `crates/mobench-sdk` ([mobench-sdk](https://crates.io/crates/mobench-sdk)): core SDK (timing harness, builders, registry, codegen)
 - `crates/mobench-macros` ([mobench-macros](https://crates.io/crates/mobench-macros)): `#[benchmark]` proc macro
-- `crates/mobench-runner` ([mobench-runner](https://crates.io/crates/mobench-runner)): lightweight timing harness
 - `crates/sample-fns`: sample benchmarks and UniFFI bindings
 - `examples/basic-benchmark`: minimal SDK integration example
 - `examples/ffi-benchmark`: full UniFFI/FFI surface example
