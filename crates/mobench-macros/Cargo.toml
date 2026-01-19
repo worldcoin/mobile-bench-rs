@@ -6,8 +6,16 @@ license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Proc macros for mobench-sdk - #[benchmark] attribute"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench-macros"
 readme = "README.md"
 keywords = ["benchmark", "mobile", "macro", "procedural"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
 proc-macro = true

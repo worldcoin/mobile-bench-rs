@@ -833,6 +833,7 @@ name = "mobench-runner"
 version = "0.1.7"
 dependencies = [
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 
