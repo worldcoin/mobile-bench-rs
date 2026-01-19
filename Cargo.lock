@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "mobench"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-macros"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -829,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-sdk"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "include_dir",
@@ -1154,7 +1154,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sample-fns"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "camino",
  "mobench-sdk",
