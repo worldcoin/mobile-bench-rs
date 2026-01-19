@@ -1,0 +1,18 @@
+# Xcode
+build/
+DerivedData/
+*.xcworkspace
+xcuserdata/
+*.xcuserstate
+
+# CocoaPods (if used)
+Pods/
+
+# Generated
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# IDE
+.idea/
+*.swp
