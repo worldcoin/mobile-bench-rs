@@ -246,6 +246,64 @@ pub fn run_command(mut cmd: Command, description: &str) -> Result<(), BenchError
     Ok(())
 }
 
+/// Reads the package name from a Cargo.toml file.
+///
+/// This function parses the `[package]` section of a Cargo.toml and extracts
+/// the `name` field. It uses simple string parsing to avoid adding toml
+/// dependencies.
+///
+/// # Arguments
+/// * `cargo_toml_path` - Path to the Cargo.toml file
+///
+/// # Returns
+/// `Some(name)` if the package name is found, `None` otherwise.
+///
+/// # Example
+/// ```ignore
+/// let name = read_package_name(Path::new("/path/to/Cargo.toml"));
+/// if let Some(name) = name {
+///     println!("Package name: {}", name);
+/// }
+/// ```
+pub fn read_package_name(cargo_toml_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(cargo_toml_path).ok()?;
+
+    // Find [package] section
+    let package_start = content.find("[package]")?;
+    let package_section = &content[package_start..];
+
+    // Find the end of the package section (next section or end of file)
+    let section_end = package_section[1..]
+        .find("\n[")
+        .map(|i| i + 1)
+        .unwrap_or(package_section.len());
+    let package_section = &package_section[..section_end];
+
+    // Find name = "..." or name = '...'
+    for line in package_section.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("name") {
+            // Parse: name = "value" or name = 'value'
+            if let Some(eq_pos) = trimmed.find('=') {
+                let value_part = trimmed[eq_pos + 1..].trim();
+                // Extract string value (handle both " and ')
+                let (quote_char, start) = if value_part.starts_with('"') {
+                    ('"', 1)
+                } else if value_part.starts_with('\'') {
+                    ('\'', 1)
+                } else {
+                    continue;
+                };
+                if let Some(end) = value_part[start..].find(quote_char) {
+                    return Some(value_part[start..start + end].to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,5 +334,79 @@ mod tests {
         let err = result.unwrap_err();
         let msg = format!("{}", err);
         assert!(msg.contains("Failed to start"));
+    }
+
+    #[test]
+    fn test_read_package_name_standard() {
+        let temp_dir = std::env::temp_dir().join("mobench-test-read-package");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let cargo_toml = temp_dir.join("Cargo.toml");
+        std::fs::write(
+            &cargo_toml,
+            r#"[package]
+name = "my-awesome-crate"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#,
+        )
+        .unwrap();
+
+        let result = read_package_name(&cargo_toml);
+        assert_eq!(result, Some("my-awesome-crate".to_string()));
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_read_package_name_with_single_quotes() {
+        let temp_dir = std::env::temp_dir().join("mobench-test-read-package-sq");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let cargo_toml = temp_dir.join("Cargo.toml");
+        std::fs::write(
+            &cargo_toml,
+            r#"[package]
+name = 'single-quoted-crate'
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        let result = read_package_name(&cargo_toml);
+        assert_eq!(result, Some("single-quoted-crate".to_string()));
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_read_package_name_not_found() {
+        let result = read_package_name(Path::new("/nonexistent/Cargo.toml"));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_read_package_name_no_package_section() {
+        let temp_dir = std::env::temp_dir().join("mobench-test-read-package-no-pkg");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let cargo_toml = temp_dir.join("Cargo.toml");
+        std::fs::write(
+            &cargo_toml,
+            r#"[workspace]
+members = ["crates/*"]
+"#,
+        )
+        .unwrap();
+
+        let result = read_package_name(&cargo_toml);
+        assert_eq!(result, None);
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
     }
 }
