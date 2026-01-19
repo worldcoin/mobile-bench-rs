@@ -1685,12 +1685,36 @@ fn load_dotenv() {
 }
 
 fn repo_root() -> Result<PathBuf> {
-    // Prefer the build-time repo root but fall back to the current directory for installed binaries.
+    let cwd = std::env::current_dir().context("resolving repo root from current directory")?;
+    if let Some(root) = find_repo_root(&cwd) {
+        return Ok(root);
+    }
+
     let compiled = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     if let Ok(path) = compiled.canonicalize() {
+        if let Some(root) = find_repo_root(&path) {
+            return Ok(root);
+        }
         return Ok(path);
     }
-    std::env::current_dir().context("resolving repo root from current directory")
+
+    Ok(cwd)
+}
+
+fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|candidate| is_repo_root(candidate))
+        .map(|root| root.to_path_buf())
+}
+
+fn is_repo_root(candidate: &Path) -> bool {
+    candidate.join("bench-mobile").join("Cargo.toml").is_file()
+        || candidate
+            .join("crates")
+            .join("sample-fns")
+            .join("Cargo.toml")
+            .is_file()
 }
 
 fn ensure_can_write(path: &Path) -> Result<()> {
