@@ -291,7 +291,10 @@ pub fn generate_android_project(
     let target_dir = output_dir.join("android");
     let library_name = project_slug.replace('-', "_");
     let project_pascal = to_pascal_case(project_slug);
-    let package_name = format!("dev.world.{}", project_slug);
+    // Use sanitized bundle ID component (alphanumeric only) for consistency with iOS
+    // This ensures both platforms use the same naming convention: "benchmobile" not "bench-mobile"
+    let package_id_component = sanitize_bundle_id_component(project_slug);
+    let package_name = format!("dev.world.{}", package_id_component);
     let vars = vec![
         TemplateVar {
             name: "PROJECT_NAME",
@@ -1011,9 +1014,10 @@ mod tests {
         );
 
         let build_gradle = fs::read_to_string(android_dir.join("app/build.gradle")).unwrap();
+        // Package name should be sanitized (no hyphens/underscores) for consistency with iOS
         assert!(
-            build_gradle.contains("dev.world.my-bench-project") || build_gradle.contains("dev.world.my_bench_project"),
-            "build.gradle should contain package name"
+            build_gradle.contains("dev.world.mybenchproject"),
+            "build.gradle should contain sanitized package name 'dev.world.mybenchproject'"
         );
 
         let manifest = fs::read_to_string(android_dir.join("app/src/main/AndroidManifest.xml")).unwrap();
@@ -1029,15 +1033,15 @@ mod tests {
         );
 
         // Verify Kotlin files are in the correct package directory structure
-        // For package "dev.world.my-bench-project", files should be in "dev/world/my-bench-project/"
-        let main_activity_path = android_dir.join("app/src/main/java/dev/world/my-bench-project/MainActivity.kt");
+        // For package "dev.world.mybenchproject", files should be in "dev/world/mybenchproject/"
+        let main_activity_path = android_dir.join("app/src/main/java/dev/world/mybenchproject/MainActivity.kt");
         assert!(
             main_activity_path.exists(),
             "MainActivity.kt should be in package directory: {:?}",
             main_activity_path
         );
 
-        let test_activity_path = android_dir.join("app/src/androidTest/java/dev/world/my-bench-project/MainActivityTest.kt");
+        let test_activity_path = android_dir.join("app/src/androidTest/java/dev/world/mybenchproject/MainActivityTest.kt");
         assert!(
             test_activity_path.exists(),
             "MainActivityTest.kt should be in package directory: {:?}",
@@ -1240,5 +1244,141 @@ pub fn public_bench() {
 
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_cross_platform_naming_consistency() {
+        // Test that Android and iOS use the same naming convention for package/bundle IDs
+        let temp_dir = env::temp_dir().join("mobench-sdk-naming-consistency-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let project_name = "bench-mobile";
+
+        // Generate Android project
+        let result = generate_android_project(&temp_dir, project_name, "bench_mobile::test_func");
+        assert!(result.is_ok(), "generate_android_project failed: {:?}", result.err());
+
+        // Generate iOS project (mimicking how ensure_ios_project does it)
+        let bundle_id_component = sanitize_bundle_id_component(project_name);
+        let bundle_prefix = format!("dev.world.{}", bundle_id_component);
+        let result = generate_ios_project(
+            &temp_dir,
+            &project_name.replace('-', "_"),
+            "BenchRunner",
+            &bundle_prefix,
+            "bench_mobile::test_func",
+        );
+        assert!(result.is_ok(), "generate_ios_project failed: {:?}", result.err());
+
+        // Read Android build.gradle to extract package name
+        let android_build_gradle = fs::read_to_string(
+            temp_dir.join("android/app/build.gradle")
+        ).expect("Failed to read Android build.gradle");
+
+        // Read iOS project.yml to extract bundle ID prefix
+        let ios_project_yml = fs::read_to_string(
+            temp_dir.join("ios/BenchRunner/project.yml")
+        ).expect("Failed to read iOS project.yml");
+
+        // Both should use "benchmobile" (without hyphens or underscores)
+        // Android: namespace = "dev.world.benchmobile"
+        // iOS: bundleIdPrefix: dev.world.benchmobile
+        assert!(
+            android_build_gradle.contains("dev.world.benchmobile"),
+            "Android package should be 'dev.world.benchmobile', got:\n{}",
+            android_build_gradle
+        );
+        assert!(
+            ios_project_yml.contains("dev.world.benchmobile"),
+            "iOS bundle prefix should contain 'dev.world.benchmobile', got:\n{}",
+            ios_project_yml
+        );
+
+        // Ensure Android doesn't use hyphens or underscores in the package ID component
+        assert!(
+            !android_build_gradle.contains("dev.world.bench-mobile"),
+            "Android package should NOT contain hyphens"
+        );
+        assert!(
+            !android_build_gradle.contains("dev.world.bench_mobile"),
+            "Android package should NOT contain underscores"
+        );
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_cross_platform_version_consistency() {
+        // Test that Android and iOS use the same version strings
+        let temp_dir = env::temp_dir().join("mobench-sdk-version-consistency-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let project_name = "test-project";
+
+        // Generate Android project
+        let result = generate_android_project(&temp_dir, project_name, "test_project::test_func");
+        assert!(result.is_ok(), "generate_android_project failed: {:?}", result.err());
+
+        // Generate iOS project
+        let bundle_id_component = sanitize_bundle_id_component(project_name);
+        let bundle_prefix = format!("dev.world.{}", bundle_id_component);
+        let result = generate_ios_project(
+            &temp_dir,
+            &project_name.replace('-', "_"),
+            "BenchRunner",
+            &bundle_prefix,
+            "test_project::test_func",
+        );
+        assert!(result.is_ok(), "generate_ios_project failed: {:?}", result.err());
+
+        // Read Android build.gradle
+        let android_build_gradle = fs::read_to_string(
+            temp_dir.join("android/app/build.gradle")
+        ).expect("Failed to read Android build.gradle");
+
+        // Read iOS project.yml
+        let ios_project_yml = fs::read_to_string(
+            temp_dir.join("ios/BenchRunner/project.yml")
+        ).expect("Failed to read iOS project.yml");
+
+        // Both should use version "1.0.0"
+        assert!(
+            android_build_gradle.contains("versionName \"1.0.0\""),
+            "Android versionName should be '1.0.0', got:\n{}",
+            android_build_gradle
+        );
+        assert!(
+            ios_project_yml.contains("CFBundleShortVersionString: \"1.0.0\""),
+            "iOS CFBundleShortVersionString should be '1.0.0', got:\n{}",
+            ios_project_yml
+        );
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_bundle_id_prefix_consistency() {
+        // Test that the bundle ID prefix format is consistent across platforms
+        let test_cases = vec![
+            ("my-project", "dev.world.myproject"),
+            ("bench_mobile", "dev.world.benchmobile"),
+            ("TestApp", "dev.world.testapp"),
+            ("app-with-many-dashes", "dev.world.appwithmanydashes"),
+            ("app_with_many_underscores", "dev.world.appwithmanyunderscores"),
+        ];
+
+        for (input, expected_prefix) in test_cases {
+            let sanitized = sanitize_bundle_id_component(input);
+            let full_prefix = format!("dev.world.{}", sanitized);
+            assert_eq!(
+                full_prefix, expected_prefix,
+                "For input '{}', expected '{}' but got '{}'",
+                input, expected_prefix, full_prefix
+            );
+        }
     }
 }
