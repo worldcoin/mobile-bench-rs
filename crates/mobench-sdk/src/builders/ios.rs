@@ -18,7 +18,7 @@
 //! ## Requirements
 //!
 //! - Xcode with command line tools (`xcode-select --install`)
-//! - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
+//! - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`
 //! - `uniffi-bindgen` for Swift binding generation
 //! - `xcodegen` (optional, `brew install xcodegen`)
 //!
@@ -71,7 +71,7 @@
 //! ```
 
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
-use super::common::{get_cargo_target_dir, host_lib_path, run_command};
+use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -125,10 +125,14 @@ impl IosBuilder {
     ///
     /// # Arguments
     ///
-    /// * `project_root` - Root directory containing the bench-mobile crate
+    /// * `project_root` - Root directory containing the bench-mobile crate. This path
+    ///   will be canonicalized to ensure consistent behavior regardless of the current
+    ///   working directory.
     /// * `crate_name` - Name of the bench-mobile crate (e.g., "my-project-bench-mobile")
     pub fn new(project_root: impl Into<PathBuf>, crate_name: impl Into<String>) -> Self {
-        let root = project_root.into();
+        let root_input = project_root.into();
+        // Canonicalize the path to handle relative paths correctly, regardless of cwd
+        let root = root_input.canonicalize().unwrap_or(root_input);
         Self {
             output_dir: root.join("target/mobench"),
             project_root: root,
@@ -190,6 +194,11 @@ impl IosBuilder {
     /// * `Ok(BuildResult)` containing the path to the xcframework
     /// * `Err(BenchError)` if the build fails
     pub fn build(&self, config: &BuildConfig) -> Result<BuildResult, BenchError> {
+        // Validate project root before starting build
+        if self.crate_dir.is_none() {
+            validate_project_root(&self.project_root, &self.crate_name)?;
+        }
+
         let framework_name = self.crate_name.replace("-", "_");
         let ios_dir = self.output_dir.join("ios");
         let xcframework_path = ios_dir.join(format!("{}.xcframework", framework_name));
@@ -202,11 +211,13 @@ impl IosBuilder {
                 if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
             println!("    Command: cargo build --target aarch64-apple-ios-sim --lib {}",
                 if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
+            println!("    Command: cargo build --target x86_64-apple-ios --lib {}",
+                if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
             println!("  Step 2: Generate UniFFI Swift bindings");
             println!("    Output: {:?}", ios_dir.join("BenchRunner/BenchRunner/Generated"));
             println!("  Step 3: Create xcframework at {:?}", xcframework_path);
             println!("    - ios-arm64/{}.framework (device)", framework_name);
-            println!("    - ios-simulator-arm64/{}.framework (simulator)", framework_name);
+            println!("    - ios-arm64_x86_64-simulator/{}.framework (simulator - arm64 + x86_64 lipo)", framework_name);
             println!("  Step 4: Code-sign xcframework");
             println!("    Command: codesign --force --deep --sign - {:?}", xcframework_path);
             println!("  Step 5: Generate Xcode project with xcodegen (if project.yml exists)");
@@ -221,7 +232,13 @@ impl IosBuilder {
         }
 
         // Step 0: Ensure iOS project scaffolding exists
-        crate::codegen::ensure_ios_project(&self.output_dir, &self.crate_name)?;
+        // Pass project_root and crate_dir for better benchmark function detection
+        crate::codegen::ensure_ios_project_with_options(
+            &self.output_dir,
+            &self.crate_name,
+            Some(&self.project_root),
+            self.crate_dir.as_deref(),
+        )?;
 
         // Step 1: Build Rust libraries
         println!("Building Rust libraries for iOS...");
@@ -267,11 +284,92 @@ impl IosBuilder {
         // Step 5: Generate Xcode project if needed
         self.generate_xcode_project()?;
 
-        Ok(BuildResult {
+        // Step 6: Validate all expected artifacts exist
+        let result = BuildResult {
             platform: Target::Ios,
             app_path: xcframework_path,
             test_suite_path: None,
-        })
+        };
+        self.validate_build_artifacts(&result, config)?;
+
+        Ok(result)
+    }
+
+    /// Validates that all expected build artifacts exist after a successful build
+    fn validate_build_artifacts(&self, result: &BuildResult, config: &BuildConfig) -> Result<(), BenchError> {
+        let mut missing = Vec::new();
+        let framework_name = self.crate_name.replace("-", "_");
+        let profile_dir = match config.profile {
+            BuildProfile::Debug => "debug",
+            BuildProfile::Release => "release",
+        };
+
+        // Check xcframework exists
+        if !result.app_path.exists() {
+            missing.push(format!("XCFramework: {}", result.app_path.display()));
+        }
+
+        // Check framework slices exist within xcframework
+        let xcframework_path = &result.app_path;
+        let device_slice = xcframework_path.join(format!("ios-arm64/{}.framework", framework_name));
+        // Combined simulator slice with arm64 + x86_64
+        let sim_slice = xcframework_path.join(format!("ios-arm64_x86_64-simulator/{}.framework", framework_name));
+
+        if xcframework_path.exists() {
+            if !device_slice.exists() {
+                missing.push(format!("Device framework slice: {}", device_slice.display()));
+            }
+            if !sim_slice.exists() {
+                missing.push(format!("Simulator framework slice (arm64+x86_64): {}", sim_slice.display()));
+            }
+        }
+
+        // Check that static libraries were built
+        let crate_dir = self.find_crate_dir()?;
+        let target_dir = get_cargo_target_dir(&crate_dir)?;
+        let lib_name = format!("lib{}.a", framework_name);
+
+        let device_lib = target_dir.join("aarch64-apple-ios").join(profile_dir).join(&lib_name);
+        let sim_arm64_lib = target_dir.join("aarch64-apple-ios-sim").join(profile_dir).join(&lib_name);
+        let sim_x86_64_lib = target_dir.join("x86_64-apple-ios").join(profile_dir).join(&lib_name);
+
+        if !device_lib.exists() {
+            missing.push(format!("Device static library: {}", device_lib.display()));
+        }
+        if !sim_arm64_lib.exists() {
+            missing.push(format!("Simulator (arm64) static library: {}", sim_arm64_lib.display()));
+        }
+        if !sim_x86_64_lib.exists() {
+            missing.push(format!("Simulator (x86_64) static library: {}", sim_x86_64_lib.display()));
+        }
+
+        // Check Swift bindings
+        let swift_bindings = self.output_dir
+            .join("ios/BenchRunner/BenchRunner/Generated")
+            .join(format!("{}.swift", framework_name));
+        if !swift_bindings.exists() {
+            missing.push(format!("Swift bindings: {}", swift_bindings.display()));
+        }
+
+        if !missing.is_empty() {
+            let critical = missing.iter().any(|m| m.contains("XCFramework") || m.contains("static library"));
+            if critical {
+                return Err(BenchError::Build(format!(
+                    "Build validation failed: Critical artifacts are missing.\n\n\
+                     Missing artifacts:\n{}\n\n\
+                     This usually means the Rust build step failed. Check the cargo build output above.",
+                    missing.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+                )));
+            } else {
+                eprintln!(
+                    "Warning: Some build artifacts are missing:\n{}\n\
+                     The build may still work but some features might be unavailable.",
+                    missing.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Finds the benchmark crate directory (either bench-mobile/ or crates/{crate_name}/)
@@ -326,10 +424,11 @@ impl IosBuilder {
     fn build_rust_libraries(&self, config: &BuildConfig) -> Result<(), BenchError> {
         let crate_dir = self.find_crate_dir()?;
 
-        // iOS targets: device and simulator
+        // iOS targets: device and simulator (both arm64 and x86_64 for Intel Macs)
         let targets = vec![
             "aarch64-apple-ios",     // Device (ARM64)
-            "aarch64-apple-ios-sim", // Simulator (M1+ Macs)
+            "aarch64-apple-ios-sim", // Simulator (Apple Silicon Macs)
+            "x86_64-apple-ios",      // Simulator (Intel Macs)
         ];
 
         // Check if targets are installed
@@ -426,9 +525,10 @@ impl IosBuilder {
                      This target is required to compile for iOS.\n\n\
                      To install:\n\
                        rustup target add {}\n\n\
-                     For a complete iOS setup, you need both:\n\
+                     For a complete iOS setup, you need all three:\n\
                        rustup target add aarch64-apple-ios        # Device\n\
-                       rustup target add aarch64-apple-ios-sim    # Simulator (Apple Silicon)",
+                       rustup target add aarch64-apple-ios-sim    # Simulator (Apple Silicon)\n\
+                       rustup target add x86_64-apple-ios         # Simulator (Intel Macs)",
                     target, target
                 )));
             }
@@ -576,6 +676,7 @@ impl IosBuilder {
         })?;
 
         // Build framework structure for each platform
+        // Device slice (arm64 only)
         self.create_framework_slice(
             &target_dir.join("aarch64-apple-ios").join(profile_dir),
             &xcframework_path.join("ios-arm64"),
@@ -583,11 +684,12 @@ impl IosBuilder {
             "ios",
         )?;
 
-        self.create_framework_slice(
-            &target_dir.join("aarch64-apple-ios-sim").join(profile_dir),
-            &xcframework_path.join("ios-simulator-arm64"),
+        // Simulator slice (arm64 + x86_64 combined via lipo for both Apple Silicon and Intel Macs)
+        self.create_simulator_framework_slice(
+            &target_dir,
+            profile_dir,
+            &xcframework_path.join("ios-arm64_x86_64-simulator"),
             framework_name,
-            "ios-simulator",
         )?;
 
         // Create xcframework Info.plist
@@ -676,6 +778,137 @@ impl IosBuilder {
         Ok(())
     }
 
+    /// Creates a combined simulator framework slice with arm64 + x86_64 using lipo
+    fn create_simulator_framework_slice(
+        &self,
+        target_dir: &Path,
+        profile_dir: &str,
+        output_dir: &Path,
+        framework_name: &str,
+    ) -> Result<(), BenchError> {
+        let framework_dir = output_dir.join(format!("{}.framework", framework_name));
+        let headers_dir = framework_dir.join("Headers");
+
+        // Create directories
+        fs::create_dir_all(&headers_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create framework directories at {}: {}. Check output directory permissions.",
+                headers_dir.display(),
+                e
+            ))
+        })?;
+
+        // Paths to the simulator libraries
+        let arm64_lib = target_dir
+            .join("aarch64-apple-ios-sim")
+            .join(profile_dir)
+            .join(format!("lib{}.a", framework_name));
+        let x86_64_lib = target_dir
+            .join("x86_64-apple-ios")
+            .join(profile_dir)
+            .join(format!("lib{}.a", framework_name));
+
+        // Check that both libraries exist
+        if !arm64_lib.exists() {
+            return Err(BenchError::Build(format!(
+                "Simulator library (arm64) not found at {}.\n\n\
+                 Expected output from cargo build --target aarch64-apple-ios-sim --lib.\n\
+                 Ensure your crate has [lib] crate-type = [\"staticlib\"].",
+                arm64_lib.display()
+            )));
+        }
+        if !x86_64_lib.exists() {
+            return Err(BenchError::Build(format!(
+                "Simulator library (x86_64) not found at {}.\n\n\
+                 Expected output from cargo build --target x86_64-apple-ios --lib.\n\
+                 Ensure your crate has [lib] crate-type = [\"staticlib\"].",
+                x86_64_lib.display()
+            )));
+        }
+
+        // Use lipo to combine arm64 and x86_64 into a universal binary
+        let dest_lib = framework_dir.join(framework_name);
+        let output = Command::new("lipo")
+            .arg("-create")
+            .arg(&arm64_lib)
+            .arg(&x86_64_lib)
+            .arg("-output")
+            .arg(&dest_lib)
+            .output()
+            .map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to run lipo to create universal simulator binary.\n\n\
+                     Command: lipo -create {} {} -output {}\n\
+                     Error: {}\n\n\
+                     Ensure Xcode command line tools are installed: xcode-select --install",
+                    arm64_lib.display(),
+                    x86_64_lib.display(),
+                    dest_lib.display(),
+                    e
+                ))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(BenchError::Build(format!(
+                "lipo failed to create universal simulator binary.\n\n\
+                 Command: lipo -create {} {} -output {}\n\
+                 Exit status: {}\n\
+                 Stderr: {}\n\n\
+                 Ensure both libraries are valid static libraries.",
+                arm64_lib.display(),
+                x86_64_lib.display(),
+                dest_lib.display(),
+                output.status,
+                stderr
+            )));
+        }
+
+        if self.verbose {
+            println!(
+                "  Created universal simulator binary (arm64 + x86_64) at {:?}",
+                dest_lib
+            );
+        }
+
+        // Copy UniFFI-generated header into the framework
+        let header_name = format!("{}FFI.h", framework_name);
+        let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
+            BenchError::Build(format!(
+                "UniFFI header {} not found; run binding generation before building",
+                header_name
+            ))
+        })?;
+        let dest_header = headers_dir.join(&header_name);
+        fs::copy(&header_path, &dest_header).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
+                header_path.display(),
+                dest_header.display(),
+                e
+            ))
+        })?;
+
+        // Create module.modulemap
+        let modulemap_content = format!(
+            "framework module {} {{\n  umbrella header \"{}FFI.h\"\n  export *\n  module * {{ export * }}\n}}",
+            framework_name, framework_name
+        );
+        let modulemap_path = headers_dir.join("module.modulemap");
+        fs::write(&modulemap_path, modulemap_content).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write module.modulemap at {}: {}. Check output directory permissions.",
+                modulemap_path.display(),
+                e
+            ))
+        })?;
+
+        // Create framework Info.plist (uses "ios-simulator" platform)
+        self.create_framework_plist(&framework_dir, framework_name, "ios-simulator")?;
+
+        Ok(())
+    }
+
     /// Creates Info.plist for a framework slice
     fn create_framework_plist(
         &self,
@@ -758,12 +991,13 @@ impl IosBuilder {
         </dict>
         <dict>
             <key>LibraryIdentifier</key>
-            <string>ios-simulator-arm64</string>
+            <string>ios-arm64_x86_64-simulator</string>
             <key>LibraryPath</key>
             <string>{}.framework</string>
             <key>SupportedArchitectures</key>
             <array>
                 <string>arm64</string>
+                <string>x86_64</string>
             </array>
             <key>SupportedPlatform</key>
             <string>ios</string>
@@ -793,6 +1027,11 @@ impl IosBuilder {
     }
 
     /// Code-signs the xcframework
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if codesign is not available or if signing fails.
+    /// The xcframework must be signed for Xcode to accept it.
     fn codesign_xcframework(&self, xcframework_path: &Path) -> Result<(), BenchError> {
         let output = Command::new("codesign")
             .arg("--force")
@@ -800,30 +1039,52 @@ impl IosBuilder {
             .arg("--sign")
             .arg("-")
             .arg(xcframework_path)
-            .output();
+            .output()
+            .map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to run codesign.\n\n\
+                     XCFramework: {}\n\
+                     Error: {}\n\n\
+                     Ensure Xcode command line tools are installed:\n\
+                       xcode-select --install\n\n\
+                     The xcframework must be signed for Xcode to accept it.",
+                    xcframework_path.display(),
+                    e
+                ))
+            })?;
 
-        match output {
-            Ok(output) if output.status.success() => {
-                if self.verbose {
-                    println!("  Successfully code-signed xcframework");
-                }
-                Ok(())
+        if output.status.success() {
+            if self.verbose {
+                println!("  Successfully code-signed xcframework");
             }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                println!("Warning: Code signing failed: {}", stderr);
-                println!("You may need to manually sign the xcframework");
-                Ok(()) // Don't fail the build for signing issues
-            }
-            Err(e) => {
-                println!("Warning: Could not run codesign: {}", e);
-                println!("You may need to manually sign the xcframework");
-                Ok(()) // Don't fail the build if codesign is not available
-            }
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(BenchError::Build(format!(
+                "codesign failed to sign xcframework.\n\n\
+                 XCFramework: {}\n\
+                 Exit status: {}\n\
+                 Stderr: {}\n\n\
+                 Ensure you have valid signing credentials:\n\
+                   security find-identity -v -p codesigning\n\n\
+                 For ad-hoc signing (most common), the '-' identity should work.\n\
+                 If signing continues to fail, check that the xcframework structure is valid.",
+                xcframework_path.display(),
+                output.status,
+                stderr
+            )))
         }
     }
 
     /// Generates Xcode project using xcodegen if project.yml exists
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - xcodegen is not installed and project.yml exists
+    /// - xcodegen execution fails
+    ///
+    /// If project.yml does not exist, this function returns Ok(()) silently.
     fn generate_xcode_project(&self) -> Result<(), BenchError> {
         let ios_dir = self.output_dir.join("ios");
         let project_yml = ios_dir.join("BenchRunner/project.yml");
@@ -843,32 +1104,46 @@ impl IosBuilder {
         let output = Command::new("xcodegen")
             .arg("generate")
             .current_dir(&project_dir)
-            .output();
-
-        match output {
-            Ok(output) if output.status.success() => Ok(()),
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                Err(BenchError::Build(format!(
-                    "xcodegen failed.\n\n\
-                     Command: xcodegen generate\n\
+            .output()
+            .map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to run xcodegen.\n\n\
+                     project.yml found at: {}\n\
                      Working directory: {}\n\
-                     Exit status: {}\n\n\
-                     Stdout:\n{}\n\n\
-                     Stderr:\n{}\n\n\
-                     Tip: install xcodegen with: brew install xcodegen",
+                     Error: {}\n\n\
+                     xcodegen is required to generate the Xcode project.\n\
+                     Install it with:\n\
+                       brew install xcodegen\n\n\
+                     After installation, re-run the build.",
+                    project_yml.display(),
                     project_dir.display(),
-                    output.status,
-                    stdout,
-                    stderr
-                )))
+                    e
+                ))
+            })?;
+
+        if output.status.success() {
+            if self.verbose {
+                println!("  Successfully generated Xcode project");
             }
-            Err(e) => {
-                println!("Warning: xcodegen not found or failed: {}", e);
-                println!("Install xcodegen with: brew install xcodegen");
-                Ok(()) // Don't fail if xcodegen is not available
-            }
+            Ok(())
+        } else {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(BenchError::Build(format!(
+                "xcodegen failed.\n\n\
+                 Command: xcodegen generate\n\
+                 Working directory: {}\n\
+                 Exit status: {}\n\n\
+                 Stdout:\n{}\n\n\
+                 Stderr:\n{}\n\n\
+                 Check that project.yml is valid YAML and has correct xcodegen syntax.\n\
+                 Try running 'xcodegen generate' manually in {} for more details.",
+                project_dir.display(),
+                output.status,
+                stdout,
+                stderr,
+                project_dir.display()
+            )))
         }
     }
 
