@@ -18,6 +18,9 @@ targets:
         optional: true
     info:
       path: {{PROJECT_NAME_PASCAL}}/Info.plist
+      properties:
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: {{BUNDLE_ID}}

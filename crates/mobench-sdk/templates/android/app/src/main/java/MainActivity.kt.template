@@ -55,8 +55,10 @@ class MainActivity : AppCompatActivity() {
             formatBenchReport(report)
         } catch (e: BenchException) {
             // Generic handler for all benchmark errors (InvalidIterations, UnknownFunction, etc.)
+            android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
             "Benchmark error: ${e.message}"
         } catch (e: Exception) {
+            android.util.Log.e("BenchRunner", "Unexpected error during benchmark execution", e)
             "Unexpected error: ${e.message}"
         }
 
@@ -129,18 +131,45 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resolveBenchParams(): BenchParams {
-        val defaults = loadBenchParamsFromAssets() ?: BenchParams(
+        val assetParams = loadBenchParamsFromAssets()
+        val defaults = assetParams ?: BenchParams(
             DEFAULT_FUNCTION,
             DEFAULT_ITERATIONS,
             DEFAULT_WARMUP
         )
-        val fn = intent?.getStringExtra(FUNCTION_EXTRA)
-            ?.takeUnless { it.isBlank() }
-            ?: defaults.function
-        val iterations = intent?.getIntExtra(ITERATIONS_EXTRA, defaults.iterations.toInt())?.toUInt()
-            ?: defaults.iterations
-        val warmup = intent?.getIntExtra(WARMUP_EXTRA, defaults.warmup.toInt())?.toUInt()
-            ?: defaults.warmup
+
+        // Check for intent extras (used for test automation and BrowserStack)
+        val intentFunction = intent?.getStringExtra(FUNCTION_EXTRA)?.takeUnless { it.isBlank() }
+        val intentIterations = intent?.let {
+            val value = it.getIntExtra(ITERATIONS_EXTRA, -1)
+            if (value >= 0) value.toUInt() else null
+        }
+        val intentWarmup = intent?.let {
+            val value = it.getIntExtra(WARMUP_EXTRA, -1)
+            if (value >= 0) value.toUInt() else null
+        }
+
+        // Resolve final values with logging
+        val fn = intentFunction ?: defaults.function
+        val iterations = intentIterations ?: defaults.iterations
+        val warmup = intentWarmup ?: defaults.warmup
+
+        // Log the resolution source for debugging
+        if (assetParams == null && intentFunction == null && intentIterations == null && intentWarmup == null) {
+            android.util.Log.i("BenchRunner", "Using hardcoded defaults: function=$fn, iterations=$iterations, warmup=$warmup")
+        } else {
+            val sources = mutableListOf<String>()
+            if (intentFunction != null) sources.add("function from intent")
+            if (intentIterations != null) sources.add("iterations from intent")
+            if (intentWarmup != null) sources.add("warmup from intent")
+            if (assetParams != null) {
+                if (intentFunction == null) sources.add("function from bench_spec.json")
+                if (intentIterations == null) sources.add("iterations from bench_spec.json")
+                if (intentWarmup == null) sources.add("warmup from bench_spec.json")
+            }
+            android.util.Log.i("BenchRunner", "Resolved params: function=$fn, iterations=$iterations, warmup=$warmup (sources: ${sources.joinToString(", ")})")
+        }
+
         return BenchParams(fn, iterations, warmup)
     }
 
