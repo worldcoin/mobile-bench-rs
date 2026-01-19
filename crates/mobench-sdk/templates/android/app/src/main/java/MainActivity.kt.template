@@ -148,17 +148,51 @@ class MainActivity : AppCompatActivity() {
         return try {
             val raw = assets.open(SPEC_ASSET).bufferedReader().use { it.readText() }
             if (raw.isBlank()) {
+                android.util.Log.w("BenchRunner", "bench_spec.json exists but is empty, using defaults")
                 null
             } else {
                 val json = JSONObject(raw)
-                BenchParams(
-                    json.optString("function", DEFAULT_FUNCTION),
-                    json.optInt("iterations", DEFAULT_ITERATIONS.toInt()).toUInt(),
-                    json.optInt("warmup", DEFAULT_WARMUP.toInt()).toUInt(),
-                )
+
+                // Log warnings for missing or invalid config values
+                val function = if (json.has("function")) {
+                    json.getString("function")
+                } else {
+                    android.util.Log.w("BenchRunner", "Config missing 'function' key, using default: $DEFAULT_FUNCTION")
+                    DEFAULT_FUNCTION
+                }
+
+                val iterations = if (json.has("iterations")) {
+                    try {
+                        json.getInt("iterations").toUInt()
+                    } catch (e: Exception) {
+                        android.util.Log.w("BenchRunner", "Config 'iterations' is not a valid integer: ${json.opt("iterations")}, using default: $DEFAULT_ITERATIONS")
+                        DEFAULT_ITERATIONS
+                    }
+                } else {
+                    android.util.Log.w("BenchRunner", "Config missing 'iterations' key, using default: $DEFAULT_ITERATIONS")
+                    DEFAULT_ITERATIONS
+                }
+
+                val warmup = if (json.has("warmup")) {
+                    try {
+                        json.getInt("warmup").toUInt()
+                    } catch (e: Exception) {
+                        android.util.Log.w("BenchRunner", "Config 'warmup' is not a valid integer: ${json.opt("warmup")}, using default: $DEFAULT_WARMUP")
+                        DEFAULT_WARMUP
+                    }
+                } else {
+                    android.util.Log.w("BenchRunner", "Config missing 'warmup' key, using default: $DEFAULT_WARMUP")
+                    DEFAULT_WARMUP
+                }
+
+                android.util.Log.i("BenchRunner", "Loaded config from bench_spec.json: function=$function, iterations=$iterations, warmup=$warmup")
+                BenchParams(function, iterations, warmup)
             }
+        } catch (e: java.io.FileNotFoundException) {
+            android.util.Log.d("BenchRunner", "No bench_spec.json in assets, will use intent extras or defaults")
+            null
         } catch (e: Exception) {
-            android.util.Log.w("MainActivity", "Failed to load bench_spec.json from assets", e)
+            android.util.Log.e("BenchRunner", "Failed to parse bench_spec.json from assets", e)
             null
         }
     }

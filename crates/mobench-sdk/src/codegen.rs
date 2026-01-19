@@ -40,7 +40,9 @@ pub fn generate_project(config: &InitConfig) -> Result<PathBuf, BenchError> {
     let output_dir = &config.output_dir;
     let project_slug = sanitize_package_name(&config.project_name);
     let project_pascal = to_pascal_case(&project_slug);
-    let bundle_prefix = format!("dev.world.{}", project_slug);
+    // Use sanitized bundle ID component (alphanumeric only) to avoid iOS validation issues
+    let bundle_id_component = sanitize_bundle_id_component(&project_slug);
+    let bundle_prefix = format!("dev.world.{}", bundle_id_component);
 
     // Create base directories
     fs::create_dir_all(output_dir)?;
@@ -343,6 +345,16 @@ pub fn generate_ios_project(
     default_function: &str,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("ios");
+    // Sanitize bundle ID components to ensure they only contain alphanumeric characters
+    // iOS bundle identifiers should not contain hyphens or underscores
+    let sanitized_bundle_prefix = {
+        let parts: Vec<&str> = bundle_prefix.split('.').collect();
+        parts.iter()
+            .map(|part| sanitize_bundle_id_component(part))
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    let sanitized_project_slug = sanitize_bundle_id_component(project_slug);
     let vars = vec![
         TemplateVar {
             name: "DEFAULT_FUNCTION",
@@ -354,11 +366,11 @@ pub fn generate_ios_project(
         },
         TemplateVar {
             name: "BUNDLE_ID_PREFIX",
-            value: bundle_prefix.to_string(),
+            value: sanitized_bundle_prefix.clone(),
         },
         TemplateVar {
             name: "BUNDLE_ID",
-            value: format!("{}.{}", bundle_prefix, project_slug),
+            value: format!("{}.{}", sanitized_bundle_prefix, sanitized_project_slug),
         },
         TemplateVar {
             name: "LIBRARY_NAME",
@@ -583,6 +595,23 @@ fn render_template(input: &str, vars: &[TemplateVar]) -> String {
         output = output.replace(&format!("{{{{{}}}}}", var.name), &var.value);
     }
     output
+}
+
+/// Sanitizes a string to be a valid iOS bundle identifier component
+///
+/// Bundle identifiers can only contain alphanumeric characters (A-Z, a-z, 0-9),
+/// hyphens (-), and dots (.). However, to avoid issues and maintain consistency,
+/// this function converts all non-alphanumeric characters to lowercase letters only.
+///
+/// Examples:
+/// - "bench-mobile" -> "benchmobile"
+/// - "bench_mobile" -> "benchmobile"
+/// - "my-project_name" -> "myprojectname"
+pub fn sanitize_bundle_id_component(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
 }
 
 fn sanitize_package_name(name: &str) -> String {
@@ -824,7 +853,10 @@ pub fn ensure_ios_project_with_options(
     let project_pascal = "BenchRunner";
     // Derive library name and bundle prefix from crate name
     let library_name = crate_name.replace('-', "_");
-    let bundle_prefix = format!("dev.world.{}", library_name.replace('_', "-"));
+    // Use sanitized bundle ID component (alphanumeric only) to avoid iOS validation issues
+    // e.g., "bench-mobile" or "bench_mobile" -> "benchmobile"
+    let bundle_id_component = sanitize_bundle_id_component(crate_name);
+    let bundle_prefix = format!("dev.world.{}", bundle_id_component);
 
     // Resolve the default function by auto-detecting from source
     let effective_root = project_root.unwrap_or_else(|| {
@@ -1049,5 +1081,23 @@ pub fn public_bench() {
 
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_sanitize_bundle_id_component() {
+        // Hyphens should be removed
+        assert_eq!(sanitize_bundle_id_component("bench-mobile"), "benchmobile");
+        // Underscores should be removed
+        assert_eq!(sanitize_bundle_id_component("bench_mobile"), "benchmobile");
+        // Mixed separators should all be removed
+        assert_eq!(sanitize_bundle_id_component("my-project_name"), "myprojectname");
+        // Already valid should remain unchanged (but lowercase)
+        assert_eq!(sanitize_bundle_id_component("benchmobile"), "benchmobile");
+        // Numbers should be preserved
+        assert_eq!(sanitize_bundle_id_component("bench2mobile"), "bench2mobile");
+        // Uppercase should be lowercased
+        assert_eq!(sanitize_bundle_id_component("BenchMobile"), "benchmobile");
+        // Complex case
+        assert_eq!(sanitize_bundle_id_component("My-Complex_Project-123"), "mycomplexproject123");
     }
 }
