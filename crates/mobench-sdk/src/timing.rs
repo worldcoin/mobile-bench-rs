@@ -1,8 +1,11 @@
 //! Lightweight benchmarking harness for mobile platforms.
 //!
 //! This module provides the core timing infrastructure for the mobench ecosystem.
-//! It's designed to be minimal and portable, with no platform-specific dependencies,
-//! making it suitable for compilation to Android and iOS targets.
+//! It was previously a separate crate (`mobench-runner`) but has been consolidated
+//! into `mobench-sdk` for a simpler dependency graph.
+//!
+//! The module is designed to be minimal and portable, with no platform-specific
+//! dependencies, making it suitable for compilation to Android and iOS targets.
 //!
 //! ## Overview
 //!

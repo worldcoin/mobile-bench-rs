@@ -1,9 +1,21 @@
-//! Common utilities shared between Android and iOS builders
+//! Common utilities shared between Android and iOS builders.
 //!
-//! This module provides helper functions for:
-//! - Detecting Cargo target directories (workspace-aware)
-//! - Finding host libraries for UniFFI binding generation
-//! - Running external commands with consistent error handling
+//! This module provides helper functions that are used by both [`super::AndroidBuilder`]
+//! and [`super::IosBuilder`] to ensure consistent behavior and error handling.
+//!
+//! ## Features
+//!
+//! - **Workspace-aware target detection** - Correctly handles Cargo workspaces where
+//!   the target directory is at the workspace root
+//! - **Host library resolution** - Finds compiled libraries for UniFFI binding generation
+//! - **Consistent error handling** - All errors include actionable fix suggestions
+//!
+//! ## Error Messages
+//!
+//! All functions in this module provide detailed, actionable error messages that include:
+//! - What went wrong
+//! - Where it happened (paths, commands)
+//! - How to fix it (specific commands or configuration changes)
 
 use std::env;
 use std::path::{Path, PathBuf};

@@ -1,5 +1,9 @@
 //! # mobench-sdk
 //!
+//! [![Crates.io](https://img.shields.io/crates/v/mobench-sdk.svg)](https://crates.io/crates/mobench-sdk)
+//! [![Documentation](https://docs.rs/mobench-sdk/badge.svg)](https://docs.rs/mobench-sdk)
+//! [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/worldcoin/mobile-bench-rs/blob/main/LICENSE)
+//!
 //! A mobile benchmarking SDK for Rust that enables running performance benchmarks
 //! on real Android and iOS devices via BrowserStack App Automate.
 //!
@@ -74,11 +78,13 @@
 //!
 //! ## Crate Ecosystem
 //!
-//! The mobench ecosystem consists of three crates:
+//! The mobench ecosystem consists of three published crates:
 //!
 //! - **`mobench-sdk`** (this crate) - Core SDK library with timing harness and build automation
 //! - **[`mobench`](https://crates.io/crates/mobench)** - CLI tool for building and running benchmarks
 //! - **[`mobench-macros`](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
+//!
+//! Note: The `mobench-runner` crate has been consolidated into this crate as the [`timing`] module.
 //!
 //! ## Feature Flags
 //!
@@ -273,28 +279,37 @@
 //!
 //! MIT License - see repository for details.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 // Core timing module - always available
 pub mod timing;
 pub mod types;
 
 // Full SDK modules - only with "full" feature
 #[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub mod builders;
 #[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub mod codegen;
 #[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub mod registry;
 #[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub mod runner;
 
 // Re-export the benchmark macro from bench-macros (only with full feature)
 #[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub use mobench_macros::benchmark;
 
 // Re-export key types for convenience (full feature)
 #[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub use registry::{BenchFunction, discover_benchmarks, find_benchmark, list_benchmark_names};
 #[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub use runner::{BenchmarkBuilder, run_benchmark};
 
 // Re-export types that are always available
@@ -302,6 +317,7 @@ pub use types::{BenchError, BenchSample, BenchSpec, RunnerReport};
 
 // Re-export types that require full feature
 #[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, Target};
 
 // Re-export timing types at the crate root for convenience
