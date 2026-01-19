@@ -98,23 +98,23 @@ This compiles Rust code for three Android ABIs:
 - `armv7-linux-androideabi` → `armeabi-v7a` (32-bit ARM devices)
 - `x86_64-linux-android` → `x86_64` (x86 emulators)
 
-Output: `target/android/{abi}/release/libsample_fns.so`
+Output: `target/{target-triple}/release/libsample_fns.so`
 
-This copies `.so` files to `android/app/src/main/jniLibs/{abi}/libsample_fns.so` where Android's build system expects them.
+The mobench builder copies `.so` files to `target/mobench/android/app/src/main/jniLibs/{abi}/libsample_fns.so` where Android's build system expects them.
 
 #### Step 2: Build APK with Gradle
 ```bash
-cd android
+cd target/mobench/android
 ./gradlew :app:assembleDebug
-cd ..
+cd ../../..
 ```
 
-Output: `android/app/build/outputs/apk/debug/app-debug.apk`
+Output: `target/mobench/android/app/build/outputs/apk/debug/app-debug.apk`
 
 #### Step 3: Install and Run
 ```bash
 # Install
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r target/mobench/android/app/build/outputs/apk/debug/app-debug.apk
 
 # Launch with default parameters
 adb shell am start -n dev.world.bench/.MainActivity
@@ -132,7 +132,7 @@ adb shell am start -n dev.world.bench/.MainActivity \
    cargo mobench build --target android
    ```
 
-2. Open the `android/` directory in Android Studio
+2. Open the `target/mobench/android/` directory in Android Studio
 
 3. Wait for Gradle sync to complete
 
@@ -186,7 +186,7 @@ This build step:
 
 2. Creates xcframework with structure:
    ```
-   target/ios/sample_fns.xcframework/
+   target/mobench/ios/sample_fns.xcframework/
    ├── Info.plist
    ├── ios-arm64/
    │   └── sample_fns.framework/
@@ -210,18 +210,18 @@ This build step:
 
 5. **Automatically code-signs the xcframework** (required for Xcode)
 
-Output: `target/ios/sample_fns.xcframework` (signed)
+Output: `target/mobench/ios/sample_fns.xcframework` (signed)
 
 **Note**: The build step includes automatic code signing. If signing fails for any reason, you can sign manually:
 ```bash
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 ```
 
 Code signing is **required** for Xcode to accept and link the framework. Without signing, you'll see "The Framework 'sample_fns.xcframework' is unsigned" errors.
 
 #### Step 2: Generate Xcode Project
 ```bash
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodegen generate
 ```
 
@@ -229,7 +229,7 @@ This generates `BenchRunner.xcodeproj` from `project.yml` specification. The gen
 - Source files from `BenchRunner/` directory
 - Generated Swift bindings (`BenchRunner/Generated/sample_fns.swift`)
 - Bridging header (`BenchRunner/BenchRunner-Bridging-Header.h`)
-- Framework dependency on `../../target/ios/sample_fns.xcframework`
+- Framework dependency on `../sample_fns.xcframework`
 
 #### Step 3: Build and Run in Xcode
 ```bash
@@ -306,7 +306,7 @@ This makes C types (`RustBuffer`, `RustCallStatus`, etc.) available to Swift wit
 
 **Code Signing**: The build step automatically signs the xcframework. If signing fails, sign with:
 ```bash
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 ```
 
 ## Common Issues
@@ -331,10 +331,10 @@ cargo install cargo-ndk
 ```bash
 # Ensure .so files are in the APK
 cargo mobench build --target android
-cd android && ./gradlew clean assembleDebug
+cd target/mobench/android && ./gradlew clean assembleDebug
 
 # Verify .so files are in APK
-unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep libsample_fns.so
+unzip -l target/mobench/android/app/build/outputs/apk/debug/app-debug.apk | grep libsample_fns.so
 ```
 
 **Issue**: `Error: UnknownFunction`
@@ -350,18 +350,18 @@ brew install xcodegen
 
 **Issue**: "The Framework 'sample_fns.xcframework' is unsigned"
 ```bash
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 ```
 
 **Issue**: "While building for iOS Simulator, no library for this platform was found"
 ```bash
 # Rebuild with correct structure
-rm -rf target/ios/sample_fns.xcframework
+rm -rf target/mobench/ios/sample_fns.xcframework
 cargo mobench build --target ios
-codesign --force --deep --sign - target/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 
 # Clean Xcode build
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodebuild clean -project BenchRunner.xcodeproj -scheme BenchRunner
 ```
 
@@ -372,13 +372,13 @@ xcodebuild clean -project BenchRunner.xcodeproj -scheme BenchRunner
 **Issue**: "Cannot find type 'RustBuffer' in scope"
 ```bash
 # Ensure bridging header exists
-cat ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h
+cat target/mobench/ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h
 
 # Should contain:
 # #import "sample_fnsFFI.h"
 
 # Regenerate project
-cd ios/BenchRunner
+cd target/mobench/ios/BenchRunner
 xcodegen generate
 ```
 
