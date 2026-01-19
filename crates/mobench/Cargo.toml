@@ -6,9 +6,17 @@ license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Mobile benchmarking CLI for Rust - Run benchmarks on real Android and iOS devices"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench"
 readme = "README.md"
 keywords = ["benchmark", "mobile", "android", "ios", "performance"]
 categories = ["development-tools", "command-line-utilities"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 default-run = "mobench"
 
