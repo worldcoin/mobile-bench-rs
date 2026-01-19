@@ -295,7 +295,7 @@ pub fn generate_android_project(output_dir: &Path, project_slug: &str) -> Result
             value: "example_fibonacci".to_string(),
         },
     ];
-    render_dir(&ANDROID_TEMPLATES, Path::new(""), &target_dir, &vars)?;
+    render_dir(&ANDROID_TEMPLATES, &target_dir, &vars)?;
     Ok(())
 }
 
@@ -339,7 +339,7 @@ pub fn generate_ios_project(
             value: project_slug.replace('-', "_"),
         },
     ];
-    render_dir(&IOS_TEMPLATES, Path::new(""), &target_dir, &vars)?;
+    render_dir(&IOS_TEMPLATES, &target_dir, &vars)?;
     Ok(())
 }
 
@@ -431,7 +431,6 @@ fn fibonacci(n: u32) -> u64 {
 
 fn render_dir(
     dir: &Dir,
-    prefix: &Path,
     out_root: &Path,
     vars: &[TemplateVar],
 ) -> Result<(), BenchError> {
@@ -442,14 +441,14 @@ fn render_dir(
                 if sub.path().components().any(|c| c.as_os_str() == ".gradle") {
                     continue;
                 }
-                let next_prefix = prefix.join(sub.path());
-                render_dir(sub, &next_prefix, out_root, vars)?;
+                render_dir(sub, out_root, vars)?;
             }
             DirEntry::File(file) => {
                 if file.path().components().any(|c| c.as_os_str() == ".gradle") {
                     continue;
                 }
-                let mut relative = prefix.join(file.path());
+                // file.path() returns the full relative path from the embedded dir root
+                let mut relative = file.path().to_path_buf();
                 let mut contents = file.contents().to_vec();
                 if let Some(ext) = relative.extension()
                     && ext == "template"
@@ -565,10 +564,12 @@ pub fn ensure_ios_project(output_dir: &Path, crate_name: &str) -> Result<(), Ben
     }
 
     println!("iOS project not found, generating scaffolding...");
-    let project_slug = crate_name.replace('-', "_");
-    let project_pascal = to_pascal_case(&project_slug);
-    let bundle_prefix = format!("dev.world.{}", project_slug.replace('_', "-"));
-    generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix)?;
+    // Use fixed "BenchRunner" for project/scheme name to match template directory structure
+    let project_pascal = "BenchRunner";
+    // Derive library name and bundle prefix from crate name
+    let library_name = crate_name.replace('-', "_");
+    let bundle_prefix = format!("dev.world.{}", library_name.replace('_', "-"));
+    generate_ios_project(output_dir, &library_name, project_pascal, &bundle_prefix)?;
     println!("  Generated iOS project at {:?}", output_dir.join("ios"));
     Ok(())
 }
