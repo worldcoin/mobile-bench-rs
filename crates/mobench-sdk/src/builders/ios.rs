@@ -154,9 +154,11 @@ impl IosBuilder {
 
     /// Sets the explicit crate directory
     ///
-    /// By default, the builder searches for the crate in:
-    /// - `{project_root}/bench-mobile/`
-    /// - `{project_root}/crates/{crate_name}/`
+    /// By default, the builder searches for the crate in this order:
+    /// 1. `{project_root}/Cargo.toml` - if it exists and has `[package] name` matching `crate_name`
+    /// 2. `{project_root}/bench-mobile/` - SDK-generated projects
+    /// 3. `{project_root}/crates/{crate_name}/` - workspace structure
+    /// 4. `{project_root}/{crate_name}/` - simple nested structure
     ///
     /// Use this to override auto-detection and point directly to the crate.
     pub fn crate_dir(mut self, dir: impl Into<PathBuf>) -> Self {
@@ -372,7 +374,13 @@ impl IosBuilder {
         Ok(())
     }
 
-    /// Finds the benchmark crate directory (either bench-mobile/ or crates/{crate_name}/)
+    /// Finds the benchmark crate directory.
+    ///
+    /// Search order:
+    /// 1. Explicit `crate_dir` if set via `.crate_dir()` builder method
+    /// 2. Current directory (`project_root`) if its Cargo.toml has a matching package name
+    /// 3. `{project_root}/bench-mobile/` (SDK projects)
+    /// 4. `{project_root}/crates/{crate_name}/` (repository structure)
     fn find_crate_dir(&self) -> Result<PathBuf, BenchError> {
         // If explicit crate_dir was provided, use it
         if let Some(ref dir) = self.crate_dir {
@@ -386,7 +394,18 @@ impl IosBuilder {
             )));
         }
 
-        // Try bench-mobile/ first (SDK projects)
+        // Check if the current directory (project_root) IS the crate
+        // This handles the case where user runs `cargo mobench build` from within the crate directory
+        let root_cargo_toml = self.project_root.join("Cargo.toml");
+        if root_cargo_toml.exists() {
+            if let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml) {
+                if pkg_name == self.crate_name {
+                    return Ok(self.project_root.clone());
+                }
+            }
+        }
+
+        // Try bench-mobile/ (SDK projects)
         let bench_mobile_dir = self.project_root.join("bench-mobile");
         if bench_mobile_dir.exists() {
             return Ok(bench_mobile_dir);
@@ -398,16 +417,27 @@ impl IosBuilder {
             return Ok(crates_dir);
         }
 
+        // Also try {crate_name}/ in project root (common pattern)
+        let named_dir = self.project_root.join(&self.crate_name);
+        if named_dir.exists() {
+            return Ok(named_dir);
+        }
+
+        let root_manifest = root_cargo_toml;
         let bench_mobile_manifest = bench_mobile_dir.join("Cargo.toml");
         let crates_manifest = crates_dir.join("Cargo.toml");
+        let named_manifest = named_dir.join("Cargo.toml");
         Err(BenchError::Build(format!(
             "Benchmark crate '{}' not found.\n\n\
              Searched locations:\n\
+             - {} (checked [package] name)\n\
+             - {}\n\
              - {}\n\
              - {}\n\n\
              To fix this:\n\
-             1. Create a bench-mobile/ directory with your benchmark crate, or\n\
-             2. Use --crate-path to specify the benchmark crate location:\n\
+             1. Run from the crate directory (where Cargo.toml has name = \"{}\")\n\
+             2. Create a bench-mobile/ directory with your benchmark crate, or\n\
+             3. Use --crate-path to specify the benchmark crate location:\n\
                 cargo mobench build --target ios --crate-path ./my-benchmarks\n\n\
              Common issues:\n\
              - Typo in crate name (check Cargo.toml [package] name)\n\
@@ -415,8 +445,11 @@ impl IosBuilder {
              - Missing Cargo.toml in the crate directory\n\n\
              Run 'cargo mobench init --help' to generate a new benchmark project.",
             self.crate_name,
+            root_manifest.display(),
             bench_mobile_manifest.display(),
-            crates_manifest.display()
+            crates_manifest.display(),
+            named_manifest.display(),
+            self.crate_name,
         )))
     }
 
@@ -1761,5 +1794,145 @@ mod tests {
         let builder =
             IosBuilder::new("/tmp/test-project", "test-bench-mobile").output_dir("/custom/output");
         assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
+    }
+
+    #[test]
+    fn test_find_crate_dir_current_directory_is_crate() {
+        // Test case 1: Current directory IS the crate with matching package name
+        let temp_dir = std::env::temp_dir().join("mobench-ios-test-find-crate-current");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create Cargo.toml with matching package name
+        std::fs::write(
+            temp_dir.join("Cargo.toml"),
+            r#"[package]
+name = "bench-mobile"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        let builder = IosBuilder::new(&temp_dir, "bench-mobile");
+        let result = builder.find_crate_dir();
+        assert!(result.is_ok(), "Should find crate in current directory");
+        // Note: IosBuilder canonicalizes paths, so compare canonical forms
+        let expected = temp_dir.canonicalize().unwrap_or(temp_dir.clone());
+        assert_eq!(result.unwrap(), expected);
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_crate_dir_nested_bench_mobile() {
+        // Test case 2: Crate is in bench-mobile/ subdirectory
+        let temp_dir = std::env::temp_dir().join("mobench-ios-test-find-crate-nested");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(temp_dir.join("bench-mobile")).unwrap();
+
+        // Create parent Cargo.toml (workspace or different crate)
+        std::fs::write(
+            temp_dir.join("Cargo.toml"),
+            r#"[workspace]
+members = ["bench-mobile"]
+"#,
+        )
+        .unwrap();
+
+        // Create bench-mobile/Cargo.toml
+        std::fs::write(
+            temp_dir.join("bench-mobile/Cargo.toml"),
+            r#"[package]
+name = "bench-mobile"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        let builder = IosBuilder::new(&temp_dir, "bench-mobile");
+        let result = builder.find_crate_dir();
+        assert!(result.is_ok(), "Should find crate in bench-mobile/ directory");
+        let expected = temp_dir.canonicalize().unwrap_or(temp_dir.clone()).join("bench-mobile");
+        assert_eq!(result.unwrap(), expected);
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_crate_dir_crates_subdir() {
+        // Test case 3: Crate is in crates/{name}/ subdirectory
+        let temp_dir = std::env::temp_dir().join("mobench-ios-test-find-crate-crates");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(temp_dir.join("crates/my-bench")).unwrap();
+
+        // Create workspace Cargo.toml
+        std::fs::write(
+            temp_dir.join("Cargo.toml"),
+            r#"[workspace]
+members = ["crates/*"]
+"#,
+        )
+        .unwrap();
+
+        // Create crates/my-bench/Cargo.toml
+        std::fs::write(
+            temp_dir.join("crates/my-bench/Cargo.toml"),
+            r#"[package]
+name = "my-bench"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        let builder = IosBuilder::new(&temp_dir, "my-bench");
+        let result = builder.find_crate_dir();
+        assert!(result.is_ok(), "Should find crate in crates/ directory");
+        let expected = temp_dir.canonicalize().unwrap_or(temp_dir.clone()).join("crates/my-bench");
+        assert_eq!(result.unwrap(), expected);
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_crate_dir_not_found() {
+        // Test case 4: Crate doesn't exist anywhere
+        let temp_dir = std::env::temp_dir().join("mobench-ios-test-find-crate-notfound");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create Cargo.toml with DIFFERENT package name
+        std::fs::write(
+            temp_dir.join("Cargo.toml"),
+            r#"[package]
+name = "some-other-crate"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        let builder = IosBuilder::new(&temp_dir, "nonexistent-crate");
+        let result = builder.find_crate_dir();
+        assert!(result.is_err(), "Should fail to find nonexistent crate");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Benchmark crate 'nonexistent-crate' not found"));
+        assert!(err_msg.contains("Searched locations"));
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_crate_dir_explicit_crate_path() {
+        // Test case 5: Explicit crate_dir overrides auto-detection
+        let temp_dir = std::env::temp_dir().join("mobench-ios-test-find-crate-explicit");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(temp_dir.join("custom-location")).unwrap();
+
+        let builder = IosBuilder::new(&temp_dir, "any-name")
+            .crate_dir(temp_dir.join("custom-location"));
+        let result = builder.find_crate_dir();
+        assert!(result.is_ok(), "Should use explicit crate_dir");
+        assert_eq!(result.unwrap(), temp_dir.join("custom-location"));
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
     }
 }
