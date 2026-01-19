@@ -413,7 +413,7 @@ impl IosBuilder {
              - Typo in crate name (check Cargo.toml [package] name)\n\
              - Wrong working directory (run from project root)\n\
              - Missing Cargo.toml in the crate directory\n\n\
-             Run 'cargo mobench init-sdk --help' to generate a new benchmark project.",
+             Run 'cargo mobench init --help' to generate a new benchmark project.",
             self.crate_name,
             bench_mobile_manifest.display(),
             crates_manifest.display()

@@ -58,7 +58,7 @@ Benchmarks are identified by name at runtime. You can call them by:
 From your repo root, create a mobile harness with the CLI:
 
 ```bash
-cargo mobench init-sdk --target both --project-name my-bench --output-dir .
+cargo mobench init --target android --output bench-config.toml
 ```
 
 This generates:
@@ -175,8 +175,8 @@ cargo mobench run \
   --iterations 100 \
   --warmup 10 \
   --devices "iPhone 14-16" \
-  --ios-app target/ios/BenchRunner.ipa \
-  --ios-test-suite target/ios/BenchRunnerUITests.zip
+  --ios-app target/mobench/ios/BenchRunner.ipa \
+  --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip
 ```
 
 **IPA Signing Methods:**

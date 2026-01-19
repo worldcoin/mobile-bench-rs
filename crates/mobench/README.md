@@ -36,7 +36,7 @@ This creates:
 - `bench-mobile/` - FFI wrapper crate with UniFFI bindings
 - `android/` or `ios/` - Platform-specific app projects (generated to output directory)
 - `bench-config.toml` - Run configuration file
-- `mobench.toml` - Project configuration file (when using `init-sdk`)
+- `mobench.toml` - Project configuration file (when using `init`)
 - `benches/example.rs` - Example benchmarks (with `--examples`)
 
 ### 2. Write Benchmarks
