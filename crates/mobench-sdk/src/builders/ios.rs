@@ -13,6 +13,8 @@ use std::process::Command;
 pub struct IosBuilder {
     /// Root directory of the project
     project_root: PathBuf,
+    /// Output directory for mobile artifacts (defaults to target/mobench)
+    output_dir: PathBuf,
     /// Name of the bench-mobile crate
     crate_name: String,
     /// Whether to use verbose output
@@ -27,11 +29,22 @@ impl IosBuilder {
     /// * `project_root` - Root directory containing the bench-mobile crate
     /// * `crate_name` - Name of the bench-mobile crate (e.g., "my-project-bench-mobile")
     pub fn new(project_root: impl Into<PathBuf>, crate_name: impl Into<String>) -> Self {
+        let root = project_root.into();
         Self {
-            project_root: project_root.into(),
+            output_dir: root.join("target/mobench"),
+            project_root: root,
             crate_name: crate_name.into(),
             verbose: false,
         }
+    }
+
+    /// Sets the output directory for mobile artifacts
+    ///
+    /// By default, artifacts are written to `{project_root}/target/mobench/`.
+    /// Use this to customize the output location.
+    pub fn output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.output_dir = dir.into();
+        self
     }
 
     /// Enables verbose output
@@ -80,7 +93,7 @@ impl IosBuilder {
                     framework_name
                 ))
             })?;
-        let include_dir = self.project_root.join("target/ios/include");
+        let include_dir = self.output_dir.join("ios/include");
         fs::create_dir_all(&include_dir)
             .map_err(|e| BenchError::Build(format!("Failed to create include dir: {}", e)))?;
         let header_dest = include_dir.join(format!("{}.h", framework_name));
@@ -197,7 +210,7 @@ impl IosBuilder {
 
         // Check if bindings already exist (for repository testing with pre-generated bindings)
         let bindings_path = self
-            .project_root
+            .output_dir
             .join("ios")
             .join("BenchRunner")
             .join("BenchRunner")
@@ -235,7 +248,7 @@ impl IosBuilder {
 
         let lib_path = host_lib_path(&crate_dir, &self.crate_name)?;
         let out_dir = self
-            .project_root
+            .output_dir
             .join("ios")
             .join("BenchRunner")
             .join("BenchRunner")
@@ -269,7 +282,7 @@ impl IosBuilder {
         };
 
         let target_dir = self.project_root.join("target");
-        let xcframework_dir = target_dir.join("ios");
+        let xcframework_dir = self.output_dir.join("ios");
         let framework_name = &self.crate_name.replace("-", "_");
         let xcframework_path = xcframework_dir.join(format!("{}.xcframework", framework_name));
 
@@ -504,7 +517,7 @@ impl IosBuilder {
 
     /// Generates Xcode project using xcodegen if project.yml exists
     fn generate_xcode_project(&self) -> Result<(), BenchError> {
-        let ios_dir = self.project_root.join("ios");
+        let ios_dir = self.output_dir.join("ios");
         let project_yml = ios_dir.join("BenchRunner/project.yml");
 
         if !project_yml.exists() {
@@ -541,7 +554,7 @@ impl IosBuilder {
     fn find_uniffi_header(&self, header_name: &str) -> Option<PathBuf> {
         // Check generated Swift bindings directory first
         let swift_dir = self
-            .project_root
+            .output_dir
             .join("ios/BenchRunner/BenchRunner/Generated");
         let candidate_swift = swift_dir.join(header_name);
         if candidate_swift.exists() {
@@ -753,7 +766,7 @@ impl IosBuilder {
     pub fn package_ipa(&self, scheme: &str, method: SigningMethod) -> Result<PathBuf, BenchError> {
         // For repository structure: ios/BenchRunner/BenchRunner.xcodeproj
         // The directory and scheme happen to have the same name
-        let ios_dir = self.project_root.join("ios").join(scheme);
+        let ios_dir = self.output_dir.join("ios").join(scheme);
         let project_path = ios_dir.join(format!("{}.xcodeproj", scheme));
 
         // Verify Xcode project exists
@@ -764,7 +777,7 @@ impl IosBuilder {
             )));
         }
 
-        let export_path = self.project_root.join("target/ios");
+        let export_path = self.output_dir.join("ios");
         let ipa_path = export_path.join(format!("{}.ipa", scheme));
 
         // Create target/ios directory if it doesn't exist
@@ -774,7 +787,7 @@ impl IosBuilder {
         println!("Building {} for device...", scheme);
 
         // Step 1: Build the app for device (simpler than archiving)
-        let build_dir = self.project_root.join("target/ios/build");
+        let build_dir = self.output_dir.join("ios/build");
         let build_configuration = "Debug";
         let mut cmd = Command::new("xcodebuild");
         cmd.args([
@@ -920,7 +933,7 @@ impl IosBuilder {
     /// This requires the app project to be generated first with `build()`.
     /// The resulting zip can be supplied to BrowserStack as the test suite.
     pub fn package_xcuitest(&self, scheme: &str) -> Result<PathBuf, BenchError> {
-        let ios_dir = self.project_root.join("ios").join(scheme);
+        let ios_dir = self.output_dir.join("ios").join(scheme);
         let project_path = ios_dir.join(format!("{}.xcodeproj", scheme));
 
         if !project_path.exists() {
@@ -930,11 +943,11 @@ impl IosBuilder {
             )));
         }
 
-        let export_path = self.project_root.join("target/ios");
+        let export_path = self.output_dir.join("ios");
         fs::create_dir_all(&export_path)
             .map_err(|e| BenchError::Build(format!("Failed to create export directory: {}", e)))?;
 
-        let build_dir = self.project_root.join("target/ios/build");
+        let build_dir = self.output_dir.join("ios/build");
         println!("Building XCUITest runner for {}...", scheme);
 
         let mut cmd = Command::new("xcodebuild");
@@ -1085,11 +1098,22 @@ mod tests {
     fn test_ios_builder_creation() {
         let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
         assert!(!builder.verbose);
+        assert_eq!(
+            builder.output_dir,
+            PathBuf::from("/tmp/test-project/target/mobench")
+        );
     }
 
     #[test]
     fn test_ios_builder_verbose() {
         let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile").verbose(true);
         assert!(builder.verbose);
+    }
+
+    #[test]
+    fn test_ios_builder_custom_output_dir() {
+        let builder =
+            IosBuilder::new("/tmp/test-project", "test-bench-mobile").output_dir("/custom/output");
+        assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
     }
 }

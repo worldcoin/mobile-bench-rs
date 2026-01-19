@@ -114,6 +114,8 @@ enum Command {
         target: SdkTarget,
         #[arg(long, help = "Build in release mode")]
         release: bool,
+        #[arg(long, help = "Output directory for mobile artifacts (default: target/mobench)")]
+        output_dir: Option<PathBuf>,
     },
     /// Package iOS app as IPA for distribution or testing.
     PackageIpa {
@@ -573,8 +575,12 @@ pub fn run() -> Result<()> {
         } => {
             cmd_init_sdk(target, project_name, output_dir, examples)?;
         }
-        Command::Build { target, release } => {
-            cmd_build(target, release)?;
+        Command::Build {
+            target,
+            release,
+            output_dir,
+        } => {
+            cmd_build(target, release, output_dir)?;
         }
         Command::PackageIpa { scheme, method } => {
             cmd_package_ipa(&scheme, method)?;
@@ -1765,7 +1771,7 @@ fn cmd_init_sdk(
 }
 
 /// Build mobile artifacts using mobench-sdk (Phase 1 MVP)
-fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
+fn cmd_build(target: SdkTarget, release: bool, output_dir: Option<PathBuf>) -> Result<()> {
     println!("Building mobile artifacts...");
     println!("  Target: {:?}", target);
     println!("  Profile: {}", if release { "release" } else { "debug" });
@@ -1773,6 +1779,10 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
     let project_root = std::env::current_dir().context("Failed to get current directory")?;
     let crate_name = detect_bench_mobile_crate_name(&project_root)
         .unwrap_or_else(|_| "bench-mobile".to_string()); // Fallback for legacy layouts
+
+    if let Some(ref dir) = output_dir {
+        println!("  Output: {:?}", dir);
+    }
 
     let build_config = mobench_sdk::BuildConfig {
         target: target.into(),
@@ -1786,32 +1796,45 @@ fn cmd_build(target: SdkTarget, release: bool) -> Result<()> {
 
     match target {
         SdkTarget::Android => {
-            let builder =
+            let mut builder =
                 mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
                     .verbose(true);
+            if let Some(ref dir) = output_dir {
+                builder = builder.output_dir(dir);
+            }
             let result = builder.build(&build_config)?;
             println!("\n✓ Android build completed!");
             println!("  APK: {:?}", result.app_path);
         }
         SdkTarget::Ios => {
-            let builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name.clone())
-                .verbose(true);
+            let mut builder =
+                mobench_sdk::builders::IosBuilder::new(&project_root, crate_name.clone())
+                    .verbose(true);
+            if let Some(ref dir) = output_dir {
+                builder = builder.output_dir(dir);
+            }
             let result = builder.build(&build_config)?;
             println!("\n✓ iOS build completed!");
             println!("  Framework: {:?}", result.app_path);
         }
         SdkTarget::Both => {
             // Build Android
-            let android_builder =
+            let mut android_builder =
                 mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
                     .verbose(true);
+            if let Some(ref dir) = output_dir {
+                android_builder = android_builder.output_dir(dir);
+            }
             let android_result = android_builder.build(&build_config)?;
             println!("\n✓ Android build completed!");
             println!("  APK: {:?}", android_result.app_path);
 
             // Build iOS
-            let ios_builder =
+            let mut ios_builder =
                 mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+            if let Some(ref dir) = output_dir {
+                ios_builder = ios_builder.output_dir(dir);
+            }
             let ios_result = ios_builder.build(&build_config)?;
             println!("\n✓ iOS build completed!");
             println!("  Framework: {:?}", ios_result.app_path);
