@@ -5,6 +5,7 @@
 
 use crate::types::{BenchError, InitConfig, Target};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use include_dir::{Dir, DirEntry, include_dir};
@@ -47,17 +48,21 @@ pub fn generate_project(config: &InitConfig) -> Result<PathBuf, BenchError> {
     // Generate bench-mobile FFI wrapper crate
     generate_bench_mobile_crate(output_dir, &project_slug)?;
 
+    // For full project generation (init), use "example_fibonacci" as the default
+    // since the generated example benchmarks include this function
+    let default_function = "example_fibonacci";
+
     // Generate platform-specific projects
     match config.target {
         Target::Android => {
-            generate_android_project(output_dir, &project_slug)?;
+            generate_android_project(output_dir, &project_slug, default_function)?;
         }
         Target::Ios => {
-            generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix)?;
+            generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix, default_function)?;
         }
         Target::Both => {
-            generate_android_project(output_dir, &project_slug)?;
-            generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix)?;
+            generate_android_project(output_dir, &project_slug, default_function)?;
+            generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix, default_function)?;
         }
     }
 
@@ -275,24 +280,43 @@ uniffi::setup_scaffolding!();
 ///
 /// * `output_dir` - Directory to write the `android/` project into
 /// * `project_slug` - Project name (e.g., "bench-mobile" -> "bench_mobile")
-pub fn generate_android_project(output_dir: &Path, project_slug: &str) -> Result<(), BenchError> {
+/// * `default_function` - Default benchmark function to use (e.g., "bench_mobile::my_benchmark")
+pub fn generate_android_project(
+    output_dir: &Path,
+    project_slug: &str,
+    default_function: &str,
+) -> Result<(), BenchError> {
     let target_dir = output_dir.join("android");
+    let library_name = project_slug.replace('-', "_");
+    let project_pascal = to_pascal_case(project_slug);
     let vars = vec![
+        TemplateVar {
+            name: "PROJECT_NAME",
+            value: project_slug.to_string(),
+        },
+        TemplateVar {
+            name: "PROJECT_NAME_PASCAL",
+            value: project_pascal.clone(),
+        },
+        TemplateVar {
+            name: "APP_NAME",
+            value: format!("{} Benchmark", project_pascal),
+        },
         TemplateVar {
             name: "PACKAGE_NAME",
             value: format!("dev.world.{}", project_slug),
         },
         TemplateVar {
             name: "UNIFFI_NAMESPACE",
-            value: project_slug.replace('-', "_"),
+            value: library_name.clone(),
         },
         TemplateVar {
             name: "LIBRARY_NAME",
-            value: project_slug.replace('-', "_"),
+            value: library_name,
         },
         TemplateVar {
             name: "DEFAULT_FUNCTION",
-            value: "example_fibonacci".to_string(),
+            value: default_function.to_string(),
         },
     ];
     render_dir(&ANDROID_TEMPLATES, &target_dir, &vars)?;
@@ -310,17 +334,19 @@ pub fn generate_android_project(output_dir: &Path, project_slug: &str) -> Result
 /// * `project_slug` - Project name (e.g., "bench-mobile" -> "bench_mobile")
 /// * `project_pascal` - PascalCase version of project name (e.g., "BenchMobile")
 /// * `bundle_prefix` - iOS bundle ID prefix (e.g., "dev.world.bench")
+/// * `default_function` - Default benchmark function to use (e.g., "bench_mobile::my_benchmark")
 pub fn generate_ios_project(
     output_dir: &Path,
     project_slug: &str,
     project_pascal: &str,
     bundle_prefix: &str,
+    default_function: &str,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("ios");
     let vars = vec![
         TemplateVar {
             name: "DEFAULT_FUNCTION",
-            value: "example_fibonacci".to_string(),
+            value: default_function.to_string(),
         },
         TemplateVar {
             name: "PROJECT_NAME_PASCAL",
@@ -429,6 +455,12 @@ fn fibonacci(n: u32) -> u64 {
     Ok(())
 }
 
+/// File extensions that should be processed for template variable substitution
+const TEMPLATE_EXTENSIONS: &[&str] = &[
+    "gradle", "xml", "kt", "java", "swift", "yml", "yaml", "json", "toml", "md", "txt", "h", "m",
+    "plist", "pbxproj", "xcscheme", "xcworkspacedata", "entitlements", "modulemap",
+];
+
 fn render_dir(
     dir: &Dir,
     out_root: &Path,
@@ -450,22 +482,30 @@ fn render_dir(
                 // file.path() returns the full relative path from the embedded dir root
                 let mut relative = file.path().to_path_buf();
                 let mut contents = file.contents().to_vec();
-                if let Some(ext) = relative.extension()
-                    && ext == "template"
-                {
+
+                // Check if file has .template extension (explicit template)
+                let is_explicit_template = relative
+                    .extension()
+                    .map(|ext| ext == "template")
+                    .unwrap_or(false);
+
+                // Check if file is a text file that should be processed for templates
+                let should_render = is_explicit_template || is_template_file(&relative);
+
+                if is_explicit_template {
+                    // Remove .template extension from output filename
                     relative.set_extension("");
-                    let rendered = render_template(
-                        std::str::from_utf8(&contents).map_err(|e| {
-                            BenchError::Build(format!(
-                                "invalid UTF-8 in template {:?}: {}",
-                                file.path(),
-                                e
-                            ))
-                        })?,
-                        vars,
-                    );
-                    contents = rendered.into_bytes();
                 }
+
+                if should_render {
+                    if let Ok(text) = std::str::from_utf8(&contents) {
+                        let rendered = render_template(text, vars);
+                        // Validate that all template variables were replaced
+                        validate_no_unreplaced_placeholders(&rendered, &relative)?;
+                        contents = rendered.into_bytes();
+                    }
+                }
+
                 let out_path = out_root.join(relative);
                 if let Some(parent) = out_path.parent() {
                     fs::create_dir_all(parent)?;
@@ -474,6 +514,66 @@ fn render_dir(
             }
         }
     }
+    Ok(())
+}
+
+/// Checks if a file should be processed for template variable substitution
+/// based on its extension
+fn is_template_file(path: &Path) -> bool {
+    // Check for .template extension on any file
+    if let Some(ext) = path.extension() {
+        if ext == "template" {
+            return true;
+        }
+        // Check if the base extension is in our list
+        if let Some(ext_str) = ext.to_str() {
+            return TEMPLATE_EXTENSIONS.contains(&ext_str);
+        }
+    }
+    // Also check the filename without the .template extension
+    if let Some(stem) = path.file_stem() {
+        let stem_path = Path::new(stem);
+        if let Some(ext) = stem_path.extension() {
+            if let Some(ext_str) = ext.to_str() {
+                return TEMPLATE_EXTENSIONS.contains(&ext_str);
+            }
+        }
+    }
+    false
+}
+
+/// Validates that no unreplaced template placeholders remain in the rendered content
+fn validate_no_unreplaced_placeholders(content: &str, file_path: &Path) -> Result<(), BenchError> {
+    // Find all {{...}} patterns
+    let mut pos = 0;
+    let mut unreplaced = Vec::new();
+
+    while let Some(start) = content[pos..].find("{{") {
+        let abs_start = pos + start;
+        if let Some(end) = content[abs_start..].find("}}") {
+            let placeholder = &content[abs_start..abs_start + end + 2];
+            // Extract just the variable name
+            let var_name = &content[abs_start + 2..abs_start + end];
+            // Skip placeholders that look like Gradle variable syntax (e.g., ${...})
+            // or other non-template patterns
+            if !var_name.contains('$') && !var_name.contains(' ') && !var_name.is_empty() {
+                unreplaced.push(placeholder.to_string());
+            }
+            pos = abs_start + end + 2;
+        } else {
+            break;
+        }
+    }
+
+    if !unreplaced.is_empty() {
+        return Err(BenchError::Build(format!(
+            "Template validation failed for {:?}: unreplaced placeholders found: {:?}\n\n\
+             This is a bug in mobench-sdk. Please report it at:\n\
+             https://github.com/worldcoin/mobile-bench-rs/issues",
+            file_path, unreplaced
+        )));
+    }
+
     Ok(())
 }
 
@@ -528,37 +628,193 @@ pub fn ios_project_exists(output_dir: &Path) -> bool {
     output_dir.join("ios/BenchRunner/project.yml").exists()
 }
 
+/// Detects the first benchmark function in a crate by scanning src/lib.rs for `#[benchmark]`
+///
+/// This function looks for functions marked with the `#[benchmark]` attribute and returns
+/// the first one found in the format `{crate_name}::{function_name}`.
+///
+/// # Arguments
+///
+/// * `crate_dir` - Path to the crate directory containing Cargo.toml
+/// * `crate_name` - Name of the crate (used as prefix for the function name)
+///
+/// # Returns
+///
+/// * `Some(String)` - The detected function name in format `crate_name::function_name`
+/// * `None` - If no benchmark functions are found or if the file cannot be read
+pub fn detect_default_function(crate_dir: &Path, crate_name: &str) -> Option<String> {
+    let lib_rs = crate_dir.join("src/lib.rs");
+    if !lib_rs.exists() {
+        return None;
+    }
+
+    let file = fs::File::open(&lib_rs).ok()?;
+    let reader = BufReader::new(file);
+
+    let mut found_benchmark_attr = false;
+    let crate_name_normalized = crate_name.replace('-', "_");
+
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+
+        // Check for #[benchmark] attribute
+        if trimmed == "#[benchmark]" || trimmed.starts_with("#[benchmark(") {
+            found_benchmark_attr = true;
+            continue;
+        }
+
+        // If we found a benchmark attribute, look for the function definition
+        if found_benchmark_attr {
+            // Look for "fn function_name" or "pub fn function_name"
+            if let Some(fn_pos) = trimmed.find("fn ") {
+                let after_fn = &trimmed[fn_pos + 3..];
+                // Extract function name (until '(' or whitespace)
+                let fn_name: String = after_fn
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+
+                if !fn_name.is_empty() {
+                    return Some(format!("{}::{}", crate_name_normalized, fn_name));
+                }
+            }
+            // Reset if we hit a line that's not a function definition
+            // (could be another attribute or comment)
+            if !trimmed.starts_with('#') && !trimmed.starts_with("//") && !trimmed.is_empty() {
+                found_benchmark_attr = false;
+            }
+        }
+    }
+
+    None
+}
+
+/// Resolves the default benchmark function for a project
+///
+/// This function attempts to auto-detect benchmark functions from the crate's source.
+/// If no benchmarks are found, it falls back to a sensible default based on the crate name.
+///
+/// # Arguments
+///
+/// * `project_root` - Root directory of the project
+/// * `crate_name` - Name of the benchmark crate
+/// * `crate_dir` - Optional explicit crate directory (if None, will search standard locations)
+///
+/// # Returns
+///
+/// The default function name in format `crate_name::function_name`
+pub fn resolve_default_function(
+    project_root: &Path,
+    crate_name: &str,
+    crate_dir: Option<&Path>,
+) -> String {
+    let crate_name_normalized = crate_name.replace('-', "_");
+
+    // Try to find the crate directory
+    let search_dirs: Vec<PathBuf> = if let Some(dir) = crate_dir {
+        vec![dir.to_path_buf()]
+    } else {
+        vec![
+            project_root.join("bench-mobile"),
+            project_root.join("crates").join(crate_name),
+            project_root.to_path_buf(),
+        ]
+    };
+
+    // Try to detect benchmarks from each potential location
+    for dir in &search_dirs {
+        if dir.join("Cargo.toml").exists() {
+            if let Some(detected) = detect_default_function(dir, &crate_name_normalized) {
+                return detected;
+            }
+        }
+    }
+
+    // Fallback: use a sensible default based on crate name
+    format!("{}::example_benchmark", crate_name_normalized)
+}
+
 /// Auto-generates Android project scaffolding from a crate name
 ///
 /// This is a convenience function that derives template variables from the
-/// crate name and generates the Android project structure.
+/// crate name and generates the Android project structure. It auto-detects
+/// the default benchmark function from the crate's source code.
 ///
 /// # Arguments
 ///
 /// * `output_dir` - Directory to write the `android/` project into
 /// * `crate_name` - Name of the benchmark crate (e.g., "bench-mobile")
 pub fn ensure_android_project(output_dir: &Path, crate_name: &str) -> Result<(), BenchError> {
+    ensure_android_project_with_options(output_dir, crate_name, None, None)
+}
+
+/// Auto-generates Android project scaffolding with additional options
+///
+/// This is a more flexible version of `ensure_android_project` that allows
+/// specifying a custom default function and/or crate directory.
+///
+/// # Arguments
+///
+/// * `output_dir` - Directory to write the `android/` project into
+/// * `crate_name` - Name of the benchmark crate (e.g., "bench-mobile")
+/// * `project_root` - Optional project root for auto-detecting benchmarks (defaults to output_dir parent)
+/// * `crate_dir` - Optional explicit crate directory for benchmark detection
+pub fn ensure_android_project_with_options(
+    output_dir: &Path,
+    crate_name: &str,
+    project_root: Option<&Path>,
+    crate_dir: Option<&Path>,
+) -> Result<(), BenchError> {
     if android_project_exists(output_dir) {
         return Ok(());
     }
 
     println!("Android project not found, generating scaffolding...");
     let project_slug = crate_name.replace('-', "_");
-    generate_android_project(output_dir, &project_slug)?;
+
+    // Resolve the default function by auto-detecting from source
+    let effective_root = project_root.unwrap_or_else(|| {
+        output_dir.parent().unwrap_or(output_dir)
+    });
+    let default_function = resolve_default_function(effective_root, crate_name, crate_dir);
+
+    generate_android_project(output_dir, &project_slug, &default_function)?;
     println!("  Generated Android project at {:?}", output_dir.join("android"));
+    println!("  Default benchmark function: {}", default_function);
     Ok(())
 }
 
 /// Auto-generates iOS project scaffolding from a crate name
 ///
 /// This is a convenience function that derives template variables from the
-/// crate name and generates the iOS project structure.
+/// crate name and generates the iOS project structure. It auto-detects
+/// the default benchmark function from the crate's source code.
 ///
 /// # Arguments
 ///
 /// * `output_dir` - Directory to write the `ios/` project into
 /// * `crate_name` - Name of the benchmark crate (e.g., "bench-mobile")
 pub fn ensure_ios_project(output_dir: &Path, crate_name: &str) -> Result<(), BenchError> {
+    ensure_ios_project_with_options(output_dir, crate_name, None, None)
+}
+
+/// Auto-generates iOS project scaffolding with additional options
+///
+/// This is a more flexible version of `ensure_ios_project` that allows
+/// specifying a custom default function and/or crate directory.
+///
+/// # Arguments
+///
+/// * `output_dir` - Directory to write the `ios/` project into
+/// * `crate_name` - Name of the benchmark crate (e.g., "bench-mobile")
+/// * `project_root` - Optional project root for auto-detecting benchmarks (defaults to output_dir parent)
+/// * `crate_dir` - Optional explicit crate directory for benchmark detection
+pub fn ensure_ios_project_with_options(
+    output_dir: &Path,
+    crate_name: &str,
+    project_root: Option<&Path>,
+    crate_dir: Option<&Path>,
+) -> Result<(), BenchError> {
     if ios_project_exists(output_dir) {
         return Ok(());
     }
@@ -569,8 +825,16 @@ pub fn ensure_ios_project(output_dir: &Path, crate_name: &str) -> Result<(), Ben
     // Derive library name and bundle prefix from crate name
     let library_name = crate_name.replace('-', "_");
     let bundle_prefix = format!("dev.world.{}", library_name.replace('_', "-"));
-    generate_ios_project(output_dir, &library_name, project_pascal, &bundle_prefix)?;
+
+    // Resolve the default function by auto-detecting from source
+    let effective_root = project_root.unwrap_or_else(|| {
+        output_dir.parent().unwrap_or(output_dir)
+    });
+    let default_function = resolve_default_function(effective_root, crate_name, crate_dir);
+
+    generate_ios_project(output_dir, &library_name, project_pascal, &bundle_prefix, &default_function)?;
     println!("  Generated iOS project at {:?}", output_dir.join("ios"));
+    println!("  Default benchmark function: {}", default_function);
     Ok(())
 }
 
@@ -591,6 +855,197 @@ mod tests {
         assert!(temp_dir.join("bench-mobile/Cargo.toml").exists());
         assert!(temp_dir.join("bench-mobile/src/lib.rs").exists());
         assert!(temp_dir.join("bench-mobile/build.rs").exists());
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_android_project_no_unreplaced_placeholders() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-android-test");
+        // Clean up any previous test run
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let result = generate_android_project(&temp_dir, "my-bench-project", "my_bench_project::test_func");
+        assert!(result.is_ok(), "generate_android_project failed: {:?}", result.err());
+
+        // Verify key files exist
+        let android_dir = temp_dir.join("android");
+        assert!(android_dir.join("settings.gradle").exists());
+        assert!(android_dir.join("app/build.gradle").exists());
+        assert!(android_dir.join("app/src/main/AndroidManifest.xml").exists());
+        assert!(android_dir.join("app/src/main/res/values/strings.xml").exists());
+        assert!(android_dir.join("app/src/main/res/values/themes.xml").exists());
+
+        // Verify no unreplaced placeholders remain in generated files
+        let files_to_check = [
+            "settings.gradle",
+            "app/build.gradle",
+            "app/src/main/AndroidManifest.xml",
+            "app/src/main/res/values/strings.xml",
+            "app/src/main/res/values/themes.xml",
+        ];
+
+        for file in files_to_check {
+            let path = android_dir.join(file);
+            let contents = fs::read_to_string(&path).expect(&format!("Failed to read {}", file));
+
+            // Check for unreplaced placeholders
+            let has_placeholder = contents.contains("{{") && contents.contains("}}");
+            assert!(
+                !has_placeholder,
+                "File {} contains unreplaced template placeholders: {}",
+                file,
+                contents
+            );
+        }
+
+        // Verify specific substitutions were made
+        let settings = fs::read_to_string(android_dir.join("settings.gradle")).unwrap();
+        assert!(
+            settings.contains("my-bench-project-android") || settings.contains("my_bench_project-android"),
+            "settings.gradle should contain project name"
+        );
+
+        let build_gradle = fs::read_to_string(android_dir.join("app/build.gradle")).unwrap();
+        assert!(
+            build_gradle.contains("dev.world.my-bench-project") || build_gradle.contains("dev.world.my_bench_project"),
+            "build.gradle should contain package name"
+        );
+
+        let manifest = fs::read_to_string(android_dir.join("app/src/main/AndroidManifest.xml")).unwrap();
+        assert!(
+            manifest.contains("Theme.MyBenchProject"),
+            "AndroidManifest.xml should contain PascalCase theme name"
+        );
+
+        let strings = fs::read_to_string(android_dir.join("app/src/main/res/values/strings.xml")).unwrap();
+        assert!(
+            strings.contains("Benchmark"),
+            "strings.xml should contain app name with Benchmark"
+        );
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_is_template_file() {
+        assert!(is_template_file(Path::new("settings.gradle")));
+        assert!(is_template_file(Path::new("app/build.gradle")));
+        assert!(is_template_file(Path::new("AndroidManifest.xml")));
+        assert!(is_template_file(Path::new("strings.xml")));
+        assert!(is_template_file(Path::new("MainActivity.kt.template")));
+        assert!(is_template_file(Path::new("project.yml")));
+        assert!(is_template_file(Path::new("Info.plist")));
+        assert!(!is_template_file(Path::new("libfoo.so")));
+        assert!(!is_template_file(Path::new("image.png")));
+    }
+
+    #[test]
+    fn test_validate_no_unreplaced_placeholders() {
+        // Should pass with no placeholders
+        assert!(validate_no_unreplaced_placeholders("hello world", Path::new("test.txt")).is_ok());
+
+        // Should pass with Gradle variables (not our placeholders)
+        assert!(validate_no_unreplaced_placeholders("${ENV_VAR}", Path::new("test.txt")).is_ok());
+
+        // Should fail with unreplaced template placeholders
+        let result = validate_no_unreplaced_placeholders("hello {{NAME}}", Path::new("test.txt"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("{{NAME}}"));
+    }
+
+    #[test]
+    fn test_to_pascal_case() {
+        assert_eq!(to_pascal_case("my-project"), "MyProject");
+        assert_eq!(to_pascal_case("my_project"), "MyProject");
+        assert_eq!(to_pascal_case("myproject"), "Myproject");
+        assert_eq!(to_pascal_case("my-bench-project"), "MyBenchProject");
+    }
+
+    #[test]
+    fn test_detect_default_function_finds_benchmark() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-detect-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(temp_dir.join("src")).unwrap();
+
+        // Create a lib.rs with a benchmark function
+        let lib_content = r#"
+use mobench_sdk::benchmark;
+
+/// Some docs
+#[benchmark]
+fn my_benchmark_func() {
+    // benchmark code
+}
+
+fn helper_func() {}
+"#;
+        fs::write(temp_dir.join("src/lib.rs"), lib_content).unwrap();
+        fs::write(temp_dir.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+
+        let result = detect_default_function(&temp_dir, "my_crate");
+        assert_eq!(result, Some("my_crate::my_benchmark_func".to_string()));
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_detect_default_function_no_benchmark() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-detect-none-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(temp_dir.join("src")).unwrap();
+
+        // Create a lib.rs without benchmark functions
+        let lib_content = r#"
+fn regular_function() {
+    // no benchmark here
+}
+"#;
+        fs::write(temp_dir.join("src/lib.rs"), lib_content).unwrap();
+
+        let result = detect_default_function(&temp_dir, "my_crate");
+        assert!(result.is_none());
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_detect_default_function_pub_fn() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-detect-pub-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(temp_dir.join("src")).unwrap();
+
+        // Create a lib.rs with a public benchmark function
+        let lib_content = r#"
+#[benchmark]
+pub fn public_bench() {
+    // benchmark code
+}
+"#;
+        fs::write(temp_dir.join("src/lib.rs"), lib_content).unwrap();
+
+        let result = detect_default_function(&temp_dir, "test-crate");
+        assert_eq!(result, Some("test_crate::public_bench".to_string()));
+
+        // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_resolve_default_function_fallback() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-resolve-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // No lib.rs exists, should fall back to default
+        let result = resolve_default_function(&temp_dir, "my-crate", None);
+        assert_eq!(result, "my_crate::example_benchmark");
 
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();

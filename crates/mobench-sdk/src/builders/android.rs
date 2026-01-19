@@ -56,7 +56,7 @@
 //! ```
 
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
-use super::common::{get_cargo_target_dir, host_lib_path, run_command};
+use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -171,6 +171,11 @@ impl AndroidBuilder {
     /// * `Ok(BuildResult)` containing the path to the built APK
     /// * `Err(BenchError)` if the build fails
     pub fn build(&self, config: &BuildConfig) -> Result<BuildResult, BenchError> {
+        // Validate project root before starting build
+        if self.crate_dir.is_none() {
+            validate_project_root(&self.project_root, &self.crate_name)?;
+        }
+
         let android_dir = self.output_dir.join("android");
         let profile_name = match config.profile {
             BuildProfile::Debug => "debug",
@@ -180,6 +185,7 @@ impl AndroidBuilder {
         if self.dry_run {
             println!("\n[dry-run] Android build plan:");
             println!("  Step 0: Check/generate Android project scaffolding at {:?}", android_dir);
+            println!("  Step 0.5: Ensure Gradle wrapper exists (run 'gradle wrapper' if needed)");
             println!("  Step 1: Build Rust libraries for Android ABIs (arm64-v8a, armeabi-v7a, x86_64)");
             println!("    Command: cargo ndk --target <abi> --platform 24 build {}",
                 if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
@@ -202,7 +208,16 @@ impl AndroidBuilder {
         }
 
         // Step 0: Ensure Android project scaffolding exists
-        crate::codegen::ensure_android_project(&self.output_dir, &self.crate_name)?;
+        // Pass project_root and crate_dir for better benchmark function detection
+        crate::codegen::ensure_android_project_with_options(
+            &self.output_dir,
+            &self.crate_name,
+            Some(&self.project_root),
+            self.crate_dir.as_deref(),
+        )?;
+
+        // Step 0.5: Ensure Gradle wrapper exists
+        self.ensure_gradle_wrapper(&android_dir)?;
 
         // Step 1: Build Rust libraries
         println!("Building Rust libraries for Android...");
@@ -224,11 +239,70 @@ impl AndroidBuilder {
         println!("Building Android test APK...");
         let test_suite_path = self.build_test_apk(config)?;
 
-        Ok(BuildResult {
+        // Step 6: Validate all expected artifacts exist
+        let result = BuildResult {
             platform: Target::Android,
             app_path: apk_path,
             test_suite_path: Some(test_suite_path),
-        })
+        };
+        self.validate_build_artifacts(&result, config)?;
+
+        Ok(result)
+    }
+
+    /// Validates that all expected build artifacts exist after a successful build
+    fn validate_build_artifacts(&self, result: &BuildResult, config: &BuildConfig) -> Result<(), BenchError> {
+        let mut missing = Vec::new();
+        let profile_dir = match config.profile {
+            BuildProfile::Debug => "debug",
+            BuildProfile::Release => "release",
+        };
+
+        // Check main APK
+        if !result.app_path.exists() {
+            missing.push(format!("Main APK: {}", result.app_path.display()));
+        }
+
+        // Check test APK
+        if let Some(ref test_path) = result.test_suite_path {
+            if !test_path.exists() {
+                missing.push(format!("Test APK: {}", test_path.display()));
+            }
+        }
+
+        // Check that at least one native library exists in jniLibs
+        let jni_libs_dir = self.output_dir.join("android/app/src/main/jniLibs");
+        let lib_name = format!("lib{}.so", self.crate_name.replace("-", "_"));
+        let required_abis = ["arm64-v8a", "armeabi-v7a", "x86_64"];
+        let mut found_libs = 0;
+        for abi in &required_abis {
+            let lib_path = jni_libs_dir.join(abi).join(&lib_name);
+            if lib_path.exists() {
+                found_libs += 1;
+            } else {
+                missing.push(format!("Native library ({} {}): {}", abi, profile_dir, lib_path.display()));
+            }
+        }
+
+        if found_libs == 0 {
+            return Err(BenchError::Build(format!(
+                "Build validation failed: No native libraries found.\n\n\
+                 Expected at least one .so file in jniLibs directories.\n\
+                 Missing artifacts:\n{}\n\n\
+                 This usually means the Rust build step failed. Check the cargo-ndk output above.",
+                missing.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+            )));
+        }
+
+        if !missing.is_empty() {
+            eprintln!(
+                "Warning: Some build artifacts are missing:\n{}\n\
+                 The build may still work but some features might be unavailable.",
+                missing.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+            );
+        }
+
+        Ok(())
     }
 
     /// Finds the benchmark crate directory (either bench-mobile/ or crates/{crate_name}/)
@@ -559,8 +633,15 @@ impl AndroidBuilder {
                 if self.verbose {
                     println!("  Copied {} -> {}", src.display(), dest.display());
                 }
-            } else if self.verbose {
-                println!("  Warning: {} not found, skipping", src.display());
+            } else {
+                // Always warn about missing native libraries - this will cause runtime crashes
+                eprintln!(
+                    "Warning: Native library for {} not found at {}.\n\
+                     This will cause a runtime crash when the app tries to load the library.\n\
+                     Ensure cargo-ndk build completed successfully for this ABI.",
+                    android_abi,
+                    src.display()
+                );
             }
         }
 
@@ -655,6 +736,89 @@ impl AndroidBuilder {
              You can also install the SDK via Android Studio.",
             searched_list
         )))
+    }
+
+    /// Ensures the Gradle wrapper (gradlew) exists in the Android project
+    ///
+    /// If gradlew doesn't exist, this runs `gradle wrapper --gradle-version 8.5`
+    /// to generate the wrapper files.
+    fn ensure_gradle_wrapper(&self, android_dir: &Path) -> Result<(), BenchError> {
+        let gradlew = android_dir.join("gradlew");
+
+        // If gradlew already exists, we're good
+        if gradlew.exists() {
+            return Ok(());
+        }
+
+        println!("Gradle wrapper not found, generating...");
+
+        // Check if gradle is available
+        let gradle_available = Command::new("gradle")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !gradle_available {
+            return Err(BenchError::Build(
+                "Gradle wrapper (gradlew) not found and 'gradle' command is not available.\n\n\
+                 The Android project requires Gradle to build. You have two options:\n\n\
+                 1. Install Gradle globally and run the build again (it will auto-generate the wrapper):\n\
+                    - macOS: brew install gradle\n\
+                    - Linux: sudo apt install gradle\n\
+                    - Or download from https://gradle.org/install/\n\n\
+                 2. Or generate the wrapper manually in the Android project directory:\n\
+                    cd target/mobench/android && gradle wrapper --gradle-version 8.5"
+                    .to_string(),
+            ));
+        }
+
+        // Run gradle wrapper to generate gradlew
+        let mut cmd = Command::new("gradle");
+        cmd.arg("wrapper")
+            .arg("--gradle-version")
+            .arg("8.5")
+            .current_dir(android_dir);
+
+        let output = cmd.output().map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to run 'gradle wrapper' command: {}\n\n\
+                 Ensure Gradle is installed and on your PATH.",
+                e
+            ))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(BenchError::Build(format!(
+                "Failed to generate Gradle wrapper.\n\n\
+                 Command: gradle wrapper --gradle-version 8.5\n\
+                 Working directory: {}\n\
+                 Exit status: {}\n\
+                 Stderr: {}\n\n\
+                 Try running this command manually in the Android project directory.",
+                android_dir.display(),
+                output.status,
+                stderr
+            )));
+        }
+
+        // Make gradlew executable on Unix systems
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = fs::metadata(&gradlew) {
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&gradlew, perms);
+            }
+        }
+
+        if self.verbose {
+            println!("  Generated Gradle wrapper at {:?}", gradlew);
+        }
+
+        Ok(())
     }
 
     /// Builds the Android APK using Gradle
