@@ -916,7 +916,13 @@ impl IosBuilder {
         framework_name: &str,
         platform: &str,
     ) -> Result<(), BenchError> {
-        let bundle_id = framework_name.replace('_', "-");
+        // Sanitize bundle ID to only contain alphanumeric characters (no hyphens or underscores)
+        // iOS bundle identifiers should be alphanumeric with dots separating components
+        let bundle_id: String = framework_name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_lowercase();
         let plist_content = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
