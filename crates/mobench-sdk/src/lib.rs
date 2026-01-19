@@ -1,74 +1,268 @@
-//! Mobile Benchmark SDK for Rust
+//! # mobench-sdk
 //!
-//! `mobench-sdk` is a library for benchmarking Rust functions on real mobile devices
-//! (Android and iOS) via BrowserStack. It provides a simple API similar to criterion.rs
-//! but targets mobile platforms.
+//! A mobile benchmarking SDK for Rust that enables running performance benchmarks
+//! on real Android and iOS devices via BrowserStack App Automate.
 //!
-//! # Quick Start
+//! ## Overview
 //!
-//! 1. Add mobench-sdk to your project:
+//! `mobench-sdk` provides a simple, declarative API for defining benchmarks that can
+//! run on mobile devices. It handles the complexity of cross-compilation, FFI bindings,
+//! and mobile app packaging automatically.
+//!
+//! ## Quick Start
+//!
+//! ### 1. Add Dependencies
+//!
 //! ```toml
 //! [dependencies]
 //! mobench-sdk = "0.1"
+//! inventory = "0.3"  # Required for benchmark registration
 //! ```
 //!
-//! 2. Mark functions with `#[benchmark]`:
+//! ### 2. Define Benchmarks
+//!
+//! Use the [`#[benchmark]`](macro@benchmark) attribute to mark functions for benchmarking:
+//!
 //! ```ignore
 //! use mobench_sdk::benchmark;
 //!
 //! #[benchmark]
 //! fn my_expensive_operation() {
-//!     // Your code here
-//!     let result = compute_something();
-//!     std::hint::black_box(result);
+//!     let result = expensive_computation();
+//!     std::hint::black_box(result);  // Prevent optimization
+//! }
+//!
+//! #[benchmark]
+//! fn another_benchmark() {
+//!     for i in 0..1000 {
+//!         std::hint::black_box(i * i);
+//!     }
 //! }
 //! ```
 //!
-//! 3. Initialize mobile project:
-//! ```bash
-//! cargo mobench init --target android
-//! ```
+//! ### 3. Build and Run
 //!
-//! 4. Build and run:
+//! Use the `mobench` CLI to build and run benchmarks:
+//!
 //! ```bash
+//! # Install the CLI
+//! cargo install mobench
+//!
+//! # Build for Android (outputs to target/mobench/)
 //! cargo mobench build --target android
-//! cargo mobench run --target android --function my_expensive_operation
+//!
+//! # Build for iOS
+//! cargo mobench build --target ios
+//!
+//! # Run on BrowserStack
+//! cargo mobench run --target android --function my_expensive_operation \
+//!     --iterations 100 --warmup 10 --devices "Google Pixel 7-13.0"
 //! ```
 //!
-//! # Architecture
+//! ## Architecture
 //!
 //! The SDK consists of several components:
 //!
-//! - **Registry**: Discovers functions marked with `#[benchmark]` at runtime
-//! - **Runner**: Executes benchmarks and collects timing data
-//! - **Builders**: Automates building Android/iOS apps
-//! - **Codegen**: Generates mobile app templates
+//! | Module | Description |
+//! |--------|-------------|
+//! | [`registry`] | Runtime discovery of `#[benchmark]` functions |
+//! | [`runner`] | Benchmark execution and timing infrastructure |
+//! | [`builders`] | Android and iOS build automation |
+//! | [`codegen`] | Mobile app template generation |
+//! | [`types`] | Common types and error definitions |
 //!
-//! # Example: Programmatic Usage
+//! ## Crate Ecosystem
+//!
+//! The mobench ecosystem consists of four crates:
+//!
+//! - **`mobench-sdk`** (this crate) - Core SDK library with build automation
+//! - **[`mobench`](https://crates.io/crates/mobench)** - CLI tool for building and running benchmarks
+//! - **[`mobench-macros`](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
+//! - **[`mobench-runner`](https://crates.io/crates/mobench-runner)** - Lightweight timing harness
+//!
+//! ## Programmatic Usage
+//!
+//! You can also use the SDK programmatically:
+//!
+//! ### Using the Builder Pattern
 //!
 //! ```ignore
-//! use mobench_sdk::{BenchmarkBuilder, BenchSpec};
+//! use mobench_sdk::BenchmarkBuilder;
 //!
-//! fn main() -> Result<(), mobench_sdk::BenchError> {
-//!     // Using the builder pattern
-//!     let report = BenchmarkBuilder::new("my_benchmark")
-//!         .iterations(100)
-//!         .warmup(10)
-//!         .run()?;
+//! let report = BenchmarkBuilder::new("my_benchmark")
+//!     .iterations(100)
+//!     .warmup(10)
+//!     .run()?;
 //!
-//!     println!("Samples: {}", report.samples.len());
+//! println!("Mean: {} ns", report.samples.iter()
+//!     .map(|s| s.duration_ns)
+//!     .sum::<u64>() / report.samples.len() as u64);
+//! ```
 //!
-//!     // Or using BenchSpec directly
-//!     let spec = BenchSpec {
-//!         name: "my_benchmark".to_string(),
-//!         iterations: 50,
-//!         warmup: 5,
-//!     };
-//!     let report = mobench_sdk::run_benchmark(spec)?;
+//! ### Using BenchSpec Directly
 //!
-//!     Ok(())
+//! ```ignore
+//! use mobench_sdk::{BenchSpec, run_benchmark};
+//!
+//! let spec = BenchSpec {
+//!     name: "my_benchmark".to_string(),
+//!     iterations: 50,
+//!     warmup: 5,
+//! };
+//!
+//! let report = run_benchmark(spec)?;
+//! println!("Collected {} samples", report.samples.len());
+//! ```
+//!
+//! ### Discovering Benchmarks
+//!
+//! ```ignore
+//! use mobench_sdk::{discover_benchmarks, list_benchmark_names};
+//!
+//! // Get all registered benchmark names
+//! let names = list_benchmark_names();
+//! for name in names {
+//!     println!("Found benchmark: {}", name);
+//! }
+//!
+//! // Get full benchmark function info
+//! let benchmarks = discover_benchmarks();
+//! for bench in benchmarks {
+//!     println!("Benchmark: {}", bench.name);
 //! }
 //! ```
+//!
+//! ## Building Mobile Apps
+//!
+//! The SDK includes builders for automating mobile app creation:
+//!
+//! ### Android Builder
+//!
+//! ```ignore
+//! use mobench_sdk::builders::AndroidBuilder;
+//! use mobench_sdk::{BuildConfig, BuildProfile, Target};
+//!
+//! let builder = AndroidBuilder::new(".", "my-bench-crate")
+//!     .verbose(true)
+//!     .output_dir("target/mobench");  // Default
+//!
+//! let config = BuildConfig {
+//!     target: Target::Android,
+//!     profile: BuildProfile::Release,
+//!     incremental: true,
+//! };
+//!
+//! let result = builder.build(&config)?;
+//! println!("APK built at: {:?}", result.app_path);
+//! ```
+//!
+//! ### iOS Builder
+//!
+//! ```ignore
+//! use mobench_sdk::builders::{IosBuilder, SigningMethod};
+//! use mobench_sdk::{BuildConfig, BuildProfile, Target};
+//!
+//! let builder = IosBuilder::new(".", "my-bench-crate")
+//!     .verbose(true);
+//!
+//! let config = BuildConfig {
+//!     target: Target::Ios,
+//!     profile: BuildProfile::Release,
+//!     incremental: true,
+//! };
+//!
+//! let result = builder.build(&config)?;
+//! println!("xcframework built at: {:?}", result.app_path);
+//!
+//! // Package IPA for distribution
+//! let ipa_path = builder.package_ipa("BenchRunner", SigningMethod::AdHoc)?;
+//! ```
+//!
+//! ## Output Directory
+//!
+//! By default, all mobile artifacts are written to `target/mobench/`:
+//!
+//! ```text
+//! target/mobench/
+//! ├── android/
+//! │   ├── app/
+//! │   │   ├── src/main/jniLibs/     # Native .so libraries
+//! │   │   └── build/outputs/apk/    # Built APK
+//! │   └── ...
+//! └── ios/
+//!     ├── sample_fns.xcframework/   # Built xcframework
+//!     ├── BenchRunner/              # Xcode project
+//!     └── BenchRunner.ipa           # Packaged IPA
+//! ```
+//!
+//! This keeps generated files inside `target/`, following Rust conventions
+//! and preventing accidental commits of mobile project files.
+//!
+//! ## Platform Requirements
+//!
+//! ### Android
+//!
+//! - Android NDK (set `ANDROID_NDK_HOME` environment variable)
+//! - `cargo-ndk` (`cargo install cargo-ndk`)
+//! - Rust targets: `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`
+//!
+//! ### iOS
+//!
+//! - Xcode with command line tools
+//! - `uniffi-bindgen` (`cargo install uniffi-bindgen`)
+//! - `xcodegen` (optional, `brew install xcodegen`)
+//! - Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`
+//!
+//! ## Best Practices
+//!
+//! ### Use `black_box` to Prevent Optimization
+//!
+//! Always wrap benchmark results with [`std::hint::black_box`] to prevent the
+//! compiler from optimizing away the computation:
+//!
+//! ```ignore
+//! #[benchmark]
+//! fn correct_benchmark() {
+//!     let result = expensive_computation();
+//!     std::hint::black_box(result);  // Result is "used"
+//! }
+//! ```
+//!
+//! ### Avoid Side Effects
+//!
+//! Benchmarks should be deterministic and avoid I/O operations:
+//!
+//! ```ignore
+//! // Good: Pure computation
+//! #[benchmark]
+//! fn good_benchmark() {
+//!     let data = vec![1, 2, 3, 4, 5];
+//!     let sum: i32 = data.iter().sum();
+//!     std::hint::black_box(sum);
+//! }
+//!
+//! // Avoid: File I/O adds noise
+//! #[benchmark]
+//! fn noisy_benchmark() {
+//!     let data = std::fs::read_to_string("data.txt").unwrap();  // Don't do this
+//!     std::hint::black_box(data);
+//! }
+//! ```
+//!
+//! ### Choose Appropriate Iteration Counts
+//!
+//! - **Warmup**: 5-10 iterations to warm CPU caches and JIT
+//! - **Iterations**: 50-100 for stable statistics
+//! - Mobile devices may have more variance than desktop
+//!
+//! ## Feature Flags
+//!
+//! Currently, `mobench-sdk` has no optional feature flags. All functionality
+//! is included by default.
+//!
+//! ## License
+//!
+//! MIT License - see repository for details.
 
 // Public modules
 pub mod builders;
@@ -91,7 +285,13 @@ pub use types::{
 // Re-export mobench-runner types for backward compatibility
 pub use mobench_runner;
 
-/// Library version
+/// Library version, matching `Cargo.toml`.
+///
+/// This can be used to verify SDK compatibility:
+///
+/// ```
+/// assert!(!mobench_sdk::VERSION.is_empty());
+/// ```
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]

@@ -1,3 +1,100 @@
+//! # mobench
+//!
+//! Command-line tool for building and running Rust benchmarks on mobile devices.
+//!
+//! ## Overview
+//!
+//! `mobench` is the CLI orchestrator for the mobench ecosystem. It handles:
+//!
+//! - **Building** - Compiles Rust code for Android/iOS and packages mobile apps
+//! - **Running** - Executes benchmarks locally or on BrowserStack devices
+//! - **Reporting** - Collects and formats benchmark results
+//!
+//! ## Installation
+//!
+//! ```bash
+//! cargo install mobench
+//! ```
+//!
+//! ## Quick Start
+//!
+//! ```bash
+//! # Initialize a benchmark project
+//! cargo mobench init --target android --output bench-config.toml
+//!
+//! # Build for Android
+//! cargo mobench build --target android
+//!
+//! # Build for iOS
+//! cargo mobench build --target ios
+//!
+//! # Run locally (no device required)
+//! cargo mobench run --target android --function my_benchmark --local-only
+//!
+//! # Run on BrowserStack
+//! cargo mobench run --target android --function my_benchmark \
+//!     --iterations 100 --warmup 10 --devices "Google Pixel 7-13.0"
+//! ```
+//!
+//! ## Commands
+//!
+//! | Command | Description |
+//! |---------|-------------|
+//! | `init` | Initialize a new benchmark project |
+//! | `build` | Build mobile artifacts (APK/xcframework) |
+//! | `run` | Execute benchmarks locally or on devices |
+//! | `list` | List discovered benchmark functions |
+//! | `fetch` | Retrieve results from BrowserStack |
+//! | `package-ipa` | Package iOS app as IPA |
+//! | `package-xcuitest` | Package XCUITest runner |
+//!
+//! ## Output Directory
+//!
+//! All build artifacts are written to `target/mobench/` by default:
+//!
+//! ```text
+//! target/mobench/
+//! ├── android/           # Android project and APK
+//! └── ios/               # iOS project, xcframework, and IPA
+//! ```
+//!
+//! Use `--output-dir` to customize the output location.
+//!
+//! ## Configuration
+//!
+//! Benchmarks can be configured via command-line arguments or a TOML config file:
+//!
+//! ```toml
+//! target = "android"
+//! function = "my_crate::my_benchmark"
+//! iterations = 100
+//! warmup = 10
+//!
+//! [browserstack]
+//! app_automate_username = "${BROWSERSTACK_USERNAME}"
+//! app_automate_access_key = "${BROWSERSTACK_ACCESS_KEY}"
+//! project = "my-project"
+//! ```
+//!
+//! ## BrowserStack Integration
+//!
+//! The CLI integrates with BrowserStack App Automate for running benchmarks
+//! on real devices. Set credentials via environment variables:
+//!
+//! ```bash
+//! export BROWSERSTACK_USERNAME="your_username"
+//! export BROWSERSTACK_ACCESS_KEY="your_access_key"
+//! ```
+//!
+//! ## Crate Ecosystem
+//!
+//! This crate is part of the mobench ecosystem:
+//!
+//! - **`mobench`** (this crate) - CLI tool
+//! - **[`mobench-sdk`](https://crates.io/crates/mobench-sdk)** - Core SDK with build automation
+//! - **[`mobench-macros`](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
+//! - **[`mobench-runner`](https://crates.io/crates/mobench-runner)** - Timing harness
+
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
