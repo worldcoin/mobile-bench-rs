@@ -24,7 +24,7 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: {{PROJECT_NAME_PASCAL}}/{{PROJECT_NAME_PASCAL}}-Bridging-Header.h
         HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/{{PROJECT_NAME_PASCAL}}/Generated"
     dependencies:
-      - framework: ../../target/ios/{{LIBRARY_NAME}}.xcframework
+      - framework: ../{{LIBRARY_NAME}}.xcframework
         embed: true
         link: true
   {{PROJECT_NAME_PASCAL}}UITests:
