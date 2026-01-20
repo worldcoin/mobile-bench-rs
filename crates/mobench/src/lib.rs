@@ -1002,6 +1002,13 @@ fn filename_for_url(key: &str, url: &str) -> String {
 }
 
 fn extract_bench_json(contents: &str) -> Option<Value> {
+    // First, try iOS-style markers: BENCH_REPORT_JSON_START ... BENCH_REPORT_JSON_END
+    // This allows multi-line JSON and is more robust for iOS NSLog output
+    if let Some(json) = extract_bench_json_ios_markers(contents) {
+        return Some(json);
+    }
+
+    // Fall back to Android-style single-line marker: BENCH_JSON {...}
     let marker = "BENCH_JSON ";
     for line in contents.lines().rev() {
         if let Some(idx) = line.find(marker) {
@@ -1011,6 +1018,133 @@ fn extract_bench_json(contents: &str) -> Option<Value> {
             }
         }
     }
+    None
+}
+
+/// Extract benchmark JSON from iOS logs using START/END markers.
+/// iOS uses NSLog which may split the JSON across multiple log lines,
+/// so we need to capture everything between the markers.
+fn extract_bench_json_ios_markers(contents: &str) -> Option<Value> {
+    let start_marker = "BENCH_REPORT_JSON_START";
+    let end_marker = "BENCH_REPORT_JSON_END";
+
+    // Find the last occurrence of start marker (in case of multiple runs)
+    let start_pos = contents.rfind(start_marker)?;
+    let after_start = &contents[start_pos + start_marker.len()..];
+
+    // Find the end marker after the start
+    let end_pos = after_start.find(end_marker)?;
+    let json_section = &after_start[..end_pos];
+
+    // The JSON might be on the next line or have log prefixes, so we need to clean it up
+    // iOS NSLog format often looks like: "2026-01-20 12:34:56.789 BenchRunner[1234:5678] {"key": "value"}"
+    // or just the raw JSON on its own line
+
+    // Try to find valid JSON in the section
+    let json_str = extract_json_from_log_section(json_section)?;
+
+    serde_json::from_str::<Value>(&json_str).ok()
+}
+
+/// Extract valid JSON from a log section that may contain log prefixes/timestamps.
+/// Handles both raw JSON and JSON embedded in log lines.
+fn extract_json_from_log_section(section: &str) -> Option<String> {
+    // First, try the whole section as-is (trimmed)
+    let trimmed = section.trim();
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        if serde_json::from_str::<Value>(trimmed).is_ok() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    // If that didn't work, look for JSON on individual lines
+    // This handles cases where NSLog adds timestamps/prefixes
+    for line in section.lines() {
+        let line = line.trim();
+
+        // Skip empty lines
+        if line.is_empty() {
+            continue;
+        }
+
+        // Look for JSON starting with {
+        if let Some(json_start) = line.find('{') {
+            let potential_json = &line[json_start..];
+
+            // Try to find the matching closing brace
+            // This handles cases like: "timestamp prefix {"key": "value"} suffix"
+            if let Some(json) = extract_balanced_json(potential_json) {
+                if serde_json::from_str::<Value>(&json).is_ok() {
+                    return Some(json);
+                }
+            }
+        }
+    }
+
+    // Try concatenating all lines and looking for JSON (for multi-line JSON)
+    let all_content: String = section
+        .lines()
+        .map(|line| {
+            // Try to strip common log prefixes (timestamps, process info)
+            // iOS format: "2026-01-20 12:34:56.789 AppName[pid:tid] content"
+            if let Some(bracket_end) = line.find("] ") {
+                &line[bracket_end + 2..]
+            } else {
+                line.trim()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if let Some(json_start) = all_content.find('{') {
+        let potential_json = &all_content[json_start..];
+        if let Some(json) = extract_balanced_json(potential_json) {
+            if serde_json::from_str::<Value>(&json).is_ok() {
+                return Some(json);
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract a balanced JSON object from a string starting with '{'.
+/// Returns the JSON substring if balanced braces are found.
+fn extract_balanced_json(s: &str) -> Option<String> {
+    if !s.starts_with('{') {
+        return None;
+    }
+
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, c) in s.char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+
+        match c {
+            '\\' if in_string => {
+                escape_next = true;
+            }
+            '"' => {
+                in_string = !in_string;
+            }
+            '{' if !in_string => {
+                depth += 1;
+            }
+            '}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(s[..=i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
     None
 }
 

@@ -109,13 +109,19 @@ struct BenchParams {
     }
 }
 
+/// Result of running a benchmark, containing both display text and JSON report
+struct BenchmarkResult {
+    let displayText: String
+    let jsonReport: String
+}
+
 enum {{PROJECT_NAME_PASCAL}}FFI {
-    static func runCurrentBenchmark() async -> String {
+    static func runCurrentBenchmark() async -> BenchmarkResult {
         let params = BenchParams.resolved()
         return run(params: params)
     }
 
-    static func run(params: BenchParams) -> String {
+    static func run(params: BenchParams) -> BenchmarkResult {
         let spec = BenchSpec(
             name: params.function,
             iterations: params.iterations,
@@ -124,13 +130,106 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
 
         do {
             let report = try runBenchmark(spec: spec)
-            return formatBenchReport(report)
+            let displayText = formatBenchReport(report)
+            let jsonReport = generateJSONReport(report)
+            return BenchmarkResult(displayText: displayText, jsonReport: jsonReport)
         } catch let error as BenchError {
             print("[BenchRunner] ERROR: Benchmark failed: \(error)")
-            return formatBenchError(error)
+            let errorText = formatBenchError(error)
+            let errorJSON = generateErrorJSON(error)
+            return BenchmarkResult(displayText: errorText, jsonReport: errorJSON)
         } catch {
             print("[BenchRunner] ERROR: Unexpected error during benchmark execution: \(error)")
-            return "Unexpected error: \(error.localizedDescription)"
+            let errorText = "Unexpected error: \(error.localizedDescription)"
+            let errorJSON = "{\"error\": \"Unexpected error: \(error.localizedDescription)\"}"
+            return BenchmarkResult(displayText: errorText, jsonReport: errorJSON)
+        }
+    }
+
+    /// Generates a JSON report matching the Android BENCH_JSON format for consistency
+    private static func generateJSONReport(_ report: BenchReport) -> String {
+        var json: [String: Any] = [:]
+
+        // Spec section
+        let specDict: [String: Any] = [
+            "name": report.spec.name,
+            "iterations": report.spec.iterations,
+            "warmup": report.spec.warmup
+        ]
+        json["spec"] = specDict
+
+        // Function name at top level (for compatibility with existing parsers)
+        json["function"] = report.spec.name
+
+        // Samples as array of duration_ns values
+        let samplesNs = report.samples.map { $0.durationNs }
+        json["samples_ns"] = samplesNs
+
+        // Also include samples in object format for compatibility
+        let samplesArray = report.samples.map { ["duration_ns": $0.durationNs] }
+        json["samples"] = samplesArray
+
+        // Statistics
+        if !report.samples.isEmpty {
+            let durations = report.samples.map { $0.durationNs }
+            let minNs = durations.min() ?? 0
+            let maxNs = durations.max() ?? 0
+            let sumNs = durations.reduce(0, +)
+            let avgNs = Double(sumNs) / Double(durations.count)
+
+            // Compute median
+            let sorted = durations.sorted()
+            let medianNs: UInt64
+            if sorted.count % 2 == 0 {
+                medianNs = (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+            } else {
+                medianNs = sorted[sorted.count / 2]
+            }
+
+            let stats: [String: Any] = [
+                "min_ns": minNs,
+                "max_ns": maxNs,
+                "avg_ns": avgNs,
+                "mean_ns": UInt64(avgNs),
+                "median_ns": medianNs
+            ]
+            json["stats"] = stats
+
+            // Also add top-level stats for compatibility with different parsers
+            json["mean_ns"] = UInt64(avgNs)
+            json["min_ns"] = minNs
+            json["max_ns"] = maxNs
+        }
+
+        // Resource metrics (iOS-specific)
+        let resources: [String: Any] = [
+            "platform": "ios",
+            "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
+        ]
+        json["resources"] = resources
+
+        // Serialize to JSON string
+        do {
+            let data = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+            return String(data: data, encoding: .utf8) ?? "{}"
+        } catch {
+            print("[BenchRunner] ERROR: Failed to serialize JSON report: \(error)")
+            return "{}"
+        }
+    }
+
+    /// Generates a JSON error report
+    private static func generateErrorJSON(_ error: BenchError) -> String {
+        let errorDict: [String: Any] = [
+            "error": true,
+            "message": error.localizedDescription
+        ]
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: errorDict, options: [.sortedKeys])
+            return String(data: data, encoding: .utf8) ?? "{\"error\": true}"
+        } catch {
+            return "{\"error\": true, \"message\": \"Failed to serialize error\"}"
         }
     }
 
