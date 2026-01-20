@@ -82,6 +82,10 @@ CLI flags override config file values when provided.
 
 ## Release Notes
 
+### v0.1.13
+
+- **Fix iOS XCUITest test name mismatch**: Changed BrowserStack `only-testing` filter to use `testLaunchAndCaptureBenchmarkReport` which matches what BrowserStack parses from the xctest bundle
+
 ### v0.1.12
 
 - **Fix iOS XCUITest BrowserStack detection**: Added Info.plist to the UITests target template, resolving issues where BrowserStack could not properly detect and run XCUITest bundles
