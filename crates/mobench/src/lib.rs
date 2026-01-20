@@ -2287,7 +2287,7 @@ fn detect_bench_mobile_crate_name(root: &Path) -> Result<String> {
     }
 
     bail!(
-        "No benchmark crate found. Expected bench-mobile/Cargo.toml or crates/sample-fns/Cargo.toml under the project root. Run from the project root or set crate_name in mobench.toml."
+        "No benchmark crate found. Expected bench-mobile/Cargo.toml or crates/sample-fns/Cargo.toml under the project root. Run from the project root or set [project].crate in mobench.toml."
     )
 }
 

@@ -83,7 +83,7 @@ pub enum BenchError {
     ///
     /// This can occur when reading/writing benchmark specifications
     /// or configuration files.
-    #[error("serialization error: {0}. Ensure the input is valid JSON")]
+    #[error("serialization error: {0}. Check JSON validity or output serializability")]
     Serialization(#[from] serde_json::Error),
 
     /// A configuration error occurred.
