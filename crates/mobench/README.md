@@ -87,8 +87,11 @@ cargo mobench run \
   --function fibonacci_30 \
   --devices "Google Pixel 7-13.0" \
   --iterations 100 \
-  --warmup 10
+  --warmup 10 \
+  --release
 ```
+
+**Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
 
 ## Commands
 
@@ -179,19 +182,21 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 # Run locally (no BrowserStack devices specified)
 cargo mobench run --target android --function fibonacci_30
 
-# Run on BrowserStack devices
+# Run on BrowserStack devices (use --release for smaller APK)
 cargo mobench run \
   --target android \
   --function sha256_hash \
   --devices "Google Pixel 7-13.0,Samsung Galaxy S23-13.0" \
   --iterations 50 \
+  --release \
   --output results.json
 
-# Run on iOS with auto-fetch
+# Run on iOS with auto-fetch (use --release for smaller artifacts)
 cargo mobench run \
   --target ios \
   --function json_parse \
   --devices "iPhone 14-16,iPhone 15-17" \
+  --release \
   --fetch
 ```
 
@@ -213,6 +218,26 @@ cargo mobench package-ipa --method adhoc
 ```
 
 **Output:** `target/mobench/ios/BenchRunner.ipa`
+
+### `package-xcuitest` - Package XCUITest Runner
+
+Create the XCUITest runner package required for BrowserStack iOS testing:
+
+```bash
+cargo mobench package-xcuitest [OPTIONS]
+```
+
+**Options:**
+- `--scheme <NAME>` - Xcode scheme for UI tests (default: BenchRunnerUITests)
+
+**Example:**
+```bash
+cargo mobench package-xcuitest
+```
+
+**Output:** `target/mobench/ios/BenchRunnerUITests.zip`
+
+This command builds the XCUITest target and packages it into the zip format that BrowserStack expects for iOS test automation.
 
 ### `plan` - Generate Device Matrix
 
@@ -439,24 +464,26 @@ EOF
 # Build
 cargo mobench build --target android --release
 
-# Run on multiple devices
+# Run on multiple devices (use --release for BrowserStack)
 cargo mobench run \
   --target android \
   --function sha256_1kb \
   --devices "Google Pixel 7-13.0,Samsung Galaxy S23-13.0,OnePlus 11-13.0" \
   --iterations 200 \
+  --release \
   --output crypto-results.json
 ```
 
 ### Compare iOS Performance
 
 ```bash
-# Run same benchmark on different iOS versions
+# Run same benchmark on different iOS versions (use --release for BrowserStack)
 cargo mobench run \
   --target ios \
   --function json_parse \
   --devices "iPhone 13-15,iPhone 14-16,iPhone 15-17" \
   --iterations 100 \
+  --release \
   --fetch \
   --output ios-comparison.json
 ```
@@ -496,6 +523,7 @@ jobs:
             --function my_benchmark \
             --devices "Google Pixel 7-13.0" \
             --iterations 50 \
+            --release \
             --output results.json \
             --fetch
 

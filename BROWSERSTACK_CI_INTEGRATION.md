@@ -54,17 +54,20 @@ for (device, bench_results) in results {
 ### Using `mobench run` with Result Fetching
 
 ```bash
-# Run and fetch results
+# Run and fetch results (use --release for smaller APK, faster uploads)
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --iterations 30 \
   --warmup 5 \
   --devices "Google Pixel 7-13.0" \
+  --release \
   --fetch \
   --fetch-timeout-secs 600 \
   --output results.json
 ```
+
+**Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
 
 ## API Methods
 
@@ -184,12 +187,14 @@ jobs:
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
         run: |
           # Build and run (fetches results)
+          # Use --release to reduce APK size and prevent upload timeouts
           cargo mobench run \
             --target android \
             --function my_crate::my_benchmark \
             --iterations 30 \
             --warmup 5 \
             --devices "Google Pixel 7-13.0" \
+            --release \
             --fetch \
             --fetch-timeout-secs 600 \
             --output results.json

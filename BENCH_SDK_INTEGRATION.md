@@ -141,11 +141,15 @@ cargo mobench run \
   --function my_crate::checksum_bench \
   --iterations 100 \
   --warmup 10 \
-  --devices "Google Pixel 7-13.0"
+  --devices "Google Pixel 7-13.0" \
+  --release
 ```
+
+**Important**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
 
 The CLI will automatically:
 
+- Build in release mode (with `--release` flag)
 - Upload APK and test APK to BrowserStack
 - Schedule the test run
 - Wait for completion
@@ -153,7 +157,7 @@ The CLI will automatically:
 
 ## 8) BrowserStack (iOS XCUITest)
 
-Build iOS artifacts and package as IPA:
+Build iOS artifacts and package for BrowserStack:
 
 ```bash
 # Build xcframework
@@ -161,6 +165,9 @@ cargo mobench build --target ios
 
 # Package as IPA (ad-hoc signing, no Apple ID needed)
 cargo mobench package-ipa --method adhoc
+
+# Package the XCUITest runner for BrowserStack
+cargo mobench package-xcuitest
 
 # Or for development signing (requires Apple Developer account)
 cargo mobench package-ipa --method development
@@ -175,18 +182,24 @@ cargo mobench run \
   --iterations 100 \
   --warmup 10 \
   --devices "iPhone 14-16" \
+  --release \
   --ios-app target/mobench/ios/BenchRunner.ipa \
   --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip
 ```
 
-**IPA Signing Methods:**
+**Important**: Always use the `--release` flag for BrowserStack runs to reduce artifact sizes and prevent upload timeouts.
 
-- `adhoc`: No Apple ID required, works for BrowserStack device testing
-- `development`: Requires Apple Developer account, for physical device testing
+**iOS Packaging Commands:**
+
+- `package-ipa`: Creates the app IPA bundle for device deployment
+  - `--method adhoc`: No Apple ID required, works for BrowserStack
+  - `--method development`: Requires Apple Developer account
+- `package-xcuitest`: Creates the XCUITest runner zip that BrowserStack uses to drive test automation. Outputs to `target/mobench/ios/BenchRunnerUITests.zip`
 
 ## Notes
 
 - **No scripts needed**: All functionality is available via `cargo mobench` commands
+- **Use `--release` for BrowserStack**: Debug builds are ~544MB, release builds are ~133MB. Large artifacts can cause upload timeouts.
 - If you change FFI types, the build process automatically regenerates bindings
 - Android emulator ABI is typically `x86_64` in Android Studio
 - BrowserStack credentials must be set via `BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY`

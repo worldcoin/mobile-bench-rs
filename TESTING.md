@@ -467,16 +467,63 @@ cargo test --all
 
 See the main [README.md](README.md) for BrowserStack testing instructions.
 
+#### Release Builds for BrowserStack
+
+Always use the `--release` flag when running benchmarks on BrowserStack. Debug builds are significantly larger and may cause upload timeouts:
+
+| Build Type | APK Size |
+|------------|----------|
+| Debug      | ~544 MB  |
+| Release    | ~133 MB  |
+
+```bash
+# Android - use --release for smaller APK
+cargo mobench run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --devices "Google Pixel 7-13.0" \
+  --release \
+  --output results.json
+
+# iOS - use --release for smaller artifacts
+cargo mobench run \
+  --target ios \
+  --function sample_fns::fibonacci \
+  --devices "iPhone 14-16" \
+  --release \
+  --ios-app target/mobench/ios/BenchRunner.ipa \
+  --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip \
+  --output results.json
+```
+
+#### Packaging iOS for BrowserStack
+
+BrowserStack iOS testing requires both an IPA and an XCUITest runner package:
+
+```bash
+# 1. Build the iOS artifacts
+cargo mobench build --target ios
+
+# 2. Package the app IPA
+cargo mobench package-ipa --method adhoc
+
+# 3. Package the XCUITest runner
+cargo mobench package-xcuitest
+```
+
+The `package-xcuitest` command creates `target/mobench/ios/BenchRunnerUITests.zip` which BrowserStack uses to drive the test automation.
+
 ### Performance Regression Testing
 
 Compare benchmark results across builds:
 ```bash
-# Run benchmark and save results
+# Run benchmark and save results (use --release for BrowserStack)
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --devices "Google Pixel 7-13.0" \
   --iterations 100 \
+  --release \
   --fetch \
   --output results-v1.json \
   --summary-csv
@@ -487,6 +534,7 @@ cargo mobench run \
   --function sample_fns::fibonacci \
   --devices "Google Pixel 7-13.0" \
   --iterations 100 \
+  --release \
   --fetch \
   --output results-v2.json \
   --summary-csv
@@ -497,6 +545,8 @@ cargo mobench compare \
   --candidate results-v2.json \
   --output comparison.md
 ```
+
+**Note**: The `--release` flag is recommended for BrowserStack runs to reduce APK size (debug: ~544MB, release: ~133MB) and prevent upload timeouts.
 
 ### Adding New Test Functions
 
