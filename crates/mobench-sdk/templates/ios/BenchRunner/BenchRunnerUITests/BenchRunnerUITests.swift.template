@@ -15,8 +15,9 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         let completed = completedIndicator.waitForExistence(timeout: benchmarkTimeout)
         XCTAssertTrue(completed, "Benchmark should complete within \(benchmarkTimeout) seconds")
 
-        // Give UI a moment to update with final results
-        Thread.sleep(forTimeInterval: 0.5)
+        // Wait 5 seconds so BrowserStack video captures the results
+        // This delay is critical for video evidence of benchmark completion
+        Thread.sleep(forTimeInterval: 5.0)
 
         // Extract the benchmark report JSON from the hidden element
         let reportElement = app.staticTexts["benchmarkReportJSON"]

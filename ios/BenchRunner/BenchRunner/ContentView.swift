@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var report: String = "Running benchmark..."
+    @State private var report: String = "Running benchmarks..."
     @State private var reportJSON: String = ""
     @State private var isCompleted: Bool = false
 

@@ -36,5 +36,10 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: {{PROJECT_NAME_PASCAL}}UITests
+    info:
+      path: {{PROJECT_NAME_PASCAL}}UITests/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: {{BUNDLE_ID}}.uitests
     dependencies:
       - target: {{PROJECT_NAME_PASCAL}}
