@@ -169,6 +169,8 @@ enum Command {
         summary_csv: bool,
         #[arg(long, help = "Skip mobile builds and only run the host harness")]
         local_only: bool,
+        #[arg(long, help = "Build in release mode (recommended for BrowserStack to reduce APK size and upload time)")]
+        release: bool,
         #[arg(
             long,
             help = "Path to iOS app bundle (.ipa or zipped .app) for BrowserStack XCUITest"
@@ -249,6 +251,19 @@ enum Command {
         scheme: String,
         #[arg(long, value_enum, default_value = "adhoc", help = "Signing method")]
         method: IosSigningMethodArg,
+        #[arg(long, help = "Output directory for mobile artifacts (default: target/mobench)")]
+        output_dir: Option<PathBuf>,
+    },
+    /// Package XCUITest runner for BrowserStack testing.
+    ///
+    /// Builds the XCUITest runner using xcodebuild and zips the resulting
+    /// .xctest bundle for BrowserStack upload. The output is placed at
+    /// `target/mobench/ios/BenchRunnerUITests.zip` by default.
+    PackageXcuitest {
+        #[arg(long, default_value = "BenchRunner", help = "Xcode scheme to build")]
+        scheme: String,
+        #[arg(long, help = "Output directory for mobile artifacts (default: target/mobench)")]
+        output_dir: Option<PathBuf>,
     },
     /// List all discovered benchmark functions (Phase 1 MVP).
     List,
@@ -436,6 +451,7 @@ pub fn run() -> Result<()> {
             output,
             summary_csv,
             local_only,
+            release,
             ios_app,
             ios_test_suite,
             fetch,
@@ -453,12 +469,14 @@ pub fn run() -> Result<()> {
                 ios_app,
                 ios_test_suite,
                 local_only,
+                release,
             )?;
             let summary_paths = resolve_summary_paths(output.as_deref())?;
             println!(
                 "Preparing benchmark run for {:?}: {} (iterations={}, warmup={})",
                 spec.target, spec.function, spec.iterations, spec.warmup
             );
+            println!("Build profile: {}", if release { "release" } else { "debug" });
             persist_mobile_spec(&spec)?;
             if !spec.devices.is_empty() {
                 println!("Devices: {}", spec.devices.join(", "));
@@ -489,7 +507,7 @@ pub fn run() -> Result<()> {
                         let ndk = std::env::var("ANDROID_NDK_HOME").context(
                             "ANDROID_NDK_HOME must be set for Android builds. Example: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>",
                         )?;
-                        let build = run_android_build(&ndk)?;
+                        let build = run_android_build(&ndk, release)?;
                         let apk = build.app_path;
                         println!("Built Android APK at {:?}", apk);
                         if spec.devices.is_empty() {
@@ -505,7 +523,7 @@ pub fn run() -> Result<()> {
                         }
                     }
                     MobileTarget::Ios => {
-                        let (xcframework, header) = run_ios_build()?;
+                        let (xcframework, header) = run_ios_build(release)?;
                         println!("Built iOS xcframework at {:?}", xcframework);
                         let ios_xcuitest = spec.ios_xcuitest.clone();
 
@@ -710,8 +728,11 @@ pub fn run() -> Result<()> {
         } => {
             cmd_build(target, release, output_dir, crate_path, cli.dry_run, cli.verbose)?;
         }
-        Command::PackageIpa { scheme, method } => {
-            cmd_package_ipa(&scheme, method)?;
+        Command::PackageIpa { scheme, method, output_dir } => {
+            cmd_package_ipa(&scheme, method, output_dir)?;
+        }
+        Command::PackageXcuitest { scheme, output_dir } => {
+            cmd_package_xcuitest(&scheme, output_dir)?;
         }
         Command::List => {
             cmd_list()?;
@@ -1016,6 +1037,7 @@ fn resolve_run_spec(
     ios_app: Option<PathBuf>,
     ios_test_suite: Option<PathBuf>,
     local_only: bool,
+    release: bool,
 ) -> Result<RunSpec> {
     if let Some(cfg_path) = config {
         let cfg = load_config(cfg_path)?;
@@ -1050,7 +1072,7 @@ fn resolve_run_spec(
         && !devices.is_empty()
         && ios_xcuitest.is_none()
     {
-        Some(package_ios_xcuitest_artifacts()?)
+        Some(package_ios_xcuitest_artifacts(release)?)
     } else {
         ios_xcuitest
     };
@@ -1126,14 +1148,19 @@ fn filter_devices_by_tags(devices: Vec<DeviceEntry>, tags: &[String]) -> Result<
     Ok(matched)
 }
 
-fn run_ios_build() -> Result<(PathBuf, PathBuf)> {
+fn run_ios_build(release: bool) -> Result<(PathBuf, PathBuf)> {
     let root = repo_root()?;
     let crate_name =
         detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
     let builder = mobench_sdk::builders::IosBuilder::new(&root, crate_name).verbose(true);
+    let profile = if release {
+        mobench_sdk::BuildProfile::Release
+    } else {
+        mobench_sdk::BuildProfile::Debug
+    };
     let cfg = mobench_sdk::BuildConfig {
         target: mobench_sdk::Target::Ios,
-        profile: mobench_sdk::BuildProfile::Debug,
+        profile,
         incremental: true,
     };
     let result = builder.build(&cfg)?;
@@ -1148,14 +1175,19 @@ fn run_ios_build() -> Result<(PathBuf, PathBuf)> {
     Ok((result.app_path, header))
 }
 
-fn package_ios_xcuitest_artifacts() -> Result<IosXcuitestArtifacts> {
+fn package_ios_xcuitest_artifacts(release: bool) -> Result<IosXcuitestArtifacts> {
     let root = repo_root()?;
     let crate_name =
         detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
     let builder = mobench_sdk::builders::IosBuilder::new(&root, crate_name).verbose(true);
+    let profile = if release {
+        mobench_sdk::BuildProfile::Release
+    } else {
+        mobench_sdk::BuildProfile::Debug
+    };
     let cfg = mobench_sdk::BuildConfig {
         target: mobench_sdk::Target::Ios,
-        profile: mobench_sdk::BuildProfile::Debug,
+        profile,
         incremental: true,
     };
     builder
@@ -1805,20 +1837,46 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
     output
 }
 
+/// Formats a duration in nanoseconds to a human-readable string.
+///
+/// The function picks the appropriate unit based on the magnitude:
+/// - Uses milliseconds (ms) by default
+/// - Switches to seconds (s) if the value is >= 1000ms (1 second)
+///
+/// Examples:
+/// - 500_000 ns -> "0.500ms"
+/// - 1_500_000 ns -> "1.500ms"
+/// - 1_500_000_000 ns -> "1.500s"
+fn format_duration_smart(ns: u64) -> String {
+    let ms = ns as f64 / 1_000_000.0;
+    if ms >= 1000.0 {
+        // Convert to seconds
+        let secs = ms / 1000.0;
+        format!("{:.3}s", secs)
+    } else {
+        format!("{:.3}ms", ms)
+    }
+}
+
 fn format_ms(value: Option<u64>) -> String {
     value
-        .map(|ns| format!("{:.3}", ns as f64 / 1_000_000.0))
+        .map(format_duration_smart)
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn run_android_build(_ndk_home: &str) -> Result<mobench_sdk::BuildResult> {
+fn run_android_build(_ndk_home: &str, release: bool) -> Result<mobench_sdk::BuildResult> {
     let root = repo_root()?;
     let crate_name =
         detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
 
+    let profile = if release {
+        mobench_sdk::BuildProfile::Release
+    } else {
+        mobench_sdk::BuildProfile::Debug
+    };
     let cfg = mobench_sdk::BuildConfig {
         target: mobench_sdk::Target::Android,
-        profile: mobench_sdk::BuildProfile::Debug,
+        profile,
         incremental: true,
     };
     let builder = mobench_sdk::builders::AndroidBuilder::new(&root, crate_name).verbose(true);
@@ -2122,29 +2180,67 @@ fn cmd_list() -> Result<()> {
 }
 
 /// Package iOS app as IPA for distribution or testing
-fn cmd_package_ipa(scheme: &str, method: IosSigningMethodArg) -> Result<()> {
+fn cmd_package_ipa(scheme: &str, method: IosSigningMethodArg, output_dir: Option<PathBuf>) -> Result<()> {
     println!("Packaging iOS app as IPA...");
     println!("  Scheme: {}", scheme);
     println!("  Method: {:?}", method);
+    if let Some(ref dir) = output_dir {
+        println!("  Output: {:?}", dir);
+    }
 
     let project_root = repo_root()?;
     let crate_name = detect_bench_mobile_crate_name(&project_root)
         .unwrap_or_else(|_| "bench-mobile".to_string());
 
-    let builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+    let mut builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+    if let Some(ref dir) = output_dir {
+        builder = builder.output_dir(dir);
+    }
 
     let signing_method: mobench_sdk::builders::SigningMethod = method.into();
     let ipa_path = builder
         .package_ipa(scheme, signing_method)
         .context("Failed to package IPA")?;
 
-    println!("\n✓ IPA packaged successfully!");
+    println!("\n[checkmark] IPA packaged successfully!");
     println!("  Path: {:?}", ipa_path);
     println!("\nYou can now:");
     println!("  - Install on device: Use Xcode or ios-deploy");
     println!(
         "  - Test on BrowserStack: cargo mobench run --target ios --ios-app {:?}",
         ipa_path
+    );
+
+    Ok(())
+}
+
+/// Package XCUITest runner for BrowserStack testing
+fn cmd_package_xcuitest(scheme: &str, output_dir: Option<PathBuf>) -> Result<()> {
+    println!("Packaging XCUITest runner...");
+    println!("  Scheme: {}", scheme);
+    if let Some(ref dir) = output_dir {
+        println!("  Output: {:?}", dir);
+    }
+
+    let project_root = repo_root()?;
+    let crate_name = detect_bench_mobile_crate_name(&project_root)
+        .unwrap_or_else(|_| "bench-mobile".to_string());
+
+    let mut builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+    if let Some(ref dir) = output_dir {
+        builder = builder.output_dir(dir);
+    }
+
+    let zip_path = builder
+        .package_xcuitest(scheme)
+        .context("Failed to package XCUITest runner")?;
+
+    println!("\n[checkmark] XCUITest runner packaged successfully!");
+    println!("  Path: {:?}", zip_path);
+    println!("\nYou can now:");
+    println!(
+        "  - Test on BrowserStack: cargo mobench run --target ios --ios-test-suite {:?}",
+        zip_path
     );
 
     Ok(())
@@ -2172,6 +2268,7 @@ mod tests {
             None,
             None,
             false,
+            false, // release
         )
         .unwrap();
         assert_eq!(spec.function, "sample_fns::fibonacci");
@@ -2210,6 +2307,7 @@ mod tests {
             None,
             None,
             false,
+            false, // release
         )
         .expect("should auto-package iOS artifacts when missing");
         let ios_artifacts = spec
@@ -2220,5 +2318,34 @@ mod tests {
             ios_artifacts.test_suite.exists(),
             "iOS test suite artifact missing"
         );
+    }
+
+    #[test]
+    fn format_duration_smart_uses_milliseconds_by_default() {
+        // 500 microseconds = 0.5 ms
+        assert_eq!(format_duration_smart(500_000), "0.500ms");
+        // 1.5 ms
+        assert_eq!(format_duration_smart(1_500_000), "1.500ms");
+        // 100 ms
+        assert_eq!(format_duration_smart(100_000_000), "100.000ms");
+        // 999.999 ms (just below threshold)
+        assert_eq!(format_duration_smart(999_999_000), "999.999ms");
+    }
+
+    #[test]
+    fn format_duration_smart_switches_to_seconds_when_large() {
+        // Exactly 1 second
+        assert_eq!(format_duration_smart(1_000_000_000), "1.000s");
+        // 1.5 seconds
+        assert_eq!(format_duration_smart(1_500_000_000), "1.500s");
+        // 10 seconds
+        assert_eq!(format_duration_smart(10_000_000_000), "10.000s");
+    }
+
+    #[test]
+    fn format_ms_handles_optional_values() {
+        assert_eq!(format_ms(Some(1_500_000)), "1.500ms");
+        assert_eq!(format_ms(Some(1_500_000_000)), "1.500s");
+        assert_eq!(format_ms(None), "-");
     }
 }
