@@ -123,7 +123,9 @@ BrowserStack:
 export BROWSERSTACK_USERNAME=your_username
 export BROWSERSTACK_ACCESS_KEY=your_key
 
-cargo mobench run --target android --function my_benchmark --devices "Google Pixel 7-13.0"
+# Use --release for BrowserStack (smaller APK: ~133MB vs ~544MB debug)
+cargo mobench run --target android --function my_benchmark \
+  --devices "Google Pixel 7-13.0" --release
 ```
 
 ## Examples (Repository)

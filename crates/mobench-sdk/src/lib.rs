@@ -58,9 +58,9 @@
 //! # Build for iOS
 //! cargo mobench build --target ios
 //!
-//! # Run on BrowserStack
+//! # Run on BrowserStack (use --release for smaller APK uploads)
 //! cargo mobench run --target android --function my_expensive_operation \
-//!     --iterations 100 --warmup 10 --devices "Google Pixel 7-13.0"
+//!     --iterations 100 --warmup 10 --devices "Google Pixel 7-13.0" --release
 //! ```
 //!
 //! ## Architecture

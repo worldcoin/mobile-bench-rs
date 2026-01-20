@@ -35,9 +35,9 @@
 //! # Run locally (no device required)
 //! cargo mobench run --target android --function my_benchmark --local-only
 //!
-//! # Run on BrowserStack
+//! # Run on BrowserStack (use --release for smaller APK uploads)
 //! cargo mobench run --target android --function my_benchmark \
-//!     --iterations 100 --warmup 10 --devices "Google Pixel 7-13.0"
+//!     --iterations 100 --warmup 10 --devices "Google Pixel 7-13.0" --release
 //! ```
 //!
 //! ## Commands
