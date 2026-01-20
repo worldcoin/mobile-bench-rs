@@ -80,4 +80,19 @@ CLI flags override config file values when provided.
 - `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide
 
+## Release Notes
+
+### v0.1.12
+
+- **Fix iOS XCUITest BrowserStack detection**: Added Info.plist to the UITests target template, resolving issues where BrowserStack could not properly detect and run XCUITest bundles
+- **Improved video capture for BrowserStack**: Increased post-benchmark delay from 0.5s to 5.0s to ensure benchmark results are captured in BrowserStack video recordings
+- **Better UX during benchmark runs**: iOS app now shows "Running benchmarks..." text before results appear, providing visual feedback during execution
+- **Template sync**: Synchronized top-level iOS/Android templates with SDK-embedded templates for consistency
+
+### v0.1.11
+
+- Initial public release with `--release` flag support
+- `package-xcuitest` command for iOS BrowserStack testing
+- Updated mobile timing display and documentation
+
 MIT licensed — World Foundation 2026.
