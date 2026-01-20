@@ -78,6 +78,18 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         }
     }
 
+    /// Formats a duration in nanoseconds to a human-readable string.
+    /// Uses milliseconds (ms) by default, switches to seconds (s) if >= 1000ms.
+    private static func formatDuration(_ ns: UInt64) -> String {
+        let ms = Double(ns) / 1_000_000.0
+        if ms >= 1000.0 {
+            let secs = ms / 1000.0
+            return String(format: "%.3fs", secs)
+        } else {
+            return String(format: "%.3fms", ms)
+        }
+    }
+
     private static func formatBenchReport(_ report: BenchReport) -> String {
         var output = "=== Benchmark Results ===\n\n"
         output += "Function: \(report.spec.name)\n"
@@ -86,20 +98,19 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
 
         output += "Samples (\(report.samples.count)):\n"
         for (index, sample) in report.samples.enumerated() {
-            let durationUs = Double(sample.durationNs) / 1_000.0
-            output += "  \(index + 1). \(String(format: "%.3f", durationUs)) μs (\(sample.durationNs) ns)\n"
+            output += "  \(index + 1). \(formatDuration(sample.durationNs))\n"
         }
 
         if !report.samples.isEmpty {
-            let durations = report.samples.map { Double($0.durationNs) / 1_000.0 }
-            let min = durations.min() ?? 0.0
-            let max = durations.max() ?? 0.0
-            let avg = durations.reduce(0, +) / Double(durations.count)
+            let durations = report.samples.map { $0.durationNs }
+            let min = durations.min() ?? 0
+            let max = durations.max() ?? 0
+            let avg = durations.reduce(0, +) / UInt64(durations.count)
 
             output += "\nStatistics:\n"
-            output += "  Min: \(String(format: "%.3f", min)) μs\n"
-            output += "  Max: \(String(format: "%.3f", max)) μs\n"
-            output += "  Avg: \(String(format: "%.3f", avg)) μs\n"
+            output += "  Min: \(formatDuration(min))\n"
+            output += "  Max: \(formatDuration(max))\n"
+            output += "  Avg: \(formatDuration(avg))\n"
         }
 
         return output
