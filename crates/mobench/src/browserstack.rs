@@ -185,7 +185,7 @@ impl BrowserStackClient {
             build_name: self.project.clone(),
             // Specify the test method to run (required by BrowserStack for XCUITest)
             only_testing: Some(vec![
-                "BenchRunnerUITests/BenchRunnerUITests/testLaunchShowsBenchmarkReport".to_string(),
+                "BenchRunnerUITests/BenchRunnerUITests/testLaunchAndCaptureBenchmarkReport".to_string(),
             ]),
         };
 
