@@ -37,8 +37,12 @@ cargo add mobench-sdk inventory
 cargo mobench build --target android
 cargo mobench build --target ios
 
-# Run a benchmark
+# Run a benchmark locally
 cargo mobench run --target android --function sample_fns::fibonacci
+
+# Run on BrowserStack (use --release for smaller APK uploads)
+cargo mobench run --target android --function sample_fns::fibonacci \
+  --devices "Google Pixel 7-13.0" --release
 ```
 
 ## Configuration
