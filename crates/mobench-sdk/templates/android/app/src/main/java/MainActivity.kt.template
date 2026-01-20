@@ -63,6 +63,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<TextView>(R.id.result_text)?.text = display
+
+        // Keep the report on screen for at least 5 seconds so BrowserStack video captures it
+        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for video capture...")
+        Thread.sleep(5000)
+        android.util.Log.i("BenchRunner", "Display hold complete")
     }
 
     /**

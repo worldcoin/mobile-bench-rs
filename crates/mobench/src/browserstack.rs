@@ -352,10 +352,32 @@ impl BrowserStackClient {
 
     /// Extract benchmark results from device logs
     /// Looks for JSON output matching BenchReport format
+    /// Supports both Android (BENCH_JSON) and iOS (BENCH_REPORT_JSON_START/END) formats
     pub fn extract_benchmark_results(&self, logs: &str) -> Result<Vec<Value>> {
         let mut results = Vec::new();
 
-        // Look for JSON objects that contain benchmark-related fields
+        // First, try iOS-style markers: BENCH_REPORT_JSON_START ... BENCH_REPORT_JSON_END
+        if let Some(json) = Self::extract_ios_bench_json(logs) {
+            results.push(json);
+        }
+
+        // Also look for Android-style BENCH_JSON marker
+        let bench_json_marker = "BENCH_JSON ";
+        for line in logs.lines() {
+            if let Some(idx) = line.find(bench_json_marker) {
+                let json_part = &line[idx + bench_json_marker.len()..];
+                if let Ok(json) = serde_json::from_str::<Value>(json_part) {
+                    if json.get("function").is_some()
+                        || json.get("samples").is_some()
+                        || json.get("spec").is_some()
+                    {
+                        results.push(json);
+                    }
+                }
+            }
+        }
+
+        // Look for JSON objects that contain benchmark-related fields (fallback)
         for line in logs.lines() {
             let trimmed = line.trim();
             let looks_like_json = trimmed.starts_with('{') && trimmed.ends_with('}');
@@ -365,7 +387,13 @@ impl BrowserStackClient {
                 && let Ok(json) = serde_json::from_str::<Value>(trimmed)
                 && (json.get("function").is_some() || json.get("samples").is_some())
             {
-                results.push(json);
+                // Avoid duplicates
+                if !results
+                    .iter()
+                    .any(|existing| existing.to_string() == json.to_string())
+                {
+                    results.push(json);
+                }
             }
         }
 
@@ -374,6 +402,118 @@ impl BrowserStackClient {
         } else {
             Ok(results)
         }
+    }
+
+    /// Extract benchmark JSON from iOS logs using START/END markers.
+    /// iOS uses NSLog which may split the JSON across multiple log lines.
+    fn extract_ios_bench_json(logs: &str) -> Option<Value> {
+        let start_marker = "BENCH_REPORT_JSON_START";
+        let end_marker = "BENCH_REPORT_JSON_END";
+
+        // Find the last occurrence of start marker (in case of multiple runs)
+        let start_pos = logs.rfind(start_marker)?;
+        let after_start = &logs[start_pos + start_marker.len()..];
+
+        // Find the end marker after the start
+        let end_pos = after_start.find(end_marker)?;
+        let json_section = &after_start[..end_pos];
+
+        // Try to extract valid JSON from the section
+        Self::extract_json_from_ios_log_section(json_section)
+    }
+
+    /// Extract valid JSON from an iOS log section that may contain log prefixes/timestamps.
+    fn extract_json_from_ios_log_section(section: &str) -> Option<Value> {
+        // First, try the whole section as-is (trimmed)
+        let trimmed = section.trim();
+        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
+                return Some(json);
+            }
+        }
+
+        // Look for JSON on individual lines, stripping iOS log prefixes
+        for line in section.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            // Look for JSON starting with {
+            if let Some(json_start) = line.find('{') {
+                let potential_json = &line[json_start..];
+                if let Some(json) = Self::extract_balanced_json(potential_json) {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&json) {
+                        return Some(parsed);
+                    }
+                }
+            }
+        }
+
+        // Try concatenating all lines (for multi-line JSON)
+        let all_content: String = section
+            .lines()
+            .map(|line| {
+                // Strip common iOS log prefixes (timestamps, process info)
+                // Format: "2026-01-20 12:34:56.789 AppName[pid:tid] content"
+                if let Some(bracket_end) = line.find("] ") {
+                    &line[bracket_end + 2..]
+                } else {
+                    line.trim()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("");
+
+        if let Some(json_start) = all_content.find('{') {
+            let potential_json = &all_content[json_start..];
+            if let Some(json) = Self::extract_balanced_json(potential_json) {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&json) {
+                    return Some(parsed);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Extract a balanced JSON object from a string starting with '{'.
+    fn extract_balanced_json(s: &str) -> Option<String> {
+        if !s.starts_with('{') {
+            return None;
+        }
+
+        let mut depth = 0;
+        let mut in_string = false;
+        let mut escape_next = false;
+
+        for (i, c) in s.char_indices() {
+            if escape_next {
+                escape_next = false;
+                continue;
+            }
+
+            match c {
+                '\\' if in_string => {
+                    escape_next = true;
+                }
+                '"' => {
+                    in_string = !in_string;
+                }
+                '{' if !in_string => {
+                    depth += 1;
+                }
+                '}' if !in_string => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(s[..=i].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
     }
 
     /// Extract performance metrics from device logs
@@ -1351,5 +1491,128 @@ Test completed
         assert_eq!(cpu.peak_percent, 50.0);
         assert_eq!(cpu.min_percent, 30.0);
         assert_eq!(cpu.average_percent, 40.0); // (30 + 50) / 2
+    }
+
+    #[test]
+    fn extract_benchmark_results_handles_ios_markers() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        // Simulate iOS XCUITest logs with BENCH_REPORT_JSON_START/END markers
+        let logs = r#"
+2026-01-20 12:34:56.789 BenchRunner[1234:5678] Starting benchmark...
+2026-01-20 12:34:57.123 BenchRunner[1234:5678] BENCH_REPORT_JSON_START
+2026-01-20 12:34:57.124 BenchRunner[1234:5678] {"function": "sample_fns::fibonacci", "samples": [{"duration_ns": 1000000}, {"duration_ns": 1200000}], "mean_ns": 1100000}
+2026-01-20 12:34:57.125 BenchRunner[1234:5678] BENCH_REPORT_JSON_END
+2026-01-20 12:34:57.200 BenchRunner[1234:5678] Test completed
+        "#;
+
+        let results = client.extract_benchmark_results(logs).unwrap();
+        assert!(!results.is_empty(), "Should find benchmark results");
+
+        let first = &results[0];
+        assert_eq!(
+            first.get("function").unwrap().as_str().unwrap(),
+            "sample_fns::fibonacci"
+        );
+        assert_eq!(first.get("mean_ns").unwrap().as_u64().unwrap(), 1100000);
+    }
+
+    #[test]
+    fn extract_benchmark_results_handles_ios_raw_json() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        // Simulate iOS logs with raw JSON between markers (no log prefix on JSON line)
+        let logs = r#"
+BENCH_REPORT_JSON_START
+{"function": "test_fn", "samples": [{"duration_ns": 500000}], "mean_ns": 500000}
+BENCH_REPORT_JSON_END
+        "#;
+
+        let results = client.extract_benchmark_results(logs).unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(
+            results[0].get("function").unwrap().as_str().unwrap(),
+            "test_fn"
+        );
+    }
+
+    #[test]
+    fn extract_benchmark_results_handles_android_bench_json_marker() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        // Simulate Android logs with BENCH_JSON marker
+        let logs = r#"
+2026-01-20 12:34:56 I/BenchRunner: Starting benchmark...
+2026-01-20 12:34:57 I/BenchRunner: BENCH_JSON {"spec": {"name": "sample_fns::checksum"}, "samples_ns": [1000, 2000], "function": "sample_fns::checksum"}
+2026-01-20 12:34:58 I/BenchRunner: Test completed
+        "#;
+
+        let results = client.extract_benchmark_results(logs).unwrap();
+        assert!(!results.is_empty());
+        assert!(results
+            .iter()
+            .any(|r| r.get("function").and_then(|f| f.as_str()) == Some("sample_fns::checksum")));
+    }
+
+    #[test]
+    fn extract_ios_bench_json_finds_last_occurrence() {
+        // Test that we find the last occurrence of markers (in case of multiple runs)
+        let logs = r#"
+BENCH_REPORT_JSON_START
+{"function": "first_run", "samples": []}
+BENCH_REPORT_JSON_END
+Some other logs
+BENCH_REPORT_JSON_START
+{"function": "second_run", "samples": []}
+BENCH_REPORT_JSON_END
+        "#;
+
+        let result = BrowserStackClient::extract_ios_bench_json(logs);
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap().get("function").unwrap().as_str().unwrap(),
+            "second_run"
+        );
+    }
+
+    #[test]
+    fn extract_balanced_json_handles_nested_objects() {
+        let input = r#"{"outer": {"inner": {"value": 42}}, "extra": "text"} more stuff"#;
+        let result = BrowserStackClient::extract_balanced_json(input);
+        assert!(result.is_some());
+        let json = result.unwrap();
+        assert!(json.contains("outer"));
+        assert!(json.contains("inner"));
+        assert!(!json.contains("more stuff"));
+    }
+
+    #[test]
+    fn extract_balanced_json_handles_strings_with_braces() {
+        let input = r#"{"message": "Hello {world}"}"#;
+        let result = BrowserStackClient::extract_balanced_json(input);
+        assert!(result.is_some());
+        let json = result.unwrap();
+        assert_eq!(json, input);
     }
 }
