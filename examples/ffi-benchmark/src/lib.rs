@@ -90,7 +90,9 @@ impl From<mobench_sdk::BenchError> for BenchError {
             mobench_sdk::BenchError::Runner(runner_err) => BenchError::ExecutionFailed {
                 reason: runner_err.to_string(),
             },
-            mobench_sdk::BenchError::UnknownFunction(name) => BenchError::UnknownFunction { name },
+            mobench_sdk::BenchError::UnknownFunction(name, _available) => {
+                BenchError::UnknownFunction { name }
+            }
             _ => BenchError::ExecutionFailed {
                 reason: err.to_string(),
             },

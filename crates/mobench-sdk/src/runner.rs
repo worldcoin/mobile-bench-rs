@@ -3,14 +3,15 @@
 //! This module provides the execution engine that runs registered benchmarks
 //! and collects timing data.
 
-use crate::registry::find_benchmark;
-use crate::timing::{run_closure, TimingError};
-use crate::types::{BenchError, BenchSpec, RunnerReport};
+use crate::registry::{find_benchmark, list_benchmark_names};
+use crate::timing::BenchSpec;
+use crate::types::{BenchError, RunnerReport};
 
 /// Runs a benchmark by name
 ///
 /// Looks up the benchmark function in the registry and executes it with the
-/// given specification.
+/// given specification. The benchmark's runner handles all timing, including
+/// any setup/teardown logic.
 ///
 /// # Arguments
 ///
@@ -37,15 +38,16 @@ use crate::types::{BenchError, BenchSpec, RunnerReport};
 /// ```
 pub fn run_benchmark(spec: BenchSpec) -> Result<RunnerReport, BenchError> {
     // Find the benchmark function in the registry
-    let bench_fn =
-        find_benchmark(&spec.name).ok_or_else(|| BenchError::UnknownFunction(spec.name.clone()))?;
+    let bench_fn = find_benchmark(&spec.name).ok_or_else(|| {
+        let available = list_benchmark_names()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        BenchError::UnknownFunction(spec.name.clone(), available)
+    })?;
 
-    // Create a closure that invokes the registered function
-    let closure =
-        || (bench_fn.invoke)(&[]).map_err(|e| TimingError::Execution(e.to_string()));
-
-    // Run the benchmark using the timing infrastructure
-    let report = run_closure(spec, closure)?;
+    // Call the runner directly - it handles setup/teardown and timing internally
+    let report = (bench_fn.runner)(spec)?;
 
     Ok(report)
 }

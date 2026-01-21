@@ -8,6 +8,65 @@ type BrowserStackResults = (
     std::collections::HashMap<String, PerformanceMetrics>,
 );
 use std::path::Path;
+use std::time::Instant;
+
+/// Format a file size in human-readable format (MB or KB).
+fn format_file_size(bytes: u64) -> String {
+    if bytes >= 1_000_000 {
+        format!("{} MB", bytes / 1_000_000)
+    } else if bytes >= 1_000 {
+        format!("{} KB", bytes / 1_000)
+    } else {
+        format!("{} bytes", bytes)
+    }
+}
+
+/// Get file size from path, returning 0 if unable to read metadata.
+fn get_file_size(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// A device available on BrowserStack for testing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserStackDevice {
+    /// Device name (e.g., "Google Pixel 7", "iPhone 14")
+    pub device: String,
+    /// Operating system ("android" or "ios")
+    pub os: String,
+    /// OS version (e.g., "13.0", "16")
+    pub os_version: String,
+    /// Whether the device is available for testing
+    #[serde(default)]
+    pub available: Option<bool>,
+}
+
+impl BrowserStackDevice {
+    /// Returns the device identifier string in BrowserStack format.
+    /// Format: "Device Name-OS Version" (e.g., "Google Pixel 7-13.0")
+    pub fn identifier(&self) -> String {
+        format!("{}-{}", self.device, self.os_version)
+    }
+}
+
+/// Result of device validation.
+#[derive(Debug)]
+pub struct DeviceValidationResult {
+    /// Valid devices that were matched.
+    pub valid: Vec<String>,
+    /// Invalid device specs with suggestions.
+    pub invalid: Vec<DeviceValidationError>,
+}
+
+/// Error details for an invalid device specification.
+#[derive(Debug)]
+pub struct DeviceValidationError {
+    /// The device spec that was provided.
+    pub spec: String,
+    /// Reason it's invalid.
+    pub reason: String,
+    /// Suggested alternatives if any match was close.
+    pub suggestions: Vec<String>,
+}
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
@@ -55,6 +114,10 @@ impl BrowserStackClient {
             return Err(anyhow!("app artifact not found at {:?}", artifact));
         }
 
+        let file_size = get_file_size(artifact);
+        println!("Uploading Android APK ({})...", format_file_size(file_size));
+        let start = Instant::now();
+
         let form = Form::new().file("file", artifact)?;
         let resp = self
             .http
@@ -64,7 +127,11 @@ impl BrowserStackClient {
             .send()
             .context("uploading app to BrowserStack")?;
 
-        parse_response(resp, "app upload")
+        let result = parse_response(resp, "app upload")?;
+        let elapsed = start.elapsed().as_secs();
+        println!("  Uploaded Android APK (took {}s)", elapsed);
+
+        Ok(result)
     }
 
     /// Upload an Espresso test-suite APK to BrowserStack.
@@ -72,6 +139,10 @@ impl BrowserStackClient {
         if !artifact.exists() {
             return Err(anyhow!("test suite artifact not found at {:?}", artifact));
         }
+
+        let file_size = get_file_size(artifact);
+        println!("Uploading Android test APK ({})...", format_file_size(file_size));
+        let start = Instant::now();
 
         let form = Form::new().file("file", artifact)?;
         let resp = self
@@ -82,13 +153,21 @@ impl BrowserStackClient {
             .send()
             .context("uploading test suite to BrowserStack")?;
 
-        parse_response(resp, "test suite upload")
+        let result = parse_response(resp, "test suite upload")?;
+        let elapsed = start.elapsed().as_secs();
+        println!("  Uploaded Android test APK (took {}s)", elapsed);
+
+        Ok(result)
     }
 
     pub fn upload_xcuitest_app(&self, artifact: &Path) -> Result<AppUpload> {
         if !artifact.exists() {
             return Err(anyhow!("iOS app artifact not found at {:?}", artifact));
         }
+
+        let file_size = get_file_size(artifact);
+        println!("Uploading iOS app IPA ({})...", format_file_size(file_size));
+        let start = Instant::now();
 
         let form = Form::new().file("file", artifact)?;
         let resp = self
@@ -99,7 +178,11 @@ impl BrowserStackClient {
             .send()
             .context("uploading iOS app to BrowserStack")?;
 
-        parse_response(resp, "iOS app upload")
+        let result = parse_response(resp, "iOS app upload")?;
+        let elapsed = start.elapsed().as_secs();
+        println!("  Uploaded iOS app IPA (took {}s)", elapsed);
+
+        Ok(result)
     }
 
     pub fn upload_xcuitest_test_suite(&self, artifact: &Path) -> Result<TestSuiteUpload> {
@@ -110,6 +193,10 @@ impl BrowserStackClient {
             ));
         }
 
+        let file_size = get_file_size(artifact);
+        println!("Uploading iOS XCUITest runner ({})...", format_file_size(file_size));
+        let start = Instant::now();
+
         let form = Form::new().file("file", artifact)?;
         let resp = self
             .http
@@ -119,7 +206,11 @@ impl BrowserStackClient {
             .send()
             .context("uploading iOS XCUITest suite to BrowserStack")?;
 
-        parse_response(resp, "iOS XCUITest suite upload")
+        let result = parse_response(resp, "iOS XCUITest suite upload")?;
+        let elapsed = start.elapsed().as_secs();
+        println!("  Uploaded iOS XCUITest runner (took {}s)", elapsed);
+
+        Ok(result)
     }
 
     pub fn schedule_espresso_run(
@@ -243,6 +334,66 @@ impl BrowserStackClient {
         std::fs::write(dest, bytes)
             .with_context(|| format!("writing BrowserStack asset to {:?}", dest))?;
         Ok(())
+    }
+
+    /// List available Android devices for Espresso testing.
+    pub fn list_espresso_devices(&self) -> Result<Vec<BrowserStackDevice>> {
+        let json = self.get_json("app-automate/espresso/v2/devices")?;
+        parse_device_list(json, "espresso")
+    }
+
+    /// List available iOS devices for XCUITest testing.
+    pub fn list_xcuitest_devices(&self) -> Result<Vec<BrowserStackDevice>> {
+        let json = self.get_json("app-automate/xcuitest/v2/devices")?;
+        parse_device_list(json, "xcuitest")
+    }
+
+    /// List all available devices (both Android and iOS).
+    pub fn list_all_devices(&self) -> Result<Vec<BrowserStackDevice>> {
+        let mut devices = Vec::new();
+
+        match self.list_espresso_devices() {
+            Ok(android_devices) => devices.extend(android_devices),
+            Err(e) => {
+                eprintln!("Warning: Failed to fetch Android devices: {}", e);
+            }
+        }
+
+        match self.list_xcuitest_devices() {
+            Ok(ios_devices) => devices.extend(ios_devices),
+            Err(e) => {
+                eprintln!("Warning: Failed to fetch iOS devices: {}", e);
+            }
+        }
+
+        Ok(devices)
+    }
+
+    /// Validate device specifications against available devices.
+    ///
+    /// Returns a validation result with valid devices and any errors for invalid specs.
+    pub fn validate_devices(
+        &self,
+        specs: &[String],
+        platform: Option<&str>,
+    ) -> Result<DeviceValidationResult> {
+        let available = match platform {
+            Some("android") | Some("espresso") => self.list_espresso_devices()?,
+            Some("ios") | Some("xcuitest") => self.list_xcuitest_devices()?,
+            _ => self.list_all_devices()?,
+        };
+
+        let mut valid = Vec::new();
+        let mut invalid = Vec::new();
+
+        for spec in specs {
+            match validate_device_spec(spec, &available) {
+                Ok(matched) => valid.push(matched),
+                Err(error) => invalid.push(error),
+            }
+        }
+
+        Ok(DeviceValidationResult { valid, invalid })
     }
 
     /// Get the status of an Espresso build
@@ -921,6 +1072,233 @@ fn parse_response<T: DeserializeOwned>(resp: Response, context: &str) -> Result<
 
     serde_json::from_str(&text)
         .with_context(|| format!("parsing BrowserStack API response for {}", context))
+}
+
+/// Parse a device list response from BrowserStack API.
+fn parse_device_list(json: Value, context: &str) -> Result<Vec<BrowserStackDevice>> {
+    // BrowserStack returns an array of device objects
+    let devices = match json {
+        Value::Array(arr) => arr,
+        Value::Object(obj) => {
+            // Some endpoints wrap the list in a "devices" key
+            obj.get("devices")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+        }
+        _ => {
+            return Err(anyhow!(
+                "Unexpected response format from {} devices endpoint",
+                context
+            ));
+        }
+    };
+
+    let mut result = Vec::with_capacity(devices.len());
+    for device in devices {
+        // Handle both flat format and nested format
+        let device_name = device
+            .get("device")
+            .or_else(|| device.get("name"))
+            .or_else(|| device.get("deviceName"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let os = device
+            .get("os")
+            .and_then(|v| v.as_str())
+            .unwrap_or(if context == "xcuitest" { "ios" } else { "android" })
+            .to_string();
+
+        let os_version = device
+            .get("os_version")
+            .or_else(|| device.get("osVersion"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let available = device
+            .get("available")
+            .or_else(|| device.get("realMobile"))
+            .and_then(|v| v.as_bool());
+
+        result.push(BrowserStackDevice {
+            device: device_name,
+            os,
+            os_version,
+            available,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Validate a device specification against available devices.
+///
+/// The spec can be:
+/// - Exact match: "Google Pixel 7-13.0"
+/// - Device name only: "Google Pixel 7" (matches any version)
+/// - Partial match: "Pixel 7" (fuzzy match)
+///
+/// Provides improved suggestions:
+/// - If user types "Pixel 7", suggests "Google Pixel 7-13.0", "Google Pixel 7-14.0"
+/// - If OS version doesn't match, suggests same device with available versions
+/// - Shows top 3 suggestions max
+fn validate_device_spec(
+    spec: &str,
+    available: &[BrowserStackDevice],
+) -> std::result::Result<String, DeviceValidationError> {
+    let spec_lower = spec.to_lowercase();
+
+    // First, try exact match on identifier
+    for device in available {
+        if device.identifier().to_lowercase() == spec_lower {
+            return Ok(device.identifier());
+        }
+    }
+
+    // Try matching device name only (for specs without version)
+    if !spec.contains('-') {
+        for device in available {
+            if device.device.to_lowercase() == spec_lower {
+                // Return the full identifier with version
+                return Ok(device.identifier());
+            }
+        }
+    }
+
+    // Parse spec to see if it has a version component
+    let (spec_device, spec_version) = if let Some(dash_pos) = spec.rfind('-') {
+        let device_part = &spec[..dash_pos];
+        let version_part = &spec[dash_pos + 1..];
+        // Only treat as version if it looks like a version number
+        if version_part.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            (device_part.to_lowercase(), Some(version_part.to_lowercase()))
+        } else {
+            (spec_lower.clone(), None)
+        }
+    } else {
+        (spec_lower.clone(), None)
+    };
+
+    // Check if the device name matches but OS version is wrong
+    if let Some(ref version) = spec_version {
+        let matching_devices: Vec<&BrowserStackDevice> = available
+            .iter()
+            .filter(|d| d.device.to_lowercase() == spec_device)
+            .collect();
+
+        if !matching_devices.is_empty() {
+            // Device exists but with different versions
+            let available_versions: Vec<String> = matching_devices
+                .iter()
+                .map(|d| d.identifier())
+                .collect();
+
+            let mut suggestions = available_versions;
+            suggestions.sort();
+            suggestions.truncate(3);
+
+            return Err(DeviceValidationError {
+                spec: spec.to_string(),
+                reason: format!(
+                    "OS version '{}' not available for this device",
+                    version
+                ),
+                suggestions,
+            });
+        }
+    }
+
+    // Try fuzzy matching - prioritize matches that start with the spec
+    let mut scored_suggestions: Vec<(u32, String)> = Vec::new();
+    for device in available {
+        let id = device.identifier();
+        let id_lower = id.to_lowercase();
+        let device_lower = device.device.to_lowercase();
+
+        // Score based on how well the spec matches
+        let score = if device_lower.starts_with(&spec_device) {
+            // High priority: device name starts with spec
+            100
+        } else if device_lower.contains(&spec_device) {
+            // Medium priority: device name contains spec
+            50
+        } else if id_lower.contains(&spec_lower) {
+            // Lower priority: full identifier contains spec
+            25
+        } else {
+            // Check for partial word matches (e.g., "Pixel 7" in "Google Pixel 7")
+            let spec_words: Vec<&str> = spec_lower.split_whitespace().collect();
+            let device_words: Vec<&str> = device_lower.split_whitespace().collect();
+
+            let matches = spec_words.iter().filter(|sw|
+                device_words.iter().any(|dw| dw.contains(*sw))
+            ).count();
+
+            if matches == spec_words.len() && !spec_words.is_empty() {
+                // All words from spec found in device name
+                75
+            } else if matches > 0 {
+                // Some words match
+                10 * matches as u32
+            } else {
+                0
+            }
+        };
+
+        if score > 0 {
+            scored_suggestions.push((score, id));
+        }
+    }
+
+    // Sort by score (descending), then alphabetically
+    scored_suggestions.sort_by(|a, b| {
+        b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1))
+    });
+
+    // Take top 3 unique suggestions
+    let suggestions: Vec<String> = scored_suggestions
+        .into_iter()
+        .map(|(_, id)| id)
+        .take(3)
+        .collect();
+
+    Err(DeviceValidationError {
+        spec: spec.to_string(),
+        reason: if suggestions.is_empty() {
+            "No matching device found".to_string()
+        } else {
+            "Device not found, but similar devices are available".to_string()
+        },
+        suggestions,
+    })
+}
+
+/// Format a helpful error message for missing BrowserStack credentials.
+pub fn format_credentials_error(_missing_username: bool, _missing_access_key: bool) -> String {
+    let mut message = String::from("BrowserStack credentials not configured.\n\n");
+
+    message.push_str("Set credentials using one of these methods:\n\n");
+
+    message.push_str("  1. Environment variables:\n");
+    message.push_str("     export BROWSERSTACK_USERNAME=your_username\n");
+    message.push_str("     export BROWSERSTACK_ACCESS_KEY=your_access_key\n\n");
+
+    message.push_str("  2. Config file (bench-config.toml):\n");
+    message.push_str("     [browserstack]\n");
+    message.push_str("     app_automate_username = \"your_username\"\n");
+    message.push_str("     app_automate_access_key = \"your_access_key\"\n\n");
+
+    message.push_str("  3. .env.local file in project root:\n");
+    message.push_str("     BROWSERSTACK_USERNAME=your_username\n");
+    message.push_str("     BROWSERSTACK_ACCESS_KEY=your_access_key\n\n");
+
+    message.push_str("Get credentials: https://app-automate.browserstack.com/\n");
+    message.push_str("(Navigate to Settings -> Access Key)\n");
+
+    message
 }
 
 #[cfg(test)]
@@ -1614,5 +1992,209 @@ BENCH_REPORT_JSON_END
         assert!(result.is_some());
         let json = result.unwrap();
         assert_eq!(json, input);
+    }
+
+    #[test]
+    fn device_identifier_format() {
+        let device = BrowserStackDevice {
+            device: "Google Pixel 7".to_string(),
+            os: "android".to_string(),
+            os_version: "13.0".to_string(),
+            available: Some(true),
+        };
+        assert_eq!(device.identifier(), "Google Pixel 7-13.0");
+    }
+
+    #[test]
+    fn validate_device_spec_exact_match() {
+        let devices = vec![
+            BrowserStackDevice {
+                device: "Google Pixel 7".to_string(),
+                os: "android".to_string(),
+                os_version: "13.0".to_string(),
+                available: Some(true),
+            },
+            BrowserStackDevice {
+                device: "iPhone 14".to_string(),
+                os: "ios".to_string(),
+                os_version: "16".to_string(),
+                available: Some(true),
+            },
+        ];
+
+        // Exact match should work
+        let result = validate_device_spec("Google Pixel 7-13.0", &devices);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Google Pixel 7-13.0");
+
+        // Case-insensitive match
+        let result = validate_device_spec("google pixel 7-13.0", &devices);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_device_spec_device_name_only() {
+        let devices = vec![BrowserStackDevice {
+            device: "Google Pixel 7".to_string(),
+            os: "android".to_string(),
+            os_version: "13.0".to_string(),
+            available: Some(true),
+        }];
+
+        // Device name without version should match and return full identifier
+        let result = validate_device_spec("Google Pixel 7", &devices);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Google Pixel 7-13.0");
+    }
+
+    #[test]
+    fn validate_device_spec_suggestions() {
+        let devices = vec![
+            BrowserStackDevice {
+                device: "Google Pixel 7".to_string(),
+                os: "android".to_string(),
+                os_version: "13.0".to_string(),
+                available: Some(true),
+            },
+            BrowserStackDevice {
+                device: "Google Pixel 7 Pro".to_string(),
+                os: "android".to_string(),
+                os_version: "13.0".to_string(),
+                available: Some(true),
+            },
+        ];
+
+        // Partial match should give suggestions
+        let result = validate_device_spec("Pixel 7", &devices);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(!error.suggestions.is_empty());
+        assert!(error.suggestions.iter().any(|s| s.contains("Pixel 7")));
+    }
+
+    #[test]
+    fn validate_device_spec_no_match() {
+        let devices = vec![BrowserStackDevice {
+            device: "Google Pixel 7".to_string(),
+            os: "android".to_string(),
+            os_version: "13.0".to_string(),
+            available: Some(true),
+        }];
+
+        // No match at all
+        let result = validate_device_spec("iPhone 14", &devices);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.suggestions.is_empty());
+        assert_eq!(error.reason, "No matching device found");
+    }
+
+    #[test]
+    fn validate_device_spec_wrong_os_version() {
+        let devices = vec![
+            BrowserStackDevice {
+                device: "Google Pixel 7".to_string(),
+                os: "android".to_string(),
+                os_version: "13.0".to_string(),
+                available: Some(true),
+            },
+            BrowserStackDevice {
+                device: "Google Pixel 7".to_string(),
+                os: "android".to_string(),
+                os_version: "14.0".to_string(),
+                available: Some(true),
+            },
+        ];
+
+        // Wrong OS version should suggest available versions
+        let result = validate_device_spec("Google Pixel 7-12.0", &devices);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.reason.contains("OS version"));
+        assert!(error.suggestions.contains(&"Google Pixel 7-13.0".to_string()));
+        assert!(error.suggestions.contains(&"Google Pixel 7-14.0".to_string()));
+    }
+
+    #[test]
+    fn validate_device_spec_limits_suggestions_to_three() {
+        let devices = vec![
+            BrowserStackDevice {
+                device: "Google Pixel 6".to_string(),
+                os: "android".to_string(),
+                os_version: "12.0".to_string(),
+                available: Some(true),
+            },
+            BrowserStackDevice {
+                device: "Google Pixel 7".to_string(),
+                os: "android".to_string(),
+                os_version: "13.0".to_string(),
+                available: Some(true),
+            },
+            BrowserStackDevice {
+                device: "Google Pixel 7 Pro".to_string(),
+                os: "android".to_string(),
+                os_version: "13.0".to_string(),
+                available: Some(true),
+            },
+            BrowserStackDevice {
+                device: "Google Pixel 8".to_string(),
+                os: "android".to_string(),
+                os_version: "14.0".to_string(),
+                available: Some(true),
+            },
+            BrowserStackDevice {
+                device: "Google Pixel 8 Pro".to_string(),
+                os: "android".to_string(),
+                os_version: "14.0".to_string(),
+                available: Some(true),
+            },
+        ];
+
+        // Should limit to 3 suggestions
+        let result = validate_device_spec("Pixel", &devices);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.suggestions.len() <= 3, "Should have at most 3 suggestions, got {}", error.suggestions.len());
+    }
+
+    #[test]
+    fn format_credentials_error_both_missing() {
+        let error = format_credentials_error(true, true);
+        assert!(error.contains("BrowserStack credentials not configured"));
+        assert!(error.contains("BROWSERSTACK_USERNAME"));
+        assert!(error.contains("BROWSERSTACK_ACCESS_KEY"));
+        assert!(error.contains(".env.local"));
+        assert!(error.contains("bench-config.toml"));
+        assert!(error.contains("https://app-automate.browserstack.com/"));
+    }
+
+    #[test]
+    fn format_credentials_error_includes_all_methods() {
+        let error = format_credentials_error(true, false);
+        // Should always include all three methods regardless of what's missing
+        assert!(error.contains("Environment variables"));
+        assert!(error.contains("Config file"));
+        assert!(error.contains(".env.local"));
+    }
+
+    #[test]
+    fn parse_device_list_array_format() {
+        let json = serde_json::json!([
+            {
+                "device": "Google Pixel 7",
+                "os": "android",
+                "os_version": "13.0"
+            },
+            {
+                "device": "iPhone 14",
+                "os": "ios",
+                "os_version": "16"
+            }
+        ]);
+
+        let devices = parse_device_list(json, "espresso").unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].device, "Google Pixel 7");
+        assert_eq!(devices[1].device, "iPhone 14");
     }
 }
