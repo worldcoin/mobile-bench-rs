@@ -37,8 +37,12 @@ cargo add mobench-sdk inventory
 cargo mobench build --target android
 cargo mobench build --target ios
 
-# Run a benchmark
+# Run a benchmark locally
 cargo mobench run --target android --function sample_fns::fibonacci
+
+# Run on BrowserStack (use --release for smaller APK uploads)
+cargo mobench run --target android --function sample_fns::fibonacci \
+  --devices "Google Pixel 7-13.0" --release
 ```
 
 ## Configuration
@@ -75,5 +79,24 @@ CLI flags override config file values when provided.
 - `FETCH_RESULTS_GUIDE.md`: fetching and summarizing results
 - `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide
+
+## Release Notes
+
+### v0.1.13
+
+- **Fix iOS XCUITest test name mismatch**: Changed BrowserStack `only-testing` filter to use `testLaunchAndCaptureBenchmarkReport` which matches what BrowserStack parses from the xctest bundle
+
+### v0.1.12
+
+- **Fix iOS XCUITest BrowserStack detection**: Added Info.plist to the UITests target template, resolving issues where BrowserStack could not properly detect and run XCUITest bundles
+- **Improved video capture for BrowserStack**: Increased post-benchmark delay from 0.5s to 5.0s to ensure benchmark results are captured in BrowserStack video recordings
+- **Better UX during benchmark runs**: iOS app now shows "Running benchmarks..." text before results appear, providing visual feedback during execution
+- **Template sync**: Synchronized top-level iOS/Android templates with SDK-embedded templates for consistency
+
+### v0.1.11
+
+- Initial public release with `--release` flag support
+- `package-xcuitest` command for iOS BrowserStack testing
+- Updated mobile timing display and documentation
 
 MIT licensed — World Foundation 2026.

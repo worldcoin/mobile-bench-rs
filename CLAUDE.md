@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.11):**
+**Published on crates.io as the mobench ecosystem (v0.1.13):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -129,6 +129,13 @@ cargo mobench build --target ios
 
 # Package iOS IPA (for BrowserStack or physical devices)
 cargo mobench package-ipa --method adhoc
+
+# Package XCUITest runner (for BrowserStack iOS testing)
+cargo mobench package-xcuitest
+
+# Build in release mode (smaller artifacts, recommended for BrowserStack)
+cargo mobench build --target android --release
+cargo mobench build --target ios --release
 ```
 
 **What the CLI does:**
@@ -209,25 +216,34 @@ cargo mobench run \
 export BROWSERSTACK_USERNAME="your_username"
 export BROWSERSTACK_ACCESS_KEY="your_access_key"
 
-# Run on real devices
+# Run on real devices (use --release to reduce APK size for faster uploads)
 cargo mobench run \
   --target android \
   --function sample_fns::checksum \
   --iterations 30 \
   --warmup 5 \
   --devices "Google Pixel 7-13.0" \
+  --release \
   --output run-summary.json
 ```
+
+**Note on `--release` flag**: Debug builds can be very large (~544MB) which may cause BrowserStack upload timeouts. The `--release` flag builds in release mode, reducing APK size significantly (~133MB), and is recommended for all BrowserStack runs.
 
 #### BrowserStack Run (iOS)
 
 ```bash
+# First, package the IPA and XCUITest runner
+cargo mobench package-ipa --method adhoc
+cargo mobench package-xcuitest
+
+# Run on real devices
 cargo mobench run \
   --target ios \
   --function sample_fns::fibonacci \
   --iterations 20 \
   --warmup 3 \
   --devices "iPhone 14-16" \
+  --release \
   --ios-app target/mobench/ios/BenchRunner.ipa \
   --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip \
   --output run-summary.json
@@ -245,6 +261,43 @@ cargo mobench plan --output device-matrix.yaml
 # Run with config
 cargo mobench run --config bench-config.toml
 ```
+
+#### Release Builds for BrowserStack
+
+Debug builds can be very large and may cause upload timeouts on BrowserStack:
+- **Debug APK**: ~544MB
+- **Release APK**: ~133MB
+
+Always use the `--release` flag when running benchmarks on BrowserStack:
+
+```bash
+# Android - builds in release mode automatically
+cargo mobench run --target android --release --devices "Google Pixel 7-13.0" ...
+
+# iOS - builds in release mode automatically
+cargo mobench run --target ios --release --devices "iPhone 14-16" ...
+```
+
+The `--release` flag ensures smaller artifact sizes and faster uploads.
+
+#### Packaging iOS for BrowserStack
+
+BrowserStack iOS testing requires two packages:
+1. **App IPA**: The main application bundle
+2. **XCUITest Runner**: The test automation package
+
+```bash
+# Package the app IPA
+cargo mobench package-ipa --method adhoc
+
+# Package the XCUITest runner for BrowserStack
+cargo mobench package-xcuitest
+```
+
+The `package-xcuitest` command:
+- Builds the XCUITest target from the iOS project
+- Creates a properly structured zip file for BrowserStack
+- Outputs to `target/mobench/ios/BenchRunnerUITests.zip`
 
 #### Fetch BrowserStack Results
 

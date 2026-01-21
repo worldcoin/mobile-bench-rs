@@ -13,9 +13,12 @@ cargo mobench run \
   --iterations 30 \
   --warmup 5 \
   --devices "Google Pixel 7-13.0" \
+  --release \
   --fetch \
   --output results.json
 ```
+
+**Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
 
 ## How It Works
 
@@ -155,12 +158,14 @@ jobs:
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
           ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
         run: |
+          # Use --release to reduce APK size and prevent upload timeouts
           cargo mobench run \
             --target android \
             --function my_crate::my_benchmark \
             --iterations 30 \
             --warmup 5 \
             --devices "Google Pixel 7-13.0" \
+            --release \
             --fetch \
             --fetch-timeout-secs 900 \
             --output results.json
@@ -230,10 +235,11 @@ Verify your app logs JSON to stdout/logcat in the correct format.
 ## Best Practices
 
 1. **Always use --fetch in CI** for automated pipelines
-2. **Set reasonable timeouts** based on your benchmark duration
-3. **Check exit codes** - command succeeds even if fetch warns
-4. **Archive results** as CI artifacts for historical tracking
-5. **Use GitHub Actions summaries** to display results inline
+2. **Always use --release for BrowserStack** to reduce artifact sizes (~544MB debug vs ~133MB release) and prevent upload timeouts
+3. **Set reasonable timeouts** based on your benchmark duration
+4. **Check exit codes** - command succeeds even if fetch warns
+5. **Archive results** as CI artifacts for historical tracking
+6. **Use GitHub Actions summaries** to display results inline
 
 ## Comparison with Manual Workflow
 
@@ -254,11 +260,12 @@ cat target/browserstack/.../device-logs.txt | grep '{"function"'
 
 ### With --fetch
 ```bash
-# One command does everything
+# One command does everything (use --release for BrowserStack)
 cargo mobench run \
   --target android \
   --function my_func \
   --devices "..." \
+  --release \
   --fetch \
   --output results.json
 

@@ -46,5 +46,10 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: BenchRunnerUITests
+    info:
+      path: BenchRunnerUITests/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.world.bench.uitests
     dependencies:
       - target: BenchRunner
