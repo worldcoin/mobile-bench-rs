@@ -77,11 +77,8 @@ jobs:
             build-tools;34.0.0
             ndk;26.1.10909125
 
-      - name: Build Rust shared libs for Android
-        run: scripts/build-android.sh
-
-      - name: Sync .so into Android app
-        run: scripts/sync-android-libs.sh
+      - name: Build Android artifacts
+        run: cargo mobench build --target android
 
       - name: Setup Gradle
         uses: gradle/gradle-build-action@v3
@@ -89,14 +86,14 @@ jobs:
           gradle-version: 8.7
 
       - name: Assemble APK
-        working-directory: android
+        working-directory: target/mobench/android
         run: gradle :app:assembleDebug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: mobile-bench-android-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: target/mobench/android/app/build/outputs/apk/debug/*.apk
 
   ios:
     if: ${{ github.event.inputs.platform == 'ios' || github.event.inputs.platform == 'both' || github.event.inputs.platform == '' }}
@@ -112,21 +109,14 @@ jobs:
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
-      - name: Install cargo-apple and cbindgen
-        run: |
-          cargo install cargo-apple
-          cargo install cbindgen
-
       - name: Build iOS xcframework + header
-        run: scripts/build-ios.sh
+        run: cargo mobench build --target ios
 
       - name: Upload iOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mobile-bench-ios
-          path: |
-            target/ios/sample_fns.xcframework
-            target/ios/include/sample_fns.h
+          path: target/mobench/ios/sample_fns.xcframework
 
   browserstack:
     name: BrowserStack run
