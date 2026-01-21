@@ -791,6 +791,95 @@ pub fn detect_default_function(crate_dir: &Path, crate_name: &str) -> Option<Str
     None
 }
 
+/// Detects all benchmark functions in a crate by scanning src/lib.rs for `#[benchmark]`
+///
+/// This function looks for functions marked with the `#[benchmark]` attribute and returns
+/// all found in the format `{crate_name}::{function_name}`.
+///
+/// # Arguments
+///
+/// * `crate_dir` - Path to the crate directory containing Cargo.toml
+/// * `crate_name` - Name of the crate (used as prefix for the function names)
+///
+/// # Returns
+///
+/// A vector of benchmark function names in format `crate_name::function_name`
+pub fn detect_all_benchmarks(crate_dir: &Path, crate_name: &str) -> Vec<String> {
+    let lib_rs = crate_dir.join("src/lib.rs");
+    if !lib_rs.exists() {
+        return Vec::new();
+    }
+
+    let Ok(file) = fs::File::open(&lib_rs) else {
+        return Vec::new();
+    };
+    let reader = BufReader::new(file);
+
+    let mut benchmarks = Vec::new();
+    let mut found_benchmark_attr = false;
+    let crate_name_normalized = crate_name.replace('-', "_");
+
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+
+        // Check for #[benchmark] attribute
+        if trimmed == "#[benchmark]" || trimmed.starts_with("#[benchmark(") {
+            found_benchmark_attr = true;
+            continue;
+        }
+
+        // If we found a benchmark attribute, look for the function definition
+        if found_benchmark_attr {
+            // Look for "fn function_name" or "pub fn function_name"
+            if let Some(fn_pos) = trimmed.find("fn ") {
+                let after_fn = &trimmed[fn_pos + 3..];
+                // Extract function name (until '(' or whitespace)
+                let fn_name: String = after_fn
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+
+                if !fn_name.is_empty() {
+                    benchmarks.push(format!("{}::{}", crate_name_normalized, fn_name));
+                }
+                found_benchmark_attr = false;
+            }
+            // Reset if we hit a line that's not a function definition
+            // (could be another attribute or comment)
+            if !trimmed.starts_with('#') && !trimmed.starts_with("//") && !trimmed.is_empty() {
+                found_benchmark_attr = false;
+            }
+        }
+    }
+
+    benchmarks
+}
+
+/// Validates that a benchmark function exists in the crate source
+///
+/// # Arguments
+///
+/// * `crate_dir` - Path to the crate directory containing Cargo.toml
+/// * `crate_name` - Name of the crate (used as prefix for the function names)
+/// * `function_name` - The function name to validate (with or without crate prefix)
+///
+/// # Returns
+///
+/// `true` if the function is found, `false` otherwise
+pub fn validate_benchmark_exists(crate_dir: &Path, crate_name: &str, function_name: &str) -> bool {
+    let benchmarks = detect_all_benchmarks(crate_dir, crate_name);
+    let crate_name_normalized = crate_name.replace('-', "_");
+
+    // Normalize the function name - add crate prefix if missing
+    let normalized_name = if function_name.contains("::") {
+        function_name.to_string()
+    } else {
+        format!("{}::{}", crate_name_normalized, function_name)
+    };
+
+    benchmarks.iter().any(|b| b == &normalized_name)
+}
+
 /// Resolves the default benchmark function for a project
 ///
 /// This function attempts to auto-detect benchmark functions from the crate's source.

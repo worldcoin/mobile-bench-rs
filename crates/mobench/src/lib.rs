@@ -267,6 +267,70 @@ enum Command {
     },
     /// List all discovered benchmark functions (Phase 1 MVP).
     List,
+    /// Verify benchmark setup: registry, spec, artifacts, and optional smoke test.
+    ///
+    /// This command validates:
+    /// - Registry has benchmark functions registered
+    /// - Spec file exists and is valid (if --spec-path provided)
+    /// - Artifacts are present and consistent (if --check-artifacts)
+    /// - Runs a local smoke test (if --smoke-test and function is specified)
+    Verify {
+        #[arg(long, value_enum, help = "Target platform to verify artifacts for")]
+        target: Option<SdkTarget>,
+        #[arg(long, help = "Path to bench_spec.json to validate")]
+        spec_path: Option<PathBuf>,
+        #[arg(long, help = "Check that build artifacts exist")]
+        check_artifacts: bool,
+        #[arg(long, help = "Run a local smoke test with minimal iterations")]
+        smoke_test: bool,
+        #[arg(long, help = "Function name to verify/smoke test")]
+        function: Option<String>,
+        #[arg(long, help = "Output directory for mobile artifacts (default: target/mobench)")]
+        output_dir: Option<PathBuf>,
+    },
+    /// Display summary statistics from a benchmark report JSON file.
+    ///
+    /// Prints avg/min/max/median, sample count, device, and OS version
+    /// from the specified report file.
+    Summary {
+        #[arg(help = "Path to the benchmark report JSON file")]
+        report: PathBuf,
+        #[arg(long, help = "Output format: text (default), json, or csv")]
+        format: Option<SummaryFormat>,
+    },
+    /// List available BrowserStack devices for testing.
+    ///
+    /// Fetches and displays the list of available devices from BrowserStack
+    /// that can be used with the --devices flag in the run command.
+    ///
+    /// Examples:
+    ///   mobench devices                    # List all devices
+    ///   mobench devices --platform android # List Android devices only
+    ///   mobench devices --json             # Output as JSON
+    ///   mobench devices --validate "Google Pixel 7-13.0"  # Validate a device spec
+    Devices {
+        #[arg(long, value_enum, help = "Filter by platform (android or ios)")]
+        platform: Option<DevicePlatform>,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+        #[arg(long, help = "Validate device specs against available devices")]
+        validate: Vec<String>,
+    },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum DevicePlatform {
+    Android,
+    Ios,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum SummaryFormat {
+    Text,
+    Json,
+    Csv,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
@@ -472,23 +536,96 @@ pub fn run() -> Result<()> {
                 release,
             )?;
             let summary_paths = resolve_summary_paths(output.as_deref())?;
-            println!(
-                "Preparing benchmark run for {:?}: {} (iterations={}, warmup={})",
-                spec.target, spec.function, spec.iterations, spec.warmup
-            );
-            println!("Build profile: {}", if release { "release" } else { "debug" });
-            persist_mobile_spec(&spec)?;
+            let root = repo_root()?;
+            let output_dir = root.join("target/mobench");
+
+            // Validate device specs early to catch errors before building (C2: Device validation)
+            if !spec.devices.is_empty() && !local_only {
+                if let Ok(creds) = resolve_browserstack_credentials(spec.browserstack.as_ref()) {
+                    let client = BrowserStackClient::new(
+                        BrowserStackAuth {
+                            username: creds.username,
+                            access_key: creds.access_key,
+                        },
+                        creds.project,
+                    )?;
+
+                    let platform_str = match spec.target {
+                        MobileTarget::Android => Some("android"),
+                        MobileTarget::Ios => Some("ios"),
+                    };
+
+                    println!("Validating device specifications...");
+                    let validation = client.validate_devices(&spec.devices, platform_str)?;
+
+                    if !validation.invalid.is_empty() {
+                        println!();
+                        println!("Invalid device specifications:");
+                        for error in &validation.invalid {
+                            println!("  [ERROR] {}: {}", error.spec, error.reason);
+                            if !error.suggestions.is_empty() {
+                                println!("          Did you mean:");
+                                for suggestion in &error.suggestions {
+                                    println!("            - {}", suggestion);
+                                }
+                            }
+                        }
+                        println!();
+                        println!("Use 'cargo mobench devices' to see available devices.");
+                        bail!(
+                            "{} of {} device specs are invalid. Fix them before running.",
+                            validation.invalid.len(),
+                            spec.devices.len()
+                        );
+                    }
+                    println!("  All {} device(s) validated successfully.", validation.valid.len());
+                }
+            }
+
+            // Print resolved spec summary (A5: Better CLI output)
+            println!();
+            println!("=== Benchmark Run Configuration ===");
+            println!("  Target:      {:?}", spec.target);
+            println!("  Function:    {}", spec.function);
+            println!("  Iterations:  {}", spec.iterations);
+            println!("  Warmup:      {}", spec.warmup);
+            println!("  Profile:     {}", if release { "release" } else { "debug" });
             if !spec.devices.is_empty() {
-                println!("Devices: {}", spec.devices.join(", "));
+                println!("  Devices:     {}", spec.devices.join(", "));
+            } else {
+                println!("  Devices:     (none - local build only)");
             }
-            println!("JSON summary will be written to {:?}", summary_paths.json);
-            println!(
-                "Markdown summary will be written to {:?}",
-                summary_paths.markdown
-            );
+            println!();
+
+            // Print artifact locations
+            println!("=== Output Locations ===");
+            println!("  Build output:    {}", output_dir.display());
+            match spec.target {
+                MobileTarget::Android => {
+                    println!("  Android APK:     {}/android/app/build/outputs/apk/", output_dir.display());
+                    println!("  bench_spec.json: {}/android/app/src/main/assets/", output_dir.display());
+                }
+                MobileTarget::Ios => {
+                    println!("  iOS xcframework: {}/ios/", output_dir.display());
+                    println!("  bench_spec.json: {}/ios/BenchRunner/BenchRunner/Resources/", output_dir.display());
+                    if let Some(ref xcui) = spec.ios_xcuitest {
+                        println!("  iOS App IPA:     {}", xcui.app.display());
+                        println!("  XCUITest Runner: {}", xcui.test_suite.display());
+                    }
+                }
+            }
+            println!("  JSON summary:    {}", summary_paths.json.display());
+            println!("  Markdown:        {}", summary_paths.markdown.display());
             if summary_csv {
-                println!("CSV summary will be written to {:?}", summary_paths.csv);
+                println!("  CSV:             {}", summary_paths.csv.display());
             }
+            println!();
+
+            // A2: Validate that the requested benchmark function exists (if we can detect it)
+            validate_benchmark_function(&root, &spec.function)?;
+
+            // Persist the spec and metadata to mobile app bundles
+            persist_mobile_spec(&spec, release)?;
 
             // Skip local smoke test - sample-fns uses direct dispatch, not inventory registry
             // Benchmarks will run on the actual mobile device
@@ -668,6 +805,9 @@ pub fn run() -> Result<()> {
 
             run_summary.summary = build_summary(&run_summary)?;
             write_summary(&run_summary, &summary_paths, summary_csv)?;
+
+            // Print completion message with output location
+            println!("\nBenchmark run complete. Summary written to {:?}", summary_paths.json);
         }
         Command::Init { output, target } => {
             write_config_template(&output, target)?;
@@ -736,6 +876,26 @@ pub fn run() -> Result<()> {
         }
         Command::List => {
             cmd_list()?;
+        }
+        Command::Verify {
+            target,
+            spec_path,
+            check_artifacts,
+            smoke_test,
+            function,
+            output_dir,
+        } => {
+            cmd_verify(target, spec_path, check_artifacts, smoke_test, function, output_dir)?;
+        }
+        Command::Summary { report, format } => {
+            cmd_summary(&report, format)?;
+        }
+        Command::Devices {
+            platform,
+            json,
+            validate,
+        } => {
+            cmd_devices(platform, json, validate)?;
         }
     }
 
@@ -1459,16 +1619,18 @@ fn resolve_browserstack_credentials(
         project = Some(val);
     }
 
-    let username = username.filter(|s| !s.is_empty()).ok_or_else(|| {
-        anyhow!("BrowserStack username missing; set BROWSERSTACK_USERNAME or provide in config")
-    })?;
-    let access_key = access_key.filter(|s| !s.is_empty()).ok_or_else(|| {
-        anyhow!("BrowserStack access key missing; set BROWSERSTACK_ACCESS_KEY or provide in config")
-    })?;
+    // Check what's missing and provide helpful error message
+    let missing_username = username.as_deref().map(str::is_empty).unwrap_or(true);
+    let missing_access_key = access_key.as_deref().map(str::is_empty).unwrap_or(true);
+
+    if missing_username || missing_access_key {
+        let error_msg = browserstack::format_credentials_error(missing_username, missing_access_key);
+        bail!("{}", error_msg);
+    }
 
     Ok(ResolvedBrowserStack {
-        username,
-        access_key,
+        username: username.unwrap(),
+        access_key: access_key.unwrap(),
         project,
     })
 }
@@ -1498,7 +1660,90 @@ fn run_local_smoke(spec: &RunSpec) -> Result<Value> {
     serde_json::to_value(&report).context("serializing benchmark report")
 }
 
-fn persist_mobile_spec(spec: &RunSpec) -> Result<()> {
+/// Validates that the benchmark function exists in the crate source.
+///
+/// This provides early feedback when a function name is misspelled or doesn't exist.
+/// If validation fails, it warns but continues (the final validation happens on device).
+fn validate_benchmark_function(project_root: &Path, function_name: &str) -> Result<()> {
+    // Try to find the benchmark crate
+    let crate_name = detect_bench_mobile_crate_name(project_root).ok();
+
+    // Check common crate locations
+    let search_dirs = [
+        project_root.join("bench-mobile"),
+        project_root.join("crates/sample-fns"),
+        project_root.to_path_buf(),
+    ];
+
+    // Extract the crate name from the function (e.g., "sample_fns::fibonacci" -> "sample_fns")
+    let function_crate = function_name.split("::").next().unwrap_or("");
+
+    let mut found_any_benchmarks = false;
+    let mut found_function = false;
+
+    for dir in &search_dirs {
+        if !dir.join("Cargo.toml").exists() {
+            continue;
+        }
+
+        // Determine the crate name for this directory
+        let dir_crate_name = crate_name.as_deref().unwrap_or(function_crate);
+
+        // Detect all benchmarks in this directory
+        let benchmarks = mobench_sdk::codegen::detect_all_benchmarks(dir, dir_crate_name);
+
+        if !benchmarks.is_empty() {
+            found_any_benchmarks = true;
+
+            // Check if our function is in the list
+            if benchmarks.iter().any(|b| b == function_name) {
+                found_function = true;
+                break;
+            }
+
+            // Also check without crate prefix (in case user specified just the function name)
+            let simple_name = function_name.split("::").last().unwrap_or(function_name);
+            if benchmarks.iter().any(|b| b.ends_with(&format!("::{}", simple_name))) {
+                found_function = true;
+                break;
+            }
+        }
+    }
+
+    if found_any_benchmarks && !found_function {
+        // We found benchmarks but not the one requested - this is likely an error
+        println!("=== Warning ===");
+        println!("  Benchmark function '{}' was not found in the source code.", function_name);
+        println!("  Available benchmarks:");
+        for dir in &search_dirs {
+            if !dir.join("Cargo.toml").exists() {
+                continue;
+            }
+            let dir_crate_name = crate_name.as_deref().unwrap_or(function_crate);
+            let benchmarks = mobench_sdk::codegen::detect_all_benchmarks(dir, dir_crate_name);
+            for bench in benchmarks {
+                println!("    - {}", bench);
+            }
+        }
+        println!();
+        println!("  The run will continue, but the benchmark may fail on the device.");
+        println!("  Tip: Use 'cargo mobench list' to see all available benchmarks.");
+        println!();
+    } else if !found_any_benchmarks {
+        // No benchmarks found at all - might be using direct dispatch
+        println!("=== Note ===");
+        println!("  Could not validate benchmark function '{}' (no #[benchmark] functions found).", function_name);
+        println!("  This is normal for projects using direct FFI dispatch (like sample-fns).");
+        println!();
+    } else {
+        // Function validated successfully
+        println!("Benchmark function '{}' validated.", function_name);
+    }
+
+    Ok(())
+}
+
+fn persist_mobile_spec(spec: &RunSpec, release: bool) -> Result<()> {
     let root = repo_root()?;
     let payload = json!({
         "function": spec.function,
@@ -1506,18 +1751,73 @@ fn persist_mobile_spec(spec: &RunSpec) -> Result<()> {
         "warmup": spec.warmup,
     });
     let contents = serde_json::to_string_pretty(&payload)?;
-    let targets = [
+
+    // Write to legacy mobile-spec locations for backward compatibility
+    let legacy_targets = [
         root.join("target/mobile-spec/android/bench_spec.json"),
         root.join("target/mobile-spec/ios/bench_spec.json"),
     ];
-    for path in targets {
+    for path in legacy_targets {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating directory {:?}", parent))?;
         }
         write_file(&path, contents.as_bytes())?;
     }
+
+    // IMPORTANT: Also embed the spec directly into the mobile app bundles
+    // This ensures the requested benchmark function is always used, even when
+    // the app is run via BrowserStack where file paths are different.
+    let mobench_output_dir = root.join("target/mobench");
+    let apps_exist = mobench_output_dir.join("android").exists() || mobench_output_dir.join("ios").exists();
+
+    if let Err(e) = embed_spec_into_apps(&mobench_output_dir, spec) {
+        // Only warn if the apps don't exist yet - they'll be created during build
+        if apps_exist {
+            println!("Warning: Failed to embed bench spec into app bundles: {}", e);
+        }
+    } else if apps_exist {
+        println!("Embedded bench_spec.json in mobile app bundles");
+    }
+
+    // B3: Embed build metadata (bench_meta.json) for artifact correlation
+    let profile = if release { "release" } else { "debug" };
+    let target_str = match spec.target {
+        MobileTarget::Android => "android",
+        MobileTarget::Ios => "ios",
+    };
+
+    if let Err(e) = embed_meta_into_apps(&mobench_output_dir, spec, target_str, profile) {
+        if apps_exist {
+            println!("Warning: Failed to embed bench meta into app bundles: {}", e);
+        }
+    } else if apps_exist {
+        println!("Embedded bench_meta.json with build metadata");
+    }
+
     Ok(())
+}
+
+/// Embeds the benchmark spec into Android assets and iOS bundle resources.
+fn embed_spec_into_apps(output_dir: &Path, spec: &RunSpec) -> Result<()> {
+    let embedded_spec = mobench_sdk::builders::EmbeddedBenchSpec {
+        function: spec.function.clone(),
+        iterations: spec.iterations,
+        warmup: spec.warmup,
+    };
+    mobench_sdk::builders::embed_bench_spec(output_dir, &embedded_spec)
+        .map_err(|e| anyhow!("Failed to embed bench spec: {}", e))
+}
+
+/// Embeds build metadata (bench_meta.json) into Android assets and iOS bundle resources.
+fn embed_meta_into_apps(output_dir: &Path, spec: &RunSpec, target: &str, profile: &str) -> Result<()> {
+    let embedded_spec = mobench_sdk::builders::EmbeddedBenchSpec {
+        function: spec.function.clone(),
+        iterations: spec.iterations,
+        warmup: spec.warmup,
+    };
+    mobench_sdk::builders::embed_bench_meta(output_dir, &embedded_spec, target, profile)
+        .map_err(|e| anyhow!("Failed to embed bench meta: {}", e))
 }
 
 #[derive(Debug)]
@@ -1634,6 +1934,125 @@ fn write_summary(summary: &RunSummary, paths: &SummaryPaths, summary_csv: bool) 
         write_file(&paths.csv, csv.as_bytes())?;
         println!("Wrote CSV summary to {:?}", paths.csv);
     }
+    Ok(())
+}
+
+/// Print a final summary with all artifact correlation information (C3).
+#[allow(dead_code)]
+fn print_run_completion_summary(
+    summary: &RunSummary,
+    paths: &SummaryPaths,
+    output_dir: &Path,
+) -> Result<()> {
+    println!();
+    println!("=== Run Completion Summary ===");
+    println!();
+
+    // Build ID and platform
+    if let Some(ref remote) = summary.remote_run {
+        let (build_id, platform) = match remote {
+            RemoteRun::Android { build_id, .. } => (build_id, "Android/Espresso"),
+            RemoteRun::Ios { build_id, .. } => (build_id, "iOS/XCUITest"),
+        };
+        println!("BrowserStack Run:");
+        println!("  Build ID:    {}", build_id);
+        println!("  Platform:    {}", platform);
+        println!(
+            "  Dashboard:   https://app-automate.browserstack.com/dashboard/v2/builds/{}",
+            build_id
+        );
+        println!();
+
+        // Fetch command for later retrieval
+        let target_str = match summary.spec.target {
+            MobileTarget::Android => "android",
+            MobileTarget::Ios => "ios",
+        };
+        println!("Fetch Results Later:");
+        println!(
+            "  cargo mobench fetch --target {} --build-id {} --output-dir ./results",
+            target_str, build_id
+        );
+        println!();
+    }
+
+    // Devices tested
+    if !summary.spec.devices.is_empty() {
+        println!("Devices Tested ({}):", summary.spec.devices.len());
+        for device in &summary.spec.devices {
+            println!("  - {}", device);
+        }
+        println!();
+    }
+
+    // Results summary by device
+    if !summary.summary.device_summaries.is_empty() {
+        println!("Results Summary:");
+        for device_summary in &summary.summary.device_summaries {
+            println!("  Device: {}", device_summary.device);
+            for bench in &device_summary.benchmarks {
+                let median = bench
+                    .median_ns
+                    .map(format_duration_smart)
+                    .unwrap_or_else(|| "-".to_string());
+                let samples = bench.samples;
+                println!(
+                    "    {} - median: {}, samples: {}",
+                    bench.function, median, samples
+                );
+            }
+        }
+        println!();
+    }
+
+    // Artifact locations
+    println!("Output Artifacts:");
+    println!("  JSON Summary:     {}", paths.json.display());
+    println!("  Markdown Report:  {}", paths.markdown.display());
+    if paths.csv.exists() {
+        println!("  CSV Data:         {}", paths.csv.display());
+    }
+
+    // Build artifacts
+    match summary.spec.target {
+        MobileTarget::Android => {
+            let apk_dir = output_dir.join("android/app/build/outputs/apk");
+            if apk_dir.exists() {
+                println!("  Android APK:      {}/", apk_dir.display());
+            }
+        }
+        MobileTarget::Ios => {
+            let ios_dir = output_dir.join("ios");
+            if ios_dir.exists() {
+                println!("  iOS Framework:    {}/", ios_dir.display());
+            }
+        }
+    }
+
+    // Bench spec and meta locations
+    let spec_path = match summary.spec.target {
+        MobileTarget::Android => output_dir.join("android/app/src/main/assets/bench_spec.json"),
+        MobileTarget::Ios => {
+            output_dir.join("ios/BenchRunner/BenchRunner/Resources/bench_spec.json")
+        }
+    };
+    if spec_path.exists() {
+        println!("  Bench Spec:       {}", spec_path.display());
+    }
+
+    let meta_path = match summary.spec.target {
+        MobileTarget::Android => output_dir.join("android/app/src/main/assets/bench_meta.json"),
+        MobileTarget::Ios => {
+            output_dir.join("ios/BenchRunner/BenchRunner/Resources/bench_meta.json")
+        }
+    };
+    if meta_path.exists() {
+        println!("  Bench Meta:       {}", meta_path.display());
+    }
+
+    println!();
+    println!("Run completed successfully.");
+
     Ok(())
 }
 
@@ -2291,26 +2710,91 @@ fn detect_bench_mobile_crate_name(root: &Path) -> Result<String> {
     )
 }
 
-/// List all discovered benchmark functions (Phase 1 MVP)
+/// List all discovered benchmark functions
+///
+/// This uses source code scanning to find `#[benchmark]` functions, which works
+/// without requiring a full build. It also falls back to the inventory registry
+/// for any benchmarks that may be registered at runtime.
 fn cmd_list() -> Result<()> {
     println!("Discovering benchmark functions...\n");
 
-    let benchmarks = mobench_sdk::discover_benchmarks();
+    let project_root = repo_root()?;
+    let mut all_benchmarks = Vec::new();
 
-    if benchmarks.is_empty() {
-        println!("No benchmarks found.");
-        println!("\nTo add benchmarks:");
-        println!("  1. Add #[benchmark] attribute to functions");
-        println!("  2. Make sure mobench-sdk is in your dependencies");
-        println!("  3. Rebuild your project");
-    } else {
-        println!("Found {} benchmark(s):", benchmarks.len());
+    // Method 1: Source code scanning (works without build)
+    let search_dirs = [
+        ("bench-mobile", project_root.join("bench-mobile")),
+        ("sample-fns", project_root.join("crates/sample-fns")),
+        ("ffi-benchmark", project_root.join("crates/ffi-benchmark")),
+        ("", project_root.clone()),
+    ];
+
+    for (default_crate_name, dir) in &search_dirs {
+        if !dir.join("Cargo.toml").exists() {
+            continue;
+        }
+        let crate_name = if default_crate_name.is_empty() {
+            if let Ok(name) = get_crate_name_from_cargo_toml(&dir.join("Cargo.toml")) {
+                name
+            } else {
+                continue;
+            }
+        } else {
+            default_crate_name.to_string()
+        };
+        let benchmarks = mobench_sdk::codegen::detect_all_benchmarks(dir, &crate_name);
         for bench in benchmarks {
-            println!("  - {}", bench.name);
+            if !all_benchmarks.contains(&bench) {
+                all_benchmarks.push(bench);
+            }
         }
     }
 
+    // Method 2: Inventory registry (for runtime-registered benchmarks)
+    let registry_benchmarks = mobench_sdk::discover_benchmarks();
+    for bench in registry_benchmarks {
+        let name = bench.name.to_string();
+        if !all_benchmarks.contains(&name) {
+            all_benchmarks.push(name);
+        }
+    }
+
+    all_benchmarks.sort();
+
+    if all_benchmarks.is_empty() {
+        println!("No benchmarks found.\n");
+        println!("Searched locations:");
+        for (name, dir) in &search_dirs {
+            if !name.is_empty() {
+                println!("  - {}: {}", name, dir.display());
+            }
+        }
+        println!("\nTo add benchmarks:");
+        println!("  1. Add #[benchmark] attribute to functions");
+        println!("  2. Make sure mobench-sdk is in your dependencies");
+        println!("  3. Run 'cargo mobench list' again");
+    } else {
+        println!("Found {} benchmark(s):", all_benchmarks.len());
+        for bench in &all_benchmarks {
+            println!("  {}", bench);
+        }
+        println!();
+        println!("Usage:");
+        println!("  cargo mobench run --target android --function {} --iterations 100", all_benchmarks.first().unwrap());
+    }
+
     Ok(())
+}
+
+fn get_crate_name_from_cargo_toml(cargo_toml: &Path) -> Result<String> {
+    let contents = fs::read_to_string(cargo_toml)?;
+    let value: toml::Value = toml::from_str(&contents)?;
+    let name = value
+        .get("package")
+        .and_then(|pkg| pkg.get("name"))
+        .and_then(|n| n.as_str())
+        .ok_or_else(|| anyhow!("package.name not found in {:?}", cargo_toml))?;
+    Ok(name.to_string())
 }
 
 /// Package iOS app as IPA for distribution or testing
@@ -2376,6 +2860,715 @@ fn cmd_package_xcuitest(scheme: &str, output_dir: Option<PathBuf>) -> Result<()>
         "  - Test on BrowserStack: cargo mobench run --target ios --ios-test-suite {:?}",
         zip_path
     );
+
+    Ok(())
+}
+
+/// Verify benchmark setup: registry, spec, artifacts, and optional smoke test
+fn cmd_verify(
+    target: Option<SdkTarget>,
+    spec_path: Option<PathBuf>,
+    check_artifacts: bool,
+    smoke_test: bool,
+    function: Option<String>,
+    output_dir: Option<PathBuf>,
+) -> Result<()> {
+    println!("Verifying benchmark setup...\n");
+
+    let mut checks_passed = 0;
+    let mut checks_failed = 0;
+    let mut warnings = 0;
+
+    // 1. Check benchmark registry
+    print!("  [1/4] Checking benchmark registry... ");
+    let benchmarks = mobench_sdk::discover_benchmarks();
+    if benchmarks.is_empty() {
+        println!("WARNING");
+        println!("        No benchmarks found in registry.");
+        println!("        This may be expected if benchmarks are in a separate crate.");
+        println!("        Tip: Add #[benchmark] attribute to functions and ensure mobench-sdk is linked.");
+        warnings += 1;
+    } else {
+        println!("OK ({} benchmark(s) found)", benchmarks.len());
+        for bench in &benchmarks {
+            println!("        - {}", bench.name);
+        }
+        checks_passed += 1;
+    }
+
+    // 2. Validate spec file if provided
+    print!("  [2/4] Checking spec file... ");
+    if let Some(ref path) = spec_path {
+        match validate_spec_file(path) {
+            Ok(spec) => {
+                println!("OK");
+                println!("        Function: {}", spec.name);
+                println!("        Iterations: {}", spec.iterations);
+                println!("        Warmup: {}", spec.warmup);
+                checks_passed += 1;
+            }
+            Err(e) => {
+                println!("FAILED");
+                println!("        Error: {}", e);
+                checks_failed += 1;
+            }
+        }
+    } else {
+        // Try default locations
+        let project_root = repo_root().unwrap_or_else(|_| PathBuf::from("."));
+        let output_base = output_dir.clone().unwrap_or_else(|| project_root.join("target/mobench"));
+        let default_paths = [
+            output_base.join("android/app/src/main/assets/bench_spec.json"),
+            output_base.join("ios/BenchRunner/BenchRunner/bench_spec.json"),
+            project_root.join("target/mobile-spec/android/bench_spec.json"),
+            project_root.join("target/mobile-spec/ios/bench_spec.json"),
+        ];
+
+        let mut found_any = false;
+        for path in &default_paths {
+            if path.exists() {
+                if !found_any {
+                    println!("OK (found at default locations)");
+                    found_any = true;
+                }
+                match validate_spec_file(path) {
+                    Ok(spec) => {
+                        println!("        {:?}", path);
+                        println!("          Function: {}, Iterations: {}, Warmup: {}",
+                            spec.name, spec.iterations, spec.warmup);
+                    }
+                    Err(e) => {
+                        println!("        {:?} - INVALID: {}", path, e);
+                    }
+                }
+            }
+        }
+        if found_any {
+            checks_passed += 1;
+        } else {
+            println!("SKIPPED (no spec file found, use --spec-path to specify)");
+            warnings += 1;
+        }
+    }
+
+    // 3. Check artifacts if requested
+    print!("  [3/4] Checking build artifacts... ");
+    if check_artifacts {
+        let project_root = repo_root().unwrap_or_else(|_| PathBuf::from("."));
+        let output_base = output_dir.clone().unwrap_or_else(|| project_root.join("target/mobench"));
+
+        let mut artifacts_ok = true;
+        let mut artifact_details = Vec::new();
+
+        if let Some(ref t) = target {
+            match t {
+                SdkTarget::Android | SdkTarget::Both => {
+                    let apk_path = output_base.join("android/app/build/outputs/apk/debug/app-debug.apk");
+                    let apk_release = output_base.join("android/app/build/outputs/apk/release/app-release-unsigned.apk");
+                    if apk_path.exists() {
+                        artifact_details.push(format!("Android APK (debug): {:?}", apk_path));
+                    } else if apk_release.exists() {
+                        artifact_details.push(format!("Android APK (release): {:?}", apk_release));
+                    } else {
+                        artifact_details.push("Android APK: NOT FOUND".to_string());
+                        artifacts_ok = false;
+                    }
+
+                    // Check JNI libs
+                    let jni_base = output_base.join("android/app/src/main/jniLibs");
+                    let abis = ["arm64-v8a", "armeabi-v7a", "x86_64"];
+                    for abi in abis {
+                        let lib_path = jni_base.join(abi).join("libsample_fns.so");
+                        if lib_path.exists() {
+                            artifact_details.push(format!("JNI lib ({}): OK", abi));
+                        }
+                    }
+                }
+                SdkTarget::Ios => {}
+            }
+
+            match t {
+                SdkTarget::Ios | SdkTarget::Both => {
+                    let xcframework = output_base.join("ios/sample_fns.xcframework");
+                    if xcframework.exists() {
+                        artifact_details.push(format!("iOS xcframework: {:?}", xcframework));
+                    } else {
+                        artifact_details.push("iOS xcframework: NOT FOUND".to_string());
+                        artifacts_ok = false;
+                    }
+
+                    let ipa_path = output_base.join("ios/BenchRunner.ipa");
+                    if ipa_path.exists() {
+                        artifact_details.push(format!("iOS IPA: {:?}", ipa_path));
+                    }
+
+                    let xcuitest_path = output_base.join("ios/BenchRunnerUITests.zip");
+                    if xcuitest_path.exists() {
+                        artifact_details.push(format!("XCUITest runner: {:?}", xcuitest_path));
+                    }
+                }
+                SdkTarget::Android => {}
+            }
+        } else {
+            // Check both platforms by default
+            let android_apk = output_base.join("android/app/build/outputs/apk/debug/app-debug.apk");
+            let ios_xcframework = output_base.join("ios/sample_fns.xcframework");
+
+            if android_apk.exists() {
+                artifact_details.push(format!("Android APK: {:?}", android_apk));
+            }
+            if ios_xcframework.exists() {
+                artifact_details.push(format!("iOS xcframework: {:?}", ios_xcframework));
+            }
+
+            if artifact_details.is_empty() {
+                artifacts_ok = false;
+                artifact_details.push("No artifacts found. Run 'cargo mobench build' first.".to_string());
+            }
+        }
+
+        if artifacts_ok {
+            println!("OK");
+            checks_passed += 1;
+        } else {
+            println!("FAILED");
+            checks_failed += 1;
+        }
+        for detail in &artifact_details {
+            println!("        {}", detail);
+        }
+    } else {
+        println!("SKIPPED (use --check-artifacts to enable)");
+    }
+
+    // 4. Run smoke test if requested
+    print!("  [4/4] Running smoke test... ");
+    if smoke_test {
+        if let Some(ref func) = function {
+            match run_verify_smoke_test(func) {
+                Ok(report) => {
+                    println!("OK");
+                    let samples = report.samples.len();
+                    let mean_ns = if samples > 0 {
+                        report.samples.iter().map(|s| s.duration_ns).sum::<u64>() / samples as u64
+                    } else {
+                        0
+                    };
+                    println!("        Function: {}", func);
+                    println!("        Samples: {}", samples);
+                    println!("        Mean: {} ns ({:.3} ms)", mean_ns, mean_ns as f64 / 1_000_000.0);
+                    checks_passed += 1;
+                }
+                Err(e) => {
+                    println!("FAILED");
+                    println!("        Error: {}", e);
+                    checks_failed += 1;
+                }
+            }
+        } else if !benchmarks.is_empty() {
+            // Use first discovered benchmark
+            let func = &benchmarks[0].name;
+            match run_verify_smoke_test(func) {
+                Ok(report) => {
+                    println!("OK");
+                    let samples = report.samples.len();
+                    let mean_ns = if samples > 0 {
+                        report.samples.iter().map(|s| s.duration_ns).sum::<u64>() / samples as u64
+                    } else {
+                        0
+                    };
+                    println!("        Function: {} (auto-selected)", func);
+                    println!("        Samples: {}", samples);
+                    println!("        Mean: {} ns ({:.3} ms)", mean_ns, mean_ns as f64 / 1_000_000.0);
+                    checks_passed += 1;
+                }
+                Err(e) => {
+                    println!("FAILED");
+                    println!("        Error: {}", e);
+                    checks_failed += 1;
+                }
+            }
+        } else {
+            println!("SKIPPED (no benchmark function available)");
+            println!("        Tip: Use --function to specify a function, or add benchmarks with #[benchmark]");
+            warnings += 1;
+        }
+    } else {
+        println!("SKIPPED (use --smoke-test to enable)");
+    }
+
+    // Print summary
+    println!("\n----------------------------------------");
+    println!("Verification Summary:");
+    println!("  Passed:   {}", checks_passed);
+    println!("  Failed:   {}", checks_failed);
+    println!("  Warnings: {}", warnings);
+
+    if checks_failed > 0 {
+        println!("\n[X] Verification failed with {} error(s)", checks_failed);
+        bail!("Verification failed");
+    } else if warnings > 0 {
+        println!("\n[!] Verification completed with {} warning(s)", warnings);
+    } else {
+        println!("\n[checkmark] All checks passed!");
+    }
+
+    Ok(())
+}
+
+/// Validate a bench_spec.json file
+///
+/// Handles both "name" and "function" field names for compatibility
+/// with different spec file formats.
+fn validate_spec_file(path: &Path) -> Result<mobench_sdk::BenchSpec> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("reading spec file {:?}", path))?;
+
+    // Try parsing directly first (standard BenchSpec format with "name" field)
+    if let Ok(spec) = serde_json::from_str::<mobench_sdk::BenchSpec>(&contents) {
+        // Validate spec fields
+        if spec.name.trim().is_empty() {
+            bail!("spec.name is empty");
+        }
+        if spec.iterations == 0 {
+            bail!("spec.iterations must be > 0");
+        }
+        return Ok(spec);
+    }
+
+    // Fall back to generic Value parsing for "function" field format
+    // (used by persist_mobile_spec and some older formats)
+    let value: Value = serde_json::from_str(&contents)
+        .with_context(|| format!("parsing spec file {:?}", path))?;
+
+    // Extract name from either "name" or "function" field
+    let name = value
+        .get("name")
+        .or_else(|| value.get("function"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("spec must have 'name' or 'function' field"))?
+        .to_string();
+
+    let iterations = value
+        .get("iterations")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(100);
+
+    let warmup = value
+        .get("warmup")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(10);
+
+    // Validate
+    if name.trim().is_empty() {
+        bail!("spec.name/function is empty");
+    }
+    if iterations == 0 {
+        bail!("spec.iterations must be > 0");
+    }
+
+    Ok(mobench_sdk::BenchSpec {
+        name,
+        iterations,
+        warmup,
+    })
+}
+
+/// Run a minimal smoke test for verification
+fn run_verify_smoke_test(function: &str) -> Result<mobench_sdk::RunnerReport> {
+    let spec = mobench_sdk::BenchSpec {
+        name: function.to_string(),
+        iterations: 3, // Minimal iterations for smoke test
+        warmup: 1,
+    };
+
+    mobench_sdk::run_benchmark(spec)
+        .map_err(|e| anyhow!("smoke test failed: {}", e))
+}
+
+/// Display summary statistics from a benchmark report JSON file
+fn cmd_summary(report_path: &Path, format: Option<SummaryFormat>) -> Result<()> {
+    let format = format.unwrap_or(SummaryFormat::Text);
+
+    // Try to load the report in various formats
+    let contents = fs::read_to_string(report_path)
+        .with_context(|| format!("reading report file {:?}", report_path))?;
+
+    let value: Value = serde_json::from_str(&contents)
+        .with_context(|| format!("parsing report file {:?}", report_path))?;
+
+    // Extract summary information
+    let summary_data = extract_summary_data(&value)?;
+
+    match format {
+        SummaryFormat::Text => print_summary_text(&summary_data),
+        SummaryFormat::Json => print_summary_json(&summary_data)?,
+        SummaryFormat::Csv => print_summary_csv(&summary_data),
+    }
+
+    Ok(())
+}
+
+/// Summary data extracted from various report formats
+#[derive(Debug, Serialize)]
+struct SummaryData {
+    source_file: String,
+    function: Option<String>,
+    device: Option<String>,
+    os_version: Option<String>,
+    sample_count: usize,
+    mean_ns: Option<u64>,
+    median_ns: Option<u64>,
+    min_ns: Option<u64>,
+    max_ns: Option<u64>,
+    p95_ns: Option<u64>,
+    iterations: Option<u32>,
+    warmup: Option<u32>,
+}
+
+/// Extract summary data from various report formats
+fn extract_summary_data(value: &Value) -> Result<Vec<SummaryData>> {
+    let mut results = Vec::new();
+
+    // Check if this is a RunSummary format (from `mobench run`)
+    if value.get("summary").is_some() {
+        let summary = &value["summary"];
+        let function = summary.get("function").and_then(|f| f.as_str()).map(String::from);
+        let iterations = summary.get("iterations").and_then(|i| i.as_u64()).map(|i| i as u32);
+        let warmup = summary.get("warmup").and_then(|w| w.as_u64()).map(|w| w as u32);
+
+        if let Some(device_summaries) = summary.get("device_summaries").and_then(|d| d.as_array()) {
+            for device_summary in device_summaries {
+                let device = device_summary.get("device").and_then(|d| d.as_str()).map(String::from);
+
+                if let Some(benchmarks) = device_summary.get("benchmarks").and_then(|b| b.as_array()) {
+                    for bench in benchmarks {
+                        let bench_function = bench.get("function").and_then(|f| f.as_str()).map(String::from);
+                        results.push(SummaryData {
+                            source_file: "RunSummary".to_string(),
+                            function: bench_function.or_else(|| function.clone()),
+                            device: device.clone(),
+                            os_version: None, // RunSummary doesn't include OS version directly
+                            sample_count: bench.get("samples").and_then(|s| s.as_u64()).unwrap_or(0) as usize,
+                            mean_ns: bench.get("mean_ns").and_then(|m| m.as_u64()),
+                            median_ns: bench.get("median_ns").and_then(|m| m.as_u64()),
+                            min_ns: bench.get("min_ns").and_then(|m| m.as_u64()),
+                            max_ns: bench.get("max_ns").and_then(|m| m.as_u64()),
+                            p95_ns: bench.get("p95_ns").and_then(|p| p.as_u64()),
+                            iterations,
+                            warmup,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Check if this is a BenchReport format (direct timing output)
+    if let Some(spec) = value.get("spec") {
+        let samples = extract_samples(value);
+        let stats = compute_sample_stats(&samples);
+
+        results.push(SummaryData {
+            source_file: "BenchReport".to_string(),
+            function: spec.get("name").and_then(|n| n.as_str()).map(String::from),
+            device: Some("local".to_string()),
+            os_version: None,
+            sample_count: samples.len(),
+            mean_ns: stats.as_ref().map(|s| s.mean_ns),
+            median_ns: stats.as_ref().map(|s| s.median_ns),
+            min_ns: stats.as_ref().map(|s| s.min_ns),
+            max_ns: stats.as_ref().map(|s| s.max_ns),
+            p95_ns: stats.as_ref().map(|s| s.p95_ns),
+            iterations: spec.get("iterations").and_then(|i| i.as_u64()).map(|i| i as u32),
+            warmup: spec.get("warmup").and_then(|w| w.as_u64()).map(|w| w as u32),
+        });
+    }
+
+    // Check if this is benchmark_results format (from BrowserStack fetch)
+    if let Some(benchmark_results) = value.get("benchmark_results").and_then(|b| b.as_object()) {
+        for (device, entries) in benchmark_results {
+            if let Some(entries) = entries.as_array() {
+                for entry in entries {
+                    let samples = extract_samples(entry);
+                    let stats = compute_sample_stats(&samples);
+
+                    results.push(SummaryData {
+                        source_file: "BrowserStack".to_string(),
+                        function: entry.get("function").and_then(|f| f.as_str()).map(String::from),
+                        device: Some(device.clone()),
+                        os_version: entry.get("os_version").and_then(|o| o.as_str()).map(String::from),
+                        sample_count: samples.len(),
+                        mean_ns: entry.get("mean_ns").and_then(|m| m.as_u64()).or_else(|| stats.as_ref().map(|s| s.mean_ns)),
+                        median_ns: stats.as_ref().map(|s| s.median_ns),
+                        min_ns: stats.as_ref().map(|s| s.min_ns),
+                        max_ns: stats.as_ref().map(|s| s.max_ns),
+                        p95_ns: stats.as_ref().map(|s| s.p95_ns),
+                        iterations: None,
+                        warmup: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // Check if this is a session bench-report.json format
+    if value.get("samples").is_some() && value.get("spec").is_none() {
+        // Direct samples array without spec wrapper
+        let samples = extract_samples(value);
+        let stats = compute_sample_stats(&samples);
+
+        results.push(SummaryData {
+            source_file: "SessionReport".to_string(),
+            function: value.get("function").and_then(|f| f.as_str()).map(String::from),
+            device: value.get("device").and_then(|d| d.as_str()).map(String::from),
+            os_version: value.get("os_version").and_then(|o| o.as_str()).map(String::from),
+            sample_count: samples.len(),
+            mean_ns: value.get("mean_ns").and_then(|m| m.as_u64()).or_else(|| stats.as_ref().map(|s| s.mean_ns)),
+            median_ns: stats.as_ref().map(|s| s.median_ns),
+            min_ns: stats.as_ref().map(|s| s.min_ns),
+            max_ns: stats.as_ref().map(|s| s.max_ns),
+            p95_ns: stats.as_ref().map(|s| s.p95_ns),
+            iterations: value.get("iterations").and_then(|i| i.as_u64()).map(|i| i as u32),
+            warmup: value.get("warmup").and_then(|w| w.as_u64()).map(|w| w as u32),
+        });
+    }
+
+    if results.is_empty() {
+        bail!("Could not extract summary data from report. Unrecognized format.");
+    }
+
+    Ok(results)
+}
+
+/// Print summary in text format
+fn print_summary_text(data: &[SummaryData]) {
+    println!("Benchmark Summary");
+    println!("=================\n");
+
+    for (idx, entry) in data.iter().enumerate() {
+        if data.len() > 1 {
+            println!("--- Entry {} ---", idx + 1);
+        }
+
+        if let Some(ref func) = entry.function {
+            println!("Function:     {}", func);
+        }
+        if let Some(ref device) = entry.device {
+            println!("Device:       {}", device);
+        }
+        if let Some(ref os) = entry.os_version {
+            println!("OS Version:   {}", os);
+        }
+        println!("Sample Count: {}", entry.sample_count);
+        println!();
+
+        println!("Statistics (nanoseconds):");
+        println!("  Mean:   {}", entry.mean_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
+        println!("  Median: {}", entry.median_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
+        println!("  Min:    {}", entry.min_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
+        println!("  Max:    {}", entry.max_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
+        println!("  P95:    {}", entry.p95_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
+
+        if entry.iterations.is_some() || entry.warmup.is_some() {
+            println!();
+            println!("Configuration:");
+            if let Some(iter) = entry.iterations {
+                println!("  Iterations: {}", iter);
+            }
+            if let Some(warm) = entry.warmup {
+                println!("  Warmup:     {}", warm);
+            }
+        }
+
+        if idx < data.len() - 1 {
+            println!();
+        }
+    }
+}
+
+/// Print summary in JSON format
+fn print_summary_json(data: &[SummaryData]) -> Result<()> {
+    let json = serde_json::to_string_pretty(data)?;
+    println!("{}", json);
+    Ok(())
+}
+
+/// Print summary in CSV format
+fn print_summary_csv(data: &[SummaryData]) {
+    println!("function,device,os_version,sample_count,mean_ns,median_ns,min_ns,max_ns,p95_ns,iterations,warmup");
+    for entry in data {
+        println!(
+            "{},{},{},{},{},{},{},{},{},{},{}",
+            entry.function.as_deref().unwrap_or(""),
+            entry.device.as_deref().unwrap_or(""),
+            entry.os_version.as_deref().unwrap_or(""),
+            entry.sample_count,
+            entry.mean_ns.map(|v| v.to_string()).unwrap_or_default(),
+            entry.median_ns.map(|v| v.to_string()).unwrap_or_default(),
+            entry.min_ns.map(|v| v.to_string()).unwrap_or_default(),
+            entry.max_ns.map(|v| v.to_string()).unwrap_or_default(),
+            entry.p95_ns.map(|v| v.to_string()).unwrap_or_default(),
+            entry.iterations.map(|v| v.to_string()).unwrap_or_default(),
+            entry.warmup.map(|v| v.to_string()).unwrap_or_default(),
+        );
+    }
+}
+
+/// List available BrowserStack devices and optionally validate device specs.
+fn cmd_devices(
+    platform: Option<DevicePlatform>,
+    output_json: bool,
+    validate: Vec<String>,
+) -> Result<()> {
+    // Try to get credentials, but provide helpful error if missing
+    let creds = match resolve_browserstack_credentials(None) {
+        Ok(creds) => creds,
+        Err(_) => {
+            // Check what's missing and provide helpful guidance
+            let username = env::var("BROWSERSTACK_USERNAME").ok();
+            let access_key = env::var("BROWSERSTACK_ACCESS_KEY").ok();
+
+            let missing_username = username.is_none() || username.as_deref() == Some("");
+            let missing_access_key = access_key.is_none() || access_key.as_deref() == Some("");
+
+            let error_msg = browserstack::format_credentials_error(missing_username, missing_access_key);
+            bail!("{}", error_msg);
+        }
+    };
+
+    let client = BrowserStackClient::new(
+        BrowserStackAuth {
+            username: creds.username,
+            access_key: creds.access_key,
+        },
+        creds.project,
+    )?;
+
+    // If validating devices, do that and exit
+    if !validate.is_empty() {
+        let platform_str = platform.map(|p| match p {
+            DevicePlatform::Android => "android",
+            DevicePlatform::Ios => "ios",
+        });
+
+        let validation = client.validate_devices(&validate, platform_str)?;
+
+        if output_json {
+            let output = json!({
+                "valid": validation.valid,
+                "invalid": validation.invalid.iter().map(|e| {
+                    json!({
+                        "spec": e.spec,
+                        "reason": e.reason,
+                        "suggestions": e.suggestions
+                    })
+                }).collect::<Vec<_>>()
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            if !validation.valid.is_empty() {
+                println!("Valid devices ({}):", validation.valid.len());
+                for device in &validation.valid {
+                    println!("  [OK] {}", device);
+                }
+            }
+
+            if !validation.invalid.is_empty() {
+                if !validation.valid.is_empty() {
+                    println!();
+                }
+                println!("Invalid devices ({}):", validation.invalid.len());
+                for error in &validation.invalid {
+                    println!("  [ERROR] {}: {}", error.spec, error.reason);
+                    if !error.suggestions.is_empty() {
+                        println!("          Suggestions:");
+                        for suggestion in &error.suggestions {
+                            println!("            - {}", suggestion);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Exit with error if any devices were invalid
+        if !validation.invalid.is_empty() {
+            bail!(
+                "{} of {} device specs are invalid",
+                validation.invalid.len(),
+                validate.len()
+            );
+        }
+
+        return Ok(());
+    }
+
+    // List devices
+    println!("Fetching available BrowserStack devices...\n");
+
+    let devices = match platform {
+        Some(DevicePlatform::Android) => client.list_espresso_devices()?,
+        Some(DevicePlatform::Ios) => client.list_xcuitest_devices()?,
+        None => client.list_all_devices()?,
+    };
+
+    if devices.is_empty() {
+        println!("No devices found.");
+        return Ok(());
+    }
+
+    if output_json {
+        println!("{}", serde_json::to_string_pretty(&devices)?);
+        return Ok(());
+    }
+
+    // Group devices by OS
+    let mut android_devices: Vec<_> = devices.iter().filter(|d| d.os == "android").collect();
+    let mut ios_devices: Vec<_> = devices.iter().filter(|d| d.os == "ios").collect();
+
+    // Sort by device name, then OS version (descending)
+    android_devices.sort_by(|a, b| {
+        a.device.cmp(&b.device).then_with(|| {
+            // Try to compare versions numerically
+            let av: f64 = a.os_version.parse().unwrap_or(0.0);
+            let bv: f64 = b.os_version.parse().unwrap_or(0.0);
+            bv.partial_cmp(&av).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+    ios_devices.sort_by(|a, b| {
+        a.device.cmp(&b.device).then_with(|| {
+            let av: f64 = a.os_version.parse().unwrap_or(0.0);
+            let bv: f64 = b.os_version.parse().unwrap_or(0.0);
+            bv.partial_cmp(&av).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+
+    if !android_devices.is_empty() {
+        println!("Android Devices ({}):", android_devices.len());
+        println!("{:-<60}", "");
+        for device in &android_devices {
+            println!("  {:40} OS {}", device.device, device.os_version);
+            println!("    --devices \"{}\"", device.identifier());
+        }
+        println!();
+    }
+
+    if !ios_devices.is_empty() {
+        println!("iOS Devices ({}):", ios_devices.len());
+        println!("{:-<60}", "");
+        for device in &ios_devices {
+            println!("  {:40} iOS {}", device.device, device.os_version);
+            println!("    --devices \"{}\"", device.identifier());
+        }
+        println!();
+    }
+
+    println!("Total: {} devices available", devices.len());
+    println!("\nUsage:");
+    println!("  cargo mobench run --target android --devices \"Google Pixel 7-13.0\" ...");
+    println!("  cargo mobench run --target ios --devices \"iPhone 14-16\" ...");
 
     Ok(())
 }

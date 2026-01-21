@@ -285,6 +285,10 @@
 pub mod timing;
 pub mod types;
 
+// UniFFI integration helpers
+// This module provides template types and conversion traits for UniFFI integration
+pub mod uniffi_types;
+
 // Full SDK modules - only with "full" feature
 #[cfg(feature = "full")]
 #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
