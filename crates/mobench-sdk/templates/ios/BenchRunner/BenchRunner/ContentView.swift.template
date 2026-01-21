@@ -1,20 +1,55 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var report: String = "Running benchmark..."
+    @State private var report: String = "Running benchmarks..."
+    @State private var reportJSON: String = ""
+    @State private var isCompleted: Bool = false
 
     var body: some View {
-        ScrollView {
-            Text(report)
-                .font(.system(.body, design: .monospaced))
-                .accessibilityIdentifier("benchmarkReport")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
+        ZStack {
+            ScrollView {
+                Text(report)
+                    .font(.system(.body, design: .monospaced))
+                    .accessibilityIdentifier("benchmarkReport")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .background(Color(UIColor.systemBackground))
+
+            // Hidden elements for XCUITest to read benchmark data
+            // These are invisible but accessible for automation
+            VStack {
+                // Completion indicator - XCUITest waits for this to exist
+                if isCompleted {
+                    Text("completed")
+                        .accessibilityIdentifier("benchmarkCompleted")
+                        .frame(width: 0, height: 0)
+                        .opacity(0)
+                }
+
+                // JSON report element - stores the full benchmark JSON in its label
+                Text(reportJSON)
+                    .accessibilityIdentifier("benchmarkReportJSON")
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+            }
         }
-        .background(Color(UIColor.systemBackground))
         .onAppear {
             Task {
-                report = await {{PROJECT_NAME_PASCAL}}FFI.runCurrentBenchmark()
+                let result = await {{PROJECT_NAME_PASCAL}}FFI.runCurrentBenchmark()
+                report = result.displayText
+                reportJSON = result.jsonReport
+                isCompleted = true
+
+                // Log the JSON report with markers for BrowserStack device logs
+                NSLog("BENCH_REPORT_JSON_START")
+                NSLog("%@", result.jsonReport)
+                NSLog("BENCH_REPORT_JSON_END")
+
+                // Keep the report on screen for at least 5 seconds so BrowserStack video captures it
+                NSLog("Displaying results for 5 seconds for video capture...")
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                NSLog("Display hold complete")
             }
         }
     }
