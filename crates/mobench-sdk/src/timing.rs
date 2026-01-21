@@ -351,6 +351,196 @@ where
     Ok(BenchReport { spec, samples })
 }
 
+/// Runs a benchmark with setup that executes once before all iterations.
+///
+/// The setup function is called once before timing begins, then the benchmark
+/// runs multiple times using a reference to the setup result. This is useful
+/// for expensive initialization that shouldn't be included in timing.
+///
+/// # Arguments
+///
+/// * `spec` - Benchmark configuration specifying iterations and warmup
+/// * `setup` - Function that creates the input data (called once, not timed)
+/// * `f` - Benchmark closure that receives a reference to setup result
+///
+/// # Example
+///
+/// ```ignore
+/// use mobench_sdk::timing::{BenchSpec, run_closure_with_setup};
+///
+/// fn setup_data() -> Vec<u8> {
+///     vec![0u8; 1_000_000]  // Expensive allocation not measured
+/// }
+///
+/// let spec = BenchSpec::new("hash_benchmark", 100, 10)?;
+/// let report = run_closure_with_setup(spec, setup_data, |data| {
+///     std::hint::black_box(compute_hash(data));
+///     Ok(())
+/// })?;
+/// ```
+pub fn run_closure_with_setup<S, T, F>(
+    spec: BenchSpec,
+    setup: S,
+    mut f: F,
+) -> Result<BenchReport, TimingError>
+where
+    S: FnOnce() -> T,
+    F: FnMut(&T) -> Result<(), TimingError>,
+{
+    if spec.iterations == 0 {
+        return Err(TimingError::NoIterations {
+            count: spec.iterations,
+        });
+    }
+
+    // Setup phase - not timed
+    let input = setup();
+
+    // Warmup phase - not recorded
+    for _ in 0..spec.warmup {
+        f(&input)?;
+    }
+
+    // Measurement phase
+    let mut samples = Vec::with_capacity(spec.iterations as usize);
+    for _ in 0..spec.iterations {
+        let start = Instant::now();
+        f(&input)?;
+        samples.push(BenchSample::from_duration(start.elapsed()));
+    }
+
+    Ok(BenchReport { spec, samples })
+}
+
+/// Runs a benchmark with per-iteration setup.
+///
+/// Setup runs before each iteration and is not timed. The benchmark takes
+/// ownership of the setup result, making this suitable for benchmarks that
+/// mutate their input (e.g., sorting).
+///
+/// # Arguments
+///
+/// * `spec` - Benchmark configuration specifying iterations and warmup
+/// * `setup` - Function that creates fresh input for each iteration (not timed)
+/// * `f` - Benchmark closure that takes ownership of setup result
+///
+/// # Example
+///
+/// ```ignore
+/// use mobench_sdk::timing::{BenchSpec, run_closure_with_setup_per_iter};
+///
+/// fn generate_random_vec() -> Vec<i32> {
+///     (0..1000).map(|_| rand::random()).collect()
+/// }
+///
+/// let spec = BenchSpec::new("sort_benchmark", 100, 10)?;
+/// let report = run_closure_with_setup_per_iter(spec, generate_random_vec, |mut data| {
+///     data.sort();
+///     std::hint::black_box(data);
+///     Ok(())
+/// })?;
+/// ```
+pub fn run_closure_with_setup_per_iter<S, T, F>(
+    spec: BenchSpec,
+    mut setup: S,
+    mut f: F,
+) -> Result<BenchReport, TimingError>
+where
+    S: FnMut() -> T,
+    F: FnMut(T) -> Result<(), TimingError>,
+{
+    if spec.iterations == 0 {
+        return Err(TimingError::NoIterations {
+            count: spec.iterations,
+        });
+    }
+
+    // Warmup phase
+    for _ in 0..spec.warmup {
+        let input = setup();
+        f(input)?;
+    }
+
+    // Measurement phase
+    let mut samples = Vec::with_capacity(spec.iterations as usize);
+    for _ in 0..spec.iterations {
+        let input = setup(); // Not timed
+
+        let start = Instant::now();
+        f(input)?; // Only this is timed
+        samples.push(BenchSample::from_duration(start.elapsed()));
+    }
+
+    Ok(BenchReport { spec, samples })
+}
+
+/// Runs a benchmark with setup and teardown.
+///
+/// Setup runs once before all iterations, teardown runs once after all
+/// iterations complete. Neither is included in timing.
+///
+/// # Arguments
+///
+/// * `spec` - Benchmark configuration specifying iterations and warmup
+/// * `setup` - Function that creates the input data (called once, not timed)
+/// * `f` - Benchmark closure that receives a reference to setup result
+/// * `teardown` - Function that cleans up the input (called once, not timed)
+///
+/// # Example
+///
+/// ```ignore
+/// use mobench_sdk::timing::{BenchSpec, run_closure_with_setup_teardown};
+///
+/// fn setup_db() -> Database { Database::connect("test.db") }
+/// fn cleanup_db(db: Database) { db.close(); std::fs::remove_file("test.db").ok(); }
+///
+/// let spec = BenchSpec::new("db_benchmark", 100, 10)?;
+/// let report = run_closure_with_setup_teardown(
+///     spec,
+///     setup_db,
+///     |db| { db.query("SELECT *"); Ok(()) },
+///     cleanup_db,
+/// )?;
+/// ```
+pub fn run_closure_with_setup_teardown<S, T, F, D>(
+    spec: BenchSpec,
+    setup: S,
+    mut f: F,
+    teardown: D,
+) -> Result<BenchReport, TimingError>
+where
+    S: FnOnce() -> T,
+    F: FnMut(&T) -> Result<(), TimingError>,
+    D: FnOnce(T),
+{
+    if spec.iterations == 0 {
+        return Err(TimingError::NoIterations {
+            count: spec.iterations,
+        });
+    }
+
+    // Setup phase - not timed
+    let input = setup();
+
+    // Warmup phase
+    for _ in 0..spec.warmup {
+        f(&input)?;
+    }
+
+    // Measurement phase
+    let mut samples = Vec::with_capacity(spec.iterations as usize);
+    for _ in 0..spec.iterations {
+        let start = Instant::now();
+        f(&input)?;
+        samples.push(BenchSample::from_duration(start.elapsed()));
+    }
+
+    // Teardown phase - not timed
+    teardown(input);
+
+    Ok(BenchReport { spec, samples })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,5 +580,84 @@ mod tests {
 
         assert_eq!(restored.spec.name, "test");
         assert_eq!(restored.samples.len(), 10);
+    }
+
+    #[test]
+    fn run_with_setup_calls_setup_once() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static SETUP_COUNT: AtomicU32 = AtomicU32::new(0);
+        static RUN_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        let spec = BenchSpec::new("test", 5, 2).unwrap();
+        let report = run_closure_with_setup(
+            spec,
+            || {
+                SETUP_COUNT.fetch_add(1, Ordering::SeqCst);
+                vec![1, 2, 3]
+            },
+            |data| {
+                RUN_COUNT.fetch_add(1, Ordering::SeqCst);
+                std::hint::black_box(data.len());
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(SETUP_COUNT.load(Ordering::SeqCst), 1); // Setup called once
+        assert_eq!(RUN_COUNT.load(Ordering::SeqCst), 7); // 2 warmup + 5 iterations
+        assert_eq!(report.samples.len(), 5);
+    }
+
+    #[test]
+    fn run_with_setup_per_iter_calls_setup_each_time() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static SETUP_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        let spec = BenchSpec::new("test", 3, 1).unwrap();
+        let report = run_closure_with_setup_per_iter(
+            spec,
+            || {
+                SETUP_COUNT.fetch_add(1, Ordering::SeqCst);
+                vec![1, 2, 3]
+            },
+            |data| {
+                std::hint::black_box(data);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(SETUP_COUNT.load(Ordering::SeqCst), 4); // 1 warmup + 3 iterations
+        assert_eq!(report.samples.len(), 3);
+    }
+
+    #[test]
+    fn run_with_setup_teardown_calls_both() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static SETUP_COUNT: AtomicU32 = AtomicU32::new(0);
+        static TEARDOWN_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        let spec = BenchSpec::new("test", 3, 1).unwrap();
+        let report = run_closure_with_setup_teardown(
+            spec,
+            || {
+                SETUP_COUNT.fetch_add(1, Ordering::SeqCst);
+                "resource"
+            },
+            |_resource| {
+                Ok(())
+            },
+            |_resource| {
+                TEARDOWN_COUNT.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .unwrap();
+
+        assert_eq!(SETUP_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(report.samples.len(), 3);
     }
 }
