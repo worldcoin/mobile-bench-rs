@@ -63,6 +63,25 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<TextView>(R.id.result_text)?.text = display
+
+        // Keep the report on screen for at least 5 seconds so BrowserStack video captures it
+        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for video capture...")
+        Thread.sleep(5000)
+        android.util.Log.i("BenchRunner", "Display hold complete")
+    }
+
+    /**
+     * Formats a duration in nanoseconds to a human-readable string.
+     * Uses milliseconds (ms) by default, switches to seconds (s) if >= 1000ms.
+     */
+    private fun formatDuration(ns: Long): String {
+        val ms = ns.toDouble() / 1_000_000.0
+        return if (ms >= 1000.0) {
+            val secs = ms / 1000.0
+            String.format("%.3fs", secs)
+        } else {
+            String.format("%.3fms", ms)
+        }
     }
 
     private fun formatBenchReport(report: BenchReport): String = buildString {
@@ -74,20 +93,19 @@ class MainActivity : AppCompatActivity() {
         appendLine()
         appendLine("Samples (${report.samples.size}):")
         report.samples.forEachIndexed { index, sample ->
-            val durationUs = sample.durationNs.toDouble() / 1_000.0
-            appendLine("  ${index + 1}. ${String.format("%.3f", durationUs)} μs (${sample.durationNs} ns)")
+            appendLine("  ${index + 1}. ${formatDuration(sample.durationNs.toLong())}")
         }
 
         if (report.samples.isNotEmpty()) {
-            val durations = report.samples.map { it.durationNs.toDouble() / 1_000.0 }
-            val min = durations.minOrNull() ?: 0.0
-            val max = durations.maxOrNull() ?: 0.0
-            val avg = durations.average()
+            val durations = report.samples.map { it.durationNs.toLong() }
+            val min = durations.minOrNull() ?: 0L
+            val max = durations.maxOrNull() ?: 0L
+            val avg = durations.sum().toDouble() / durations.size.toDouble()
             appendLine()
             appendLine("Statistics:")
-            appendLine("  Min: ${String.format("%.3f", min)} μs")
-            appendLine("  Max: ${String.format("%.3f", max)} μs")
-            appendLine("  Avg: ${String.format("%.3f", avg)} μs")
+            appendLine("  Min: ${formatDuration(min)}")
+            appendLine("  Max: ${formatDuration(max)}")
+            appendLine("  Avg: ${formatDuration(avg.toLong())}")
         }
     }
 
