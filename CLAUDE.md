@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.13):**
+**Published on crates.io as the mobench ecosystem (v0.1.14):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -88,6 +88,10 @@ Quick test commands:
 # Run all Rust tests
 cargo test --all
 
+# Check prerequisites before building (validates NDK, Xcode, Rust targets)
+cargo mobench check --target android
+cargo mobench check --target ios
+
 # Initialize SDK project
 cargo mobench init --target android --output bench-config.toml
 
@@ -96,12 +100,23 @@ cargo mobench init --target android --output bench-config.toml
 cargo mobench build --target android
 cargo mobench build --target ios
 
+# Build with progress output for clearer feedback
+cargo mobench build --target android --progress
+
 # Build to custom output directory
 cargo mobench build --target android --output-dir ./my-output
 
 # List discovered benchmarks
 cargo mobench list
 
+# Verify benchmark setup (registry, spec, artifacts)
+cargo mobench verify --target android --check-artifacts
+
+# View benchmark result statistics
+cargo mobench summary results.json
+
+# List available BrowserStack devices
+cargo mobench devices --platform android
 ```
 
 ## Common Commands
@@ -114,6 +129,10 @@ The `cargo mobench` CLI provides a unified build experience:
 # Install the CLI
 cargo install mobench
 
+# Check prerequisites first (validates NDK, Xcode, Rust targets, etc.)
+cargo mobench check --target android
+cargo mobench check --target ios
+
 # Initialize project (generates config and scaffolding)
 cargo mobench init --target android --output bench-config.toml
 
@@ -122,6 +141,10 @@ cargo mobench build --target android
 
 # Build for iOS
 cargo mobench build --target ios
+
+# Build with simplified progress output
+cargo mobench build --target android --progress
+cargo mobench build --target ios --progress
 
 # Build for both platforms
 cargo mobench build --target android
@@ -136,15 +159,20 @@ cargo mobench package-xcuitest
 # Build in release mode (smaller artifacts, recommended for BrowserStack)
 cargo mobench build --target android --release
 cargo mobench build --target ios --release
+
+# Verify build artifacts exist and are valid
+cargo mobench verify --target android --check-artifacts
 ```
 
 **What the CLI does:**
 
+- Validates prerequisites with `check` command before building
 - Automatically builds Rust libraries with correct targets
 - Generates or updates mobile app projects from embedded templates
 - Syncs native libraries into platform-specific directories
 - Builds APK (Android) or xcframework (iOS)
 - Outputs all artifacts to `target/mobench/` by default (use `--output-dir` to customize)
+- Shows progress with `--progress` flag for clearer feedback
 - No manual script execution needed
 
 ### Repository Development Builds
@@ -327,6 +355,39 @@ fn my_expensive_operation() {
 
 The macro automatically registers functions at compile time via the `inventory` crate.
 
+**Macro Validation (v0.1.14+)**: The `#[benchmark]` macro now validates function signatures at compile time:
+- Functions must take no parameters
+- Functions must return `()` (unit type)
+- Compile errors include helpful messages about requirements
+
+**Debugging Benchmark Registration**: Use the `debug_benchmarks!()` macro to verify benchmarks are properly registered:
+
+```rust
+use mobench_sdk::{benchmark, debug_benchmarks};
+
+#[benchmark]
+fn my_benchmark() {
+    std::hint::black_box(42);
+}
+
+// Generate debug function
+debug_benchmarks!();
+
+fn main() {
+    // Print all registered benchmarks
+    _debug_print_benchmarks();
+    // Output:
+    // Discovered benchmarks:
+    //   - my_crate::my_benchmark
+}
+```
+
+If no benchmarks appear, check:
+1. Functions are annotated with `#[benchmark]`
+2. Functions are `pub` (public visibility)
+3. Functions take no parameters and return `()`
+4. The `inventory` crate is in your dependencies
+
 ### FFI Boundary (`examples/ffi-benchmark`)
 
 The example crate uses **UniFFI proc macros** to generate type-safe bindings for Kotlin and Swift. The API is defined directly in Rust code with attributes:
@@ -395,6 +456,30 @@ Credentials are resolved in this order:
 1. Config file (supports `${ENV_VAR}` expansion)
 2. Environment variables: `BROWSERSTACK_USERNAME`, `BROWSERSTACK_ACCESS_KEY`, `BROWSERSTACK_PROJECT`
 3. `.env.local` file (loaded automatically via `dotenvy`)
+
+**Improved Error Messages (v0.1.14+)**: Missing credentials now show setup instructions:
+- Instructions for setting environment variables
+- Link to BrowserStack account settings page
+- Hints for `.env.local` file setup
+
+**Device Validation**: Use `cargo mobench devices` to list and validate device specs:
+
+```bash
+# List all available devices
+cargo mobench devices
+
+# Filter by platform
+cargo mobench devices --platform android
+cargo mobench devices --platform ios
+
+# Validate device specs
+cargo mobench devices --validate "Google Pixel 7-13.0"
+
+# Output as JSON
+cargo mobench devices --json
+```
+
+Invalid device specs now show suggestions for similar devices.
 
 ### CI/CD (`.github/workflows/mobile-bench.yml`)
 
@@ -584,8 +669,10 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
 ### Core SDK Crates
 
 - **`crates/mobench/`**: CLI tool (published to crates.io)
-  - `src/main.rs`: CLI entry point with commands (init, build, run, fetch, etc.)
+  - `src/lib.rs`: CLI entry point with commands (init, build, run, fetch, check, verify, summary, devices, etc.)
+  - `src/main.rs`: CLI binary wrapper
   - `src/browserstack.rs`: BrowserStack REST API client
+  - `src/config.rs`: Configuration file support for `mobench.toml`
 - **`crates/mobench-sdk/`**: Core SDK library (published to crates.io)
   - `src/lib.rs`: Public API surface
   - `src/timing.rs`: Lightweight timing harness (BenchSpec, BenchReport, run_closure)

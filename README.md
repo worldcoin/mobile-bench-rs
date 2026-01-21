@@ -33,9 +33,16 @@ cargo install mobench
 # Add the SDK to your project
 cargo add mobench-sdk inventory
 
+# Check prerequisites before building
+cargo mobench check --target android
+cargo mobench check --target ios
+
 # Build artifacts (outputs to target/mobench/ by default)
 cargo mobench build --target android
 cargo mobench build --target ios
+
+# Build with progress output for clearer feedback
+cargo mobench build --target android --progress
 
 # Run a benchmark locally
 cargo mobench run --target android --function sample_fns::fibonacci
@@ -43,6 +50,12 @@ cargo mobench run --target android --function sample_fns::fibonacci
 # Run on BrowserStack (use --release for smaller APK uploads)
 cargo mobench run --target android --function sample_fns::fibonacci \
   --devices "Google Pixel 7-13.0" --release
+
+# List available BrowserStack devices
+cargo mobench devices --platform android
+
+# View benchmark results summary
+cargo mobench summary results.json
 ```
 
 ## Configuration
@@ -81,6 +94,28 @@ CLI flags override config file values when provided.
 - `CLAUDE.md`: developer guide
 
 ## Release Notes
+
+### v0.1.14
+
+- **New `check` command**: Validates prerequisites (NDK, Xcode, Rust targets, etc.) before building
+  ```bash
+  cargo mobench check --target android
+  cargo mobench check --target ios
+  ```
+- **New `verify` command**: Validates registry, spec, and artifacts
+- **New `summary` command**: Displays benchmark result statistics (avg/min/max/median)
+- **New `devices` command**: Lists available BrowserStack devices with validation
+- **`--progress` flag**: Simplified step-by-step output for `build` and `run` commands
+- **SDK improvements**:
+  - `#[benchmark]` macro now validates function signature at compile time (no params, returns `()`)
+  - New `debug_benchmarks!()` macro for verifying benchmark registration
+  - Better error messages with available benchmarks list
+- **BrowserStack improvements**:
+  - Better credential error messages with setup instructions
+  - Artifact pre-flight validation before uploads
+  - Upload progress indication with file sizes
+  - Dashboard link printed immediately when build starts
+  - Improved device fuzzy matching with suggestions
 
 ### v0.1.13
 
