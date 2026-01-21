@@ -5,9 +5,69 @@ This guide shows how to run benchmarks on BrowserStack and fetch results within 
 ## Overview
 
 The BrowserStack client now supports:
-1. **Scheduling runs** - Upload artifacts and start tests
-2. **Polling for completion** - Wait for tests to finish (with timeout)
-3. **Fetching results** - Download device logs and extract benchmark data
+1. **Prerequisite checking** - Verify tools and credentials before builds
+2. **Device validation** - Validate device specs before scheduling runs
+3. **Scheduling runs** - Upload artifacts and start tests
+4. **Polling for completion** - Wait for tests to finish (with timeout)
+5. **Fetching results** - Download device logs and extract benchmark data
+6. **Result analysis** - Display summary statistics from reports
+
+## Pre-flight Validation
+
+Before running benchmarks on BrowserStack, validate your setup:
+
+### Check Prerequisites
+
+```bash
+# Verify Android build tools are installed
+cargo mobench check --target android
+
+# Verify iOS build tools are installed
+cargo mobench check --target ios
+
+# Output as JSON for CI parsing
+cargo mobench check --target android --format json
+```
+
+The `check` command validates:
+- Rust toolchain and cargo
+- Android: NDK, cargo-ndk, Rust targets, JDK
+- iOS: Xcode, xcodegen, Rust targets
+
+### Validate Devices
+
+Before scheduling runs, validate device specs:
+
+```bash
+# Validate specific device specs
+cargo mobench devices --validate "Google Pixel 7-13.0" "iPhone 14-16"
+
+# List available devices
+cargo mobench devices --platform android
+cargo mobench devices --platform ios
+
+# Output as JSON
+cargo mobench devices --platform android --json
+```
+
+Invalid device specs return helpful suggestions:
+```
+Invalid devices (1):
+  [ERROR] Google Pixle 7-13.0: Device not found
+          Suggestions:
+            - Google Pixel 7-13.0
+            - Google Pixel 7 Pro-13.0
+```
+
+### Verify Benchmark Setup
+
+```bash
+# Verify registry, spec, and artifacts
+cargo mobench verify --target android --check-artifacts
+
+# Include smoke test
+cargo mobench verify --target android --smoke-test --function my_benchmark
+```
 
 ## Quick Example
 
@@ -181,6 +241,15 @@ jobs:
       - name: Install mobench
         run: cargo install mobench
 
+      - name: Check prerequisites
+        run: cargo mobench check --target android
+
+      - name: Validate devices
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+        run: cargo mobench devices --validate "Google Pixel 7-13.0"
+
       - name: Run benchmarks on BrowserStack
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
@@ -199,14 +268,22 @@ jobs:
             --fetch-timeout-secs 600 \
             --output results.json
 
-          # Extract metrics for comparison
-          cat results.json | jq '.devices[0].samples | map(.duration_ns) | add / length'
+      - name: Display summary
+        run: cargo mobench summary results.json
+
+      - name: Extract metrics
+        run: |
+          # JSON format for programmatic access
+          cargo mobench summary results.json --format json > metrics.json
+          cat metrics.json | jq '.[0].mean_ns'
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: results.json
+          path: |
+            results.json
+            metrics.json
 ```
 
 ## Advanced: Custom Result Processing
@@ -283,6 +360,46 @@ match client.wait_and_fetch_all_results(build_id, "espresso", Some(600)) {
 
 ## Troubleshooting
 
+### BrowserStack credentials not configured
+
+**Error**:
+```
+BrowserStack credentials not configured.
+
+Set credentials using one of these methods:
+
+  1. Environment variables:
+     export BROWSERSTACK_USERNAME=your_username
+     export BROWSERSTACK_ACCESS_KEY=your_access_key
+
+  2. Config file (bench-config.toml):
+     [browserstack]
+     app_automate_username = "your_username"
+     app_automate_access_key = "your_access_key"
+
+  3. .env.local file in project root:
+     BROWSERSTACK_USERNAME=your_username
+     BROWSERSTACK_ACCESS_KEY=your_access_key
+
+Get credentials: https://app-automate.browserstack.com/
+(Navigate to Settings -> Access Key)
+```
+
+**Solution**: Set credentials using any of the three methods shown.
+
+### Device spec validation failed
+
+**Error**:
+```
+Invalid devices (1):
+  [ERROR] Google Pixle 7-13.0: Device not found
+          Suggestions:
+            - Google Pixel 7-13.0
+            - Google Pixel 7 Pro-13.0
+```
+
+**Solution**: Use the suggested device name or run `cargo mobench devices` to see all available devices.
+
 ### No benchmark results found
 
 **Cause**: The benchmark app didn't log results, or logs are in unexpected format.
@@ -291,6 +408,7 @@ match client.wait_and_fetch_all_results(build_id, "espresso", Some(600)) {
 1. Check device logs manually in BrowserStack dashboard
 2. Verify your app logs benchmark results as JSON to stdout/logcat
 3. Use `client.get_device_logs()` to inspect raw logs
+4. Run `cargo mobench verify --smoke-test` to test locally first
 
 ### Build stuck in "running" state
 
@@ -300,6 +418,7 @@ match client.wait_and_fetch_all_results(build_id, "espresso", Some(600)) {
 1. Check the BrowserStack dashboard for device screenshots/video
 2. Increase timeout if benchmarks legitimately take longer
 3. Add health checks to your benchmark code
+4. Use `--progress` flag to see detailed progress during runs
 
 ### Rate limiting
 
@@ -310,8 +429,63 @@ match client.wait_and_fetch_all_results(build_id, "espresso", Some(600)) {
 2. Use BrowserStack's webhook notifications instead of polling
 3. Check your BrowserStack plan limits
 
+### Prerequisites missing
+
+**Error**: Build fails with missing tools.
+
+**Solution**: Run `cargo mobench check --target <android|ios>` to identify missing prerequisites and get fix suggestions.
+
+## New CLI Commands
+
+### `cargo mobench check`
+
+Validate prerequisites before building:
+
+```bash
+cargo mobench check --target android [--format text|json]
+```
+
+### `cargo mobench devices`
+
+List and validate BrowserStack devices:
+
+```bash
+# List all devices
+cargo mobench devices
+
+# List by platform
+cargo mobench devices --platform android
+
+# Validate specific specs
+cargo mobench devices --validate "Google Pixel 7-13.0" "iPhone 14-16"
+
+# JSON output
+cargo mobench devices --json
+```
+
+### `cargo mobench verify`
+
+Validate benchmark setup:
+
+```bash
+cargo mobench verify \
+  --target android \
+  --check-artifacts \
+  --smoke-test \
+  --function my_benchmark
+```
+
+### `cargo mobench summary`
+
+Display statistics from results:
+
+```bash
+cargo mobench summary results.json [--format text|json|csv]
+```
+
 ## Next Steps
 
 - See `BROWSERSTACK_METRICS.md` for metrics and performance documentation
+- See `FETCH_RESULTS_GUIDE.md` for detailed fetch and summary workflows
 - Check `crates/mobench/src/browserstack.rs` for full API documentation
 - Run `cargo doc --open -p mobench` for detailed API docs

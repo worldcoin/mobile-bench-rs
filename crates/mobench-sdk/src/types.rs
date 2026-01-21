@@ -60,10 +60,10 @@ pub enum BenchError {
     ///
     /// This occurs when calling [`run_benchmark`](crate::run_benchmark) with
     /// a function name that hasn't been registered via `#[benchmark]`.
-    #[error(
-        "unknown benchmark function: {0}. Ensure it is annotated with #[benchmark] and the crate is linked into the bench-mobile build"
-    )]
-    UnknownFunction(String),
+    ///
+    /// The error includes a list of available benchmarks to help diagnose the issue.
+    #[error("unknown benchmark function: '{0}'. Available benchmarks: {1:?}\n\nEnsure the function is:\n  1. Annotated with #[benchmark]\n  2. Public (pub fn)\n  3. Takes no parameters and returns ()")]
+    UnknownFunction(String, Vec<String>),
 
     /// An error occurred during benchmark execution.
     ///

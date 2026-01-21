@@ -101,18 +101,67 @@ fn my_benchmark() {
 inventory::submit! {
     BenchFunction {
         name: "my_benchmark",
-        invoke: |_args| {
-            my_benchmark();
-            Ok(())
+        runner: |spec| {
+            run_closure(spec, || {
+                my_benchmark();
+                Ok(())
+            })
         }
     }
+}
+```
+
+## Setup and Teardown
+
+For benchmarks that need expensive setup that shouldn't be measured:
+
+```rust
+use mobench_macros::benchmark;
+
+fn setup_data() -> Vec<u8> {
+    vec![0u8; 1_000_000]  // Not measured
+}
+
+#[benchmark(setup = setup_data)]
+fn hash_benchmark(data: &Vec<u8>) {
+    std::hint::black_box(compute_hash(data));  // Only this is measured
+}
+```
+
+### Per-Iteration Setup
+
+For benchmarks that mutate their input (e.g., sorting):
+
+```rust
+fn generate_random_vec() -> Vec<i32> {
+    (0..1000).collect()
+}
+
+#[benchmark(setup = generate_random_vec, per_iteration)]
+fn sort_benchmark(data: Vec<i32>) {
+    let mut data = data;
+    data.sort();
+    std::hint::black_box(data);
+}
+```
+
+### Setup and Teardown
+
+```rust
+fn setup_db() -> Database { Database::connect("test.db") }
+fn cleanup_db(db: Database) { db.close(); }
+
+#[benchmark(setup = setup_db, teardown = cleanup_db)]
+fn db_query(db: &Database) {
+    db.query("SELECT * FROM users");
 }
 ```
 
 ## Requirements
 
 - Functions must be regular functions (not async)
-- Functions should not take parameters
+- Without setup: no parameters allowed
+- With setup: exactly one parameter (reference to setup result, or owned for per_iteration)
 - Functions should use `std::hint::black_box()` to prevent optimization of results
 
 ## Best Practices

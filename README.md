@@ -33,9 +33,16 @@ cargo install mobench
 # Add the SDK to your project
 cargo add mobench-sdk inventory
 
+# Check prerequisites before building
+cargo mobench check --target android
+cargo mobench check --target ios
+
 # Build artifacts (outputs to target/mobench/ by default)
 cargo mobench build --target android
 cargo mobench build --target ios
+
+# Build with progress output for clearer feedback
+cargo mobench build --target android --progress
 
 # Run a benchmark locally
 cargo mobench run --target android --function sample_fns::fibonacci
@@ -43,6 +50,12 @@ cargo mobench run --target android --function sample_fns::fibonacci
 # Run on BrowserStack (use --release for smaller APK uploads)
 cargo mobench run --target android --function sample_fns::fibonacci \
   --devices "Google Pixel 7-13.0" --release
+
+# List available BrowserStack devices
+cargo mobench devices --platform android
+
+# View benchmark results summary
+cargo mobench summary results.json
 ```
 
 ## Configuration
@@ -80,11 +93,111 @@ CLI flags override config file values when provided.
 - `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide
 
+## Setup and Teardown
+
+For benchmarks that require expensive setup (like generating test data or initializing connections), you can exclude setup time from measurements using the `setup` attribute.
+
+### The Problem
+
+Without setup/teardown, expensive initialization is measured as part of your benchmark:
+
+```rust
+#[benchmark]
+fn verify_proof() {
+    let proof = generate_complex_proof();  // This is measured (bad!)
+    verify(&proof);                         // This is what we want to measure
+}
+```
+
+### The Solution
+
+Use the `setup` attribute to run initialization once before timing begins:
+
+```rust
+// Setup function runs once before all iterations (not timed)
+fn setup_proof() -> ProofInput {
+    generate_complex_proof()  // Takes 5 seconds, but not measured
+}
+
+#[benchmark(setup = setup_proof)]
+fn verify_proof(input: &ProofInput) {
+    verify(&input.proof);  // Only this is measured
+}
+```
+
+### Per-Iteration Setup
+
+For benchmarks that mutate their input, use `per_iteration` to get fresh data each iteration:
+
+```rust
+fn generate_random_vec() -> Vec<i32> {
+    (0..1000).map(|_| rand::random()).collect()
+}
+
+#[benchmark(setup = generate_random_vec, per_iteration)]
+fn sort_benchmark(data: Vec<i32>) {
+    let mut data = data;
+    data.sort();  // Each iteration gets a fresh unsorted vec
+}
+```
+
+### Setup with Teardown
+
+For resources that need cleanup (database connections, temp files, etc.):
+
+```rust
+fn setup_db() -> Database { Database::connect("test.db") }
+fn cleanup_db(db: Database) { db.close(); std::fs::remove_file("test.db").ok(); }
+
+#[benchmark(setup = setup_db, teardown = cleanup_db)]
+fn db_query(db: &Database) {
+    db.query("SELECT * FROM users");
+}
+```
+
+### When to Use Each Pattern
+
+| Pattern | Use Case |
+|---------|----------|
+| `#[benchmark]` | Simple benchmarks with no setup or fast inline setup |
+| `#[benchmark(setup = fn)]` | Expensive one-time setup, reused across iterations |
+| `#[benchmark(setup = fn, per_iteration)]` | Benchmarks that mutate input, need fresh data each time |
+| `#[benchmark(setup = fn, teardown = fn)]` | Resources requiring cleanup (connections, files, etc.) |
+
 ## Release Notes
 
 ### v0.1.13
 
-- **Fix iOS XCUITest test name mismatch**: Changed BrowserStack `only-testing` filter to use `testLaunchAndCaptureBenchmarkReport` which matches what BrowserStack parses from the xctest bundle
+- **Setup and teardown support**: `#[benchmark]` macro now supports `setup`, `teardown`, and `per_iteration` attributes for excluding expensive initialization from timing measurements
+  ```rust
+  fn setup_data() -> Vec<u8> { vec![0u8; 10_000_000] }
+
+  #[benchmark(setup = setup_data)]
+  fn process_data(data: &Vec<u8>) {
+      // Only this is measured, not the setup
+  }
+  ```
+- **New `check` command**: Validates prerequisites (NDK, Xcode, Rust targets, etc.) before building
+  ```bash
+  cargo mobench check --target android
+  cargo mobench check --target ios
+  ```
+- **New `verify` command**: Validates registry, spec, and artifacts
+- **New `summary` command**: Displays benchmark result statistics (avg/min/max/median)
+- **New `devices` command**: Lists available BrowserStack devices with validation
+- **`--progress` flag**: Simplified step-by-step output for `build` and `run` commands
+- **Consolidated `mobench-runner` into `mobench-sdk`**: The timing harness is now part of `mobench-sdk` as the `timing` module, simplifying the dependency graph
+- **SDK improvements**:
+  - `#[benchmark]` macro now validates function signature at compile time (no params, returns `()`)
+  - New `debug_benchmarks!()` macro for verifying benchmark registration
+  - Better error messages with available benchmarks list
+- **BrowserStack improvements**:
+  - Better credential error messages with setup instructions
+  - Artifact pre-flight validation before uploads
+  - Upload progress indication with file sizes
+  - Dashboard link printed immediately when build starts
+  - Improved device fuzzy matching with suggestions
+- **Fix iOS XCUITest test name mismatch**: Changed BrowserStack `only-testing` filter to use `testLaunchAndCaptureBenchmarkReport`
 
 ### v0.1.12
 

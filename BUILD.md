@@ -3,16 +3,59 @@
 Complete build instructions for Android and iOS targets.
 
 > **For SDK Integrators**: Use the CLI commands:
+> - `cargo mobench check --target android` (validate prerequisites first)
+> - `cargo mobench check --target ios` (validate prerequisites first)
 > - `cargo mobench build --target android`
 > - `cargo mobench build --target ios`
 >
 > See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide.
 
 ## Table of Contents
+- [Prerequisites Check](#prerequisites-check)
 - [Prerequisites](#prerequisites)
 - [Android Build](#android-build)
 - [iOS Build](#ios-build)
 - [Common Issues](#common-issues)
+
+## Prerequisites Check
+
+Before installing prerequisites manually, use the `check` command to validate your setup:
+
+```bash
+# Check Android prerequisites
+cargo mobench check --target android
+
+# Check iOS prerequisites
+cargo mobench check --target ios
+
+# Check both platforms
+cargo mobench check --target android
+cargo mobench check --target ios
+```
+
+The `check` command validates:
+- **Android**: `ANDROID_NDK_HOME` environment variable, `cargo-ndk` installation, Rust targets
+- **iOS**: Xcode installation, `xcodegen`, Rust targets
+- **Both**: Cargo, rustup, required Rust targets
+
+Output includes:
+- Pass/fail status for each prerequisite
+- Instructions for fixing missing prerequisites
+- JSON output option (`--format json`) for CI integration
+
+Example output:
+```
+Checking Android prerequisites...
+  [PASS] cargo found
+  [PASS] rustup found
+  [PASS] ANDROID_NDK_HOME set: /Users/you/Library/Android/sdk/ndk/29.0.14206865
+  [PASS] cargo-ndk installed
+  [PASS] Rust target aarch64-linux-android installed
+  [PASS] Rust target armv7-linux-androideabi installed
+  [PASS] Rust target x86_64-linux-android installed
+
+All prerequisites satisfied!
+```
 
 ## Prerequisites
 
@@ -75,8 +118,14 @@ xcodebuild -version
 
 ### Quick Start (Recommended)
 ```bash
+# First, check prerequisites
+cargo mobench check --target android
+
 # Build everything and create APK in one command
 cargo mobench build --target android
+
+# Or build with progress output for clearer feedback
+cargo mobench build --target android --progress
 
 # Install on connected device or emulator
 adb install -r target/mobench/android/app/build/outputs/apk/debug/app-debug.apk
@@ -157,8 +206,14 @@ cargo mobench build --target android
 
 ### Quick Start (Recommended)
 ```bash
+# First, check prerequisites
+cargo mobench check --target ios
+
 # Build Rust xcframework (includes automatic code signing)
 cargo mobench build --target ios
+
+# Or build with progress output for clearer feedback
+cargo mobench build --target ios --progress
 
 # Generate Xcode project
 cd target/mobench/ios/BenchRunner
@@ -311,10 +366,17 @@ codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 
 ## Common Issues
 
+### Prerequisite Validation
+
+**Tip**: Before troubleshooting, run `cargo mobench check --target <android|ios>` to identify missing prerequisites. The check command provides specific instructions for each issue.
+
 ### Android
 
 **Issue**: `ANDROID_NDK_HOME is not set`
 ```bash
+# Run check to see the full prerequisite status
+cargo mobench check --target android
+
 # Find your NDK installation
 find ~/Library/Android/sdk/ndk -name "ndk-build" 2>/dev/null
 

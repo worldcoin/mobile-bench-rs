@@ -47,9 +47,33 @@
 - [x] Add GH Actions summary/annotations for benchmark results.
 - [x] Add regression comparison command (compare two JSON summaries).
 
+## DX Improvements (v2) - Completed
+
+### SDK Improvements
+- [x] `#[benchmark]` macro validates function signature at compile time (no params, returns `()`)
+- [x] Helpful compile errors with suggestions for fixing signature issues
+- [x] `debug_benchmarks!()` macro for debugging registration issues
+- [x] Better error messages: `UnknownFunction` shows available benchmarks
+- [x] Better error messages: `TimingError::NoIterations` shows actual value provided
+- [x] Quick Setup Checklist in SDK lib.rs documentation
+
+### New CLI Commands
+- [x] `cargo mobench check` - Validates prerequisites (NDK, Xcode, Rust targets, etc.)
+- [x] `cargo mobench verify` - Validates registry, spec, and artifacts with optional smoke test
+- [x] `cargo mobench summary` - Displays result statistics (text/json/csv formats)
+- [x] `cargo mobench devices` - Lists and validates BrowserStack devices
+
+### BrowserStack Improvements
+- [x] Better credential error messages with 3 setup methods (env vars, config file, .env.local)
+- [x] Artifact validation before upload (checks file exists and size)
+- [x] Device fuzzy matching with suggestions for typos
+- [x] Device validation via `--validate` flag
+
 ## Suggested Next Tasks
 
 - [ ] Stretch: parallel device runs, retries, percentile stats, optional energy/thermal readings where available.
+- [ ] Rich reporting dashboard (P2 from DX spec)
+- [ ] Spec snapshots and result comparisons across builds (P2 from DX spec)
 
 ## In-Repo Placeholders (current)
 
