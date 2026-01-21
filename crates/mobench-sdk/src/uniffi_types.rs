@@ -242,12 +242,14 @@ impl From<crate::types::BenchError> for BenchErrorVariant {
     fn from(err: crate::types::BenchError) -> Self {
         match err {
             crate::types::BenchError::Runner(runner_err) => match runner_err {
-                crate::timing::TimingError::NoIterations => BenchErrorVariant::InvalidIterations,
+                crate::timing::TimingError::NoIterations { .. } => {
+                    BenchErrorVariant::InvalidIterations
+                }
                 crate::timing::TimingError::Execution(msg) => {
                     BenchErrorVariant::ExecutionFailed { reason: msg }
                 }
             },
-            crate::types::BenchError::UnknownFunction(name) => {
+            crate::types::BenchError::UnknownFunction(name, _available) => {
                 BenchErrorVariant::UnknownFunction { name }
             }
             crate::types::BenchError::Execution(msg) => {
@@ -270,7 +272,7 @@ impl From<crate::types::BenchError> for BenchErrorVariant {
 impl From<crate::timing::TimingError> for BenchErrorVariant {
     fn from(err: crate::timing::TimingError) -> Self {
         match err {
-            crate::timing::TimingError::NoIterations => BenchErrorVariant::InvalidIterations,
+            crate::timing::TimingError::NoIterations { .. } => BenchErrorVariant::InvalidIterations,
             crate::timing::TimingError::Execution(msg) => {
                 BenchErrorVariant::ExecutionFailed { reason: msg }
             }
@@ -334,7 +336,10 @@ mod tests {
 
     #[test]
     fn test_bench_error_variant_conversion() {
-        let err = crate::types::BenchError::UnknownFunction("test_func".to_string());
+        let err = crate::types::BenchError::UnknownFunction(
+            "test_func".to_string(),
+            vec!["available_func".to_string()],
+        );
         let variant: BenchErrorVariant = err.into();
         match variant {
             BenchErrorVariant::UnknownFunction { name } => assert_eq!(name, "test_func"),

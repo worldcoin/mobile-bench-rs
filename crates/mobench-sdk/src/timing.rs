@@ -151,7 +151,7 @@ impl BenchSpec {
     /// ```
     pub fn new(name: impl Into<String>, iterations: u32, warmup: u32) -> Result<Self, TimingError> {
         if iterations == 0 {
-            return Err(TimingError::NoIterations);
+            return Err(TimingError::NoIterations { count: iterations });
         }
 
         Ok(Self {
@@ -243,15 +243,19 @@ pub struct BenchReport {
 ///
 /// // Zero iterations produces an error
 /// let result = BenchSpec::new("test", 0, 10);
-/// assert!(matches!(result, Err(TimingError::NoIterations)));
+/// assert!(matches!(result, Err(TimingError::NoIterations { .. })));
 /// ```
 #[derive(Debug, Error)]
 pub enum TimingError {
-    /// The iteration count was zero.
+    /// The iteration count was zero or invalid.
     ///
     /// At least one iteration is required to produce a measurement.
-    #[error("iterations must be greater than zero")]
-    NoIterations,
+    /// The error includes the actual value provided for diagnostic purposes.
+    #[error("iterations must be greater than zero (got {count}). Minimum recommended: 10")]
+    NoIterations {
+        /// The invalid iteration count that was provided.
+        count: u32,
+    },
 
     /// The benchmark function failed during execution.
     ///
@@ -326,7 +330,9 @@ where
     F: FnMut() -> Result<(), TimingError>,
 {
     if spec.iterations == 0 {
-        return Err(TimingError::NoIterations);
+        return Err(TimingError::NoIterations {
+            count: spec.iterations,
+        });
     }
 
     // Warmup phase - not measured
@@ -362,7 +368,7 @@ mod tests {
     #[test]
     fn rejects_zero_iterations() {
         let result = BenchSpec::new("test", 0, 10);
-        assert!(matches!(result, Err(TimingError::NoIterations)));
+        assert!(matches!(result, Err(TimingError::NoIterations { count: 0 })));
     }
 
     #[test]

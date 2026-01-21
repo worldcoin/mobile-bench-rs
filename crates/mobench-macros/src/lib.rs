@@ -80,7 +80,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{ItemFn, parse_macro_input};
+use syn::{ItemFn, ReturnType, parse_macro_input};
 
 /// Marks a function as a benchmark for mobile execution.
 ///
@@ -199,6 +199,68 @@ pub fn benchmark(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let sig = &input_fn.sig;
     let block = &input_fn.block;
     let attrs = &input_fn.attrs;
+
+    // Validate: function must take no parameters
+    if !input_fn.sig.inputs.is_empty() {
+        let param_count = input_fn.sig.inputs.len();
+        let param_names: Vec<String> = input_fn
+            .sig
+            .inputs
+            .iter()
+            .map(|arg| match arg {
+                syn::FnArg::Receiver(_) => "self".to_string(),
+                syn::FnArg::Typed(pat) => quote!(#pat).to_string(),
+            })
+            .collect();
+        return syn::Error::new_spanned(
+            &input_fn.sig.inputs,
+            format!(
+                "#[benchmark] functions must take no parameters.\n\
+                 Found {} parameter(s): {}\n\n\
+                 Benchmark functions should be zero-argument closures over their inputs.\n\
+                 Consider using a closure or moving setup code inside the function:\n\n\
+                 #[benchmark]\n\
+                 fn {}() {{\n\
+                     let input = create_input();  // Setup inside\n\
+                     let result = compute(input);\n\
+                     std::hint::black_box(result);\n\
+                 }}",
+                param_count,
+                param_names.join(", "),
+                fn_name_str
+            ),
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // Validate: function must return () (unit type)
+    match &input_fn.sig.output {
+        ReturnType::Default => {} // () return type is OK
+        ReturnType::Type(_, return_type) => {
+            // Check if the return type is explicitly `()`
+            let type_str = quote!(#return_type).to_string();
+            if type_str.trim() != "()" {
+                return syn::Error::new_spanned(
+                    return_type,
+                    format!(
+                        "#[benchmark] functions must return () (unit type).\n\
+                         Found return type: {}\n\n\
+                         Benchmark results should be consumed with std::hint::black_box() \
+                         rather than returned:\n\n\
+                         #[benchmark]\n\
+                         fn {}() {{\n\
+                             let result = compute_something();\n\
+                             std::hint::black_box(result);  // Prevents optimization\n\
+                         }}",
+                        type_str, fn_name_str
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
+        }
+    }
 
     // Get the module path for fully-qualified name
     // Note: This will generate the fully-qualified name at compile time

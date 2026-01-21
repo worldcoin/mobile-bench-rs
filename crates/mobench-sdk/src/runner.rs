@@ -3,7 +3,7 @@
 //! This module provides the execution engine that runs registered benchmarks
 //! and collects timing data.
 
-use crate::registry::find_benchmark;
+use crate::registry::{find_benchmark, list_benchmark_names};
 use crate::timing::{run_closure, TimingError};
 use crate::types::{BenchError, BenchSpec, RunnerReport};
 
@@ -37,8 +37,13 @@ use crate::types::{BenchError, BenchSpec, RunnerReport};
 /// ```
 pub fn run_benchmark(spec: BenchSpec) -> Result<RunnerReport, BenchError> {
     // Find the benchmark function in the registry
-    let bench_fn =
-        find_benchmark(&spec.name).ok_or_else(|| BenchError::UnknownFunction(spec.name.clone()))?;
+    let bench_fn = find_benchmark(&spec.name).ok_or_else(|| {
+        let available = list_benchmark_names()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        BenchError::UnknownFunction(spec.name.clone(), available)
+    })?;
 
     // Create a closure that invokes the registered function
     let closure =

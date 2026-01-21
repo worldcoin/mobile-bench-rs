@@ -220,7 +220,7 @@ impl From<mobench_sdk::BenchError> for BenchError {
                     reason: runner_err.to_string(),
                 }
             }
-            mobench_sdk::BenchError::UnknownFunction(name) => {
+            mobench_sdk::BenchError::UnknownFunction(name, _available) => {
                 BenchError::UnknownFunction { name }
             }
             _ => BenchError::ExecutionFailed {

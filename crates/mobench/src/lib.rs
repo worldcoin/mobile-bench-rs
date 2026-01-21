@@ -186,6 +186,8 @@ enum Command {
         fetch_poll_interval_secs: u64,
         #[arg(long, default_value_t = 300)]
         fetch_timeout_secs: u64,
+        #[arg(long, help = "Show simplified step-by-step progress output")]
+        progress: bool,
     },
     /// Scaffold a base config file for the CLI.
     Init {
@@ -244,6 +246,8 @@ enum Command {
         output_dir: Option<PathBuf>,
         #[arg(long, help = "Path to the benchmark crate (default: auto-detect bench-mobile/ or crates/{crate})")]
         crate_path: Option<PathBuf>,
+        #[arg(long, help = "Show simplified step-by-step progress output")]
+        progress: bool,
     },
     /// Package iOS app as IPA for distribution or testing.
     PackageIpa {
@@ -316,6 +320,27 @@ enum Command {
         #[arg(long, help = "Validate device specs against available devices")]
         validate: Vec<String>,
     },
+    /// Check prerequisites for building mobile artifacts.
+    ///
+    /// Validates that all required tools and configurations are in place
+    /// before attempting a build. This includes checking for:
+    ///
+    /// - Android: ANDROID_NDK_HOME, cargo-ndk, Rust targets
+    /// - iOS: Xcode, xcodegen, Rust targets
+    /// - Both: cargo, rustup
+    ///
+    /// Examples:
+    ///   cargo mobench check --target android
+    ///   cargo mobench check --target ios
+    ///   cargo mobench check --target android --format json
+    Check {
+        /// Target platform (android or ios)
+        #[arg(long, short, value_enum)]
+        target: SdkTarget,
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: CheckOutputFormat,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -331,6 +356,13 @@ enum SummaryFormat {
     Text,
     Json,
     Csv,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum CheckOutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
@@ -522,6 +554,7 @@ pub fn run() -> Result<()> {
             fetch_output_dir,
             fetch_poll_interval_secs,
             fetch_timeout_secs,
+            progress,
         } => {
             let spec = resolve_run_spec(
                 target,
@@ -583,74 +616,98 @@ pub fn run() -> Result<()> {
             }
 
             // Print resolved spec summary (A5: Better CLI output)
-            println!();
-            println!("=== Benchmark Run Configuration ===");
-            println!("  Target:      {:?}", spec.target);
-            println!("  Function:    {}", spec.function);
-            println!("  Iterations:  {}", spec.iterations);
-            println!("  Warmup:      {}", spec.warmup);
-            println!("  Profile:     {}", if release { "release" } else { "debug" });
-            if !spec.devices.is_empty() {
-                println!("  Devices:     {}", spec.devices.join(", "));
-            } else {
-                println!("  Devices:     (none - local build only)");
-            }
-            println!();
-
-            // Print artifact locations
-            println!("=== Output Locations ===");
-            println!("  Build output:    {}", output_dir.display());
-            match spec.target {
-                MobileTarget::Android => {
-                    println!("  Android APK:     {}/android/app/build/outputs/apk/", output_dir.display());
-                    println!("  bench_spec.json: {}/android/app/src/main/assets/", output_dir.display());
+            if !progress {
+                println!();
+                println!("=== Benchmark Run Configuration ===");
+                println!("  Target:      {:?}", spec.target);
+                println!("  Function:    {}", spec.function);
+                println!("  Iterations:  {}", spec.iterations);
+                println!("  Warmup:      {}", spec.warmup);
+                println!("  Profile:     {}", if release { "release" } else { "debug" });
+                if !spec.devices.is_empty() {
+                    println!("  Devices:     {}", spec.devices.join(", "));
+                } else {
+                    println!("  Devices:     (none - local build only)");
                 }
-                MobileTarget::Ios => {
-                    println!("  iOS xcframework: {}/ios/", output_dir.display());
-                    println!("  bench_spec.json: {}/ios/BenchRunner/BenchRunner/Resources/", output_dir.display());
-                    if let Some(ref xcui) = spec.ios_xcuitest {
-                        println!("  iOS App IPA:     {}", xcui.app.display());
-                        println!("  XCUITest Runner: {}", xcui.test_suite.display());
+                println!();
+
+                // Print artifact locations
+                println!("=== Output Locations ===");
+                println!("  Build output:    {}", output_dir.display());
+                match spec.target {
+                    MobileTarget::Android => {
+                        println!("  Android APK:     {}/android/app/build/outputs/apk/", output_dir.display());
+                        println!("  bench_spec.json: {}/android/app/src/main/assets/", output_dir.display());
+                    }
+                    MobileTarget::Ios => {
+                        println!("  iOS xcframework: {}/ios/", output_dir.display());
+                        println!("  bench_spec.json: {}/ios/BenchRunner/BenchRunner/Resources/", output_dir.display());
+                        if let Some(ref xcui) = spec.ios_xcuitest {
+                            println!("  iOS App IPA:     {}", xcui.app.display());
+                            println!("  XCUITest Runner: {}", xcui.test_suite.display());
+                        }
                     }
                 }
+                println!("  JSON summary:    {}", summary_paths.json.display());
+                println!("  Markdown:        {}", summary_paths.markdown.display());
+                if summary_csv {
+                    println!("  CSV:             {}", summary_paths.csv.display());
+                }
+                println!();
             }
-            println!("  JSON summary:    {}", summary_paths.json.display());
-            println!("  Markdown:        {}", summary_paths.markdown.display());
-            if summary_csv {
-                println!("  CSV:             {}", summary_paths.csv.display());
-            }
-            println!();
 
             // A2: Validate that the requested benchmark function exists (if we can detect it)
-            validate_benchmark_function(&root, &spec.function)?;
+            if !progress {
+                validate_benchmark_function(&root, &spec.function)?;
+            }
 
             // Persist the spec and metadata to mobile app bundles
+            if progress {
+                println!("[1/4] Preparing benchmark spec...");
+            }
             persist_mobile_spec(&spec, release)?;
 
             // Skip local smoke test - sample-fns uses direct dispatch, not inventory registry
             // Benchmarks will run on the actual mobile device
-            println!("Skipping local smoke test - benchmarks will run on mobile device");
+            if !progress {
+                println!("Skipping local smoke test - benchmarks will run on mobile device");
+            }
             let local_report = json!({
                 "skipped": true,
                 "reason": "Local smoke test disabled - benchmarks run on mobile device only"
             });
             let mut remote_run = None;
             let artifacts = if local_only {
-                println!("Skipping mobile build: --local-only set");
+                if !progress {
+                    println!("Skipping mobile build: --local-only set");
+                }
                 None
             } else {
                 match spec.target {
                     MobileTarget::Android => {
+                        if progress {
+                            println!("[2/4] Building Android APK...");
+                        } else {
+                            println!("Building for Android...");
+                            println!("  Building Rust library for Android targets...");
+                        }
                         let ndk = std::env::var("ANDROID_NDK_HOME").context(
                             "ANDROID_NDK_HOME must be set for Android builds. Example: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>",
                         )?;
                         let build = run_android_build(&ndk, release)?;
                         let apk = build.app_path;
-                        println!("Built Android APK at {:?}", apk);
+                        if !progress {
+                            println!("\u{2713} Built Android APK at {:?}", apk);
+                        }
                         if spec.devices.is_empty() {
-                            println!("Skipping BrowserStack upload/run: no devices provided");
+                            if !progress {
+                                println!("Skipping BrowserStack upload/run: no devices provided");
+                            }
                             Some(MobileArtifacts::Android { apk })
                         } else {
+                            if progress {
+                                println!("[3/4] Uploading to BrowserStack...");
+                            }
                             let test_apk = build.test_suite_path.as_ref().context(
                                 "Android test suite APK missing. Run `cargo mobench build --target android` or `./gradlew assembleDebugAndroidTest` in target/mobench/android",
                             )?;
@@ -660,13 +717,26 @@ pub fn run() -> Result<()> {
                         }
                     }
                     MobileTarget::Ios => {
+                        if progress {
+                            println!("[2/4] Building iOS xcframework...");
+                        } else {
+                            println!("Building for iOS...");
+                            println!("  Building Rust library for iOS targets...");
+                        }
                         let (xcframework, header) = run_ios_build(release)?;
-                        println!("Built iOS xcframework at {:?}", xcframework);
+                        if !progress {
+                            println!("\u{2713} Built iOS xcframework at {:?}", xcframework);
+                        }
                         let ios_xcuitest = spec.ios_xcuitest.clone();
 
                         if spec.devices.is_empty() {
-                            println!("Skipping BrowserStack upload/run: no devices provided");
+                            if !progress {
+                                println!("Skipping BrowserStack upload/run: no devices provided");
+                            }
                         } else {
+                            if progress {
+                                println!("[3/4] Uploading to BrowserStack...");
+                            }
                             let xcui = spec.ios_xcuitest.as_ref().context(
                                 "iOS XCUITest artifacts required when targeting BrowserStack devices; provide --ios-app and --ios-test-suite or set ios_xcuitest in the config",
                             )?;
@@ -806,8 +876,18 @@ pub fn run() -> Result<()> {
             run_summary.summary = build_summary(&run_summary)?;
             write_summary(&run_summary, &summary_paths, summary_csv)?;
 
-            // Print completion message with output location
-            println!("\nBenchmark run complete. Summary written to {:?}", summary_paths.json);
+            // Print clear completion summary
+            println!();
+            println!("\u{2713} Benchmark complete!");
+            println!();
+            println!("Results saved to:");
+            println!("  * {} (machine-readable)", summary_paths.json.display());
+            println!("  * {} (human-readable)", summary_paths.markdown.display());
+            if summary_csv {
+                println!("  * {} (spreadsheet)", summary_paths.csv.display());
+            }
+            println!();
+            println!("View results: cat {} | jq '.summary'", summary_paths.json.display());
         }
         Command::Init { output, target } => {
             write_config_template(&output, target)?;
@@ -865,8 +945,9 @@ pub fn run() -> Result<()> {
             release,
             output_dir,
             crate_path,
+            progress,
         } => {
-            cmd_build(target, release, output_dir, crate_path, cli.dry_run, cli.verbose)?;
+            cmd_build(target, release, output_dir, crate_path, cli.dry_run, cli.verbose, progress)?;
         }
         Command::PackageIpa { scheme, method, output_dir } => {
             cmd_package_ipa(&scheme, method, output_dir)?;
@@ -896,6 +977,9 @@ pub fn run() -> Result<()> {
             validate,
         } => {
             cmd_devices(platform, json, validate)?;
+        }
+        Command::Check { target, format } => {
+            cmd_check(target, format)?;
         }
     }
 
@@ -1503,7 +1587,100 @@ struct ResolvedBrowserStack {
     project: Option<String>,
 }
 
+/// Represents artifacts validation error details for BrowserStack uploads.
+#[derive(Debug)]
+struct ArtifactValidationError {
+    missing_artifacts: Vec<(String, PathBuf)>,
+    target: MobileTarget,
+}
+
+impl ArtifactValidationError {
+    fn format_error(&self) -> String {
+        let mut msg = String::from("Missing required artifacts for BrowserStack run:\n\n");
+
+        for (name, path) in &self.missing_artifacts {
+            msg.push_str(&format!("  x {} not found at: {}\n", name, path.display()));
+        }
+
+        msg.push('\n');
+        msg.push_str("To fix, run:\n");
+        match self.target {
+            MobileTarget::Android => {
+                msg.push_str("  cargo mobench build --target android\n");
+            }
+            MobileTarget::Ios => {
+                msg.push_str("  cargo mobench build --target ios\n");
+                msg.push_str("  cargo mobench package-ipa --method adhoc\n");
+                msg.push_str("  cargo mobench package-xcuitest\n");
+            }
+        }
+
+        msg
+    }
+}
+
+/// Validates that all required artifacts exist before attempting a BrowserStack upload.
+///
+/// This function checks for the presence of required files early to provide clear
+/// error messages before starting any uploads.
+///
+/// # Arguments
+/// * `target` - The target platform (Android or iOS)
+/// * `apk` - For Android: path to the app APK
+/// * `test_apk` - For Android: path to the test APK
+/// * `ios_artifacts` - For iOS: the app and test suite paths
+///
+/// # Returns
+/// * `Ok(())` if all artifacts exist
+/// * `Err` with detailed message about missing artifacts and how to fix
+fn validate_artifacts_for_browserstack(
+    target: MobileTarget,
+    apk: Option<&Path>,
+    test_apk: Option<&Path>,
+    ios_artifacts: Option<&IosXcuitestArtifacts>,
+) -> Result<()> {
+    let mut missing = Vec::new();
+
+    match target {
+        MobileTarget::Android => {
+            if let Some(apk_path) = apk {
+                if !apk_path.exists() {
+                    missing.push(("Android APK".to_string(), apk_path.to_path_buf()));
+                }
+            }
+            if let Some(test_apk_path) = test_apk {
+                if !test_apk_path.exists() {
+                    missing.push(("Android test APK".to_string(), test_apk_path.to_path_buf()));
+                }
+            }
+        }
+        MobileTarget::Ios => {
+            if let Some(artifacts) = ios_artifacts {
+                if !artifacts.app.exists() {
+                    missing.push(("iOS app IPA".to_string(), artifacts.app.clone()));
+                }
+                if !artifacts.test_suite.exists() {
+                    missing.push(("iOS XCUITest runner".to_string(), artifacts.test_suite.clone()));
+                }
+            }
+        }
+    }
+
+    if !missing.is_empty() {
+        let error = ArtifactValidationError {
+            missing_artifacts: missing,
+            target,
+        };
+        bail!("{}", error.format_error());
+    }
+
+    Ok(())
+}
+
 fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path, test_apk: &Path) -> Result<RemoteRun> {
+    // Validate artifacts exist before attempting upload
+    validate_artifacts_for_browserstack(MobileTarget::Android, Some(apk), Some(test_apk), None)?;
+
     let creds = resolve_browserstack_credentials(spec.browserstack.as_ref())?;
     let client = BrowserStackClient::new(
         BrowserStackAuth {
@@ -1525,11 +1702,15 @@ fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path, test_apk: &Path) ->
         &upload.app_url,
         &test_upload.test_suite_url,
     )?;
-    println!(
-        "Queued BrowserStack Espresso build {} for devices: {}",
-        run.build_id,
-        spec.devices.join(", ")
-    );
+
+    // Print dashboard link early so users can monitor progress
+    println!();
+    println!("BrowserStack build started!");
+    println!("  Build ID: {}", run.build_id);
+    println!("  Devices:  {}", spec.devices.join(", "));
+    println!("  Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}", run.build_id);
+    println!();
+    println!("Waiting for results...");
 
     Ok(RemoteRun::Android {
         app_url: upload.app_url,
@@ -1541,6 +1722,9 @@ fn trigger_browserstack_xcuitest(
     spec: &RunSpec,
     artifacts: &IosXcuitestArtifacts,
 ) -> Result<RemoteRun> {
+    // Validate artifacts exist before attempting upload
+    validate_artifacts_for_browserstack(MobileTarget::Ios, None, None, Some(artifacts))?;
+
     let creds = resolve_browserstack_credentials(spec.browserstack.as_ref())?;
     let client = BrowserStackClient::new(
         BrowserStackAuth {
@@ -1550,19 +1734,6 @@ fn trigger_browserstack_xcuitest(
         creds.project.clone(),
     )?;
 
-    if !artifacts.app.exists() {
-        bail!(
-            "iOS app artifact not found at {:?}; provide a .ipa or zipped .app",
-            artifacts.app
-        );
-    }
-    if !artifacts.test_suite.exists() {
-        bail!(
-            "iOS XCUITest test suite artifact not found at {:?}; provide the zipped test runner bundle",
-            artifacts.test_suite
-        );
-    }
-
     let app_upload = client.upload_xcuitest_app(&artifacts.app)?;
     let test_upload = client.upload_xcuitest_test_suite(&artifacts.test_suite)?;
     let run = client.schedule_xcuitest_run(
@@ -1570,11 +1741,15 @@ fn trigger_browserstack_xcuitest(
         &app_upload.app_url,
         &test_upload.test_suite_url,
     )?;
-    println!(
-        "Queued BrowserStack XCUITest build {} for devices: {}",
-        run.build_id,
-        spec.devices.join(", ")
-    );
+
+    // Print dashboard link early so users can monitor progress
+    println!();
+    println!("BrowserStack build started!");
+    println!("  Build ID: {}", run.build_id);
+    println!("  Devices:  {}", spec.devices.join(", "));
+    println!("  Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}", run.build_id);
+    println!();
+    println!("Waiting for results...");
 
     Ok(RemoteRun::Ios {
         app_url: app_upload.app_url,
@@ -2541,9 +2716,107 @@ fn cmd_build(
     crate_path: Option<PathBuf>,
     dry_run: bool,
     verbose: bool,
+    progress: bool,
 ) -> Result<()> {
     // Load config file if present (mobench.toml)
     let config_resolver = config::ConfigResolver::new().unwrap_or_default();
+
+    // Progress mode: simplified output
+    if progress {
+        let project_root = std::env::current_dir().context("Failed to get current directory")?;
+        let crate_name = detect_bench_mobile_crate_name(&project_root)
+            .unwrap_or_else(|_| "bench-mobile".to_string());
+        let effective_output_dir = output_dir.or_else(|| config_resolver.output_dir().map(|p| p.to_path_buf()));
+
+        let build_config = mobench_sdk::BuildConfig {
+            target: target.into(),
+            profile: if release {
+                mobench_sdk::BuildProfile::Release
+            } else {
+                mobench_sdk::BuildProfile::Debug
+            },
+            incremental: true,
+        };
+
+        match target {
+            SdkTarget::Android => {
+                println!("[1/3] Building Rust library...");
+                let mut builder =
+                    mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name)
+                        .verbose(false)
+                        .dry_run(dry_run);
+                if let Some(ref dir) = effective_output_dir {
+                    builder = builder.output_dir(dir);
+                }
+                if let Some(ref path) = crate_path {
+                    builder = builder.crate_dir(path);
+                }
+                println!("[2/3] Building Android APK...");
+                let result = builder.build(&build_config)?;
+                println!("[3/3] Done!");
+                if !dry_run {
+                    println!("\n\u{2713} APK: {:?}", result.app_path);
+                }
+            }
+            SdkTarget::Ios => {
+                println!("[1/3] Building Rust library...");
+                let mut builder =
+                    mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
+                        .verbose(false)
+                        .dry_run(dry_run);
+                if let Some(ref dir) = effective_output_dir {
+                    builder = builder.output_dir(dir);
+                }
+                if let Some(ref path) = crate_path {
+                    builder = builder.crate_dir(path);
+                }
+                println!("[2/3] Building iOS xcframework...");
+                let result = builder.build(&build_config)?;
+                println!("[3/3] Done!");
+                if !dry_run {
+                    println!("\n\u{2713} Framework: {:?}", result.app_path);
+                }
+            }
+            SdkTarget::Both => {
+                println!("[1/5] Building Rust library for Android...");
+                let mut android_builder =
+                    mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
+                        .verbose(false)
+                        .dry_run(dry_run);
+                if let Some(ref dir) = effective_output_dir {
+                    android_builder = android_builder.output_dir(dir);
+                }
+                if let Some(ref path) = crate_path {
+                    android_builder = android_builder.crate_dir(path);
+                }
+                println!("[2/5] Building Android APK...");
+                let android_result = android_builder.build(&build_config)?;
+
+                println!("[3/5] Building Rust library for iOS...");
+                let mut ios_builder =
+                    mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
+                        .verbose(false)
+                        .dry_run(dry_run);
+                if let Some(ref dir) = effective_output_dir {
+                    ios_builder = ios_builder.output_dir(dir);
+                }
+                if let Some(ref path) = crate_path {
+                    ios_builder = ios_builder.crate_dir(path);
+                }
+                println!("[4/5] Building iOS xcframework...");
+                let ios_result = ios_builder.build(&build_config)?;
+
+                println!("[5/5] Done!");
+                if !dry_run {
+                    println!("\n\u{2713} APK: {:?}", android_result.app_path);
+                    println!("\u{2713} Framework: {:?}", ios_result.app_path);
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // Normal (verbose) mode
     if let Some(config_path) = &config_resolver.config_path {
         println!("Using config file: {:?}", config_path);
     }
@@ -2592,6 +2865,8 @@ fn cmd_build(
 
     match target {
         SdkTarget::Android => {
+            println!("\nBuilding for Android...");
+            println!("  Building Rust library for Android targets...");
             let mut builder =
                 mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
                     .verbose(verbose)
@@ -2604,11 +2879,14 @@ fn cmd_build(
             }
             let result = builder.build(&build_config)?;
             if !dry_run {
+                println!("\u{2713} Built Android APK");
                 println!("\n[checkmark] Android build completed!");
                 println!("  APK: {:?}", result.app_path);
             }
         }
         SdkTarget::Ios => {
+            println!("\nBuilding for iOS...");
+            println!("  Building Rust library for iOS targets...");
             let mut builder =
                 mobench_sdk::builders::IosBuilder::new(&project_root, crate_name.clone())
                     .verbose(verbose)
@@ -2621,12 +2899,15 @@ fn cmd_build(
             }
             let result = builder.build(&build_config)?;
             if !dry_run {
+                println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
                 println!("  Framework: {:?}", result.app_path);
             }
         }
         SdkTarget::Both => {
             // Build Android
+            println!("\nBuilding for Android...");
+            println!("  Building Rust library for Android targets...");
             let mut android_builder =
                 mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
                     .verbose(verbose)
@@ -2639,11 +2920,14 @@ fn cmd_build(
             }
             let android_result = android_builder.build(&build_config)?;
             if !dry_run {
+                println!("\u{2713} Built Android APK");
                 println!("\n[checkmark] Android build completed!");
                 println!("  APK: {:?}", android_result.app_path);
             }
 
             // Build iOS
+            println!("\nBuilding for iOS...");
+            println!("  Building Rust library for iOS targets...");
             let mut ios_builder =
                 mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
                     .verbose(verbose)
@@ -2656,6 +2940,7 @@ fn cmd_build(
             }
             let ios_result = ios_builder.build(&build_config)?;
             if !dry_run {
+                println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
                 println!("  Framework: {:?}", ios_result.app_path);
             }
@@ -3571,6 +3856,352 @@ fn cmd_devices(
     println!("  cargo mobench run --target ios --devices \"iPhone 14-16\" ...");
 
     Ok(())
+}
+
+/// Check prerequisites for building mobile artifacts.
+///
+/// This validates that all required tools and configurations are in place
+/// before attempting a build.
+fn cmd_check(target: SdkTarget, format: CheckOutputFormat) -> Result<()> {
+    let mut checks: Vec<PrereqCheck> = Vec::new();
+    let mut issues: Vec<String> = Vec::new();
+
+    // Common checks for both platforms
+    checks.push(check_cargo());
+    checks.push(check_rustup());
+
+    match target {
+        SdkTarget::Android => {
+            println!("Checking prerequisites for Android...\n");
+            checks.push(check_android_ndk_home());
+            checks.push(check_cargo_ndk());
+            checks.push(check_rust_target("aarch64-linux-android"));
+            checks.push(check_rust_target("armv7-linux-androideabi"));
+            checks.push(check_rust_target("x86_64-linux-android"));
+            checks.push(check_jdk());
+        }
+        SdkTarget::Ios => {
+            println!("Checking prerequisites for iOS...\n");
+            checks.push(check_xcode());
+            checks.push(check_xcodegen());
+            checks.push(check_rust_target("aarch64-apple-ios"));
+            checks.push(check_rust_target("aarch64-apple-ios-sim"));
+        }
+        SdkTarget::Both => {
+            println!("Checking prerequisites for Android and iOS...\n");
+            // Android
+            checks.push(check_android_ndk_home());
+            checks.push(check_cargo_ndk());
+            checks.push(check_rust_target("aarch64-linux-android"));
+            checks.push(check_rust_target("armv7-linux-androideabi"));
+            checks.push(check_rust_target("x86_64-linux-android"));
+            checks.push(check_jdk());
+            // iOS
+            checks.push(check_xcode());
+            checks.push(check_xcodegen());
+            checks.push(check_rust_target("aarch64-apple-ios"));
+            checks.push(check_rust_target("aarch64-apple-ios-sim"));
+        }
+    }
+
+    // Collect issues
+    for check in &checks {
+        if !check.passed {
+            if let Some(ref fix) = check.fix_hint {
+                issues.push(fix.clone());
+            }
+        }
+    }
+
+    match format {
+        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
+        CheckOutputFormat::Json => print_check_results_json(&checks)?,
+    }
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        bail!("{} issue(s) found. Fix them and run 'cargo mobench check --target {:?}' again.", issues.len(), target)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PrereqCheck {
+    name: String,
+    passed: bool,
+    detail: Option<String>,
+    fix_hint: Option<String>,
+}
+
+fn print_check_results_text(checks: &[PrereqCheck], issues: &[String]) {
+    for check in checks {
+        let status = if check.passed { "\u{2713}" } else { "\u{2717}" };
+        let detail = check.detail.as_deref().unwrap_or("");
+        if detail.is_empty() {
+            println!("{} {}", status, check.name);
+        } else {
+            println!("{} {} ({})", status, check.name, detail);
+        }
+    }
+
+    if !issues.is_empty() {
+        println!("\nTo fix:");
+        for issue in issues {
+            println!("  * {}", issue);
+        }
+        println!();
+        let failed_count = checks.iter().filter(|c| !c.passed).count();
+        println!("{} issue(s) found.", failed_count);
+    } else {
+        println!("\nAll prerequisites satisfied!");
+    }
+}
+
+fn print_check_results_json(checks: &[PrereqCheck]) -> Result<()> {
+    let output = json!({
+        "checks": checks,
+        "all_passed": checks.iter().all(|c| c.passed),
+        "passed_count": checks.iter().filter(|c| c.passed).count(),
+        "failed_count": checks.iter().filter(|c| !c.passed).count(),
+    });
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn check_cargo() -> PrereqCheck {
+    let result = std::process::Command::new("cargo")
+        .arg("--version")
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_string();
+            PrereqCheck {
+                name: "cargo installed".to_string(),
+                passed: true,
+                detail: Some(version),
+                fix_hint: None,
+            }
+        }
+        _ => PrereqCheck {
+            name: "cargo installed".to_string(),
+            passed: false,
+            detail: None,
+            fix_hint: Some("Install Rust: https://rustup.rs".to_string()),
+        },
+    }
+}
+
+fn check_rustup() -> PrereqCheck {
+    let result = std::process::Command::new("rustup")
+        .arg("--version")
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            PrereqCheck {
+                name: "rustup installed".to_string(),
+                passed: true,
+                detail: Some(version),
+                fix_hint: None,
+            }
+        }
+        _ => PrereqCheck {
+            name: "rustup installed".to_string(),
+            passed: false,
+            detail: None,
+            fix_hint: Some("Install rustup: https://rustup.rs".to_string()),
+        },
+    }
+}
+
+fn check_android_ndk_home() -> PrereqCheck {
+    match env::var("ANDROID_NDK_HOME") {
+        Ok(path) if !path.is_empty() => {
+            let path_exists = Path::new(&path).exists();
+            if path_exists {
+                PrereqCheck {
+                    name: "ANDROID_NDK_HOME set".to_string(),
+                    passed: true,
+                    detail: Some(path),
+                    fix_hint: None,
+                }
+            } else {
+                PrereqCheck {
+                    name: "ANDROID_NDK_HOME set".to_string(),
+                    passed: false,
+                    detail: Some(format!("path does not exist: {}", path)),
+                    fix_hint: Some("Set ANDROID_NDK_HOME to a valid NDK path: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>".to_string()),
+                }
+            }
+        }
+        _ => PrereqCheck {
+            name: "ANDROID_NDK_HOME set".to_string(),
+            passed: false,
+            detail: None,
+            fix_hint: Some("Set ANDROID_NDK_HOME: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>".to_string()),
+        },
+    }
+}
+
+fn check_cargo_ndk() -> PrereqCheck {
+    let result = std::process::Command::new("cargo")
+        .args(["ndk", "--version"])
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_string();
+            PrereqCheck {
+                name: "cargo-ndk installed".to_string(),
+                passed: true,
+                detail: Some(version),
+                fix_hint: None,
+            }
+        }
+        _ => PrereqCheck {
+            name: "cargo-ndk installed".to_string(),
+            passed: false,
+            detail: None,
+            fix_hint: Some("Install cargo-ndk: cargo install cargo-ndk".to_string()),
+        },
+    }
+}
+
+fn check_rust_target(target: &str) -> PrereqCheck {
+    let result = std::process::Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let installed = String::from_utf8_lossy(&output.stdout);
+            let has_target = installed.lines().any(|line| line.trim() == target);
+            if has_target {
+                PrereqCheck {
+                    name: format!("Rust target: {}", target),
+                    passed: true,
+                    detail: None,
+                    fix_hint: None,
+                }
+            } else {
+                PrereqCheck {
+                    name: format!("Rust target: {}", target),
+                    passed: false,
+                    detail: Some("not installed".to_string()),
+                    fix_hint: Some(format!("Install target: rustup target add {}", target)),
+                }
+            }
+        }
+        _ => PrereqCheck {
+            name: format!("Rust target: {}", target),
+            passed: false,
+            detail: Some("could not check".to_string()),
+            fix_hint: Some(format!("Install target: rustup target add {}", target)),
+        },
+    }
+}
+
+fn check_jdk() -> PrereqCheck {
+    // Try java -version
+    let result = std::process::Command::new("java")
+        .arg("-version")
+        .output();
+
+    match result {
+        Ok(output) => {
+            // Java outputs version to stderr
+            let version_output = String::from_utf8_lossy(&output.stderr);
+            let version_line = version_output.lines().next().unwrap_or("");
+
+            if output.status.success() || !version_line.is_empty() {
+                PrereqCheck {
+                    name: "JDK installed".to_string(),
+                    passed: true,
+                    detail: Some(version_line.trim().to_string()),
+                    fix_hint: None,
+                }
+            } else {
+                PrereqCheck {
+                    name: "JDK installed".to_string(),
+                    passed: false,
+                    detail: None,
+                    fix_hint: Some("Install JDK 17+: brew install openjdk@17".to_string()),
+                }
+            }
+        }
+        Err(_) => PrereqCheck {
+            name: "JDK installed".to_string(),
+            passed: false,
+            detail: None,
+            fix_hint: Some("Install JDK 17+: brew install openjdk@17".to_string()),
+        },
+    }
+}
+
+fn check_xcode() -> PrereqCheck {
+    let result = std::process::Command::new("xcodebuild")
+        .arg("-version")
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            PrereqCheck {
+                name: "Xcode installed".to_string(),
+                passed: true,
+                detail: Some(version),
+                fix_hint: None,
+            }
+        }
+        _ => PrereqCheck {
+            name: "Xcode installed".to_string(),
+            passed: false,
+            detail: None,
+            fix_hint: Some("Install Xcode from the App Store or run: xcode-select --install".to_string()),
+        },
+    }
+}
+
+fn check_xcodegen() -> PrereqCheck {
+    let result = std::process::Command::new("xcodegen")
+        .arg("--version")
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_string();
+            PrereqCheck {
+                name: "xcodegen installed".to_string(),
+                passed: true,
+                detail: Some(version),
+                fix_hint: None,
+            }
+        }
+        _ => PrereqCheck {
+            name: "xcodegen installed".to_string(),
+            passed: false,
+            detail: None,
+            fix_hint: Some("Install xcodegen: brew install xcodegen".to_string()),
+        },
+    }
 }
 
 #[cfg(test)]
