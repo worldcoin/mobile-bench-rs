@@ -17,6 +17,20 @@ This document provides comprehensive testing instructions for mobile-bench-rs.
 
 ## Prerequisites
 
+### Prerequisite Validation (Recommended)
+
+Before installing prerequisites manually, use the `check` command to validate your setup:
+
+```bash
+# Check Android prerequisites
+cargo mobench check --target android
+
+# Check iOS prerequisites
+cargo mobench check --target ios
+```
+
+The check command will identify missing tools and provide installation instructions.
+
 ### Rust
 ```bash
 # Install Rust if not already installed
@@ -83,8 +97,17 @@ The `Mobile Bench (manual)` workflow uploads summary artifacts:
 ### Method 1: Quick All-in-One Build
 
 ```bash
+# First, validate prerequisites
+cargo mobench check --target android
+
 # Build everything and create APK
 cargo mobench build --target android
+
+# Or build with progress output for clearer feedback
+cargo mobench build --target android --progress
+
+# Verify the build artifacts
+cargo mobench verify --target android --check-artifacts
 
 # Install on connected device/emulator
 adb install -r target/mobench/android/app/build/outputs/apk/debug/app-debug.apk
@@ -178,10 +201,19 @@ Statistics:
 ### Build and Run
 
 ```bash
+# Step 0: Validate prerequisites
+cargo mobench check --target ios
+
 # Step 1: Build Rust xcframework (includes automatic code signing)
 cargo mobench build --target ios
 
-# This script:
+# Or build with progress output for clearer feedback
+cargo mobench build --target ios --progress
+
+# Verify the build artifacts
+cargo mobench verify --target ios --check-artifacts
+
+# This build step:
 # - Compiles Rust for aarch64-apple-ios (device) and aarch64-apple-ios-sim (simulator)
 # - Creates xcframework with proper structure:
 #   target/mobench/ios/sample_fns.xcframework/
@@ -293,10 +325,39 @@ Statistics:
 
 ## Troubleshooting
 
+### General Validation
+
+Before troubleshooting specific issues, use these validation commands:
+
+```bash
+# Check prerequisites
+cargo mobench check --target android
+cargo mobench check --target ios
+
+# Verify benchmark setup (registry, spec, artifacts)
+cargo mobench verify --target android --check-artifacts
+cargo mobench verify --target ios --check-artifacts
+
+# List discovered benchmarks
+cargo mobench list
+
+# Validate BrowserStack device specs
+cargo mobench devices --validate "Google Pixel 7-13.0"
+```
+
+The `verify` command validates:
+- **Registry**: Benchmark functions are properly registered
+- **Spec**: `bench_spec.json` exists and is valid (if `--spec-path` provided)
+- **Artifacts**: Build outputs exist and are consistent (if `--check-artifacts`)
+- **Smoke test**: Runs a local test with minimal iterations (if `--smoke-test`)
+
 ### Android
 
 **Problem**: `ANDROID_NDK_HOME is not set`
 ```bash
+# First, run check to see the full prerequisite status
+cargo mobench check --target android
+
 # Solution: Export the NDK path
 export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
 # Or add to ~/.zshrc / ~/.bashrc
@@ -466,6 +527,43 @@ cargo test --all
 ### BrowserStack Integration Testing
 
 See the main [README.md](README.md) for BrowserStack testing instructions.
+
+#### Device Validation
+
+Before running tests on BrowserStack, validate your device specifications:
+
+```bash
+# List all available BrowserStack devices
+cargo mobench devices
+
+# Filter by platform
+cargo mobench devices --platform android
+cargo mobench devices --platform ios
+
+# Validate specific device specs
+cargo mobench devices --validate "Google Pixel 7-13.0"
+cargo mobench devices --validate "iPhone 14-16"
+
+# Output as JSON for scripting
+cargo mobench devices --json
+```
+
+If a device spec is invalid, the command will suggest similar available devices.
+
+#### View Benchmark Results
+
+After a benchmark run, use the `summary` command to view statistics:
+
+```bash
+# Display result statistics (avg/min/max/median)
+cargo mobench summary results.json
+
+# Output as JSON
+cargo mobench summary results.json --format json
+
+# Output as CSV
+cargo mobench summary results.json --format csv
+```
 
 #### Release Builds for BrowserStack
 

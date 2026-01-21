@@ -304,6 +304,338 @@ pub fn read_package_name(cargo_toml_path: &Path) -> Option<String> {
     None
 }
 
+/// Embeds a bench spec JSON file into the Android assets and iOS bundle resources.
+///
+/// This function writes a `bench_spec.json` file to the appropriate location for
+/// both Android (assets directory) and iOS (bundle resources) so the mobile app
+/// can read the benchmark configuration at runtime.
+///
+/// # Arguments
+/// * `output_dir` - The mobench output directory (e.g., `target/mobench`)
+/// * `spec` - The benchmark specification as a JSON-serializable struct
+///
+/// # Example
+/// ```ignore
+/// use mobench_sdk::builders::common::embed_bench_spec;
+/// use mobench_sdk::BenchSpec;
+///
+/// let spec = BenchSpec {
+///     name: "my_crate::my_benchmark".to_string(),
+///     iterations: 100,
+///     warmup: 10,
+/// };
+///
+/// embed_bench_spec(Path::new("target/mobench"), &spec)?;
+/// ```
+pub fn embed_bench_spec<S: serde::Serialize>(output_dir: &Path, spec: &S) -> Result<(), BenchError> {
+    let spec_json = serde_json::to_string_pretty(spec).map_err(|e| {
+        BenchError::Build(format!("Failed to serialize bench spec: {}", e))
+    })?;
+
+    // Android: Write to assets directory
+    let android_assets_dir = output_dir.join("android/app/src/main/assets");
+    if output_dir.join("android").exists() {
+        std::fs::create_dir_all(&android_assets_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create Android assets directory at {}: {}",
+                android_assets_dir.display(),
+                e
+            ))
+        })?;
+        let android_spec_path = android_assets_dir.join("bench_spec.json");
+        std::fs::write(&android_spec_path, &spec_json).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write Android bench spec to {}: {}",
+                android_spec_path.display(),
+                e
+            ))
+        })?;
+    }
+
+    // iOS: Write to Resources directory in the Xcode project
+    let ios_resources_dir = output_dir.join("ios/BenchRunner/BenchRunner/Resources");
+    if output_dir.join("ios/BenchRunner").exists() {
+        std::fs::create_dir_all(&ios_resources_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create iOS Resources directory at {}: {}",
+                ios_resources_dir.display(),
+                e
+            ))
+        })?;
+        let ios_spec_path = ios_resources_dir.join("bench_spec.json");
+        std::fs::write(&ios_spec_path, &spec_json).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write iOS bench spec to {}: {}",
+                ios_spec_path.display(),
+                e
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Represents a benchmark specification for embedding.
+///
+/// This is a simple struct that can be serialized to JSON and embedded
+/// in mobile app bundles.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EmbeddedBenchSpec {
+    /// The benchmark function name (e.g., "my_crate::my_benchmark")
+    pub function: String,
+    /// Number of benchmark iterations
+    pub iterations: u32,
+    /// Number of warmup iterations
+    pub warmup: u32,
+}
+
+/// Build metadata for artifact correlation and traceability.
+///
+/// This struct captures metadata about the build environment to enable
+/// reproducibility and debugging of benchmark results.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BenchMeta {
+    /// Benchmark specification that was used
+    pub spec: EmbeddedBenchSpec,
+    /// Git commit hash (if in a git repository)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_hash: Option<String>,
+    /// Git branch name (if available)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Whether the git working directory was dirty
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirty: Option<bool>,
+    /// Build timestamp in RFC3339 format
+    pub build_time: String,
+    /// Build timestamp as Unix epoch seconds
+    pub build_time_unix: u64,
+    /// Target platform ("android" or "ios")
+    pub target: String,
+    /// Build profile ("debug" or "release")
+    pub profile: String,
+    /// mobench version
+    pub mobench_version: String,
+    /// Rust version used for the build
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rust_version: Option<String>,
+    /// Host OS (e.g., "macos", "linux")
+    pub host_os: String,
+}
+
+/// Gets the current git commit hash (short form).
+pub fn get_git_commit() -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !hash.is_empty() {
+            return Some(hash);
+        }
+    }
+    None
+}
+
+/// Gets the current git branch name.
+pub fn get_git_branch() -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !branch.is_empty() && branch != "HEAD" {
+            return Some(branch);
+        }
+    }
+    None
+}
+
+/// Checks if the git working directory has uncommitted changes.
+pub fn is_git_dirty() -> Option<bool> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let status = String::from_utf8_lossy(&output.stdout);
+        Some(!status.trim().is_empty())
+    } else {
+        None
+    }
+}
+
+/// Gets the Rust version.
+pub fn get_rust_version() -> Option<String> {
+    let output = Command::new("rustc")
+        .args(["--version"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !version.is_empty() {
+            return Some(version);
+        }
+    }
+    None
+}
+
+/// Creates a BenchMeta instance with current build information.
+pub fn create_bench_meta(spec: &EmbeddedBenchSpec, target: &str, profile: &str) -> BenchMeta {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    // Format as RFC3339
+    let build_time = {
+        let secs = now.as_secs();
+        // Simple UTC timestamp formatting
+        let days_since_epoch = secs / 86400;
+        let remaining_secs = secs % 86400;
+        let hours = remaining_secs / 3600;
+        let minutes = (remaining_secs % 3600) / 60;
+        let seconds = remaining_secs % 60;
+
+        // Calculate year, month, day from days since epoch (1970-01-01)
+        // Simplified calculation - good enough for build metadata
+        let (year, month, day) = days_to_ymd(days_since_epoch);
+
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            year, month, day, hours, minutes, seconds
+        )
+    };
+
+    BenchMeta {
+        spec: spec.clone(),
+        commit_hash: get_git_commit(),
+        branch: get_git_branch(),
+        dirty: is_git_dirty(),
+        build_time,
+        build_time_unix: now.as_secs(),
+        target: target.to_string(),
+        profile: profile.to_string(),
+        mobench_version: env!("CARGO_PKG_VERSION").to_string(),
+        rust_version: get_rust_version(),
+        host_os: env::consts::OS.to_string(),
+    }
+}
+
+/// Convert days since epoch to (year, month, day).
+/// Simplified Gregorian calendar calculation.
+fn days_to_ymd(days: u64) -> (i32, u32, u32) {
+    let mut remaining_days = days as i64;
+    let mut year = 1970i32;
+
+    // Advance years
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    // Days in each month (non-leap year)
+    let days_in_months: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+    let mut month = 1u32;
+    for (i, &days_in_month) in days_in_months.iter().enumerate() {
+        let mut dim = days_in_month;
+        if i == 1 && is_leap_year(year) {
+            dim = 29;
+        }
+        if remaining_days < dim {
+            break;
+        }
+        remaining_days -= dim;
+        month += 1;
+    }
+
+    (year, month, remaining_days as u32 + 1)
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+/// Embeds build metadata (bench_meta.json) alongside bench_spec.json in mobile app bundles.
+///
+/// This function creates a `bench_meta.json` file that contains:
+/// - The benchmark specification
+/// - Git commit hash and branch (if available)
+/// - Build timestamp
+/// - Target platform and profile
+/// - mobench and Rust versions
+///
+/// # Arguments
+/// * `output_dir` - The mobench output directory (e.g., `target/mobench`)
+/// * `spec` - The benchmark specification
+/// * `target` - Target platform ("android" or "ios")
+/// * `profile` - Build profile ("debug" or "release")
+pub fn embed_bench_meta(
+    output_dir: &Path,
+    spec: &EmbeddedBenchSpec,
+    target: &str,
+    profile: &str,
+) -> Result<(), BenchError> {
+    let meta = create_bench_meta(spec, target, profile);
+    let meta_json = serde_json::to_string_pretty(&meta).map_err(|e| {
+        BenchError::Build(format!("Failed to serialize bench meta: {}", e))
+    })?;
+
+    // Android: Write to assets directory
+    let android_assets_dir = output_dir.join("android/app/src/main/assets");
+    if output_dir.join("android").exists() {
+        std::fs::create_dir_all(&android_assets_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create Android assets directory at {}: {}",
+                android_assets_dir.display(),
+                e
+            ))
+        })?;
+        let android_meta_path = android_assets_dir.join("bench_meta.json");
+        std::fs::write(&android_meta_path, &meta_json).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write Android bench meta to {}: {}",
+                android_meta_path.display(),
+                e
+            ))
+        })?;
+    }
+
+    // iOS: Write to Resources directory in the Xcode project
+    let ios_resources_dir = output_dir.join("ios/BenchRunner/BenchRunner/Resources");
+    if output_dir.join("ios/BenchRunner").exists() {
+        std::fs::create_dir_all(&ios_resources_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create iOS Resources directory at {}: {}",
+                ios_resources_dir.display(),
+                e
+            ))
+        })?;
+        let ios_meta_path = ios_resources_dir.join("bench_meta.json");
+        std::fs::write(&ios_meta_path, &meta_json).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write iOS bench meta to {}: {}",
+                ios_meta_path.display(),
+                e
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +740,76 @@ members = ["crates/*"]
         assert_eq!(result, None);
 
         std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_create_bench_meta() {
+        let spec = EmbeddedBenchSpec {
+            function: "test_crate::my_benchmark".to_string(),
+            iterations: 100,
+            warmup: 10,
+        };
+
+        let meta = create_bench_meta(&spec, "android", "release");
+
+        assert_eq!(meta.spec.function, "test_crate::my_benchmark");
+        assert_eq!(meta.spec.iterations, 100);
+        assert_eq!(meta.spec.warmup, 10);
+        assert_eq!(meta.target, "android");
+        assert_eq!(meta.profile, "release");
+        assert!(!meta.mobench_version.is_empty());
+        assert!(!meta.host_os.is_empty());
+        assert!(!meta.build_time.is_empty());
+        assert!(meta.build_time_unix > 0);
+        // Build time should be in RFC3339 format (roughly YYYY-MM-DDTHH:MM:SSZ)
+        assert!(meta.build_time.contains('T'));
+        assert!(meta.build_time.ends_with('Z'));
+    }
+
+    #[test]
+    fn test_days_to_ymd_epoch() {
+        // Day 0 should be January 1, 1970
+        let (year, month, day) = days_to_ymd(0);
+        assert_eq!(year, 1970);
+        assert_eq!(month, 1);
+        assert_eq!(day, 1);
+    }
+
+    #[test]
+    fn test_days_to_ymd_known_date() {
+        // January 21, 2026 is approximately 20,474 days since epoch
+        // (2026 - 1970 = 56 years, with leap years)
+        // Let's test a simpler case: 365 days = January 1, 1971
+        let (year, month, day) = days_to_ymd(365);
+        assert_eq!(year, 1971);
+        assert_eq!(month, 1);
+        assert_eq!(day, 1);
+    }
+
+    #[test]
+    fn test_is_leap_year() {
+        assert!(!is_leap_year(1970)); // Not divisible by 4
+        assert!(is_leap_year(2000));  // Divisible by 400
+        assert!(!is_leap_year(1900)); // Divisible by 100 but not 400
+        assert!(is_leap_year(2024));  // Divisible by 4, not by 100
+    }
+
+    #[test]
+    fn test_bench_meta_serialization() {
+        let spec = EmbeddedBenchSpec {
+            function: "my_func".to_string(),
+            iterations: 50,
+            warmup: 5,
+        };
+
+        let meta = create_bench_meta(&spec, "ios", "debug");
+        let json = serde_json::to_string(&meta).expect("serialization should work");
+
+        // Verify it contains expected fields
+        assert!(json.contains("my_func"));
+        assert!(json.contains("ios"));
+        assert!(json.contains("debug"));
+        assert!(json.contains("build_time"));
+        assert!(json.contains("mobench_version"));
     }
 }
