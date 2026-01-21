@@ -3,21 +3,21 @@
 //! This module provides runtime discovery of benchmark functions that have been
 //! marked with the `#[benchmark]` attribute macro.
 
-use crate::types::BenchError;
+use crate::timing::{BenchReport, BenchSpec, TimingError};
 
 /// A registered benchmark function
 ///
 /// This struct is submitted to the global registry by the `#[benchmark]` macro.
-/// It contains the function's name and a closure that invokes it.
+/// It contains the function's name and a runner that executes the benchmark.
 pub struct BenchFunction {
     /// Fully-qualified name of the benchmark function (e.g., "my_crate::my_module::my_bench")
     pub name: &'static str,
 
-    /// Function that invokes the benchmark
+    /// Runner function that executes the benchmark with timing
     ///
-    /// Takes optional arguments and returns a Result.
-    /// Arguments are currently unused but reserved for future parameterization.
-    pub invoke: fn(&[String]) -> Result<(), BenchError>,
+    /// Takes a BenchSpec and returns a BenchReport directly.
+    /// The runner handles setup/teardown internally.
+    pub runner: fn(BenchSpec) -> Result<BenchReport, TimingError>,
 }
 
 // Register the BenchFunction type with inventory

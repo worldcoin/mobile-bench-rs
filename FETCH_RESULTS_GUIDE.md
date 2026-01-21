@@ -232,14 +232,65 @@ This means:
 
 Verify your app logs JSON to stdout/logcat in the correct format.
 
+## Analyzing Results with `summary`
+
+The `summary` command provides quick statistics from benchmark results:
+
+```bash
+# Text summary (default)
+cargo mobench summary results.json
+
+# Output:
+# Benchmark Summary
+# =================
+# Source: results.json
+# Function: sample_fns::fibonacci
+# Device: Google Pixel 7-13.0
+#
+# Statistics:
+#   Samples: 30
+#   Mean: 1,234,567 ns (1.23 ms)
+#   Median: 1,230,000 ns (1.23 ms)
+#   Min: 1,200,000 ns (1.20 ms)
+#   Max: 1,280,000 ns (1.28 ms)
+#   P95: 1,270,000 ns (1.27 ms)
+
+# JSON format for programmatic access
+cargo mobench summary results.json --format json
+
+# CSV format for spreadsheets
+cargo mobench summary results.json --format csv
+```
+
+### Using Summary in CI
+
+```yaml
+- name: Run benchmarks
+  run: |
+    cargo mobench run --target android --function my_benchmark \
+      --devices "Google Pixel 7-13.0" --release --fetch \
+      --output results.json
+
+- name: Display summary
+  run: cargo mobench summary results.json
+
+- name: Export metrics
+  run: |
+    cargo mobench summary results.json --format json > metrics.json
+    # Use jq to extract specific values
+    MEAN_NS=$(jq '.[0].mean_ns' metrics.json)
+    echo "mean_ns=$MEAN_NS" >> $GITHUB_OUTPUT
+```
+
 ## Best Practices
 
 1. **Always use --fetch in CI** for automated pipelines
 2. **Always use --release for BrowserStack** to reduce artifact sizes (~544MB debug vs ~133MB release) and prevent upload timeouts
-3. **Set reasonable timeouts** based on your benchmark duration
-4. **Check exit codes** - command succeeds even if fetch warns
-5. **Archive results** as CI artifacts for historical tracking
-6. **Use GitHub Actions summaries** to display results inline
+3. **Use summary command** to quickly analyze results
+4. **Set reasonable timeouts** based on your benchmark duration
+5. **Check exit codes** - command succeeds even if fetch warns
+6. **Archive results** as CI artifacts for historical tracking
+7. **Use GitHub Actions summaries** to display results inline
 
 ## Comparison with Manual Workflow
 
@@ -272,8 +323,33 @@ cargo mobench run \
 # Results already in results.json!
 ```
 
+## New CLI Commands for Results
+
+### `cargo mobench summary`
+
+Display statistics from any benchmark report file:
+
+```bash
+cargo mobench summary <report-file> [--format text|json|csv]
+```
+
+Supports multiple report formats:
+- `RunSummary` from `mobench run --output`
+- `BenchReport` from direct timing output
+- Fetched BrowserStack results
+
+### `cargo mobench verify`
+
+Validate setup before running benchmarks:
+
+```bash
+cargo mobench verify --target android --check-artifacts --smoke-test
+```
+
 ## See Also
 
 - `BROWSERSTACK_CI_INTEGRATION.md` - Programmatic API for custom workflows
 - `BROWSERSTACK_METRICS.md` - Metrics and performance documentation
 - `cargo mobench run --help` - Full CLI options
+- `cargo mobench summary --help` - Summary command options
+- `cargo mobench verify --help` - Verification command options
