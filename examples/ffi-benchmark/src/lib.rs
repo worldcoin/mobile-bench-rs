@@ -1,6 +1,10 @@
-//! Sample benchmark functions for mobile testing using UniFFI (proc macro mode).
+//! FFI benchmark example demonstrating UniFFI integration.
+//!
+//! This example shows how to define a full FFI surface (types, errors, and
+//! `run_benchmark`) for Kotlin/Swift bindings. For the minimal SDK-only usage,
+//! see `examples/basic-benchmark`.
 
-use mobench_sdk::timing::{run_closure, TimingError};
+use mobench_sdk::benchmark;
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
 
@@ -42,9 +46,9 @@ pub enum BenchError {
 // Generate UniFFI scaffolding from proc macros
 uniffi::setup_scaffolding!();
 
-// Conversion from mobench-sdk timing types
-impl From<mobench_sdk::timing::BenchSpec> for BenchSpec {
-    fn from(spec: mobench_sdk::timing::BenchSpec) -> Self {
+// Conversion from mobench-sdk types
+impl From<mobench_sdk::BenchSpec> for BenchSpec {
+    fn from(spec: mobench_sdk::BenchSpec) -> Self {
         Self {
             name: spec.name,
             iterations: spec.iterations,
@@ -53,7 +57,7 @@ impl From<mobench_sdk::timing::BenchSpec> for BenchSpec {
     }
 }
 
-impl From<BenchSpec> for mobench_sdk::timing::BenchSpec {
+impl From<BenchSpec> for mobench_sdk::BenchSpec {
     fn from(spec: BenchSpec) -> Self {
         Self {
             name: spec.name,
@@ -63,16 +67,16 @@ impl From<BenchSpec> for mobench_sdk::timing::BenchSpec {
     }
 }
 
-impl From<mobench_sdk::timing::BenchSample> for BenchSample {
-    fn from(sample: mobench_sdk::timing::BenchSample) -> Self {
+impl From<mobench_sdk::BenchSample> for BenchSample {
+    fn from(sample: mobench_sdk::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
         }
     }
 }
 
-impl From<mobench_sdk::timing::BenchReport> for BenchReport {
-    fn from(report: mobench_sdk::timing::BenchReport) -> Self {
+impl From<mobench_sdk::RunnerReport> for BenchReport {
+    fn from(report: mobench_sdk::RunnerReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
@@ -80,50 +84,27 @@ impl From<mobench_sdk::timing::BenchReport> for BenchReport {
     }
 }
 
-impl From<TimingError> for BenchError {
-    fn from(err: TimingError) -> Self {
+impl From<mobench_sdk::BenchError> for BenchError {
+    fn from(err: mobench_sdk::BenchError) -> Self {
         match err {
-            TimingError::NoIterations => BenchError::InvalidIterations,
-            TimingError::Execution(msg) => BenchError::ExecutionFailed { reason: msg },
+            mobench_sdk::BenchError::Runner(runner_err) => BenchError::ExecutionFailed {
+                reason: runner_err.to_string(),
+            },
+            mobench_sdk::BenchError::UnknownFunction(name) => BenchError::UnknownFunction { name },
+            _ => BenchError::ExecutionFailed {
+                reason: err.to_string(),
+            },
         }
     }
 }
 
 /// Run a benchmark by name with the given specification.
+///
+/// This is the main FFI entry point called from mobile platforms.
 #[uniffi::export]
 pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
-    let timing_spec: mobench_sdk::timing::BenchSpec = spec.into();
-
-    let report = match timing_spec.name.as_str() {
-        "fibonacci" | "fib" | "sample_fns::fibonacci" => {
-            run_closure(timing_spec, || {
-                let result = fibonacci_batch(30, 1000);
-                // Use the result to prevent optimization
-                std::hint::black_box(result);
-                Ok(())
-            })
-            .map_err(|e: TimingError| -> BenchError { e.into() })?
-        }
-        "checksum" | "checksum_1k" | "sample_fns::checksum" => {
-            run_closure(timing_spec, || {
-                // Run checksum 10000 times to make it measurable
-                let mut sum = 0u64;
-                for _ in 0..10000 {
-                    sum = sum.wrapping_add(checksum(&CHECKSUM_INPUT));
-                }
-                // Use the result to prevent optimization
-                std::hint::black_box(sum);
-                Ok(())
-            })
-            .map_err(|e: TimingError| -> BenchError { e.into() })?
-        }
-        _ => {
-            return Err(BenchError::UnknownFunction {
-                name: timing_spec.name.clone(),
-            })
-        }
-    };
-
+    let sdk_spec: mobench_sdk::BenchSpec = spec.into();
+    let report = mobench_sdk::run_benchmark(sdk_spec)?;
     Ok(report.into())
 }
 
@@ -159,6 +140,29 @@ pub fn checksum(bytes: &[u8]) -> u64 {
     bytes.iter().map(|&b| b as u64).sum()
 }
 
+// ============================================================================
+// Benchmark Functions
+// ============================================================================
+// These functions are marked with #[benchmark] and automatically registered
+// with mobench-sdk's registry system.
+
+/// Benchmark: Fibonacci calculation (30th number, 1000 iterations)
+#[benchmark]
+pub fn bench_fibonacci() {
+    let result = fibonacci_batch(30, 1000);
+    std::hint::black_box(result);
+}
+
+/// Benchmark: Checksum calculation on 1KB data (10000 iterations)
+#[benchmark]
+pub fn bench_checksum() {
+    let mut sum = 0u64;
+    for _ in 0..10000 {
+        sum = sum.wrapping_add(checksum(&CHECKSUM_INPUT));
+    }
+    std::hint::black_box(sum);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,21 +181,25 @@ mod tests {
     }
 
     #[test]
-    fn test_run_benchmark_fibonacci() {
+    fn test_run_benchmark_via_registry() {
+        // Test that benchmarks can be discovered via the registry
+        let benchmarks = mobench_sdk::discover_benchmarks();
+        assert!(benchmarks.len() >= 2, "Should find at least 2 benchmarks");
+
+        // Test execution via FFI using registry name
         let spec = BenchSpec {
-            name: "fibonacci".to_string(),
+            name: "ffi_benchmark::bench_fibonacci".to_string(),
             iterations: 3,
             warmup: 1,
         };
         let report = run_benchmark(spec).unwrap();
         assert_eq!(report.samples.len(), 3);
-        assert_eq!(report.spec.name, "fibonacci");
     }
 
     #[test]
     fn test_run_benchmark_checksum() {
         let spec = BenchSpec {
-            name: "checksum".to_string(),
+            name: "ffi_benchmark::bench_checksum".to_string(),
             iterations: 2,
             warmup: 0,
         };
@@ -213,11 +221,11 @@ mod tests {
     #[test]
     fn test_invalid_iterations() {
         let spec = BenchSpec {
-            name: "fibonacci".to_string(),
+            name: "ffi_benchmark::bench_fibonacci".to_string(),
             iterations: 0,
             warmup: 0,
         };
         let result = run_benchmark(spec);
-        assert!(matches!(result, Err(BenchError::InvalidIterations)));
+        assert!(matches!(result, Err(BenchError::ExecutionFailed { .. })));
     }
 }

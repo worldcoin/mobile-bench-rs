@@ -6,40 +6,50 @@ license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Mobile benchmarking SDK for Rust - run benchmarks on real devices"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench-sdk"
 readme = "README.md"
 keywords = ["benchmark", "mobile", "android", "ios", "performance"]
 categories = ["development-tools::profiling", "development-tools::testing"]
-include = [
-    "src/**/*",
-    "templates/**/*",
-    "Cargo.toml",
-    "README.md"
-]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+# Build on default target for docs.rs
+targets = ["x86_64-unknown-linux-gnu"]
 
 [lib]
 crate-type = ["lib"]
 
+[features]
+default = ["full"]
+# Full SDK with build automation, templates, and registry
+full = ["dep:mobench-macros", "dep:inventory", "dep:include_dir", "dep:toml", "dep:anyhow"]
+# Minimal timing-only mode for mobile binaries (small footprint)
+runner-only = []
+
 [dependencies]
-# Core dependencies
-mobench-runner = { version = "0.1", path = "../mobench-runner" }
-mobench-macros = { version = "0.1", path = "../mobench-macros" }
+# Proc macros (only with full feature)
+mobench-macros = { version = "0.1.11", path = "../mobench-macros", optional = true }
 
-# Registry
-inventory.workspace = true
+# Registry (only with full feature)
+inventory = { workspace = true, optional = true }
 
-# Serialization
+# Serialization (always needed for BenchSpec/BenchReport)
 serde.workspace = true
 serde_json.workspace = true
 
 # Error handling
 thiserror.workspace = true
-anyhow.workspace = true
+anyhow = { workspace = true, optional = true }
 
-# Template embedding (Phase 1)
-include_dir.workspace = true
+# Template embedding (only with full feature)
+include_dir = { workspace = true, optional = true }
 
-# Build automation (Phase 1)
-toml.workspace = true
+# Build automation (only with full feature)
+toml = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Test dependencies will be added as needed

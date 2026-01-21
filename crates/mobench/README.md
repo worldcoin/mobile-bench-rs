@@ -34,9 +34,10 @@ cargo mobench init --target both
 
 This creates:
 - `bench-mobile/` - FFI wrapper crate with UniFFI bindings
-- `android/` or `ios/` - Platform-specific app projects
-- `bench-config.toml` - Configuration file
-- `benches/example.rs` - Example benchmarks (with `--generate-examples`)
+- `android/` or `ios/` - Platform-specific app projects (generated to output directory)
+- `bench-config.toml` - Run configuration file
+- `mobench.toml` - Project configuration file (when using `init`)
+- `benches/example.rs` - Example benchmarks (with `--examples`)
 
 ### 2. Write Benchmarks
 
@@ -119,6 +120,10 @@ cargo mobench build --target <android|ios> [OPTIONS]
 **Options:**
 - `--target <android|ios>` - Platform to build for (required)
 - `--release` - Build in release mode (default: debug)
+- `--output-dir <DIR>` - Output directory for mobile artifacts (default: `target/mobench/`)
+- `--crate-path <PATH>` - Path to the benchmark crate (default: auto-detect)
+- `--dry-run` - Print what would be done without making changes
+- `--verbose` / `-v` - Print verbose output including all commands
 
 **Examples:**
 ```bash
@@ -127,11 +132,20 @@ cargo mobench build --target android --release
 
 # Build iOS xcframework
 cargo mobench build --target ios
+
+# Preview build without making changes
+cargo mobench build --target android --dry-run
+
+# Build with verbose output
+cargo mobench build --target ios --verbose
+
+# Build to custom output directory
+cargo mobench build --target android --output-dir ./my-output
 ```
 
 **Outputs:**
-- Android: `android/app/build/outputs/apk/debug/app-debug.apk`
-- iOS: `target/ios/sample_fns.xcframework`
+- Android: `target/mobench/android/app/build/outputs/apk/debug/app-debug.apk`
+- iOS: `target/mobench/ios/sample_fns.xcframework`
 
 ### `run` - Run Benchmarks
 
@@ -198,7 +212,7 @@ cargo mobench package-ipa [OPTIONS]
 cargo mobench package-ipa --method adhoc
 ```
 
-**Output:** `target/ios/BenchRunner.ipa`
+**Output:** `target/mobench/ios/BenchRunner.ipa`
 
 ### `plan` - Generate Device Matrix
 
@@ -269,7 +283,57 @@ cargo mobench compare \
 
 ## Configuration
 
-### Config File Format (`bench-config.toml`)
+### Project Configuration (`mobench.toml`)
+
+mobench automatically loads `mobench.toml` from the current directory or any parent directory:
+
+```toml
+[project]
+# Name of the benchmark crate
+crate = "bench-mobile"
+
+# Rust library name (typically crate name with hyphens replaced by underscores)
+library_name = "bench_mobile"
+
+# Output directory for build artifacts (default: target/mobench/)
+# output_dir = "target/mobench"
+
+[android]
+# Android package name
+package = "com.example.bench"
+
+# Minimum Android SDK version (default: 24)
+min_sdk = 24
+
+# Target Android SDK version (default: 34)
+target_sdk = 34
+
+[ios]
+# iOS bundle identifier
+bundle_id = "com.example.bench"
+
+# iOS deployment target version (default: 15.0)
+deployment_target = "15.0"
+
+# Development team ID for code signing (optional)
+# team_id = "YOUR_TEAM_ID"
+
+[benchmarks]
+# Default benchmark function to run
+default_function = "my_crate::my_benchmark"
+
+# Default number of benchmark iterations
+default_iterations = 100
+
+# Default number of warmup iterations
+default_warmup = 10
+```
+
+CLI flags always override config file values when provided.
+
+### Run Config File Format (`bench-config.toml`)
+
+For BrowserStack runs, you can also use a separate run configuration:
 
 ```toml
 target = "android"
@@ -285,8 +349,8 @@ app_automate_access_key = "${BROWSERSTACK_ACCESS_KEY}"
 project = "my-project-benchmarks"
 
 [ios_xcuitest]
-app = "target/ios/BenchRunner.ipa"
-test_suite = "target/ios/BenchRunnerUITests.zip"
+app = "target/mobench/ios/BenchRunner.ipa"
+test_suite = "target/mobench/ios/BenchRunnerUITests.zip"
 ```
 
 ### Device Matrix Format (`device-matrix.yaml`)
@@ -517,9 +581,8 @@ Ensure:
 This CLI is part of the mobench ecosystem:
 
 - **[mobench](https://crates.io/crates/mobench)** - This crate (CLI tool)
-- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - SDK library
-- **[mobench-macros](https://crates.io/crates/mobench-macros)** - Proc macros
-- **[mobench-runner](https://crates.io/crates/mobench-runner)** - Timing harness
+- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK with timing harness, build automation, and codegen
+- **[mobench-macros](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
 
 ## See Also
 

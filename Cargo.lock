@@ -123,10 +123,6 @@ version = "0.1.0"
 dependencies = [
  "inventory",
  "mobench-sdk",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "uniffi",
 ]
 
 [[package]]
@@ -312,6 +308,18 @@ name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+
+[[package]]
+name = "ffi-benchmark"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "mobench-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "uniffi",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -793,13 +801,12 @@ dependencies = [
 
 [[package]]
 name = "mobench"
-version = "0.1.5"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "clap",
  "dotenvy",
  "inventory",
- "mobench-runner",
  "mobench-sdk",
  "reqwest",
  "sample-fns",
@@ -813,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-macros"
-version = "0.1.5"
+version = "0.1.11"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -821,22 +828,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "mobench-runner"
-version = "0.1.5"
-dependencies = [
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "mobench-sdk"
-version = "0.1.5"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "include_dir",
  "inventory",
  "mobench-macros",
- "mobench-runner",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1156,10 +1154,10 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sample-fns"
-version = "0.1.5"
+version = "0.1.11"
 dependencies = [
  "camino",
- "mobench-runner",
+ "mobench-sdk",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

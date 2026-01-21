@@ -8,11 +8,13 @@ Transform your Rust project into a mobile benchmarking suite. This SDK provides 
 
 - **`#[benchmark]` macro**: Mark functions for mobile benchmarking
 - **Automatic registry**: Compile-time function discovery
+- **Built-in timing harness**: Lightweight timing infrastructure with warmup and iteration support
 - **Mobile app generation**: Create Android/iOS apps from templates
 - **Build automation**: Cross-compile and package for mobile platforms
 - **Statistical analysis**: Mean, median, stddev, percentiles
 - **BrowserStack integration**: Test on real devices in the cloud
 - **UniFFI bindings**: Automatic FFI generation for mobile platforms
+- **Configuration file support**: `mobench.toml` for project settings
 
 ## Quick Start
 
@@ -78,6 +80,7 @@ cargo mobench init --target android  # or ios, or both
 ```
 
 This creates:
+
 - `bench-mobile/` - FFI wrapper crate
 - `android/` or `ios/` - Mobile app projects
 - `bench-config.toml` - Configuration file
@@ -96,23 +99,38 @@ fn my_benchmark() {
 ### 3. Build for Mobile
 
 ```bash
+# Build to default output directory (target/mobench/)
 cargo mobench build --target android
+
+# Or with verbose output
+cargo mobench build --target android --verbose
+
+# Or preview what would be built
+cargo mobench build --target android --dry-run
 ```
 
 ### 4. Run on Devices
 
 Local device workflow (builds artifacts and writes the run spec; launch the app manually):
+
 ```bash
 cargo mobench run --target android --function my_benchmark
 ```
 
 BrowserStack:
+
 ```bash
 export BROWSERSTACK_USERNAME=your_username
 export BROWSERSTACK_ACCESS_KEY=your_key
 
 cargo mobench run --target android --function my_benchmark --devices "Google Pixel 7-13.0"
 ```
+
+## Examples (Repository)
+
+- `examples/basic-benchmark`: minimal SDK usage with `#[benchmark]`
+- `examples/ffi-benchmark`: full UniFFI surface with `run_benchmark` and FFI types
+- `crates/sample-fns`: repository demo library used by Android/iOS test apps
 
 ## API Documentation
 
@@ -326,9 +344,9 @@ fn btreemap_insert_1000() {
                │
        ┌───────┴───────┐
        ↓               ↓
-┌─────────────┐ ┌─────────────┐
-│ Android APK │ │  iOS IPA    │
-└──────┬──────┘ └──────┬──────┘
+┌─────────────┐ ┌───────────────────────┐
+│ Android APK │ │ iOS xcframework / IPA │
+└──────┬──────┘ └──────┬────────────────┘
        │               │
        └───────┬───────┘
                ↓
@@ -340,7 +358,32 @@ fn btreemap_insert_1000() {
 
 ## Configuration
 
-### `bench-config.toml`
+### `mobench.toml` (Project Configuration)
+
+mobench automatically loads `mobench.toml` from the current directory or parent directories:
+
+```toml
+[project]
+crate = "bench-mobile"
+library_name = "bench_mobile"
+# output_dir = "target/mobench"  # default
+
+[android]
+package = "com.example.bench"
+min_sdk = 24
+target_sdk = 34
+
+[ios]
+bundle_id = "com.example.bench"
+deployment_target = "15.0"
+
+[benchmarks]
+default_function = "my_crate::my_benchmark"
+default_iterations = 100
+default_warmup = 10
+```
+
+### `bench-config.toml` (Run Configuration)
 
 ```toml
 target = "android"
@@ -356,8 +399,8 @@ app_automate_access_key = "${BROWSERSTACK_ACCESS_KEY}"
 project = "my-project-benchmarks"
 
 [ios_xcuitest]
-app = "target/ios/BenchRunner.ipa"
-test_suite = "target/ios/BenchRunnerUITests.zip"
+app = "target/mobench/ios/BenchRunner.ipa"
+test_suite = "target/mobench/ios/BenchRunnerUITests.zip"
 ```
 
 ### `device-matrix.yaml`
@@ -393,9 +436,8 @@ devices:
 This is the core SDK of the mobench ecosystem:
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool (recommended for most users)
-- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - This crate (SDK library)
-- **[mobench-macros](https://crates.io/crates/mobench-macros)** - Proc macros
-- **[mobench-runner](https://crates.io/crates/mobench-runner)** - Timing harness
+- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - This crate (SDK library with timing harness, build automation, and codegen)
+- **[mobench-macros](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
 
 ## See Also
 

@@ -4,7 +4,6 @@ This guide shows how to integrate `mobench-sdk` into an existing Rust project, r
 mobile benchmarks, and then run them on BrowserStack.
 
 > **Important**: This guide is for integrators importing `mobench-sdk` as a library.
-> You do **NOT** need the `scripts/` directory from this repository.
 > All build functionality is available via `cargo mobench` commands.
 
 ## 1) Prerequisites
@@ -50,6 +49,7 @@ fn checksum_bench() {
 ```
 
 Benchmarks are identified by name at runtime. You can call them by:
+
 - Fully-qualified path (e.g., `my_crate::checksum_bench`)
 - Or suffix match (e.g., `checksum_bench`)
 
@@ -58,10 +58,11 @@ Benchmarks are identified by name at runtime. You can call them by:
 From your repo root, create a mobile harness with the CLI:
 
 ```bash
-cargo mobench init-sdk --target both --project-name my-bench --output-dir .
+cargo mobench init --target android --output bench-config.toml
 ```
 
 This generates:
+
 - `bench-mobile/` (FFI bridge that links your crate)
 - `android/` and `ios/` app templates
 - `bench-config.toml` configuration
@@ -75,6 +76,7 @@ cargo mobench build --target android
 ```
 
 This automatically:
+
 - Builds Rust libraries for all Android ABIs (arm64-v8a, armeabi-v7a, x86_64)
 - Generates UniFFI Kotlin bindings
 - Copies .so files to jniLibs
@@ -105,6 +107,7 @@ cargo mobench build --target ios
 ```
 
 This automatically:
+
 - Builds Rust libraries for iOS device + simulator
 - Generates UniFFI Swift bindings and C headers
 - Creates properly structured xcframework
@@ -142,6 +145,7 @@ cargo mobench run \
 ```
 
 The CLI will automatically:
+
 - Upload APK and test APK to BrowserStack
 - Schedule the test run
 - Wait for completion
@@ -171,11 +175,12 @@ cargo mobench run \
   --iterations 100 \
   --warmup 10 \
   --devices "iPhone 14-16" \
-  --ios-app target/ios/BenchRunner.ipa \
-  --ios-test-suite target/ios/BenchRunnerUITests.zip
+  --ios-app target/mobench/ios/BenchRunner.ipa \
+  --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip
 ```
 
 **IPA Signing Methods:**
+
 - `adhoc`: No Apple ID required, works for BrowserStack device testing
 - `development`: Requires Apple Developer account, for physical device testing
 
@@ -185,4 +190,4 @@ cargo mobench run \
 - If you change FFI types, the build process automatically regenerates bindings
 - Android emulator ABI is typically `x86_64` in Android Studio
 - BrowserStack credentials must be set via `BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY`
-- For developing this repo (not integrating the SDK), legacy `scripts/` are available but deprecated
+- For repository development, use the same `cargo mobench` workflow

@@ -15,8 +15,9 @@
 
 ## Architecture Outline
 
-- `mobench`: Orchestrates builds, packaging, upload, AppAutomate sessions, and result collation.
-- `bench-runner`: Minimal Rust harness compiled into mobile libs; exposes FFI entrypoints for target functions and collects timings.
+- `mobench`: CLI tool that orchestrates builds, packaging, upload, AppAutomate sessions, and result collation.
+- `mobench-sdk`: Core SDK library with timing harness (consolidated from the former `mobench-runner`), builders, registry, and codegen. Compiled into mobile libs; exposes FFI entrypoints for target functions and collects timings.
+- `mobench-macros`: Proc macro crate providing the `#[benchmark]` attribute for marking functions.
 - Mobile bindings:
   - Android: Kotlin wrapper + APK test harness embedding Rust lib (cargo-ndk); uses Espresso/Appium-style entrypoints for AppAutomate.
   - iOS: Swift wrapper + test host app/xcframework; invokes Rust via C-ABI bindings.
@@ -31,7 +32,7 @@
 
 ## Task Backlog
 
-- [x] Repo bootstrap: Cargo workspace, `mobench` binary crate, `bench-runner` library crate, example `sample-fns` crate.
+- [x] Repo bootstrap: Cargo workspace, `mobench` CLI crate, `mobench-sdk` library crate (timing module consolidated from former `mobench-runner`), `mobench-macros` proc macro crate, example `sample-fns` crate.
 - [x] Define FFI boundary: macro/attribute to mark benchmarkable Rust functions; export through C ABI; basic timing harness.
 - [x] Android packaging: cargo-ndk config, Kotlin wrapper module, minimal test/activity to trigger Rust bench entrypoint.
 - [x] iOS packaging: xcframework build script (cargo lipo or cargo-apple), C header generation (cbindgen), Swift wrapper, test host.
@@ -52,6 +53,6 @@
 
 ## In-Repo Placeholders (current)
 
-- Scripts: `scripts/build-android.sh`, `scripts/build-ios.sh` for manual/CI builds (require Android NDK / cargo-apple).
+- CLI: `cargo mobench build --target <android|ios>` for manual/CI builds (requires Android NDK/Xcode as appropriate).
 - Android demo app: `android/` Gradle project that loads the Rust demo cdylib (`sample-fns`) and displays results.
 - Workflow: `.github/workflows/mobile-bench.yml` manual build for Android; extend with BrowserStack upload/run and iOS job.

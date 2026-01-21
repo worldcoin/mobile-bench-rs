@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.MobileBench" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.{{PROJECT_NAME_PASCAL}}" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Customize your theme here. -->
     </style>
 </resources>
