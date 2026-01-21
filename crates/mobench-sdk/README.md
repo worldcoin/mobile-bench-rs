@@ -78,6 +78,7 @@ cargo mobench init --target android  # or ios, or both
 ```
 
 This creates:
+
 - `bench-mobile/` - FFI wrapper crate
 - `android/` or `ios/` - Mobile app projects
 - `bench-config.toml` - Configuration file
@@ -102,17 +103,25 @@ cargo mobench build --target android
 ### 4. Run on Devices
 
 Local device workflow (builds artifacts and writes the run spec; launch the app manually):
+
 ```bash
 cargo mobench run --target android --function my_benchmark
 ```
 
 BrowserStack:
+
 ```bash
 export BROWSERSTACK_USERNAME=your_username
 export BROWSERSTACK_ACCESS_KEY=your_key
 
 cargo mobench run --target android --function my_benchmark --devices "Google Pixel 7-13.0"
 ```
+
+## Examples (Repository)
+
+- `examples/basic-benchmark`: minimal SDK usage with `#[benchmark]`
+- `examples/ffi-benchmark`: full UniFFI surface with `run_benchmark` and FFI types
+- `crates/sample-fns`: repository demo library used by Android/iOS test apps
 
 ## API Documentation
 
@@ -326,9 +335,9 @@ fn btreemap_insert_1000() {
                │
        ┌───────┴───────┐
        ↓               ↓
-┌─────────────┐ ┌─────────────┐
-│ Android APK │ │  iOS IPA    │
-└──────┬──────┘ └──────┬──────┘
+┌─────────────┐ ┌───────────────────────┐
+│ Android APK │ │ iOS xcframework / IPA │
+└──────┬──────┘ └──────┬────────────────┘
        │               │
        └───────┬───────┘
                ↓

@@ -5,13 +5,9 @@ Minimal Android app that loads the Rust `sample-fns` cdylib and calls exported f
 ## Build steps
 1. Build Rust libs for Android:
    ```bash
-   scripts/build-android.sh
+   cargo mobench build --target android
    ```
-2. Copy `.so` outputs into the app:
-   ```bash
-   scripts/sync-android-libs.sh
-   ```
-3. Assemble the APK (requires Java + Gradle + Android SDK/NDK on PATH):
+2. Assemble the APK (requires Java + Gradle + Android SDK/NDK on PATH):
    ```bash
    cd android
    gradle :app:assembleDebug

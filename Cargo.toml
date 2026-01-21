@@ -6,13 +6,14 @@ members = [
     "crates/mobench-sdk",
     "crates/sample-fns",
     "examples/basic-benchmark",
+    "examples/ffi-benchmark",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.1.5"
+version = "0.1.6"
 
 [workspace.dependencies]
 anyhow = "1"
