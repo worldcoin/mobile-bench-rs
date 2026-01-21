@@ -499,7 +499,76 @@ cargo mobench run \
   - `--method development`: Requires Apple Developer account
 - `package-xcuitest`: Creates the XCUITest runner zip that BrowserStack uses to drive test automation. Outputs to `target/mobench/ios/BenchRunnerUITests.zip`
 
-## 9) Verification and Troubleshooting
+## 9) Device Selection Guide
+
+When benchmarking on BrowserStack, choosing appropriate devices helps ensure your code performs well across the spectrum of real-world hardware. Below are recommended devices for each performance tier.
+
+### Android Device Tiers
+
+| Tier | Example Device | BrowserStack Spec | Use Case |
+|------|----------------|-------------------|----------|
+| **Flagship** | Samsung Galaxy S24 Ultra | `"Samsung Galaxy S24 Ultra-14.0"` | Best-case performance, latest hardware |
+| **High** | Google Pixel 8 | `"Google Pixel 8-14.0"` | Modern high-end, clean Android |
+| **Medium-High** | Samsung Galaxy A54 | `"Samsung Galaxy A54-13.0"` | Popular mid-range, good baseline |
+| **Medium** | Samsung Galaxy A33 | `"Samsung Galaxy A33 5G-13.0"` | Budget-conscious users |
+| **Low** | Samsung Galaxy A13 | `"Samsung Galaxy A13-12.0"` | Entry-level smartphones |
+| **Lowest** | Samsung Galaxy A03s | `"Samsung Galaxy A03s-12.0"` | Worst-case performance testing |
+
+### iOS Device Tiers
+
+| Tier | Example Device | BrowserStack Spec | Use Case |
+|------|----------------|-------------------|----------|
+| **Flagship** | iPhone 15 Pro Max | `"iPhone 15 Pro Max-17"` | Best-case performance, A17 Pro chip |
+| **High** | iPhone 14 Pro | `"iPhone 14 Pro-17"` | Previous flagship, still powerful |
+| **Medium-High** | iPhone 13 | `"iPhone 13-17"` | Mainstream device, A15 chip |
+| **Medium** | iPhone 12 | `"iPhone 12-17"` | Older but still common |
+| **Low** | iPhone SE 2022 | `"iPhone SE 2022-17"` | Budget iPhone, A15 chip |
+| **Lowest** | iPhone 11 | `"iPhone 11-17"` | Oldest commonly supported |
+
+### Multi-Device Benchmarking
+
+Run benchmarks across multiple tiers to understand performance distribution:
+
+```bash
+# Android: Test across performance spectrum
+cargo mobench run \
+  --target android \
+  --function my_crate::my_benchmark \
+  --iterations 50 \
+  --warmup 5 \
+  --devices "Samsung Galaxy S24 Ultra-14.0" "Samsung Galaxy A54-13.0" "Samsung Galaxy A13-12.0" \
+  --release
+
+# iOS: Test across performance spectrum
+cargo mobench run \
+  --target ios \
+  --function my_crate::my_benchmark \
+  --iterations 50 \
+  --warmup 5 \
+  --devices "iPhone 15 Pro Max-17" "iPhone 13-17" "iPhone 11-17" \
+  --release \
+  --ios-app target/mobench/ios/BenchRunner.ipa \
+  --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip
+```
+
+### Validate Device Availability
+
+Before running, verify your device specs are valid:
+
+```bash
+# Validate specific devices
+cargo mobench devices --validate "Samsung Galaxy S24 Ultra-14.0" "iPhone 15 Pro Max-17"
+
+# List all available Android devices
+cargo mobench devices --platform android
+
+# List all available iOS devices
+cargo mobench devices --platform ios
+```
+
+**Tip**: Device availability on BrowserStack changes over time. Use `cargo mobench devices` to see currently available devices.
+
+## 10) Verification and Troubleshooting
 
 ### Check Prerequisites
 
