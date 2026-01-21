@@ -2,11 +2,10 @@
 
 Complete build instructions for Android and iOS targets.
 
-> **For SDK Integrators**: If you're importing `mobench-sdk` into your project, use the CLI commands:
-> - `cargo mobench build --target android` for Android
-> - `cargo mobench build --target ios` for iOS
+> **For SDK Integrators**: Use the CLI commands:
+> - `cargo mobench build --target android`
+> - `cargo mobench build --target ios`
 >
-> The scripts shown below are legacy tooling for developing this repository.
 > See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide.
 
 ## Table of Contents
@@ -77,8 +76,7 @@ xcodebuild -version
 ### Quick Start (Recommended)
 ```bash
 # Build everything and create APK in one command
-# For Android Studio emulators, use UNIFFI_ANDROID_ABI=x86_64
-UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
+cargo mobench build --target android
 
 # Install on connected device or emulator
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
@@ -91,8 +89,8 @@ adb shell am start -n dev.world.bench/.MainActivity
 
 #### Step 1: Build Rust Libraries + Bindings
 ```bash
-# ABI-aware binding generation to avoid UniFFI checksum mismatches.
-UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh
+# Build Rust libraries, generate bindings, and sync JNI libs.
+cargo mobench build --target android
 ```
 
 This compiles Rust code for three Android ABIs:
@@ -131,8 +129,7 @@ adb shell am start -n dev.world.bench/.MainActivity \
 ### Using Android Studio
 1. Build Rust libraries first:
    ```bash
-   ./scripts/build-android.sh
-   ./scripts/sync-android-libs.sh
+   cargo mobench build --target android
    ```
 
 2. Open the `android/` directory in Android Studio
@@ -146,15 +143,14 @@ adb shell am start -n dev.world.bench/.MainActivity \
 ### Rebuild After Code Changes
 ```bash
 # If Rust code changed
-./scripts/build-android.sh
-./scripts/sync-android-libs.sh
+cargo mobench build --target android
 
 # If only Kotlin/Java changed
 cd android && ./gradlew :app:assembleDebug
 
 # Full clean rebuild
 cargo clean
-./scripts/build-android-app.sh
+cargo mobench build --target android
 ```
 
 ## iOS Build
@@ -162,7 +158,7 @@ cargo clean
 ### Quick Start (Recommended)
 ```bash
 # Build Rust xcframework (includes automatic code signing)
-./scripts/build-ios.sh
+cargo mobench build --target ios
 
 # Generate Xcode project
 cd ios/BenchRunner
@@ -180,10 +176,10 @@ Then in Xcode:
 
 #### Step 1: Build Rust XCFramework
 ```bash
-./scripts/build-ios.sh
+cargo mobench build --target ios
 ```
 
-This script:
+This build step:
 1. Compiles Rust for iOS targets:
    - `aarch64-apple-ios` (physical devices)
    - `aarch64-apple-ios-sim` (M1+ Mac simulators)
@@ -216,7 +212,7 @@ This script:
 
 Output: `target/ios/sample_fns.xcframework` (signed)
 
-**Note**: The build script now includes automatic code signing. If signing fails for any reason, you can sign manually:
+**Note**: The build step includes automatic code signing. If signing fails for any reason, you can sign manually:
 ```bash
 codesign --force --deep --sign - target/ios/sample_fns.xcframework
 ```
@@ -276,7 +272,7 @@ xcrun simctl launch booted dev.world.bench \
 ### Rebuild After Code Changes
 ```bash
 # If Rust code changed (includes automatic signing)
-./scripts/build-ios.sh
+cargo mobench build --target ios
 
 # If Swift code changed, just rebuild in Xcode (⌘+B)
 
@@ -287,7 +283,7 @@ open BenchRunner.xcodeproj
 
 # Full clean rebuild
 cargo clean
-./scripts/build-ios.sh
+cargo mobench build --target ios
 cd ios/BenchRunner
 xcodegen generate
 # Clean in Xcode (⌘+Shift+K) then build (⌘+B)
@@ -308,7 +304,7 @@ xcodegen generate
 
 This makes C types (`RustBuffer`, `RustCallStatus`, etc.) available to Swift without explicit imports.
 
-**Code Signing**: The build script (`build-ios.sh`) automatically signs the xcframework. If you build manually or signing fails, sign with:
+**Code Signing**: The build step automatically signs the xcframework. If signing fails, sign with:
 ```bash
 codesign --force --deep --sign - target/ios/sample_fns.xcframework
 ```
@@ -334,7 +330,7 @@ cargo install cargo-ndk
 **Issue**: App crashes with `UnsatisfiedLinkError`
 ```bash
 # Ensure .so files are in the APK
-./scripts/sync-android-libs.sh
+cargo mobench build --target android
 cd android && ./gradlew clean assembleDebug
 
 # Verify .so files are in APK
@@ -361,7 +357,7 @@ codesign --force --deep --sign - target/ios/sample_fns.xcframework
 ```bash
 # Rebuild with correct structure
 rm -rf target/ios/sample_fns.xcframework
-./scripts/build-ios.sh
+cargo mobench build --target ios
 codesign --force --deep --sign - target/ios/sample_fns.xcframework
 
 # Clean Xcode build
@@ -388,12 +384,12 @@ xcodegen generate
 
 **Issue**: "framework 'ios-simulator-arm64' not found"
 - The framework binary or directory structure is incorrect
-- Rebuild: `./scripts/build-ios.sh`
+- Rebuild: `cargo mobench build --target ios`
 - Verify structure: Each framework should be named `sample_fns.framework`, not the platform identifier
 
 **Issue**: "Framework had an invalid CFBundleIdentifier"
 - Framework bundle ID conflicts with app bundle ID
-- Check `scripts/build-ios.sh` uses `dev.world.sample-fns` for framework
+- Check the iOS builder uses `dev.world.sample-fns` for the framework
 - App uses `dev.world.bench`
 
 ## UniFFI Bindings (Proc Macros)
@@ -407,7 +403,7 @@ If you modify FFI types in Rust (`crates/sample-fns/src/lib.rs`):
 cargo build -p sample-fns
 
 # Regenerate bindings from proc macros
-./scripts/generate-bindings.sh
+cargo mobench build --target android
 
 # This updates:
 # - android/app/src/main/java/uniffi/sample_fns/sample_fns.kt (Kotlin)
@@ -415,8 +411,8 @@ cargo build -p sample-fns
 # - ios/BenchRunner/BenchRunner/Generated/sample_fnsFFI.h (C header)
 
 # Then rebuild mobile apps
-UNIFFI_ANDROID_ABI=x86_64 ./scripts/build-android-app.sh  # Android
-./scripts/build-ios.sh          # iOS (includes automatic code signing)
+cargo mobench build --target android
+cargo mobench build --target ios
 ```
 
 **Example**: Adding a new FFI type:

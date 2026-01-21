@@ -1,112 +1,12 @@
-//! Basic benchmark examples demonstrating mobench-sdk usage
+//! Basic benchmark examples demonstrating mobench-sdk usage.
 //!
-//! This example crate shows how to write benchmarks using the mobench-sdk
-//! with the #[benchmark] attribute macro.
+//! This example keeps things minimal: register functions with #[benchmark] and
+//! let the SDK handle discovery and execution. See `examples/ffi-benchmark` for
+//! a full UniFFI-based FFI surface.
 
 use mobench_sdk::benchmark;
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
-
-/// Specification for a benchmark run.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
-pub struct BenchSpec {
-    pub name: String,
-    pub iterations: u32,
-    pub warmup: u32,
-}
-
-/// A single benchmark sample with timing information.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
-pub struct BenchSample {
-    pub duration_ns: u64,
-}
-
-/// Complete benchmark report with spec and timing samples.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
-pub struct BenchReport {
-    pub spec: BenchSpec,
-    pub samples: Vec<BenchSample>,
-}
-
-/// Error types for benchmark operations.
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
-pub enum BenchError {
-    #[error("iterations must be greater than zero")]
-    InvalidIterations,
-
-    #[error("unknown benchmark function: {name}")]
-    UnknownFunction { name: String },
-
-    #[error("benchmark execution failed: {reason}")]
-    ExecutionFailed { reason: String },
-}
-
-// Generate UniFFI scaffolding from proc macros
-uniffi::setup_scaffolding!();
-
-// Conversion from mobench-sdk types
-impl From<mobench_sdk::BenchSpec> for BenchSpec {
-    fn from(spec: mobench_sdk::BenchSpec) -> Self {
-        Self {
-            name: spec.name,
-            iterations: spec.iterations,
-            warmup: spec.warmup,
-        }
-    }
-}
-
-impl From<BenchSpec> for mobench_sdk::BenchSpec {
-    fn from(spec: BenchSpec) -> Self {
-        Self {
-            name: spec.name,
-            iterations: spec.iterations,
-            warmup: spec.warmup,
-        }
-    }
-}
-
-impl From<mobench_sdk::BenchSample> for BenchSample {
-    fn from(sample: mobench_sdk::BenchSample) -> Self {
-        Self {
-            duration_ns: sample.duration_ns,
-        }
-    }
-}
-
-impl From<mobench_sdk::RunnerReport> for BenchReport {
-    fn from(report: mobench_sdk::RunnerReport) -> Self {
-        Self {
-            spec: report.spec.into(),
-            samples: report.samples.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<mobench_sdk::BenchError> for BenchError {
-    fn from(err: mobench_sdk::BenchError) -> Self {
-        match err {
-            mobench_sdk::BenchError::Runner(runner_err) => BenchError::ExecutionFailed {
-                reason: runner_err.to_string(),
-            },
-            mobench_sdk::BenchError::UnknownFunction(name) => BenchError::UnknownFunction { name },
-            _ => BenchError::ExecutionFailed {
-                reason: err.to_string(),
-            },
-        }
-    }
-}
-
-/// Run a benchmark by name with the given specification
-///
-/// This is the main FFI entry point called from mobile platforms.
-/// It uses mobench-sdk's registry to discover and execute benchmarks.
-#[uniffi::export]
-pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
-    let sdk_spec: mobench_sdk::BenchSpec = spec.into();
-    let report = mobench_sdk::run_benchmark(sdk_spec)?;
-    Ok(report.into())
-}
 
 /// Compute fibonacci number iteratively.
 pub fn fibonacci(n: u32) -> u64 {
@@ -181,51 +81,19 @@ mod tests {
     }
 
     #[test]
-    fn test_run_benchmark_via_registry() {
-        // Test that benchmarks can be discovered via the registry
-        let benchmarks = mobench_sdk::discover_benchmarks();
+    fn test_discover_benchmarks() {
+        let benchmarks: Vec<&mobench_sdk::BenchFunction> = mobench_sdk::discover_benchmarks();
         assert!(benchmarks.len() >= 2, "Should find at least 2 benchmarks");
+    }
 
-        // Test execution via FFI using registry name
-        let spec = BenchSpec {
+    #[test]
+    fn test_run_benchmark_via_sdk() {
+        let spec = mobench_sdk::BenchSpec {
             name: "basic_benchmark::bench_fibonacci".to_string(),
             iterations: 3,
             warmup: 1,
         };
-        let report = run_benchmark(spec).unwrap();
+        let report = mobench_sdk::run_benchmark(spec).unwrap();
         assert_eq!(report.samples.len(), 3);
-    }
-
-    #[test]
-    fn test_run_benchmark_checksum() {
-        let spec = BenchSpec {
-            name: "basic_benchmark::bench_checksum".to_string(),
-            iterations: 2,
-            warmup: 0,
-        };
-        let report = run_benchmark(spec).unwrap();
-        assert_eq!(report.samples.len(), 2);
-    }
-
-    #[test]
-    fn test_unknown_function_error() {
-        let spec = BenchSpec {
-            name: "unknown".to_string(),
-            iterations: 1,
-            warmup: 0,
-        };
-        let result = run_benchmark(spec);
-        assert!(matches!(result, Err(BenchError::UnknownFunction { .. })));
-    }
-
-    #[test]
-    fn test_invalid_iterations() {
-        let spec = BenchSpec {
-            name: "basic_benchmark::bench_fibonacci".to_string(),
-            iterations: 0,
-            warmup: 0,
-        };
-        let result = run_benchmark(spec);
-        assert!(matches!(result, Err(BenchError::ExecutionFailed { .. })));
     }
 }
