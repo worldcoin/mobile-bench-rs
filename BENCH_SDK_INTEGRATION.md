@@ -283,8 +283,8 @@ fn delete_temp_file(file: TempFile) {
     file.delete();
 }
 
-#[benchmark(setup = create_temp_file, teardown = delete_temp_file, per_iteration)]
-pub fn write_benchmark(file: TempFile) {
+#[benchmark(setup = create_temp_file, teardown = delete_temp_file)]
+pub fn write_benchmark(file: &TempFile) {
     file.write_all(&[0u8; 1024]);
 }
 ```
@@ -297,7 +297,9 @@ pub fn write_benchmark(file: TempFile) {
 | `#[benchmark(setup = fn)]` | Expensive setup, read-only benchmark | Once | Shared reference |
 | `#[benchmark(setup = fn, per_iteration)]` | Benchmarks that mutate input | Per iteration | Owned value |
 | `#[benchmark(setup = fn, teardown = fn)]` | Resources needing cleanup | Once | Shared reference |
-| `#[benchmark(setup = fn, teardown = fn, per_iteration)]` | Mutating + cleanup | Per iteration | Owned value |
+
+Note: `per_iteration` and `teardown` cannot be combined, as `per_iteration` mode takes ownership of
+the setup value, making cleanup via teardown semantically problematic.
 
 ### Complete Example
 

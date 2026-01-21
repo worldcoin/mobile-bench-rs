@@ -166,7 +166,7 @@ fn db_query(db: &Database) {
 
 ## Release Notes
 
-### v0.1.15
+### v0.1.13
 
 - **Setup and teardown support**: `#[benchmark]` macro now supports `setup`, `teardown`, and `per_iteration` attributes for excluding expensive initialization from timing measurements
   ```rust
@@ -177,9 +177,6 @@ fn db_query(db: &Database) {
       // Only this is measured, not the setup
   }
   ```
-
-### v0.1.14
-
 - **New `check` command**: Validates prerequisites (NDK, Xcode, Rust targets, etc.) before building
   ```bash
   cargo mobench check --target android
@@ -189,6 +186,7 @@ fn db_query(db: &Database) {
 - **New `summary` command**: Displays benchmark result statistics (avg/min/max/median)
 - **New `devices` command**: Lists available BrowserStack devices with validation
 - **`--progress` flag**: Simplified step-by-step output for `build` and `run` commands
+- **Consolidated `mobench-runner` into `mobench-sdk`**: The timing harness is now part of `mobench-sdk` as the `timing` module, simplifying the dependency graph
 - **SDK improvements**:
   - `#[benchmark]` macro now validates function signature at compile time (no params, returns `()`)
   - New `debug_benchmarks!()` macro for verifying benchmark registration
@@ -199,10 +197,7 @@ fn db_query(db: &Database) {
   - Upload progress indication with file sizes
   - Dashboard link printed immediately when build starts
   - Improved device fuzzy matching with suggestions
-
-### v0.1.13
-
-- **Fix iOS XCUITest test name mismatch**: Changed BrowserStack `only-testing` filter to use `testLaunchAndCaptureBenchmarkReport` which matches what BrowserStack parses from the xctest bundle
+- **Fix iOS XCUITest test name mismatch**: Changed BrowserStack `only-testing` filter to use `testLaunchAndCaptureBenchmarkReport`
 
 ### v0.1.12
 
