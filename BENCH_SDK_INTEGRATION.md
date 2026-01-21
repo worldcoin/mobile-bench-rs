@@ -81,6 +81,9 @@ cargo mobench list
 
 # Verify registry, spec, and artifacts
 cargo mobench verify --smoke-test --function my_crate::my_benchmark
+
+# (Optional) Validate BrowserStack device specs before running
+cargo mobench devices --validate "Google Pixel 7-13.0"
 ```
 
 ## 1) Prerequisites
@@ -429,10 +432,9 @@ Build APK + test APK:
 
 ```bash
 cargo mobench build --target android
-cd android
-./gradlew :app:assembleDebugAndroidTest
-cd ..
 ```
+
+The CLI automatically builds both the app APK and the test APK (androidTest) required for BrowserStack Espresso testing.
 
 Run on BrowserStack:
 
