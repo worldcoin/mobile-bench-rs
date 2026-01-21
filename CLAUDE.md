@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.14):**
+**Published on crates.io as the mobench ecosystem (v0.1.15):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -355,9 +355,41 @@ fn my_expensive_operation() {
 
 The macro automatically registers functions at compile time via the `inventory` crate.
 
-**Macro Validation (v0.1.14+)**: The `#[benchmark]` macro now validates function signatures at compile time:
-- Functions must take no parameters
-- Functions must return `()` (unit type)
+**Setup and Teardown (v0.1.15+)**: The `#[benchmark]` macro supports setup and teardown for excluding expensive initialization from timing:
+
+```rust
+// Setup runs once before all iterations (not measured)
+fn setup_proof() -> ProofInput {
+    generate_complex_proof()  // Expensive, but not timed
+}
+
+#[benchmark(setup = setup_proof)]
+fn verify_proof(input: &ProofInput) {
+    verify(&input.proof);  // Only this is measured
+}
+
+// Per-iteration setup for benchmarks that mutate input
+fn generate_vec() -> Vec<i32> { (0..1000).collect() }
+
+#[benchmark(setup = generate_vec, per_iteration)]
+fn sort_benchmark(data: Vec<i32>) {
+    let mut data = data;
+    data.sort();  // Gets fresh data each iteration
+}
+
+// Setup + teardown for resources requiring cleanup
+fn setup_db() -> Database { Database::connect("test.db") }
+fn cleanup_db(db: Database) { db.close(); }
+
+#[benchmark(setup = setup_db, teardown = cleanup_db)]
+fn db_query(db: &Database) {
+    db.query("SELECT *");
+}
+```
+
+**Macro Validation (v0.1.14+)**: The `#[benchmark]` macro validates function signatures at compile time:
+- Simple benchmarks: no parameters, returns `()`
+- With setup: one parameter matching setup return type
 - Compile errors include helpful messages about requirements
 
 **Debugging Benchmark Registration**: Use the `debug_benchmarks!()` macro to verify benchmarks are properly registered:
@@ -385,8 +417,9 @@ fn main() {
 If no benchmarks appear, check:
 1. Functions are annotated with `#[benchmark]`
 2. Functions are `pub` (public visibility)
-3. Functions take no parameters and return `()`
-4. The `inventory` crate is in your dependencies
+3. Simple benchmarks: no parameters, returns `()`
+4. Setup benchmarks: one parameter matching setup return type
+5. The `inventory` crate is in your dependencies
 
 ### FFI Boundary (`examples/ffi-benchmark`)
 

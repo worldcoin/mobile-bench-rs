@@ -24,8 +24,8 @@ crate-type = ["cdylib", "staticlib", "lib"]
 
 ### Benchmark Function Requirements
 
-Functions marked with `#[benchmark]` must:
-- Take **no parameters** (setup should be inside the function)
+**Simple benchmarks** (no setup attribute) must:
+- Take **no parameters**
 - Return **()** (unit type) - use `std::hint::black_box()` for results
 - Be **public** (`pub fn`)
 
@@ -35,18 +35,37 @@ use mobench_sdk::benchmark;
 // CORRECT - no params, returns ()
 #[benchmark]
 pub fn my_benchmark() {
-    let input = create_input();  // Setup inside
+    let input = create_input();  // Setup inside (gets measured)
     let result = compute(input);
     std::hint::black_box(result);  // Consume result
 }
 
-// WRONG - has parameters (compile error)
+// WRONG - has parameters without setup (compile error)
 #[benchmark]
 pub fn bad_benchmark(data: &[u8]) { ... }
 
 // WRONG - returns a value (compile error)
 #[benchmark]
 pub fn bad_benchmark() -> u64 { 42 }
+```
+
+**Benchmarks with setup** must:
+- Take **one parameter** matching the setup function's return type
+- Return **()** (unit type)
+- Be **public** (`pub fn`)
+
+```rust
+// Setup function returns the input type
+fn create_test_data() -> Vec<u8> {
+    vec![0u8; 1_000_000]
+}
+
+// CORRECT - parameter type matches setup return type
+#[benchmark(setup = create_test_data)]
+pub fn process_data(data: &Vec<u8>) {
+    let sum: u64 = data.iter().map(|b| *b as u64).sum();
+    std::hint::black_box(sum);
+}
 ```
 
 ### Verify Your Setup
@@ -162,6 +181,176 @@ Benchmarks are identified by name at runtime. You can call them by:
 
 - Fully-qualified path (e.g., `my_crate::checksum_bench`)
 - Or suffix match (e.g., `checksum_bench`)
+
+## Setup and Teardown
+
+When benchmarking functions that require expensive initialization, you want to exclude the setup time from your measurements. The `#[benchmark]` macro supports `setup`, `teardown`, and `per_iteration` attributes for this purpose.
+
+### The Problem: Expensive Setup Getting Measured
+
+Without setup/teardown support, initialization is included in timing:
+
+```rust
+#[benchmark]
+pub fn verify_proof() {
+    // This 5-second proof generation is measured (bad!)
+    let proof = generate_complex_proof();
+
+    // This 10ms verification is what we actually want to measure
+    verify(&proof);
+}
+```
+
+### Solution 1: One-Time Setup (Default)
+
+Use the `setup` attribute to run initialization once before all iterations:
+
+```rust
+// Setup runs once, returns data passed to benchmark
+fn setup_proof() -> ProofInput {
+    generate_complex_proof()  // Takes 5 seconds, NOT measured
+}
+
+#[benchmark(setup = setup_proof)]
+pub fn verify_proof(input: &ProofInput) {
+    // Only this is measured - same input reused for all iterations
+    verify(&input.proof);
+}
+```
+
+**How it works:**
+1. `setup_proof()` is called once before timing starts
+2. The returned `ProofInput` is passed by reference to each iteration
+3. All iterations share the same setup data
+4. Setup time is excluded from measurements
+
+### Solution 2: Per-Iteration Setup
+
+For benchmarks that mutate their input, use `per_iteration` to get fresh data each iteration:
+
+```rust
+fn generate_random_vec() -> Vec<i32> {
+    (0..1000).map(|_| rand::random()).collect()
+}
+
+#[benchmark(setup = generate_random_vec, per_iteration)]
+pub fn sort_benchmark(data: Vec<i32>) {
+    let mut data = data;  // Takes ownership
+    data.sort();          // Mutates data - needs fresh input each time
+}
+```
+
+**How it works:**
+1. `generate_random_vec()` is called before EACH iteration
+2. Data is passed by value (ownership transfer)
+3. Each iteration gets fresh, unmutated data
+4. Setup time for each iteration is excluded from measurements
+
+### Solution 3: Setup with Teardown
+
+For resources that need cleanup (database connections, temporary files, etc.):
+
+```rust
+fn setup_db() -> Database {
+    Database::connect("test.db")
+}
+
+fn cleanup_db(db: Database) {
+    db.close();
+    std::fs::remove_file("test.db").ok();
+}
+
+#[benchmark(setup = setup_db, teardown = cleanup_db)]
+pub fn db_query(db: &Database) {
+    db.query("SELECT * FROM users");
+}
+```
+
+**How it works:**
+1. `setup_db()` is called once before timing starts
+2. Database reference is passed to each iteration
+3. After all iterations complete, `cleanup_db()` receives ownership
+4. Both setup and teardown are excluded from measurements
+
+### Combining Per-Iteration with Teardown
+
+```rust
+fn create_temp_file() -> TempFile {
+    TempFile::new("test_data.bin")
+}
+
+fn delete_temp_file(file: TempFile) {
+    file.delete();
+}
+
+#[benchmark(setup = create_temp_file, teardown = delete_temp_file, per_iteration)]
+pub fn write_benchmark(file: TempFile) {
+    file.write_all(&[0u8; 1024]);
+}
+```
+
+### Pattern Selection Guide
+
+| Pattern | When to Use | Setup Timing | Data Sharing |
+|---------|-------------|--------------|--------------|
+| `#[benchmark]` | Simple benchmarks, fast inline setup | N/A | N/A |
+| `#[benchmark(setup = fn)]` | Expensive setup, read-only benchmark | Once | Shared reference |
+| `#[benchmark(setup = fn, per_iteration)]` | Benchmarks that mutate input | Per iteration | Owned value |
+| `#[benchmark(setup = fn, teardown = fn)]` | Resources needing cleanup | Once | Shared reference |
+| `#[benchmark(setup = fn, teardown = fn, per_iteration)]` | Mutating + cleanup | Per iteration | Owned value |
+
+### Complete Example
+
+```rust
+use mobench_sdk::benchmark;
+
+// Simple benchmark - setup is fast enough to include
+#[benchmark]
+pub fn fibonacci() {
+    let n = 30;
+    let result = fib(n);
+    std::hint::black_box(result);
+}
+
+// Expensive one-time setup
+fn load_model() -> Model {
+    Model::load_from_disk("large_model.bin")  // 10 seconds
+}
+
+#[benchmark(setup = load_model)]
+pub fn inference(model: &Model) {
+    let output = model.predict(&[1.0, 2.0, 3.0]);
+    std::hint::black_box(output);
+}
+
+// Per-iteration setup for mutable operations
+fn create_shuffled_vec() -> Vec<i32> {
+    let mut v: Vec<i32> = (0..10000).collect();
+    v.shuffle(&mut rand::thread_rng());
+    v
+}
+
+#[benchmark(setup = create_shuffled_vec, per_iteration)]
+pub fn quicksort(mut data: Vec<i32>) {
+    data.sort_unstable();
+    std::hint::black_box(data);
+}
+
+// Setup + teardown for resource management
+fn open_connection() -> DbConnection {
+    DbConnection::connect("postgres://localhost/bench")
+}
+
+fn close_connection(conn: DbConnection) {
+    conn.execute("DROP TABLE IF EXISTS bench_temp");
+    conn.close();
+}
+
+#[benchmark(setup = open_connection, teardown = close_connection)]
+pub fn db_insert(conn: &DbConnection) {
+    conn.execute("INSERT INTO bench_temp VALUES (1, 'test')");
+}
+```
 
 ## 4) Scaffold mobile projects
 

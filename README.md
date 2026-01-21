@@ -93,7 +93,90 @@ CLI flags override config file values when provided.
 - `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide
 
+## Setup and Teardown
+
+For benchmarks that require expensive setup (like generating test data or initializing connections), you can exclude setup time from measurements using the `setup` attribute.
+
+### The Problem
+
+Without setup/teardown, expensive initialization is measured as part of your benchmark:
+
+```rust
+#[benchmark]
+fn verify_proof() {
+    let proof = generate_complex_proof();  // This is measured (bad!)
+    verify(&proof);                         // This is what we want to measure
+}
+```
+
+### The Solution
+
+Use the `setup` attribute to run initialization once before timing begins:
+
+```rust
+// Setup function runs once before all iterations (not timed)
+fn setup_proof() -> ProofInput {
+    generate_complex_proof()  // Takes 5 seconds, but not measured
+}
+
+#[benchmark(setup = setup_proof)]
+fn verify_proof(input: &ProofInput) {
+    verify(&input.proof);  // Only this is measured
+}
+```
+
+### Per-Iteration Setup
+
+For benchmarks that mutate their input, use `per_iteration` to get fresh data each iteration:
+
+```rust
+fn generate_random_vec() -> Vec<i32> {
+    (0..1000).map(|_| rand::random()).collect()
+}
+
+#[benchmark(setup = generate_random_vec, per_iteration)]
+fn sort_benchmark(data: Vec<i32>) {
+    let mut data = data;
+    data.sort();  // Each iteration gets a fresh unsorted vec
+}
+```
+
+### Setup with Teardown
+
+For resources that need cleanup (database connections, temp files, etc.):
+
+```rust
+fn setup_db() -> Database { Database::connect("test.db") }
+fn cleanup_db(db: Database) { db.close(); std::fs::remove_file("test.db").ok(); }
+
+#[benchmark(setup = setup_db, teardown = cleanup_db)]
+fn db_query(db: &Database) {
+    db.query("SELECT * FROM users");
+}
+```
+
+### When to Use Each Pattern
+
+| Pattern | Use Case |
+|---------|----------|
+| `#[benchmark]` | Simple benchmarks with no setup or fast inline setup |
+| `#[benchmark(setup = fn)]` | Expensive one-time setup, reused across iterations |
+| `#[benchmark(setup = fn, per_iteration)]` | Benchmarks that mutate input, need fresh data each time |
+| `#[benchmark(setup = fn, teardown = fn)]` | Resources requiring cleanup (connections, files, etc.) |
+
 ## Release Notes
+
+### v0.1.15
+
+- **Setup and teardown support**: `#[benchmark]` macro now supports `setup`, `teardown`, and `per_iteration` attributes for excluding expensive initialization from timing measurements
+  ```rust
+  fn setup_data() -> Vec<u8> { vec![0u8; 10_000_000] }
+
+  #[benchmark(setup = setup_data)]
+  fn process_data(data: &Vec<u8>) {
+      // Only this is measured, not the setup
+  }
+  ```
 
 ### v0.1.14
 
