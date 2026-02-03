@@ -1450,7 +1450,11 @@ fn resolve_run_spec(
         && !devices.is_empty()
         && ios_xcuitest.is_none()
     {
-        Some(package_ios_xcuitest_artifacts(release)?)
+        println!("Auto-packaging iOS artifacts for BrowserStack...");
+        let artifacts = package_ios_xcuitest_artifacts(release)?;
+        println!("  IPA: {}", artifacts.app.display());
+        println!("  XCUITest: {}", artifacts.test_suite.display());
+        Some(artifacts)
     } else {
         ios_xcuitest
     };

@@ -277,6 +277,25 @@ cargo mobench run \
   --output run-summary.json
 ```
 
+#### Automatic iOS Packaging
+
+When running iOS benchmarks on BrowserStack, mobench automatically packages the IPA and XCUITest runner if you don't provide `--ios-app` and `--ios-test-suite` flags:
+
+```bash
+# This auto-packages iOS artifacts:
+cargo mobench run --target ios --function my_fn --devices "iPhone 14-16" --release
+
+# Equivalent to manually running:
+cargo mobench build --target ios --release
+cargo mobench package-ipa --method adhoc
+cargo mobench package-xcuitest
+cargo mobench run --target ios --function my_fn --devices "iPhone 14-16" \
+  --ios-app target/mobench/ios/BenchRunner.ipa \
+  --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip
+```
+
+You can override auto-packaging by providing both `--ios-app` and `--ios-test-suite` together.
+
 #### Using Config Files
 
 ```bash
