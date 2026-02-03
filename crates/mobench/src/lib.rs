@@ -117,7 +117,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fmt::Write;
 use std::fs;
@@ -1679,6 +1679,91 @@ fn validate_artifacts_for_browserstack(
     }
 
     Ok(())
+}
+
+/// Extracted benchmark result for a single device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedBenchmarkResult {
+    /// Device name.
+    pub device: String,
+    /// Benchmark function name.
+    pub function: String,
+    /// Mean execution time in nanoseconds.
+    pub mean_ns: u64,
+    /// Number of samples collected.
+    pub sample_count: usize,
+    /// Standard deviation in nanoseconds (if calculable).
+    pub std_dev_ns: Option<u64>,
+    /// Minimum sample value in nanoseconds.
+    pub min_ns: Option<u64>,
+    /// Maximum sample value in nanoseconds.
+    pub max_ns: Option<u64>,
+}
+
+/// Extract a unified summary from per-device benchmark results.
+///
+/// This function takes the raw benchmark results from BrowserStack and produces
+/// a unified summary that's easier to work with programmatically.
+pub fn extract_benchmark_summary(
+    results: &HashMap<String, Vec<serde_json::Value>>,
+) -> Vec<ExtractedBenchmarkResult> {
+    let mut extracted = Vec::new();
+
+    for (device, benchmarks) in results {
+        for benchmark in benchmarks {
+            let function = benchmark
+                .get("function")
+                .and_then(|f| f.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let mean_ns = benchmark
+                .get("mean_ns")
+                .and_then(|m| m.as_u64())
+                .unwrap_or(0);
+
+            let samples: Vec<u64> = benchmark
+                .get("samples")
+                .and_then(|s| s.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|s| s.get("duration_ns").and_then(|d| d.as_u64()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let sample_count = samples.len();
+            let min_ns = samples.iter().copied().min();
+            let max_ns = samples.iter().copied().max();
+
+            let std_dev_ns = if sample_count > 1 {
+                let mean = mean_ns as f64;
+                let variance: f64 = samples
+                    .iter()
+                    .map(|&s| {
+                        let diff = s as f64 - mean;
+                        diff * diff
+                    })
+                    .sum::<f64>()
+                    / (sample_count - 1) as f64;
+                Some(variance.sqrt() as u64)
+            } else {
+                None
+            };
+
+            extracted.push(ExtractedBenchmarkResult {
+                device: device.clone(),
+                function,
+                mean_ns,
+                sample_count,
+                std_dev_ns,
+                min_ns,
+                max_ns,
+            });
+        }
+    }
+
+    extracted
 }
 
 fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path, test_apk: &Path) -> Result<RemoteRun> {
@@ -4309,5 +4394,66 @@ mod tests {
         assert_eq!(format_ms(Some(1_500_000)), "1.500ms");
         assert_eq!(format_ms(Some(1_500_000_000)), "1.500s");
         assert_eq!(format_ms(None), "-");
+    }
+}
+
+#[cfg(test)]
+mod result_extraction_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_extract_all_benchmark_results() {
+        let results: HashMap<String, Vec<serde_json::Value>> = [
+            (
+                "Pixel 7".to_string(),
+                vec![json!({
+                    "function": "my_crate::bench_fn",
+                    "mean_ns": 12345678,
+                    "samples": [{"duration_ns": 12345678}]
+                })],
+            ),
+            (
+                "iPhone 14".to_string(),
+                vec![json!({
+                    "function": "my_crate::bench_fn",
+                    "mean_ns": 11111111,
+                    "samples": [{"duration_ns": 11111111}]
+                })],
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let extracted = extract_benchmark_summary(&results);
+        assert_eq!(extracted.len(), 2);
+        assert!(extracted.iter().any(|r| r.device == "Pixel 7"));
+        assert!(extracted.iter().any(|r| r.device == "iPhone 14"));
+    }
+
+    #[test]
+    fn test_extract_with_multiple_samples() {
+        let results: HashMap<String, Vec<serde_json::Value>> = [(
+            "Device".to_string(),
+            vec![json!({
+                "function": "test_fn",
+                "mean_ns": 100,
+                "samples": [
+                    {"duration_ns": 80},
+                    {"duration_ns": 100},
+                    {"duration_ns": 120}
+                ]
+            })],
+        )]
+        .into_iter()
+        .collect();
+
+        let extracted = extract_benchmark_summary(&results);
+        assert_eq!(extracted.len(), 1);
+        let result = &extracted[0];
+        assert_eq!(result.sample_count, 3);
+        assert_eq!(result.min_ns, Some(80));
+        assert_eq!(result.max_ns, Some(120));
+        assert!(result.std_dev_ns.is_some());
     }
 }
