@@ -4467,3 +4467,68 @@ mod result_extraction_tests {
         assert!(result.std_dev_ns.is_some());
     }
 }
+
+#[cfg(test)]
+mod init_sdk_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_init_sdk_creates_mobench_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let output_dir = temp_dir.path().join("my-bench");
+
+        // Run init-sdk
+        cmd_init_sdk(
+            SdkTarget::Android,
+            "my-bench".to_string(),
+            output_dir.clone(),
+            false,
+        )
+        .unwrap();
+
+        // Check mobench.toml was created
+        let config_path = output_dir.join("mobench.toml");
+        assert!(
+            config_path.exists(),
+            "mobench.toml should be created by init-sdk"
+        );
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            contents.contains("my-bench"),
+            "Config should contain project name"
+        );
+        assert!(
+            contents.contains("[project]"),
+            "Config should have [project] section"
+        );
+        assert!(
+            contents.contains("[benchmarks]"),
+            "Config should have [benchmarks] section"
+        );
+    }
+
+    #[test]
+    fn test_init_sdk_mobench_toml_has_correct_library_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let output_dir = temp_dir.path().join("my-project");
+
+        cmd_init_sdk(
+            SdkTarget::Android,
+            "my-project".to_string(),
+            output_dir.clone(),
+            false,
+        )
+        .unwrap();
+
+        let config_path = output_dir.join("mobench.toml");
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+
+        // Library name should have hyphens replaced with underscores
+        assert!(
+            contents.contains("library_name = \"my_project\""),
+            "Config should have library_name with underscores"
+        );
+    }
+}
