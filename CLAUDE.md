@@ -237,6 +237,46 @@ cargo mobench run \
   --output run-summary.json
 ```
 
+#### Single-Command BrowserStack Flow
+
+The `run` command provides a complete single-command workflow for benchmarking on real devices:
+
+```bash
+# Android: Single command does everything
+cargo mobench run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --iterations 100 \
+  --warmup 10 \
+  --devices "Google Pixel 7-13.0" \
+  --release \
+  --output results.json
+
+# iOS: Single command also works (auto-packages IPA + XCUITest)
+cargo mobench run \
+  --target ios \
+  --function sample_fns::fibonacci \
+  --iterations 100 \
+  --warmup 10 \
+  --devices "iPhone 14-16" \
+  --release \
+  --output results.json
+```
+
+**What happens automatically:**
+1. Builds Rust native libraries for all required ABIs
+2. Generates UniFFI bindings (Kotlin/Swift)
+3. Packages mobile app (APK for Android, IPA for iOS)
+4. Packages test runner (androidTest APK or XCUITest zip)
+5. Uploads artifacts to BrowserStack
+6. Schedules and monitors the test run
+7. Fetches and displays results
+
+**No need to manually call:**
+- `cargo mobench build` (done automatically)
+- `cargo mobench package-ipa` (done automatically for iOS)
+- `cargo mobench package-xcuitest` (done automatically for iOS)
+
 #### BrowserStack Run (Android)
 
 ```bash

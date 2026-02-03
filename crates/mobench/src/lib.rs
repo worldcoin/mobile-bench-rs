@@ -149,7 +149,17 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Run a benchmark against a target platform (mobile integration stub for now).
+    /// Run benchmarks on real devices via BrowserStack.
+    ///
+    /// This is a single-command flow that:
+    /// 1. Builds Rust libraries for the target platform
+    /// 2. Packages mobile apps (APK/IPA) automatically
+    /// 3. Uploads to BrowserStack
+    /// 4. Schedules the benchmark run
+    /// 5. Fetches results when complete
+    ///
+    /// For iOS, IPA and XCUITest packages are created automatically unless
+    /// you provide --ios-app and --ios-test-suite to override.
     Run {
         #[arg(long, value_enum)]
         target: MobileTarget,
