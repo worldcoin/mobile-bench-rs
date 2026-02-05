@@ -7,10 +7,16 @@ The `mobench` CLI is the easiest way to benchmark your Rust code on mobile devic
 ## Installation
 
 ```bash
+cargo binstall mobench
+```
+
+Or build from source:
+
+```bash
 cargo install mobench
 ```
 
-Or use as a Cargo subcommand:
+Use as a Cargo subcommand:
 
 ```bash
 cargo install mobench
@@ -164,16 +170,22 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 - `--iterations <N>` - Number of iterations (default: 100)
 - `--warmup <N>` - Warmup iterations (default: 10)
 - `--devices <LIST>` - Comma-separated device list for BrowserStack
+- `--device-matrix <FILE>` - Load devices from a matrix YAML file
+- `--device-tags <TAG>` - Filter device matrix by tag (repeatable / comma-separated)
 - `--local-only` - Skip mobile builds (no device run)
 - `--config <FILE>` - Load run spec from config file
 - `--ios-app <FILE>` - iOS .ipa or zipped .app for BrowserStack
 - `--ios-test-suite <FILE>` - iOS XCUITest runner (.zip or .ipa)
-- `--output <FILE>` - Save results to JSON file (default: run-summary.json)
+- `--output <FILE>` - Save results to JSON file (default: target/mobench/results.json)
 - `--summary-csv` - Write CSV summary alongside JSON/Markdown
 - `--fetch` - Fetch BrowserStack results after completion
+- `--ci` - CI mode (step summary + regression exit codes)
+- `--baseline <FILE>` - Compare against baseline summary (non-zero on regressions)
+- `--regression-threshold-pct <N>` - Regression threshold percentage (default: 5.0)
+- `--junit <FILE>` - Write JUnit XML report
 
 **Outputs:**
-- JSON summary (default: `run-summary.json`)
+- JSON summary (default: `target/mobench/results.json`)
 - Markdown summary (same base name, `.md`)
 - CSV summary (same base name, `.csv`, when `--summary-csv` is set)
 
@@ -490,49 +502,35 @@ cargo mobench run \
 
 ### CI Integration
 
-```yaml
-# .github/workflows/mobile-bench.yml
-name: Mobile Benchmarks
+Generate a ready-to-edit workflow + action wrapper:
 
-on: [push]
-
-jobs:
-  benchmark:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install mobench
-        run: cargo install mobench
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r25c
-
-      - name: Build
-        run: cargo mobench build --target android --release
-
-      - name: Run benchmarks
-        env:
-          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
-          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
-        run: |
-          cargo mobench run \
-            --target android \
-            --function my_benchmark \
-            --devices "Google Pixel 7-13.0" \
-            --iterations 50 \
-            --release \
-            --output results.json \
-            --fetch
-
-      - name: Upload results
-        uses: actions/upload-artifact@v3
-        with:
-          name: benchmark-results
-          path: results.json
+```bash
+cargo mobench ci init
 ```
+
+This writes `.github/workflows/mobile-bench.yml` plus a local action in
+`.github/actions/mobench/` that handles caching, Android setup, and artifact upload.
+
+Example workflow excerpt:
+
+```yaml
+- uses: ./.github/actions/mobench
+  with:
+    run-args: >
+      --target android
+      --function my_benchmark
+      --devices "Google Pixel 7-13.0"
+      --iterations 50
+      --release
+      --fetch
+      --summary-csv
+    ci: true
+  env:
+    BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+    BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+```
+
+For CI dashboards, add `--junit path/to/results.junit.xml`.
 
 ## Workflow
 

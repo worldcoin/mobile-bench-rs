@@ -121,6 +121,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fmt::Write;
 use std::fs;
+use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
@@ -142,6 +143,14 @@ struct Cli {
     /// Print verbose output including all commands
     #[arg(long, short = 'v', global = true)]
     verbose: bool,
+
+    /// Assume yes to prompts and allow overwriting files
+    #[arg(long, global = true)]
+    yes: bool,
+
+    /// Disable interactive prompts (fail instead)
+    #[arg(long, global = true)]
+    non_interactive: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -171,15 +180,41 @@ enum Command {
         warmup: u32,
         #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
         devices: Vec<String>,
+        #[arg(long, help = "Device matrix YAML file to load device names from")]
+        device_matrix: Option<PathBuf>,
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Device tags to select from the device matrix (comma-separated or repeatable)"
+        )]
+        device_tags: Vec<String>,
         #[arg(long, help = "Optional path to config file")]
         config: Option<PathBuf>,
         #[arg(long, help = "Optional output path for JSON report")]
         output: Option<PathBuf>,
         #[arg(long, help = "Write CSV summary alongside JSON")]
         summary_csv: bool,
+        #[arg(
+            long,
+            help = "Enable CI mode (job summary, optional JUnit, regression exit codes)"
+        )]
+        ci: bool,
+        #[arg(long, help = "Baseline JSON summary to compare for regressions")]
+        baseline: Option<PathBuf>,
+        #[arg(
+            long,
+            default_value_t = 5.0,
+            help = "Regression threshold percentage when comparing to baseline"
+        )]
+        regression_threshold_pct: f64,
+        #[arg(long, help = "Write JUnit XML report to the given path")]
+        junit: Option<PathBuf>,
         #[arg(long, help = "Skip mobile builds and only run the host harness")]
         local_only: bool,
-        #[arg(long, help = "Build in release mode (recommended for BrowserStack to reduce APK size and upload time)")]
+        #[arg(
+            long,
+            help = "Build in release mode (recommended for BrowserStack to reduce APK size and upload time)"
+        )]
         release: bool,
         #[arg(
             long,
@@ -210,6 +245,34 @@ enum Command {
     Plan {
         #[arg(long, default_value = "device-matrix.yaml")]
         output: PathBuf,
+    },
+    /// Validate local + CI prerequisites and configuration.
+    Doctor {
+        #[arg(long, value_enum, default_value_t = SdkTarget::Both)]
+        target: SdkTarget,
+        #[arg(long, help = "Optional path to run config file to validate")]
+        config: Option<PathBuf>,
+        #[arg(long, help = "Optional path to device matrix YAML file to validate")]
+        device_matrix: Option<PathBuf>,
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Device tags to select from the device matrix (comma-separated or repeatable)"
+        )]
+        device_tags: Vec<String>,
+        #[arg(
+            long,
+            default_value_t = true,
+            help = "Validate BrowserStack credentials"
+        )]
+        browserstack: bool,
+        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
+        format: CheckOutputFormat,
+    },
+    /// CI helpers (workflow and action scaffolding).
+    Ci {
+        #[command(subcommand)]
+        command: CiCommand,
     },
     /// Fetch BrowserStack build artifacts (logs, session JSON) for CI.
     Fetch {
@@ -252,9 +315,15 @@ enum Command {
         target: SdkTarget,
         #[arg(long, help = "Build in release mode")]
         release: bool,
-        #[arg(long, help = "Output directory for mobile artifacts (default: target/mobench)")]
+        #[arg(
+            long,
+            help = "Output directory for mobile artifacts (default: target/mobench)"
+        )]
         output_dir: Option<PathBuf>,
-        #[arg(long, help = "Path to the benchmark crate (default: auto-detect bench-mobile/ or crates/{crate})")]
+        #[arg(
+            long,
+            help = "Path to the benchmark crate (default: auto-detect bench-mobile/ or crates/{crate})"
+        )]
         crate_path: Option<PathBuf>,
         #[arg(long, help = "Show simplified step-by-step progress output")]
         progress: bool,
@@ -265,7 +334,10 @@ enum Command {
         scheme: String,
         #[arg(long, value_enum, default_value = "adhoc", help = "Signing method")]
         method: IosSigningMethodArg,
-        #[arg(long, help = "Output directory for mobile artifacts (default: target/mobench)")]
+        #[arg(
+            long,
+            help = "Output directory for mobile artifacts (default: target/mobench)"
+        )]
         output_dir: Option<PathBuf>,
     },
     /// Package XCUITest runner for BrowserStack testing.
@@ -276,7 +348,10 @@ enum Command {
     PackageXcuitest {
         #[arg(long, default_value = "BenchRunner", help = "Xcode scheme to build")]
         scheme: String,
-        #[arg(long, help = "Output directory for mobile artifacts (default: target/mobench)")]
+        #[arg(
+            long,
+            help = "Output directory for mobile artifacts (default: target/mobench)"
+        )]
         output_dir: Option<PathBuf>,
     },
     /// List all discovered benchmark functions (Phase 1 MVP).
@@ -299,7 +374,10 @@ enum Command {
         smoke_test: bool,
         #[arg(long, help = "Function name to verify/smoke test")]
         function: Option<String>,
-        #[arg(long, help = "Output directory for mobile artifacts (default: target/mobench)")]
+        #[arg(
+            long,
+            help = "Output directory for mobile artifacts (default: target/mobench)"
+        )]
         output_dir: Option<PathBuf>,
     },
     /// Display summary statistics from a benchmark report JSON file.
@@ -350,6 +428,25 @@ enum Command {
         /// Output format (text or json)
         #[arg(long, default_value = "text")]
         format: CheckOutputFormat,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CiCommand {
+    /// Generate GitHub Actions workflow + local action wrapper.
+    Init {
+        #[arg(
+            long,
+            default_value = ".github/workflows/mobile-bench.yml",
+            help = "Path to write the workflow file"
+        )]
+        workflow: PathBuf,
+        #[arg(
+            long,
+            default_value = ".github/actions/mobench",
+            help = "Directory to write the local GitHub Action"
+        )]
+        action_dir: PathBuf,
     },
 }
 
@@ -553,9 +650,15 @@ pub fn run() -> Result<()> {
             iterations,
             warmup,
             devices,
+            device_matrix,
+            device_tags,
             config,
             output,
             summary_csv,
+            ci,
+            baseline,
+            regression_threshold_pct,
+            junit,
             local_only,
             release,
             ios_app,
@@ -573,6 +676,8 @@ pub fn run() -> Result<()> {
                 warmup,
                 devices,
                 config.as_deref(),
+                device_matrix.as_deref(),
+                device_tags,
                 ios_app,
                 ios_test_suite,
                 local_only,
@@ -621,7 +726,10 @@ pub fn run() -> Result<()> {
                             spec.devices.len()
                         );
                     }
-                    println!("  All {} device(s) validated successfully.", validation.valid.len());
+                    println!(
+                        "  All {} device(s) validated successfully.",
+                        validation.valid.len()
+                    );
                 }
             }
 
@@ -633,7 +741,10 @@ pub fn run() -> Result<()> {
                 println!("  Function:    {}", spec.function);
                 println!("  Iterations:  {}", spec.iterations);
                 println!("  Warmup:      {}", spec.warmup);
-                println!("  Profile:     {}", if release { "release" } else { "debug" });
+                println!(
+                    "  Profile:     {}",
+                    if release { "release" } else { "debug" }
+                );
                 if !spec.devices.is_empty() {
                     println!("  Devices:     {}", spec.devices.join(", "));
                 } else {
@@ -646,12 +757,21 @@ pub fn run() -> Result<()> {
                 println!("  Build output:    {}", output_dir.display());
                 match spec.target {
                     MobileTarget::Android => {
-                        println!("  Android APK:     {}/android/app/build/outputs/apk/", output_dir.display());
-                        println!("  bench_spec.json: {}/android/app/src/main/assets/", output_dir.display());
+                        println!(
+                            "  Android APK:     {}/android/app/build/outputs/apk/",
+                            output_dir.display()
+                        );
+                        println!(
+                            "  bench_spec.json: {}/android/app/src/main/assets/",
+                            output_dir.display()
+                        );
                     }
                     MobileTarget::Ios => {
                         println!("  iOS xcframework: {}/ios/", output_dir.display());
-                        println!("  bench_spec.json: {}/ios/BenchRunner/BenchRunner/Resources/", output_dir.display());
+                        println!(
+                            "  bench_spec.json: {}/ios/BenchRunner/BenchRunner/Resources/",
+                            output_dir.display()
+                        );
                         if let Some(ref xcui) = spec.ios_xcuitest {
                             println!("  iOS App IPA:     {}", xcui.app.display());
                             println!("  XCUITest Runner: {}", xcui.test_suite.display());
@@ -886,6 +1006,39 @@ pub fn run() -> Result<()> {
             run_summary.summary = build_summary(&run_summary)?;
             write_summary(&run_summary, &summary_paths, summary_csv)?;
 
+            let mut compare_report = None;
+            let mut regression_findings: Vec<RegressionFinding> = Vec::new();
+            if let Some(baseline_path) = baseline.as_deref() {
+                let report = compare_summaries(baseline_path, &summary_paths.json)?;
+                regression_findings = detect_regressions(&report, regression_threshold_pct);
+                compare_report = Some(report);
+            }
+
+            if ci {
+                if let Err(err) = append_github_step_summary_from_path(&summary_paths.markdown) {
+                    eprintln!("Warning: failed to publish job summary: {err}");
+                }
+                if let Some(report) = &compare_report {
+                    let compare_markdown = render_compare_markdown(report);
+                    if let Ok(summary_path) = env::var("GITHUB_STEP_SUMMARY") {
+                        if let Err(err) =
+                            append_github_step_summary(&compare_markdown, &summary_path)
+                        {
+                            eprintln!("Warning: failed to append comparison report: {err}");
+                        }
+                    }
+                }
+            } else if let Some(report) = &compare_report {
+                println!(
+                    "{compare_markdown}",
+                    compare_markdown = render_compare_markdown(report)
+                );
+            }
+
+            if let Some(junit_path) = junit.as_deref() {
+                write_junit_report(junit_path, &run_summary.summary, &regression_findings)?;
+            }
+
             // Print clear completion summary
             println!();
             println!("\u{2713} Benchmark complete!");
@@ -897,16 +1050,60 @@ pub fn run() -> Result<()> {
                 println!("  * {} (spreadsheet)", summary_paths.csv.display());
             }
             println!();
-            println!("View results: cat {} | jq '.summary'", summary_paths.json.display());
+            println!(
+                "View results: cat {} | jq '.summary'",
+                summary_paths.json.display()
+            );
+
+            if !regression_findings.is_empty() {
+                eprintln!();
+                eprintln!(
+                    "Detected {} performance regression(s) above {:.2}% threshold.",
+                    regression_findings.len(),
+                    regression_threshold_pct
+                );
+                for finding in &regression_findings {
+                    eprintln!(
+                        "  - {} :: {} ({}) {:+.2}%",
+                        finding.device, finding.function, finding.metric, finding.delta_pct
+                    );
+                }
+                std::process::exit(EXIT_REGRESSION);
+            }
         }
         Command::Init { output, target } => {
-            write_config_template(&output, target)?;
+            write_config_template(&output, target, cli.yes)?;
             println!("Wrote starter config to {:?}", output);
         }
         Command::Plan { output } => {
-            write_device_matrix_template(&output)?;
+            write_device_matrix_template(&output, cli.yes)?;
             println!("Wrote sample device matrix to {:?}", output);
         }
+        Command::Doctor {
+            target,
+            config,
+            device_matrix,
+            device_tags,
+            browserstack,
+            format,
+        } => {
+            cmd_doctor(
+                target,
+                config.as_deref(),
+                device_matrix.as_deref(),
+                device_tags,
+                browserstack,
+                format,
+            )?;
+        }
+        Command::Ci { command } => match command {
+            CiCommand::Init {
+                workflow,
+                action_dir,
+            } => {
+                cmd_ci_init(&workflow, &action_dir, cli.yes)?;
+            }
+        },
         Command::Fetch {
             target,
             build_id,
@@ -957,9 +1154,21 @@ pub fn run() -> Result<()> {
             crate_path,
             progress,
         } => {
-            cmd_build(target, release, output_dir, crate_path, cli.dry_run, cli.verbose, progress)?;
+            cmd_build(
+                target,
+                release,
+                output_dir,
+                crate_path,
+                cli.dry_run,
+                cli.verbose,
+                progress,
+            )?;
         }
-        Command::PackageIpa { scheme, method, output_dir } => {
+        Command::PackageIpa {
+            scheme,
+            method,
+            output_dir,
+        } => {
             cmd_package_ipa(&scheme, method, output_dir)?;
         }
         Command::PackageXcuitest { scheme, output_dir } => {
@@ -976,7 +1185,14 @@ pub fn run() -> Result<()> {
             function,
             output_dir,
         } => {
-            cmd_verify(target, spec_path, check_artifacts, smoke_test, function, output_dir)?;
+            cmd_verify(
+                target,
+                spec_path,
+                check_artifacts,
+                smoke_test,
+                function,
+                output_dir,
+            )?;
         }
         Command::Summary { report, format } => {
             cmd_summary(&report, format)?;
@@ -996,8 +1212,8 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn write_config_template(path: &Path, target: MobileTarget) -> Result<()> {
-    ensure_can_write(path)?;
+fn write_config_template(path: &Path, target: MobileTarget, overwrite: bool) -> Result<()> {
+    ensure_can_write(path, overwrite)?;
 
     let ios_xcuitest = if target == MobileTarget::Ios {
         Some(IosXcuitestArtifacts {
@@ -1027,8 +1243,8 @@ fn write_config_template(path: &Path, target: MobileTarget) -> Result<()> {
     write_file(path, contents.as_bytes())
 }
 
-fn write_device_matrix_template(path: &Path) -> Result<()> {
-    ensure_can_write(path)?;
+fn write_device_matrix_template(path: &Path, overwrite: bool) -> Result<()> {
+    ensure_can_write(path, overwrite)?;
 
     let matrix = DeviceMatrix {
         devices: vec![
@@ -1049,6 +1265,28 @@ fn write_device_matrix_template(path: &Path) -> Result<()> {
 
     let contents = serde_yaml::to_string(&matrix)?;
     write_file(path, contents.as_bytes())
+}
+
+const CI_WORKFLOW_TEMPLATE: &str = include_str!("../templates/ci/mobile-bench.yml");
+const CI_ACTION_TEMPLATE: &str = include_str!("../templates/ci/action.yml");
+const CI_ACTION_README_TEMPLATE: &str = include_str!("../templates/ci/action.README.md");
+
+fn cmd_ci_init(workflow_path: &Path, action_dir: &Path, overwrite: bool) -> Result<()> {
+    let action_yaml = action_dir.join("action.yml");
+    let action_readme = action_dir.join("README.md");
+
+    ensure_can_write(workflow_path, overwrite)?;
+    ensure_can_write(&action_yaml, overwrite)?;
+    ensure_can_write(&action_readme, overwrite)?;
+
+    write_file(workflow_path, CI_WORKFLOW_TEMPLATE.as_bytes())?;
+    write_file(&action_yaml, CI_ACTION_TEMPLATE.as_bytes())?;
+    write_file(&action_readme, CI_ACTION_README_TEMPLATE.as_bytes())?;
+
+    println!("Wrote workflow to {}", workflow_path.display());
+    println!("Wrote GitHub Action to {}", action_yaml.display());
+    println!("Wrote GitHub Action README to {}", action_readme.display());
+    Ok(())
 }
 
 fn fetch_browserstack_artifacts(
@@ -1422,6 +1660,8 @@ fn resolve_run_spec(
     warmup: u32,
     devices: Vec<String>,
     config: Option<&Path>,
+    device_matrix: Option<&Path>,
+    device_tags: Vec<String>,
     ios_app: Option<PathBuf>,
     ios_test_suite: Option<PathBuf>,
     local_only: bool,
@@ -1430,7 +1670,12 @@ fn resolve_run_spec(
     if let Some(cfg_path) = config {
         let cfg = load_config(cfg_path)?;
         let matrix = load_device_matrix(&cfg.device_matrix)?;
-        let device_names = match &cfg.device_tags {
+        let resolved_tags = if !device_tags.is_empty() {
+            Some(device_tags)
+        } else {
+            cfg.device_tags.clone()
+        };
+        let device_names = match resolved_tags.as_ref() {
             Some(tags) if !tags.is_empty() => filter_devices_by_tags(matrix.devices, tags)?,
             _ => matrix.devices.into_iter().map(|d| d.name).collect(),
         };
@@ -1446,18 +1691,42 @@ fn resolve_run_spec(
     }
 
     if function.trim().is_empty() {
-        bail!("function must not be empty; pass --function <crate::fn> or set function in the config file");
+        bail!(
+            "function must not be empty; pass --function <crate::fn> or set function in the config file"
+        );
     }
+
+    if device_matrix.is_some() && !devices.is_empty() {
+        bail!("--device-matrix cannot be combined with --devices; choose one source for devices");
+    }
+    if device_matrix.is_none() && !device_tags.is_empty() {
+        bail!("--device-tags requires --device-matrix or a config file with device tags");
+    }
+
+    let resolved_devices = if !devices.is_empty() {
+        devices
+    } else if let Some(matrix_path) = device_matrix {
+        let matrix = load_device_matrix(matrix_path)?;
+        if device_tags.is_empty() {
+            matrix.devices.into_iter().map(|d| d.name).collect()
+        } else {
+            filter_devices_by_tags(matrix.devices, &device_tags)?
+        }
+    } else {
+        Vec::new()
+    };
 
     let ios_xcuitest = match (ios_app, ios_test_suite) {
         (Some(app), Some(test_suite)) => Some(IosXcuitestArtifacts { app, test_suite }),
         (None, None) => None,
-        _ => bail!("both --ios-app and --ios-test-suite must be provided together; omit both to let mobench package iOS artifacts when running against devices"),
+        _ => bail!(
+            "both --ios-app and --ios-test-suite must be provided together; omit both to let mobench package iOS artifacts when running against devices"
+        ),
     };
 
     let ios_xcuitest = if target == MobileTarget::Ios
         && !local_only
-        && !devices.is_empty()
+        && !resolved_devices.is_empty()
         && ios_xcuitest.is_none()
     {
         println!("📦 Auto-packaging iOS artifacts for BrowserStack...");
@@ -1474,7 +1743,7 @@ fn resolve_run_spec(
         function,
         iterations,
         warmup,
-        devices,
+        devices: resolved_devices,
         browserstack: None,
         ios_xcuitest,
     })
@@ -1674,7 +1943,10 @@ fn validate_artifacts_for_browserstack(
                     missing.push(("iOS app IPA".to_string(), artifacts.app.clone()));
                 }
                 if !artifacts.test_suite.exists() {
-                    missing.push(("iOS XCUITest runner".to_string(), artifacts.test_suite.clone()));
+                    missing.push((
+                        "iOS XCUITest runner".to_string(),
+                        artifacts.test_suite.clone(),
+                    ));
                 }
             }
         }
@@ -1807,7 +2079,10 @@ fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path, test_apk: &Path) ->
     println!("BrowserStack build started!");
     println!("  Build ID: {}", run.build_id);
     println!("  Devices:  {}", spec.devices.join(", "));
-    println!("  Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}", run.build_id);
+    println!(
+        "  Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}",
+        run.build_id
+    );
     println!();
     println!("Waiting for results...");
 
@@ -1846,7 +2121,10 @@ fn trigger_browserstack_xcuitest(
     println!("BrowserStack build started!");
     println!("  Build ID: {}", run.build_id);
     println!("  Devices:  {}", spec.devices.join(", "));
-    println!("  Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}", run.build_id);
+    println!(
+        "  Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}",
+        run.build_id
+    );
     println!();
     println!("Waiting for results...");
 
@@ -1898,7 +2176,8 @@ fn resolve_browserstack_credentials(
     let missing_access_key = access_key.as_deref().map(str::is_empty).unwrap_or(true);
 
     if missing_username || missing_access_key {
-        let error_msg = browserstack::format_credentials_error(missing_username, missing_access_key);
+        let error_msg =
+            browserstack::format_credentials_error(missing_username, missing_access_key);
         bail!("{}", error_msg);
     }
 
@@ -1977,7 +2256,10 @@ fn validate_benchmark_function(project_root: &Path, function_name: &str) -> Resu
 
             // Also check without crate prefix (in case user specified just the function name)
             let simple_name = function_name.split("::").last().unwrap_or(function_name);
-            if benchmarks.iter().any(|b| b.ends_with(&format!("::{}", simple_name))) {
+            if benchmarks
+                .iter()
+                .any(|b| b.ends_with(&format!("::{}", simple_name)))
+            {
                 found_function = true;
                 break;
             }
@@ -1987,7 +2269,10 @@ fn validate_benchmark_function(project_root: &Path, function_name: &str) -> Resu
     if found_any_benchmarks && !found_function {
         // We found benchmarks but not the one requested - this is likely an error
         println!("=== Warning ===");
-        println!("  Benchmark function '{}' was not found in the source code.", function_name);
+        println!(
+            "  Benchmark function '{}' was not found in the source code.",
+            function_name
+        );
         println!("  Available benchmarks:");
         for dir in &search_dirs {
             if !dir.join("Cargo.toml").exists() {
@@ -2006,7 +2291,10 @@ fn validate_benchmark_function(project_root: &Path, function_name: &str) -> Resu
     } else if !found_any_benchmarks {
         // No benchmarks found at all - might be using direct dispatch
         println!("=== Note ===");
-        println!("  Could not validate benchmark function '{}' (no #[benchmark] functions found).", function_name);
+        println!(
+            "  Could not validate benchmark function '{}' (no #[benchmark] functions found).",
+            function_name
+        );
         println!("  This is normal for projects using direct FFI dispatch (like sample-fns).");
         println!();
     } else {
@@ -2043,12 +2331,16 @@ fn persist_mobile_spec(spec: &RunSpec, release: bool) -> Result<()> {
     // This ensures the requested benchmark function is always used, even when
     // the app is run via BrowserStack where file paths are different.
     let mobench_output_dir = root.join("target/mobench");
-    let apps_exist = mobench_output_dir.join("android").exists() || mobench_output_dir.join("ios").exists();
+    let apps_exist =
+        mobench_output_dir.join("android").exists() || mobench_output_dir.join("ios").exists();
 
     if let Err(e) = embed_spec_into_apps(&mobench_output_dir, spec) {
         // Only warn if the apps don't exist yet - they'll be created during build
         if apps_exist {
-            println!("Warning: Failed to embed bench spec into app bundles: {}", e);
+            println!(
+                "Warning: Failed to embed bench spec into app bundles: {}",
+                e
+            );
         }
     } else if apps_exist {
         println!("Embedded bench_spec.json in mobile app bundles");
@@ -2063,7 +2355,10 @@ fn persist_mobile_spec(spec: &RunSpec, release: bool) -> Result<()> {
 
     if let Err(e) = embed_meta_into_apps(&mobench_output_dir, spec, target_str, profile) {
         if apps_exist {
-            println!("Warning: Failed to embed bench meta into app bundles: {}", e);
+            println!(
+                "Warning: Failed to embed bench meta into app bundles: {}",
+                e
+            );
         }
     } else if apps_exist {
         println!("Embedded bench_meta.json with build metadata");
@@ -2084,7 +2379,12 @@ fn embed_spec_into_apps(output_dir: &Path, spec: &RunSpec) -> Result<()> {
 }
 
 /// Embeds build metadata (bench_meta.json) into Android assets and iOS bundle resources.
-fn embed_meta_into_apps(output_dir: &Path, spec: &RunSpec, target: &str, profile: &str) -> Result<()> {
+fn embed_meta_into_apps(
+    output_dir: &Path,
+    spec: &RunSpec,
+    target: &str,
+    profile: &str,
+) -> Result<()> {
     let embedded_spec = mobench_sdk::builders::EmbeddedBenchSpec {
         function: spec.function.clone(),
         iterations: spec.iterations,
@@ -2104,7 +2404,7 @@ struct SummaryPaths {
 fn resolve_summary_paths(output: Option<&Path>) -> Result<SummaryPaths> {
     let json = output
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| PathBuf::from("run-summary.json"));
+        .unwrap_or_else(|| PathBuf::from("target/mobench/results.json"));
     let markdown = json.with_extension("md");
     let csv = json.with_extension("csv");
     Ok(SummaryPaths {
@@ -2209,6 +2509,153 @@ fn write_summary(summary: &RunSummary, paths: &SummaryPaths, summary_csv: bool) 
         println!("Wrote CSV summary to {:?}", paths.csv);
     }
     Ok(())
+}
+
+const EXIT_REGRESSION: i32 = 2;
+
+fn append_github_step_summary_from_path(path: &Path) -> Result<()> {
+    let Ok(summary_path) = env::var("GITHUB_STEP_SUMMARY") else {
+        return Ok(());
+    };
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("reading summary markdown {:?}", path))?;
+    append_github_step_summary(&contents, &summary_path)
+}
+
+fn append_github_step_summary(contents: &str, summary_path: &str) -> Result<()> {
+    ensure_parent_dir(Path::new(summary_path))?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(summary_path)
+        .with_context(|| format!("opening GitHub step summary at {}", summary_path))?;
+    file.write_all(contents.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct RegressionFinding {
+    device: String,
+    function: String,
+    metric: String,
+    delta_pct: f64,
+}
+
+fn detect_regressions(report: &CompareReport, threshold_pct: f64) -> Vec<RegressionFinding> {
+    let mut findings = Vec::new();
+    for row in &report.rows {
+        if let Some(delta) = row.median_delta_pct {
+            if delta > threshold_pct {
+                findings.push(RegressionFinding {
+                    device: row.device.clone(),
+                    function: row.function.clone(),
+                    metric: "median".to_string(),
+                    delta_pct: delta,
+                });
+            }
+        }
+        if let Some(delta) = row.p95_delta_pct {
+            if delta > threshold_pct {
+                findings.push(RegressionFinding {
+                    device: row.device.clone(),
+                    function: row.function.clone(),
+                    metric: "p95".to_string(),
+                    delta_pct: delta,
+                });
+            }
+        }
+    }
+    findings
+}
+
+fn render_junit_report(summary: &SummaryReport, regressions: &[RegressionFinding]) -> String {
+    let mut output = String::new();
+    let mut failures_by_case: HashMap<(String, String), Vec<&RegressionFinding>> = HashMap::new();
+    for finding in regressions {
+        failures_by_case
+            .entry((finding.device.clone(), finding.function.clone()))
+            .or_default()
+            .push(finding);
+    }
+
+    let mut total_tests = 0;
+    let mut total_failures = 0;
+
+    for device in &summary.device_summaries {
+        total_tests += device.benchmarks.len();
+        for bench in &device.benchmarks {
+            if failures_by_case.contains_key(&(device.device.clone(), bench.function.clone())) {
+                total_failures += 1;
+            }
+        }
+    }
+
+    let _ = writeln!(output, r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+    let _ = writeln!(
+        output,
+        r#"<testsuite name="mobench" tests="{}" failures="{}">"#,
+        total_tests, total_failures
+    );
+
+    for device in &summary.device_summaries {
+        for bench in &device.benchmarks {
+            let case_name = format!("{}::{}", device.device, bench.function);
+            let time_secs = bench
+                .median_ns
+                .map(|ns| ns as f64 / 1_000_000_000.0)
+                .unwrap_or(0.0);
+            let _ = writeln!(
+                output,
+                r#"  <testcase name="{}" classname="{}" time="{:.6}">"#,
+                escape_xml(&case_name),
+                escape_xml(&device.device),
+                time_secs
+            );
+            if let Some(findings) =
+                failures_by_case.get(&(device.device.clone(), bench.function.clone()))
+            {
+                let mut details = String::new();
+                for finding in findings {
+                    let _ = writeln!(
+                        details,
+                        "{} regression: {:+.2}%",
+                        finding.metric, finding.delta_pct
+                    );
+                }
+                let _ = writeln!(
+                    output,
+                    r#"    <failure message="Performance regression">{}</failure>"#,
+                    escape_xml(details.trim())
+                );
+            }
+            let _ = writeln!(output, "  </testcase>");
+        }
+    }
+
+    let _ = writeln!(output, "</testsuite>");
+    output
+}
+
+fn write_junit_report(
+    path: &Path,
+    summary: &SummaryReport,
+    regressions: &[RegressionFinding],
+) -> Result<()> {
+    let report = render_junit_report(summary, regressions);
+    ensure_parent_dir(path)?;
+    write_file(path, report.as_bytes())?;
+    println!("Wrote JUnit report to {:?}", path);
+    Ok(())
+}
+
+fn escape_xml(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// Print a final summary with all artifact correlation information (C3).
@@ -2713,8 +3160,10 @@ fn run_android_build(_ndk_home: &str, release: bool) -> Result<mobench_sdk::Buil
 
 fn load_dotenv() {
     if let Ok(root) = repo_root() {
-        let path = root.join(".env.local");
-        let _ = dotenvy::from_path(path);
+        let env_paths = [root.join(".env"), root.join(".env.local")];
+        for path in env_paths {
+            let _ = dotenvy::from_path(path);
+        }
     }
 }
 
@@ -2751,8 +3200,8 @@ fn is_repo_root(candidate: &Path) -> bool {
             .is_file()
 }
 
-fn ensure_can_write(path: &Path) -> Result<()> {
-    if path.exists() {
+fn ensure_can_write(path: &Path, overwrite: bool) -> Result<()> {
+    if path.exists() && !overwrite {
         bail!("refusing to overwrite existing file: {:?}", path);
     }
     if let Some(parent) = path.parent()
@@ -2825,7 +3274,8 @@ fn cmd_build(
         let project_root = std::env::current_dir().context("Failed to get current directory")?;
         let crate_name = detect_bench_mobile_crate_name(&project_root)
             .unwrap_or_else(|_| "bench-mobile".to_string());
-        let effective_output_dir = output_dir.or_else(|| config_resolver.output_dir().map(|p| p.to_path_buf()));
+        let effective_output_dir =
+            output_dir.or_else(|| config_resolver.output_dir().map(|p| p.to_path_buf()));
 
         let build_config = mobench_sdk::BuildConfig {
             target: target.into(),
@@ -2859,10 +3309,9 @@ fn cmd_build(
             }
             SdkTarget::Ios => {
                 println!("[1/3] Building Rust library...");
-                let mut builder =
-                    mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
-                        .verbose(false)
-                        .dry_run(dry_run);
+                let mut builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
+                    .verbose(false)
+                    .dry_run(dry_run);
                 if let Some(ref dir) = effective_output_dir {
                     builder = builder.output_dir(dir);
                 }
@@ -2943,7 +3392,8 @@ fn cmd_build(
         .unwrap_or_else(|_| "bench-mobile".to_string()); // Fallback for legacy layouts
 
     // CLI flags override config file values
-    let effective_output_dir = output_dir.or_else(|| config_resolver.output_dir().map(|p| p.to_path_buf()));
+    let effective_output_dir =
+        output_dir.or_else(|| config_resolver.output_dir().map(|p| p.to_path_buf()));
 
     if let Some(ref dir) = effective_output_dir {
         println!("  Output: {:?}", dir);
@@ -3027,10 +3477,9 @@ fn cmd_build(
             // Build iOS
             println!("\nBuilding for iOS...");
             println!("  Building Rust library for iOS targets...");
-            let mut ios_builder =
-                mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
-                    .verbose(verbose)
-                    .dry_run(dry_run);
+            let mut ios_builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
+                .verbose(verbose)
+                .dry_run(dry_run);
             if let Some(ref dir) = effective_output_dir {
                 ios_builder = ios_builder.output_dir(dir);
             }
@@ -3164,7 +3613,10 @@ fn cmd_list() -> Result<()> {
         }
         println!();
         println!("Usage:");
-        println!("  cargo mobench run --target android --function {} --iterations 100", all_benchmarks.first().unwrap());
+        println!(
+            "  cargo mobench run --target android --function {} --iterations 100",
+            all_benchmarks.first().unwrap()
+        );
     }
 
     Ok(())
@@ -3182,7 +3634,11 @@ fn get_crate_name_from_cargo_toml(cargo_toml: &Path) -> Result<String> {
 }
 
 /// Package iOS app as IPA for distribution or testing
-fn cmd_package_ipa(scheme: &str, method: IosSigningMethodArg, output_dir: Option<PathBuf>) -> Result<()> {
+fn cmd_package_ipa(
+    scheme: &str,
+    method: IosSigningMethodArg,
+    output_dir: Option<PathBuf>,
+) -> Result<()> {
     println!("Packaging iOS app as IPA...");
     println!("  Scheme: {}", scheme);
     println!("  Method: {:?}", method);
@@ -3194,7 +3650,8 @@ fn cmd_package_ipa(scheme: &str, method: IosSigningMethodArg, output_dir: Option
     let crate_name = detect_bench_mobile_crate_name(&project_root)
         .unwrap_or_else(|_| "bench-mobile".to_string());
 
-    let mut builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+    let mut builder =
+        mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
     if let Some(ref dir) = output_dir {
         builder = builder.output_dir(dir);
     }
@@ -3228,7 +3685,8 @@ fn cmd_package_xcuitest(scheme: &str, output_dir: Option<PathBuf>) -> Result<()>
     let crate_name = detect_bench_mobile_crate_name(&project_root)
         .unwrap_or_else(|_| "bench-mobile".to_string());
 
-    let mut builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
+    let mut builder =
+        mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
     if let Some(ref dir) = output_dir {
         builder = builder.output_dir(dir);
     }
@@ -3270,7 +3728,9 @@ fn cmd_verify(
         println!("WARNING");
         println!("        No benchmarks found in registry.");
         println!("        This may be expected if benchmarks are in a separate crate.");
-        println!("        Tip: Add #[benchmark] attribute to functions and ensure mobench-sdk is linked.");
+        println!(
+            "        Tip: Add #[benchmark] attribute to functions and ensure mobench-sdk is linked."
+        );
         warnings += 1;
     } else {
         println!("OK ({} benchmark(s) found)", benchmarks.len());
@@ -3300,7 +3760,9 @@ fn cmd_verify(
     } else {
         // Try default locations
         let project_root = repo_root().unwrap_or_else(|_| PathBuf::from("."));
-        let output_base = output_dir.clone().unwrap_or_else(|| project_root.join("target/mobench"));
+        let output_base = output_dir
+            .clone()
+            .unwrap_or_else(|| project_root.join("target/mobench"));
         let default_paths = [
             output_base.join("android/app/src/main/assets/bench_spec.json"),
             output_base.join("ios/BenchRunner/BenchRunner/bench_spec.json"),
@@ -3318,8 +3780,10 @@ fn cmd_verify(
                 match validate_spec_file(path) {
                     Ok(spec) => {
                         println!("        {:?}", path);
-                        println!("          Function: {}, Iterations: {}, Warmup: {}",
-                            spec.name, spec.iterations, spec.warmup);
+                        println!(
+                            "          Function: {}, Iterations: {}, Warmup: {}",
+                            spec.name, spec.iterations, spec.warmup
+                        );
                     }
                     Err(e) => {
                         println!("        {:?} - INVALID: {}", path, e);
@@ -3339,7 +3803,9 @@ fn cmd_verify(
     print!("  [3/4] Checking build artifacts... ");
     if check_artifacts {
         let project_root = repo_root().unwrap_or_else(|_| PathBuf::from("."));
-        let output_base = output_dir.clone().unwrap_or_else(|| project_root.join("target/mobench"));
+        let output_base = output_dir
+            .clone()
+            .unwrap_or_else(|| project_root.join("target/mobench"));
 
         let mut artifacts_ok = true;
         let mut artifact_details = Vec::new();
@@ -3347,8 +3813,10 @@ fn cmd_verify(
         if let Some(ref t) = target {
             match t {
                 SdkTarget::Android | SdkTarget::Both => {
-                    let apk_path = output_base.join("android/app/build/outputs/apk/debug/app-debug.apk");
-                    let apk_release = output_base.join("android/app/build/outputs/apk/release/app-release-unsigned.apk");
+                    let apk_path =
+                        output_base.join("android/app/build/outputs/apk/debug/app-debug.apk");
+                    let apk_release = output_base
+                        .join("android/app/build/outputs/apk/release/app-release-unsigned.apk");
                     if apk_path.exists() {
                         artifact_details.push(format!("Android APK (debug): {:?}", apk_path));
                     } else if apk_release.exists() {
@@ -3407,7 +3875,8 @@ fn cmd_verify(
 
             if artifact_details.is_empty() {
                 artifacts_ok = false;
-                artifact_details.push("No artifacts found. Run 'cargo mobench build' first.".to_string());
+                artifact_details
+                    .push("No artifacts found. Run 'cargo mobench build' first.".to_string());
             }
         }
 
@@ -3440,7 +3909,11 @@ fn cmd_verify(
                     };
                     println!("        Function: {}", func);
                     println!("        Samples: {}", samples);
-                    println!("        Mean: {} ns ({:.3} ms)", mean_ns, mean_ns as f64 / 1_000_000.0);
+                    println!(
+                        "        Mean: {} ns ({:.3} ms)",
+                        mean_ns,
+                        mean_ns as f64 / 1_000_000.0
+                    );
                     checks_passed += 1;
                 }
                 Err(e) => {
@@ -3463,7 +3936,11 @@ fn cmd_verify(
                     };
                     println!("        Function: {} (auto-selected)", func);
                     println!("        Samples: {}", samples);
-                    println!("        Mean: {} ns ({:.3} ms)", mean_ns, mean_ns as f64 / 1_000_000.0);
+                    println!(
+                        "        Mean: {} ns ({:.3} ms)",
+                        mean_ns,
+                        mean_ns as f64 / 1_000_000.0
+                    );
                     checks_passed += 1;
                 }
                 Err(e) => {
@@ -3474,7 +3951,9 @@ fn cmd_verify(
             }
         } else {
             println!("SKIPPED (no benchmark function available)");
-            println!("        Tip: Use --function to specify a function, or add benchmarks with #[benchmark]");
+            println!(
+                "        Tip: Use --function to specify a function, or add benchmarks with #[benchmark]"
+            );
             warnings += 1;
         }
     } else {
@@ -3505,8 +3984,8 @@ fn cmd_verify(
 /// Handles both "name" and "function" field names for compatibility
 /// with different spec file formats.
 fn validate_spec_file(path: &Path) -> Result<mobench_sdk::BenchSpec> {
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("reading spec file {:?}", path))?;
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("reading spec file {:?}", path))?;
 
     // Try parsing directly first (standard BenchSpec format with "name" field)
     if let Ok(spec) = serde_json::from_str::<mobench_sdk::BenchSpec>(&contents) {
@@ -3522,8 +4001,8 @@ fn validate_spec_file(path: &Path) -> Result<mobench_sdk::BenchSpec> {
 
     // Fall back to generic Value parsing for "function" field format
     // (used by persist_mobile_spec and some older formats)
-    let value: Value = serde_json::from_str(&contents)
-        .with_context(|| format!("parsing spec file {:?}", path))?;
+    let value: Value =
+        serde_json::from_str(&contents).with_context(|| format!("parsing spec file {:?}", path))?;
 
     // Extract name from either "name" or "function" field
     let name = value
@@ -3568,8 +4047,7 @@ fn run_verify_smoke_test(function: &str) -> Result<mobench_sdk::RunnerReport> {
         warmup: 1,
     };
 
-    mobench_sdk::run_benchmark(spec)
-        .map_err(|e| anyhow!("smoke test failed: {}", e))
+    mobench_sdk::run_benchmark(spec).map_err(|e| anyhow!("smoke test failed: {}", e))
 }
 
 /// Display summary statistics from a benchmark report JSON file
@@ -3619,23 +4097,41 @@ fn extract_summary_data(value: &Value) -> Result<Vec<SummaryData>> {
     // Check if this is a RunSummary format (from `mobench run`)
     if value.get("summary").is_some() {
         let summary = &value["summary"];
-        let function = summary.get("function").and_then(|f| f.as_str()).map(String::from);
-        let iterations = summary.get("iterations").and_then(|i| i.as_u64()).map(|i| i as u32);
-        let warmup = summary.get("warmup").and_then(|w| w.as_u64()).map(|w| w as u32);
+        let function = summary
+            .get("function")
+            .and_then(|f| f.as_str())
+            .map(String::from);
+        let iterations = summary
+            .get("iterations")
+            .and_then(|i| i.as_u64())
+            .map(|i| i as u32);
+        let warmup = summary
+            .get("warmup")
+            .and_then(|w| w.as_u64())
+            .map(|w| w as u32);
 
         if let Some(device_summaries) = summary.get("device_summaries").and_then(|d| d.as_array()) {
             for device_summary in device_summaries {
-                let device = device_summary.get("device").and_then(|d| d.as_str()).map(String::from);
+                let device = device_summary
+                    .get("device")
+                    .and_then(|d| d.as_str())
+                    .map(String::from);
 
-                if let Some(benchmarks) = device_summary.get("benchmarks").and_then(|b| b.as_array()) {
+                if let Some(benchmarks) =
+                    device_summary.get("benchmarks").and_then(|b| b.as_array())
+                {
                     for bench in benchmarks {
-                        let bench_function = bench.get("function").and_then(|f| f.as_str()).map(String::from);
+                        let bench_function = bench
+                            .get("function")
+                            .and_then(|f| f.as_str())
+                            .map(String::from);
                         results.push(SummaryData {
                             source_file: "RunSummary".to_string(),
                             function: bench_function.or_else(|| function.clone()),
                             device: device.clone(),
                             os_version: None, // RunSummary doesn't include OS version directly
-                            sample_count: bench.get("samples").and_then(|s| s.as_u64()).unwrap_or(0) as usize,
+                            sample_count: bench.get("samples").and_then(|s| s.as_u64()).unwrap_or(0)
+                                as usize,
                             mean_ns: bench.get("mean_ns").and_then(|m| m.as_u64()),
                             median_ns: bench.get("median_ns").and_then(|m| m.as_u64()),
                             min_ns: bench.get("min_ns").and_then(|m| m.as_u64()),
@@ -3666,8 +4162,14 @@ fn extract_summary_data(value: &Value) -> Result<Vec<SummaryData>> {
             min_ns: stats.as_ref().map(|s| s.min_ns),
             max_ns: stats.as_ref().map(|s| s.max_ns),
             p95_ns: stats.as_ref().map(|s| s.p95_ns),
-            iterations: spec.get("iterations").and_then(|i| i.as_u64()).map(|i| i as u32),
-            warmup: spec.get("warmup").and_then(|w| w.as_u64()).map(|w| w as u32),
+            iterations: spec
+                .get("iterations")
+                .and_then(|i| i.as_u64())
+                .map(|i| i as u32),
+            warmup: spec
+                .get("warmup")
+                .and_then(|w| w.as_u64())
+                .map(|w| w as u32),
         });
     }
 
@@ -3681,11 +4183,20 @@ fn extract_summary_data(value: &Value) -> Result<Vec<SummaryData>> {
 
                     results.push(SummaryData {
                         source_file: "BrowserStack".to_string(),
-                        function: entry.get("function").and_then(|f| f.as_str()).map(String::from),
+                        function: entry
+                            .get("function")
+                            .and_then(|f| f.as_str())
+                            .map(String::from),
                         device: Some(device.clone()),
-                        os_version: entry.get("os_version").and_then(|o| o.as_str()).map(String::from),
+                        os_version: entry
+                            .get("os_version")
+                            .and_then(|o| o.as_str())
+                            .map(String::from),
                         sample_count: samples.len(),
-                        mean_ns: entry.get("mean_ns").and_then(|m| m.as_u64()).or_else(|| stats.as_ref().map(|s| s.mean_ns)),
+                        mean_ns: entry
+                            .get("mean_ns")
+                            .and_then(|m| m.as_u64())
+                            .or_else(|| stats.as_ref().map(|s| s.mean_ns)),
                         median_ns: stats.as_ref().map(|s| s.median_ns),
                         min_ns: stats.as_ref().map(|s| s.min_ns),
                         max_ns: stats.as_ref().map(|s| s.max_ns),
@@ -3706,17 +4217,35 @@ fn extract_summary_data(value: &Value) -> Result<Vec<SummaryData>> {
 
         results.push(SummaryData {
             source_file: "SessionReport".to_string(),
-            function: value.get("function").and_then(|f| f.as_str()).map(String::from),
-            device: value.get("device").and_then(|d| d.as_str()).map(String::from),
-            os_version: value.get("os_version").and_then(|o| o.as_str()).map(String::from),
+            function: value
+                .get("function")
+                .and_then(|f| f.as_str())
+                .map(String::from),
+            device: value
+                .get("device")
+                .and_then(|d| d.as_str())
+                .map(String::from),
+            os_version: value
+                .get("os_version")
+                .and_then(|o| o.as_str())
+                .map(String::from),
             sample_count: samples.len(),
-            mean_ns: value.get("mean_ns").and_then(|m| m.as_u64()).or_else(|| stats.as_ref().map(|s| s.mean_ns)),
+            mean_ns: value
+                .get("mean_ns")
+                .and_then(|m| m.as_u64())
+                .or_else(|| stats.as_ref().map(|s| s.mean_ns)),
             median_ns: stats.as_ref().map(|s| s.median_ns),
             min_ns: stats.as_ref().map(|s| s.min_ns),
             max_ns: stats.as_ref().map(|s| s.max_ns),
             p95_ns: stats.as_ref().map(|s| s.p95_ns),
-            iterations: value.get("iterations").and_then(|i| i.as_u64()).map(|i| i as u32),
-            warmup: value.get("warmup").and_then(|w| w.as_u64()).map(|w| w as u32),
+            iterations: value
+                .get("iterations")
+                .and_then(|i| i.as_u64())
+                .map(|i| i as u32),
+            warmup: value
+                .get("warmup")
+                .and_then(|w| w.as_u64())
+                .map(|w| w as u32),
         });
     }
 
@@ -3750,11 +4279,41 @@ fn print_summary_text(data: &[SummaryData]) {
         println!();
 
         println!("Statistics (nanoseconds):");
-        println!("  Mean:   {}", entry.mean_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
-        println!("  Median: {}", entry.median_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
-        println!("  Min:    {}", entry.min_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
-        println!("  Max:    {}", entry.max_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
-        println!("  P95:    {}", entry.p95_ns.map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0)).unwrap_or_else(|| "-".to_string()));
+        println!(
+            "  Mean:   {}",
+            entry
+                .mean_ns
+                .map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0))
+                .unwrap_or_else(|| "-".to_string())
+        );
+        println!(
+            "  Median: {}",
+            entry
+                .median_ns
+                .map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0))
+                .unwrap_or_else(|| "-".to_string())
+        );
+        println!(
+            "  Min:    {}",
+            entry
+                .min_ns
+                .map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0))
+                .unwrap_or_else(|| "-".to_string())
+        );
+        println!(
+            "  Max:    {}",
+            entry
+                .max_ns
+                .map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0))
+                .unwrap_or_else(|| "-".to_string())
+        );
+        println!(
+            "  P95:    {}",
+            entry
+                .p95_ns
+                .map(|v| format!("{} ({:.3} ms)", v, v as f64 / 1_000_000.0))
+                .unwrap_or_else(|| "-".to_string())
+        );
 
         if entry.iterations.is_some() || entry.warmup.is_some() {
             println!();
@@ -3782,7 +4341,9 @@ fn print_summary_json(data: &[SummaryData]) -> Result<()> {
 
 /// Print summary in CSV format
 fn print_summary_csv(data: &[SummaryData]) {
-    println!("function,device,os_version,sample_count,mean_ns,median_ns,min_ns,max_ns,p95_ns,iterations,warmup");
+    println!(
+        "function,device,os_version,sample_count,mean_ns,median_ns,min_ns,max_ns,p95_ns,iterations,warmup"
+    );
     for entry in data {
         println!(
             "{},{},{},{},{},{},{},{},{},{},{}",
@@ -3818,7 +4379,8 @@ fn cmd_devices(
             let missing_username = username.is_none() || username.as_deref() == Some("");
             let missing_access_key = access_key.is_none() || access_key.as_deref() == Some("");
 
-            let error_msg = browserstack::format_credentials_error(missing_username, missing_access_key);
+            let error_msg =
+                browserstack::format_credentials_error(missing_username, missing_access_key);
             bail!("{}", error_msg);
         }
     };
@@ -3962,10 +4524,178 @@ fn cmd_devices(
 /// This validates that all required tools and configurations are in place
 /// before attempting a build.
 fn cmd_check(target: SdkTarget, format: CheckOutputFormat) -> Result<()> {
-    let mut checks: Vec<PrereqCheck> = Vec::new();
-    let mut issues: Vec<String> = Vec::new();
+    let checks = collect_prereq_checks(target);
+    let issues = collect_issues(&checks);
 
-    // Common checks for both platforms
+    match format {
+        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
+        CheckOutputFormat::Json => print_check_results_json(&checks)?,
+    }
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "{} issue(s) found. Fix them and run 'cargo mobench check --target {:?}' again.",
+            issues.len(),
+            target
+        )
+    }
+}
+
+fn cmd_doctor(
+    target: SdkTarget,
+    config_path: Option<&Path>,
+    device_matrix_path: Option<&Path>,
+    device_tags: Vec<String>,
+    browserstack: bool,
+    format: CheckOutputFormat,
+) -> Result<()> {
+    let mut checks = collect_prereq_checks(target);
+
+    let mut config: Option<BenchConfig> = None;
+    if let Some(path) = config_path {
+        match load_config(path) {
+            Ok(cfg) => {
+                checks.push(PrereqCheck {
+                    name: "Run config".to_string(),
+                    passed: true,
+                    detail: Some(path.display().to_string()),
+                    fix_hint: None,
+                });
+                config = Some(cfg);
+            }
+            Err(err) => {
+                checks.push(PrereqCheck {
+                    name: "Run config".to_string(),
+                    passed: false,
+                    detail: Some(err.to_string()),
+                    fix_hint: Some(format!("Fix or regenerate config at {}", path.display())),
+                });
+            }
+        }
+    } else {
+        checks.push(PrereqCheck {
+            name: "Run config".to_string(),
+            passed: true,
+            detail: Some("skipped (no --config)".to_string()),
+            fix_hint: None,
+        });
+    }
+
+    let resolved_matrix_path = device_matrix_path
+        .map(PathBuf::from)
+        .or_else(|| config.as_ref().map(|cfg| cfg.device_matrix.clone()));
+    let resolved_tags = if !device_tags.is_empty() {
+        Some(device_tags)
+    } else {
+        config.as_ref().and_then(|cfg| cfg.device_tags.clone())
+    };
+
+    if resolved_matrix_path.is_none()
+        && resolved_tags
+            .as_ref()
+            .is_some_and(|tags| !tags.is_empty())
+    {
+        checks.push(PrereqCheck {
+            name: "Device matrix".to_string(),
+            passed: false,
+            detail: Some("device tags provided without a matrix file".to_string()),
+            fix_hint: Some("Provide --device-matrix or set device_matrix in the config".to_string()),
+        });
+    } else if let Some(path) = resolved_matrix_path.as_deref() {
+        match load_device_matrix(path) {
+            Ok(matrix) => {
+                if let Some(tags) = resolved_tags.as_ref().filter(|tags| !tags.is_empty()) {
+                    if let Err(err) = filter_devices_by_tags(matrix.devices, tags) {
+                        checks.push(PrereqCheck {
+                            name: "Device matrix".to_string(),
+                            passed: false,
+                            detail: Some(err.to_string()),
+                            fix_hint: Some(format!(
+                                "Update tags in {} or adjust --device-tags",
+                                path.display()
+                            )),
+                        });
+                    } else {
+                        checks.push(PrereqCheck {
+                            name: "Device matrix".to_string(),
+                            passed: true,
+                            detail: Some(format!("{} (tags: {})", path.display(), tags.join(", "))),
+                            fix_hint: None,
+                        });
+                    }
+                } else {
+                    checks.push(PrereqCheck {
+                        name: "Device matrix".to_string(),
+                        passed: true,
+                        detail: Some(path.display().to_string()),
+                        fix_hint: None,
+                    });
+                }
+            }
+            Err(err) => checks.push(PrereqCheck {
+                name: "Device matrix".to_string(),
+                passed: false,
+                detail: Some(err.to_string()),
+                fix_hint: Some(format!(
+                    "Fix or regenerate device matrix at {}",
+                    path.display()
+                )),
+            }),
+        }
+    } else {
+        checks.push(PrereqCheck {
+            name: "Device matrix".to_string(),
+            passed: true,
+            detail: Some("skipped (no --device-matrix)".to_string()),
+            fix_hint: None,
+        });
+    }
+
+    if browserstack {
+        let cfg_ref = config.as_ref().map(|cfg| &cfg.browserstack);
+        match resolve_browserstack_credentials(cfg_ref) {
+            Ok(creds) => checks.push(PrereqCheck {
+                name: "BrowserStack credentials".to_string(),
+                passed: true,
+                detail: Some(format!("user {}", creds.username)),
+                fix_hint: None,
+            }),
+            Err(err) => checks.push(PrereqCheck {
+                name: "BrowserStack credentials".to_string(),
+                passed: false,
+                detail: Some(err.to_string()),
+                fix_hint: Some("Set BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY".to_string()),
+            }),
+        }
+    } else {
+        checks.push(PrereqCheck {
+            name: "BrowserStack credentials".to_string(),
+            passed: true,
+            detail: Some("skipped (--browserstack=false)".to_string()),
+            fix_hint: None,
+        });
+    }
+
+    let issues = collect_issues(&checks);
+    match format {
+        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
+        CheckOutputFormat::Json => print_check_results_json(&checks)?,
+    }
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "{} issue(s) found. Fix them and rerun 'cargo mobench doctor'.",
+            issues.len()
+        )
+    }
+}
+
+fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
+    let mut checks: Vec<PrereqCheck> = Vec::new();
     checks.push(check_cargo());
     checks.push(check_rustup());
 
@@ -3988,14 +4718,12 @@ fn cmd_check(target: SdkTarget, format: CheckOutputFormat) -> Result<()> {
         }
         SdkTarget::Both => {
             println!("Checking prerequisites for Android and iOS...\n");
-            // Android
             checks.push(check_android_ndk_home());
             checks.push(check_cargo_ndk());
             checks.push(check_rust_target("aarch64-linux-android"));
             checks.push(check_rust_target("armv7-linux-androideabi"));
             checks.push(check_rust_target("x86_64-linux-android"));
             checks.push(check_jdk());
-            // iOS
             checks.push(check_xcode());
             checks.push(check_xcodegen());
             checks.push(check_rust_target("aarch64-apple-ios"));
@@ -4003,25 +4731,19 @@ fn cmd_check(target: SdkTarget, format: CheckOutputFormat) -> Result<()> {
         }
     }
 
-    // Collect issues
-    for check in &checks {
+    checks
+}
+
+fn collect_issues(checks: &[PrereqCheck]) -> Vec<String> {
+    let mut issues = Vec::new();
+    for check in checks {
         if !check.passed {
             if let Some(ref fix) = check.fix_hint {
                 issues.push(fix.clone());
             }
         }
     }
-
-    match format {
-        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
-        CheckOutputFormat::Json => print_check_results_json(&checks)?,
-    }
-
-    if issues.is_empty() {
-        Ok(())
-    } else {
-        bail!("{} issue(s) found. Fix them and run 'cargo mobench check --target {:?}' again.", issues.len(), target)
-    }
+    issues
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4074,9 +4796,7 @@ fn check_cargo() -> PrereqCheck {
 
     match result {
         Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             PrereqCheck {
                 name: "cargo installed".to_string(),
                 passed: true,
@@ -4146,7 +4866,10 @@ fn check_android_ndk_home() -> PrereqCheck {
             name: "ANDROID_NDK_HOME set".to_string(),
             passed: false,
             detail: None,
-            fix_hint: Some("Set ANDROID_NDK_HOME: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>".to_string()),
+            fix_hint: Some(
+                "Set ANDROID_NDK_HOME: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>"
+                    .to_string(),
+            ),
         },
     }
 }
@@ -4158,9 +4881,7 @@ fn check_cargo_ndk() -> PrereqCheck {
 
     match result {
         Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             PrereqCheck {
                 name: "cargo-ndk installed".to_string(),
                 passed: true,
@@ -4213,9 +4934,7 @@ fn check_rust_target(target: &str) -> PrereqCheck {
 
 fn check_jdk() -> PrereqCheck {
     // Try java -version
-    let result = std::process::Command::new("java")
-        .arg("-version")
-        .output();
+    let result = std::process::Command::new("java").arg("-version").output();
 
     match result {
         Ok(output) => {
@@ -4272,7 +4991,9 @@ fn check_xcode() -> PrereqCheck {
             name: "Xcode installed".to_string(),
             passed: false,
             detail: None,
-            fix_hint: Some("Install Xcode from the App Store or run: xcode-select --install".to_string()),
+            fix_hint: Some(
+                "Install Xcode from the App Store or run: xcode-select --install".to_string(),
+            ),
         },
     }
 }
@@ -4284,9 +5005,7 @@ fn check_xcodegen() -> PrereqCheck {
 
     match result {
         Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             PrereqCheck {
                 name: "xcodegen installed".to_string(),
                 passed: true,
@@ -4322,6 +5041,8 @@ mod tests {
             1,
             vec!["pixel".into()],
             None,
+            None,
+            Vec::new(),
             None,
             None,
             false,
@@ -4361,6 +5082,8 @@ mod tests {
             0,
             vec!["iphone".into()],
             None,
+            None,
+            Vec::new(),
             None,
             None,
             false,

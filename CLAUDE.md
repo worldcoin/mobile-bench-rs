@@ -234,7 +234,7 @@ cargo mobench run \
   --function sample_fns::fibonacci \
   --iterations 100 \
   --warmup 10 \
-  --output run-summary.json
+  --output target/mobench/results.json
 ```
 
 #### Single-Command BrowserStack Flow
@@ -250,7 +250,7 @@ cargo mobench run \
   --warmup 10 \
   --devices "Google Pixel 7-13.0" \
   --release \
-  --output results.json
+  --output target/mobench/results.json
 
 # iOS: Single command also works (auto-packages IPA + XCUITest)
 cargo mobench run \
@@ -260,7 +260,7 @@ cargo mobench run \
   --warmup 10 \
   --devices "iPhone 14-16" \
   --release \
-  --output results.json
+  --output target/mobench/results.json
 ```
 
 **What happens automatically:**
@@ -292,7 +292,7 @@ cargo mobench run \
   --warmup 5 \
   --devices "Google Pixel 7-13.0" \
   --release \
-  --output run-summary.json
+  --output target/mobench/results.json
 ```
 
 **Note on `--release` flag**: Debug builds can be very large (~544MB) which may cause BrowserStack upload timeouts. The `--release` flag builds in release mode, reducing APK size significantly (~133MB), and is recommended for all BrowserStack runs.
@@ -314,7 +314,7 @@ cargo mobench run \
   --release \
   --ios-app target/mobench/ios/BenchRunner.ipa \
   --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip \
-  --output run-summary.json
+  --output target/mobench/results.json
 ```
 
 #### Automatic iOS Packaging

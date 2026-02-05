@@ -1,0 +1,140 @@
+name: "mobench"
+description: "Run mobile benchmarks with mobench"
+inputs:
+  command:
+    description: "Command to invoke (default: cargo mobench run)"
+    required: false
+    default: "cargo mobench run"
+  run-args:
+    description: "Arguments passed to mobench run"
+    required: true
+  ci:
+    description: "Append --ci to the command"
+    required: false
+    default: "true"
+  install-mobench:
+    description: "Install mobench with cargo-binstall or cargo install"
+    required: false
+    default: "true"
+  mobench-version:
+    description: "Optional mobench version to install"
+    required: false
+    default: ""
+  install-cargo-ndk:
+    description: "Install cargo-ndk"
+    required: false
+    default: "true"
+  setup-android:
+    description: "Setup Android SDK/NDK"
+    required: false
+    default: "true"
+  ndk-version:
+    description: "Android NDK version"
+    required: false
+    default: "26.1.10909125"
+  android-packages:
+    description: "SDK packages to install via setup-android"
+    required: false
+    default: |
+      platform-tools
+      platforms;android-34
+      build-tools;34.0.0
+      ndk;26.1.10909125
+  cache-cargo:
+    description: "Cache cargo registry/git and target"
+    required: false
+    default: "true"
+  cache-android:
+    description: "Cache Android SDK/NDK"
+    required: false
+    default: "true"
+  artifact-name:
+    description: "Artifact name for upload"
+    required: false
+    default: "mobench-results"
+  artifact-path:
+    description: "Paths to upload as artifacts"
+    required: false
+    default: |
+      target/mobench/results.json
+      target/mobench/results.md
+      target/mobench/results.csv
+      target/browserstack
+runs:
+  using: "composite"
+  steps:
+    - name: Cache cargo
+      if: inputs.cache-cargo == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Cache Android SDK
+      if: inputs.cache-android == 'true' && inputs.setup-android == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.ANDROID_SDK_ROOT || env.ANDROID_HOME || '/usr/local/lib/android/sdk' }}
+        key: ${{ runner.os }}-android-${{ inputs.ndk-version }}
+        restore-keys: |
+          ${{ runner.os }}-android-
+
+    - name: Setup Android SDK/NDK
+      if: inputs.setup-android == 'true'
+      uses: android-actions/setup-android@v3
+      with:
+        packages: ${{ inputs.android-packages }}
+
+    - name: Install cargo-ndk
+      if: inputs.install-cargo-ndk == 'true'
+      shell: bash
+      run: |
+        if ! command -v cargo-ndk >/dev/null 2>&1; then
+          cargo install cargo-ndk
+        fi
+
+    - name: Install mobench
+      if: inputs.install-mobench == 'true'
+      shell: bash
+      run: |
+        if command -v mobench >/dev/null 2>&1 && command -v cargo-mobench >/dev/null 2>&1; then
+          exit 0
+        fi
+        version_flag=""
+        if [ -n "${{ inputs.mobench-version }}" ]; then
+          version_flag="--version ${{ inputs.mobench-version }}"
+        fi
+        if command -v cargo-binstall >/dev/null 2>&1; then
+          cargo binstall -y mobench $version_flag
+        else
+          cargo install cargo-binstall
+          cargo binstall -y mobench $version_flag
+        fi
+
+    - name: Run mobench
+      shell: bash
+      run: |
+        if [ -z "${ANDROID_SDK_ROOT:-}" ] && [ -n "${ANDROID_HOME:-}" ]; then
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+        fi
+        if [ -z "${ANDROID_SDK_ROOT:-}" ]; then
+          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+        fi
+        export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/${{ inputs.ndk-version }}"
+        extra_args=""
+        if [ "${{ inputs.ci }}" = "true" ]; then
+          extra_args="--ci"
+        fi
+        ${{ inputs.command }} $extra_args ${{ inputs.run-args }}
+
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.artifact-path }}
