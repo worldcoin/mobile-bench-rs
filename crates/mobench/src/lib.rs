@@ -121,6 +121,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fmt::Write;
 use std::fs;
+use std::io::BufWriter;
 use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -2492,9 +2493,12 @@ fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
 }
 
 fn write_summary(summary: &RunSummary, paths: &SummaryPaths, summary_csv: bool) -> Result<()> {
-    let json = serde_json::to_string_pretty(summary)?;
     ensure_parent_dir(&paths.json)?;
-    write_file(&paths.json, json.as_bytes())?;
+    let file = fs::File::create(&paths.json)
+        .with_context(|| format!("creating file {:?}", paths.json))?;
+    let writer = BufWriter::new(file);
+    serde_json::to_writer_pretty(writer, summary)
+        .with_context(|| format!("serializing run summary to {:?}", paths.json))?;
     println!("Wrote run summary to {:?}", paths.json);
 
     let markdown = render_markdown_summary(&summary.summary);
@@ -2980,22 +2984,36 @@ fn compute_sample_stats(samples: &[u64]) -> Option<SampleStats> {
         return None;
     }
 
-    let mut sorted = samples.to_vec();
-    sorted.sort_unstable();
-    let len = sorted.len();
+    // Avoid a full sort. We only need order statistics (median/p95) plus min/max/mean.
+    // `select_nth_unstable` is O(n) average vs O(n log n) for sorting.
+    let len = samples.len();
+    let mut values = samples.to_vec();
 
-    let mean_ns = (sorted.iter().map(|v| *v as u128).sum::<u128>() / len as u128) as u64;
+    let mut sum: u128 = 0;
+    let mut min_ns = u64::MAX;
+    let mut max_ns = 0u64;
+    for &v in &values {
+        sum += v as u128;
+        min_ns = min_ns.min(v);
+        max_ns = max_ns.max(v);
+    }
+    let mean_ns = (sum / len as u128) as u64;
+
+    let mid = len / 2;
+    values.select_nth_unstable(mid);
+    let upper_mid = values[mid];
     let median_ns = if len % 2 == 1 {
-        sorted[len / 2]
+        upper_mid
     } else {
-        let lower = sorted[(len / 2) - 1];
-        let upper = sorted[len / 2];
-        (lower + upper) / 2
+        // Median for even len is avg of the two middle order statistics.
+        // After selecting mid, values[..mid] contains the lower partition (unsorted).
+        let lower_mid = *values[..mid].iter().max().unwrap_or(&upper_mid);
+        (lower_mid + upper_mid) / 2
     };
+
     let p95_index = percentile_index(len, 0.95);
-    let p95_ns = sorted[p95_index];
-    let min_ns = sorted[0];
-    let max_ns = sorted[len - 1];
+    values.select_nth_unstable(p95_index);
+    let p95_ns = values[p95_index];
 
     Some(SampleStats {
         mean_ns,
@@ -5025,6 +5043,77 @@ fn check_xcodegen() -> PrereqCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compute_sample_stats_reference(samples: &[u64]) -> Option<SampleStats> {
+        if samples.is_empty() {
+            return None;
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        let len = sorted.len();
+        let mean_ns = (sorted.iter().map(|v| *v as u128).sum::<u128>() / len as u128) as u64;
+        let median_ns = if len % 2 == 1 {
+            sorted[len / 2]
+        } else {
+            let lower = sorted[(len / 2) - 1];
+            let upper = sorted[len / 2];
+            (lower + upper) / 2
+        };
+        let p95_index = percentile_index(len, 0.95);
+        let p95_ns = sorted[p95_index];
+        let min_ns = sorted[0];
+        let max_ns = sorted[len - 1];
+        Some(SampleStats {
+            mean_ns,
+            median_ns,
+            p95_ns,
+            min_ns,
+            max_ns,
+        })
+    }
+
+    #[test]
+    fn compute_sample_stats_matches_reference_for_various_inputs() {
+        let cases: Vec<Vec<u64>> = vec![
+            vec![1],
+            vec![2, 1],
+            vec![3, 1, 2],
+            vec![10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+            (0..101).map(|v| v as u64).collect(),
+            (0..100).map(|v| (v * 3 % 97) as u64).collect(),
+        ];
+        for samples in cases {
+            let fast = compute_sample_stats(&samples).expect("fast stats");
+            let reference = compute_sample_stats_reference(&samples).expect("ref stats");
+            assert_eq!(fast.mean_ns, reference.mean_ns);
+            assert_eq!(fast.median_ns, reference.median_ns);
+            assert_eq!(fast.p95_ns, reference.p95_ns);
+            assert_eq!(fast.min_ns, reference.min_ns);
+            assert_eq!(fast.max_ns, reference.max_ns);
+        }
+    }
+
+    #[test]
+    fn compute_sample_stats_matches_reference_for_pseudorandom_inputs() {
+        // Deterministic LCG to avoid adding a rand dependency.
+        let mut state: u64 = 0x1234_5678_9abc_def0;
+        for len in [1usize, 2, 3, 7, 8, 31, 32, 99, 100, 101, 1000] {
+            let mut samples = Vec::with_capacity(len);
+            for _ in 0..len {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                samples.push(state % 1_000_000);
+            }
+            let fast = compute_sample_stats(&samples).expect("fast stats");
+            let reference = compute_sample_stats_reference(&samples).expect("ref stats");
+            assert_eq!(fast.mean_ns, reference.mean_ns);
+            assert_eq!(fast.median_ns, reference.median_ns);
+            assert_eq!(fast.p95_ns, reference.p95_ns);
+            assert_eq!(fast.min_ns, reference.min_ns);
+            assert_eq!(fast.max_ns, reference.max_ns);
+        }
+    }
 
     // Register a lightweight benchmark for tests so the inventory contains at least one entry.
     #[mobench_sdk::benchmark]
