@@ -3160,11 +3160,11 @@ fn run_android_build(_ndk_home: &str, release: bool) -> Result<mobench_sdk::Buil
 
 fn load_dotenv() {
     if let Ok(root) = repo_root() {
-        let env_paths = [root.join(".env"), root.join(".env.local")];
-        for path in env_paths {
-            let _ = dotenvy::from_path(path);
-        }
+    let env_paths = [root.join(".env"), root.join(".env.local")];
+    for path in env_paths {
+        let _ = dotenvy::from_path(path);
     }
+}
 }
 
 fn repo_root() -> Result<PathBuf> {

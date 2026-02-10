@@ -33,8 +33,11 @@ Run `mobench run` in GitHub Actions with caching, Android SDK setup, and artifac
 - `install-cargo-ndk`: install `cargo-ndk` for Android builds.
 - `setup-android`: install Android SDK/NDK packages.
 - `ndk-version`: Android NDK version (used for setup + `ANDROID_NDK_HOME`).
+- `android-sdk-root`: Android SDK root directory on the runner.
 - `android-packages`: SDK packages list for `setup-android`.
 - `cache-cargo`: cache cargo registry/git and `target`.
+- `cache-target`: cache `target/` (can be large).
+- `cache-gradle`: cache `~/.gradle` wrapper and caches.
 - `cache-android`: cache Android SDK/NDK.
 - `artifact-name`: artifact name.
 - `artifact-path`: paths to upload.

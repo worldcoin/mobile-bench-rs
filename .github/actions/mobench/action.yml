@@ -32,6 +32,10 @@ inputs:
     description: "Android NDK version"
     required: false
     default: "26.1.10909125"
+  android-sdk-root:
+    description: "Android SDK root directory on the runner"
+    required: false
+    default: "/usr/local/lib/android/sdk"
   android-packages:
     description: "SDK packages to install via setup-android"
     required: false
@@ -42,6 +46,14 @@ inputs:
       ndk;26.1.10909125
   cache-cargo:
     description: "Cache cargo registry/git and target"
+    required: false
+    default: "true"
+  cache-target:
+    description: "Cache Cargo target/ directory (can be large)"
+    required: false
+    default: "true"
+  cache-gradle:
+    description: "Cache Gradle wrapper and caches (useful if mobench triggers Gradle builds)"
     required: false
     default: "true"
   cache-android:
@@ -70,16 +82,39 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
+
+    - name: Cache target
+      if: inputs.cache-target == 'true'
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-target-
+
+    - name: Cache Gradle
+      if: inputs.cache-gradle == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle/wrapper/gradle-wrapper.properties', '**/gradle.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
 
     - name: Cache Android SDK
       if: inputs.cache-android == 'true' && inputs.setup-android == 'true'
       uses: actions/cache@v4
       with:
-        path: ${{ env.ANDROID_SDK_ROOT || env.ANDROID_HOME || '/usr/local/lib/android/sdk' }}
+        path: |
+          ${{ inputs.android-sdk-root }}/ndk/${{ inputs.ndk-version }}
+          ${{ inputs.android-sdk-root }}/platform-tools
+          ${{ inputs.android-sdk-root }}/platforms
+          ${{ inputs.android-sdk-root }}/build-tools
         key: ${{ runner.os }}-android-${{ inputs.ndk-version }}
         restore-keys: |
           ${{ runner.os }}-android-
@@ -102,7 +137,7 @@ runs:
       if: inputs.install-mobench == 'true'
       shell: bash
       run: |
-        if command -v mobench >/dev/null 2>&1 && command -v cargo-mobench >/dev/null 2>&1; then
+        if command -v cargo-mobench >/dev/null 2>&1 || command -v mobench >/dev/null 2>&1; then
           exit 0
         fi
         version_flag=""
@@ -119,13 +154,9 @@ runs:
     - name: Run mobench
       shell: bash
       run: |
-        if [ -z "${ANDROID_SDK_ROOT:-}" ] && [ -n "${ANDROID_HOME:-}" ]; then
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-        fi
-        if [ -z "${ANDROID_SDK_ROOT:-}" ]; then
-          export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
-        fi
-        export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/${{ inputs.ndk-version }}"
+        export ANDROID_SDK_ROOT="${{ inputs.android-sdk-root }}"
+        export ANDROID_HOME="${{ inputs.android-sdk-root }}"
+        export ANDROID_NDK_HOME="${{ inputs.android-sdk-root }}/ndk/${{ inputs.ndk-version }}"
         extra_args=""
         if [ "${{ inputs.ci }}" = "true" ]; then
           extra_args="--ci"
