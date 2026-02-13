@@ -234,6 +234,128 @@ pub struct BenchReport {
     pub samples: Vec<BenchSample>,
 }
 
+impl BenchReport {
+    /// Returns the mean (average) duration in nanoseconds.
+    #[must_use]
+    pub fn mean_ns(&self) -> f64 {
+        if self.samples.is_empty() {
+            return 0.0;
+        }
+        let sum: u64 = self.samples.iter().map(|s| s.duration_ns).sum();
+        sum as f64 / self.samples.len() as f64
+    }
+
+    /// Returns the median duration in nanoseconds.
+    #[must_use]
+    pub fn median_ns(&self) -> f64 {
+        if self.samples.is_empty() {
+            return 0.0;
+        }
+        let mut sorted: Vec<u64> = self.samples.iter().map(|s| s.duration_ns).collect();
+        sorted.sort_unstable();
+        let len = sorted.len();
+        if len % 2 == 0 {
+            (sorted[len / 2 - 1] + sorted[len / 2]) as f64 / 2.0
+        } else {
+            sorted[len / 2] as f64
+        }
+    }
+
+    /// Returns the standard deviation in nanoseconds (sample std dev, n-1).
+    #[must_use]
+    pub fn std_dev_ns(&self) -> f64 {
+        if self.samples.len() < 2 {
+            return 0.0;
+        }
+        let mean = self.mean_ns();
+        let variance: f64 = self
+            .samples
+            .iter()
+            .map(|s| {
+                let diff = s.duration_ns as f64 - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / (self.samples.len() - 1) as f64;
+        variance.sqrt()
+    }
+
+    /// Returns the given percentile (0-100) in nanoseconds.
+    #[must_use]
+    pub fn percentile_ns(&self, p: f64) -> f64 {
+        if self.samples.is_empty() {
+            return 0.0;
+        }
+        let mut sorted: Vec<u64> = self.samples.iter().map(|s| s.duration_ns).collect();
+        sorted.sort_unstable();
+        let p = p.clamp(0.0, 100.0) / 100.0;
+        let index = (p * (sorted.len() - 1) as f64).round() as usize;
+        sorted[index.min(sorted.len() - 1)] as f64
+    }
+
+    /// Returns the minimum duration in nanoseconds.
+    #[must_use]
+    pub fn min_ns(&self) -> u64 {
+        self.samples
+            .iter()
+            .map(|s| s.duration_ns)
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Returns the maximum duration in nanoseconds.
+    #[must_use]
+    pub fn max_ns(&self) -> u64 {
+        self.samples
+            .iter()
+            .map(|s| s.duration_ns)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Returns a statistical summary of the benchmark results.
+    #[must_use]
+    pub fn summary(&self) -> BenchSummary {
+        BenchSummary {
+            name: self.spec.name.clone(),
+            iterations: self.samples.len() as u32,
+            warmup: self.spec.warmup,
+            mean_ns: self.mean_ns(),
+            median_ns: self.median_ns(),
+            std_dev_ns: self.std_dev_ns(),
+            min_ns: self.min_ns(),
+            max_ns: self.max_ns(),
+            p95_ns: self.percentile_ns(95.0),
+            p99_ns: self.percentile_ns(99.0),
+        }
+    }
+}
+
+/// Statistical summary of benchmark results.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BenchSummary {
+    /// Name of the benchmark.
+    pub name: String,
+    /// Number of measured iterations.
+    pub iterations: u32,
+    /// Number of warmup iterations.
+    pub warmup: u32,
+    /// Mean duration in nanoseconds.
+    pub mean_ns: f64,
+    /// Median duration in nanoseconds.
+    pub median_ns: f64,
+    /// Standard deviation in nanoseconds.
+    pub std_dev_ns: f64,
+    /// Minimum duration in nanoseconds.
+    pub min_ns: u64,
+    /// Maximum duration in nanoseconds.
+    pub max_ns: u64,
+    /// 95th percentile in nanoseconds.
+    pub p95_ns: f64,
+    /// 99th percentile in nanoseconds.
+    pub p99_ns: f64,
+}
+
 /// Errors that can occur during benchmark execution.
 ///
 /// # Example
@@ -558,7 +680,10 @@ mod tests {
     #[test]
     fn rejects_zero_iterations() {
         let result = BenchSpec::new("test", 0, 10);
-        assert!(matches!(result, Err(TimingError::NoIterations { count: 0 })));
+        assert!(matches!(
+            result,
+            Err(TimingError::NoIterations { count: 0 })
+        ));
     }
 
     #[test]
@@ -647,9 +772,7 @@ mod tests {
                 SETUP_COUNT.fetch_add(1, Ordering::SeqCst);
                 "resource"
             },
-            |_resource| {
-                Ok(())
-            },
+            |_resource| Ok(()),
             |_resource| {
                 TEARDOWN_COUNT.fetch_add(1, Ordering::SeqCst);
             },

@@ -60,11 +60,23 @@ pub fn generate_project(config: &InitConfig) -> Result<PathBuf, BenchError> {
             generate_android_project(output_dir, &project_slug, default_function)?;
         }
         Target::Ios => {
-            generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix, default_function)?;
+            generate_ios_project(
+                output_dir,
+                &project_slug,
+                &project_pascal,
+                &bundle_prefix,
+                default_function,
+            )?;
         }
         Target::Both => {
             generate_android_project(output_dir, &project_slug, default_function)?;
-            generate_ios_project(output_dir, &project_slug, &project_pascal, &bundle_prefix, default_function)?;
+            generate_ios_project(
+                output_dir,
+                &project_slug,
+                &project_pascal,
+                &bundle_prefix,
+                default_function,
+            )?;
         }
     }
 
@@ -343,7 +355,10 @@ pub fn generate_android_project(
 /// This function moves:
 /// - MainActivity.kt from `app/src/main/java/` to `app/src/main/java/{package_path}/`
 /// - MainActivityTest.kt from `app/src/androidTest/java/` to `app/src/androidTest/java/{package_path}/`
-fn move_kotlin_files_to_package_dir(android_dir: &Path, package_name: &str) -> Result<(), BenchError> {
+fn move_kotlin_files_to_package_dir(
+    android_dir: &Path,
+    package_name: &str,
+) -> Result<(), BenchError> {
     // Convert package name to directory path (e.g., "dev.world.my_project" -> "dev/world/my_project")
     let package_path = package_name.replace('.', "/");
 
@@ -420,7 +435,8 @@ pub fn generate_ios_project(
     // iOS bundle identifiers should not contain hyphens or underscores
     let sanitized_bundle_prefix = {
         let parts: Vec<&str> = bundle_prefix.split('.').collect();
-        parts.iter()
+        parts
+            .iter()
             .map(|part| sanitize_bundle_id_component(part))
             .collect::<Vec<_>>()
             .join(".")
@@ -542,15 +558,28 @@ fn fibonacci(n: u32) -> u64 {
 
 /// File extensions that should be processed for template variable substitution
 const TEMPLATE_EXTENSIONS: &[&str] = &[
-    "gradle", "xml", "kt", "java", "swift", "yml", "yaml", "json", "toml", "md", "txt", "h", "m",
-    "plist", "pbxproj", "xcscheme", "xcworkspacedata", "entitlements", "modulemap",
+    "gradle",
+    "xml",
+    "kt",
+    "java",
+    "swift",
+    "yml",
+    "yaml",
+    "json",
+    "toml",
+    "md",
+    "txt",
+    "h",
+    "m",
+    "plist",
+    "pbxproj",
+    "xcscheme",
+    "xcworkspacedata",
+    "entitlements",
+    "modulemap",
 ];
 
-fn render_dir(
-    dir: &Dir,
-    out_root: &Path,
-    vars: &[TemplateVar],
-) -> Result<(), BenchError> {
+fn render_dir(dir: &Dir, out_root: &Path, vars: &[TemplateVar]) -> Result<(), BenchError> {
     for entry in dir.entries() {
         match entry {
             DirEntry::Dir(sub) => {
@@ -964,13 +993,14 @@ pub fn ensure_android_project_with_options(
     let project_slug = crate_name.replace('-', "_");
 
     // Resolve the default function by auto-detecting from source
-    let effective_root = project_root.unwrap_or_else(|| {
-        output_dir.parent().unwrap_or(output_dir)
-    });
+    let effective_root = project_root.unwrap_or_else(|| output_dir.parent().unwrap_or(output_dir));
     let default_function = resolve_default_function(effective_root, crate_name, crate_dir);
 
     generate_android_project(output_dir, &project_slug, &default_function)?;
-    println!("  Generated Android project at {:?}", output_dir.join("android"));
+    println!(
+        "  Generated Android project at {:?}",
+        output_dir.join("android")
+    );
     println!("  Default benchmark function: {}", default_function);
     Ok(())
 }
@@ -1021,12 +1051,16 @@ pub fn ensure_ios_project_with_options(
     let bundle_prefix = format!("dev.world.{}", bundle_id_component);
 
     // Resolve the default function by auto-detecting from source
-    let effective_root = project_root.unwrap_or_else(|| {
-        output_dir.parent().unwrap_or(output_dir)
-    });
+    let effective_root = project_root.unwrap_or_else(|| output_dir.parent().unwrap_or(output_dir));
     let default_function = resolve_default_function(effective_root, crate_name, crate_dir);
 
-    generate_ios_project(output_dir, &library_name, project_pascal, &bundle_prefix, &default_function)?;
+    generate_ios_project(
+        output_dir,
+        &library_name,
+        project_pascal,
+        &bundle_prefix,
+        &default_function,
+    )?;
     println!("  Generated iOS project at {:?}", output_dir.join("ios"));
     println!("  Default benchmark function: {}", default_function);
     Ok(())
@@ -1061,16 +1095,33 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
-        let result = generate_android_project(&temp_dir, "my-bench-project", "my_bench_project::test_func");
-        assert!(result.is_ok(), "generate_android_project failed: {:?}", result.err());
+        let result =
+            generate_android_project(&temp_dir, "my-bench-project", "my_bench_project::test_func");
+        assert!(
+            result.is_ok(),
+            "generate_android_project failed: {:?}",
+            result.err()
+        );
 
         // Verify key files exist
         let android_dir = temp_dir.join("android");
         assert!(android_dir.join("settings.gradle").exists());
         assert!(android_dir.join("app/build.gradle").exists());
-        assert!(android_dir.join("app/src/main/AndroidManifest.xml").exists());
-        assert!(android_dir.join("app/src/main/res/values/strings.xml").exists());
-        assert!(android_dir.join("app/src/main/res/values/themes.xml").exists());
+        assert!(
+            android_dir
+                .join("app/src/main/AndroidManifest.xml")
+                .exists()
+        );
+        assert!(
+            android_dir
+                .join("app/src/main/res/values/strings.xml")
+                .exists()
+        );
+        assert!(
+            android_dir
+                .join("app/src/main/res/values/themes.xml")
+                .exists()
+        );
 
         // Verify no unreplaced placeholders remain in generated files
         let files_to_check = [
@@ -1090,15 +1141,15 @@ mod tests {
             assert!(
                 !has_placeholder,
                 "File {} contains unreplaced template placeholders: {}",
-                file,
-                contents
+                file, contents
             );
         }
 
         // Verify specific substitutions were made
         let settings = fs::read_to_string(android_dir.join("settings.gradle")).unwrap();
         assert!(
-            settings.contains("my-bench-project-android") || settings.contains("my_bench_project-android"),
+            settings.contains("my-bench-project-android")
+                || settings.contains("my_bench_project-android"),
             "settings.gradle should contain project name"
         );
 
@@ -1109,13 +1160,15 @@ mod tests {
             "build.gradle should contain sanitized package name 'dev.world.mybenchproject'"
         );
 
-        let manifest = fs::read_to_string(android_dir.join("app/src/main/AndroidManifest.xml")).unwrap();
+        let manifest =
+            fs::read_to_string(android_dir.join("app/src/main/AndroidManifest.xml")).unwrap();
         assert!(
             manifest.contains("Theme.MyBenchProject"),
             "AndroidManifest.xml should contain PascalCase theme name"
         );
 
-        let strings = fs::read_to_string(android_dir.join("app/src/main/res/values/strings.xml")).unwrap();
+        let strings =
+            fs::read_to_string(android_dir.join("app/src/main/res/values/strings.xml")).unwrap();
         assert!(
             strings.contains("Benchmark"),
             "strings.xml should contain app name with Benchmark"
@@ -1123,14 +1176,16 @@ mod tests {
 
         // Verify Kotlin files are in the correct package directory structure
         // For package "dev.world.mybenchproject", files should be in "dev/world/mybenchproject/"
-        let main_activity_path = android_dir.join("app/src/main/java/dev/world/mybenchproject/MainActivity.kt");
+        let main_activity_path =
+            android_dir.join("app/src/main/java/dev/world/mybenchproject/MainActivity.kt");
         assert!(
             main_activity_path.exists(),
             "MainActivity.kt should be in package directory: {:?}",
             main_activity_path
         );
 
-        let test_activity_path = android_dir.join("app/src/androidTest/java/dev/world/mybenchproject/MainActivityTest.kt");
+        let test_activity_path = android_dir
+            .join("app/src/androidTest/java/dev/world/mybenchproject/MainActivityTest.kt");
         assert!(
             test_activity_path.exists(),
             "MainActivityTest.kt should be in package directory: {:?}",
@@ -1139,11 +1194,15 @@ mod tests {
 
         // Verify the files are NOT in the root java directory
         assert!(
-            !android_dir.join("app/src/main/java/MainActivity.kt").exists(),
+            !android_dir
+                .join("app/src/main/java/MainActivity.kt")
+                .exists(),
             "MainActivity.kt should not be in root java directory"
         );
         assert!(
-            !android_dir.join("app/src/androidTest/java/MainActivityTest.kt").exists(),
+            !android_dir
+                .join("app/src/androidTest/java/MainActivityTest.kt")
+                .exists(),
             "MainActivityTest.kt should not be in root java directory"
         );
 
@@ -1279,7 +1338,10 @@ pub fn public_bench() {
         // Underscores should be removed
         assert_eq!(sanitize_bundle_id_component("bench_mobile"), "benchmobile");
         // Mixed separators should all be removed
-        assert_eq!(sanitize_bundle_id_component("my-project_name"), "myprojectname");
+        assert_eq!(
+            sanitize_bundle_id_component("my-project_name"),
+            "myprojectname"
+        );
         // Already valid should remain unchanged (but lowercase)
         assert_eq!(sanitize_bundle_id_component("benchmobile"), "benchmobile");
         // Numbers should be preserved
@@ -1287,7 +1349,10 @@ pub fn public_bench() {
         // Uppercase should be lowercased
         assert_eq!(sanitize_bundle_id_component("BenchMobile"), "benchmobile");
         // Complex case
-        assert_eq!(sanitize_bundle_id_component("My-Complex_Project-123"), "mycomplexproject123");
+        assert_eq!(
+            sanitize_bundle_id_component("My-Complex_Project-123"),
+            "mycomplexproject123"
+        );
     }
 
     #[test]
@@ -1309,7 +1374,11 @@ pub fn public_bench() {
             bundle_prefix,
             "bench_mobile::test_func",
         );
-        assert!(result.is_ok(), "generate_ios_project failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "generate_ios_project failed: {:?}",
+            result.err()
+        );
 
         // Verify project.yml was created
         let project_yml_path = temp_dir.join("ios/BenchRunner/project.yml");
@@ -1346,7 +1415,11 @@ pub fn public_bench() {
 
         // Generate Android project
         let result = generate_android_project(&temp_dir, project_name, "bench_mobile::test_func");
-        assert!(result.is_ok(), "generate_android_project failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "generate_android_project failed: {:?}",
+            result.err()
+        );
 
         // Generate iOS project (mimicking how ensure_ios_project does it)
         let bundle_id_component = sanitize_bundle_id_component(project_name);
@@ -1358,17 +1431,19 @@ pub fn public_bench() {
             &bundle_prefix,
             "bench_mobile::test_func",
         );
-        assert!(result.is_ok(), "generate_ios_project failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "generate_ios_project failed: {:?}",
+            result.err()
+        );
 
         // Read Android build.gradle to extract package name
-        let android_build_gradle = fs::read_to_string(
-            temp_dir.join("android/app/build.gradle")
-        ).expect("Failed to read Android build.gradle");
+        let android_build_gradle = fs::read_to_string(temp_dir.join("android/app/build.gradle"))
+            .expect("Failed to read Android build.gradle");
 
         // Read iOS project.yml to extract bundle ID prefix
-        let ios_project_yml = fs::read_to_string(
-            temp_dir.join("ios/BenchRunner/project.yml")
-        ).expect("Failed to read iOS project.yml");
+        let ios_project_yml = fs::read_to_string(temp_dir.join("ios/BenchRunner/project.yml"))
+            .expect("Failed to read iOS project.yml");
 
         // Both should use "benchmobile" (without hyphens or underscores)
         // Android: namespace = "dev.world.benchmobile"
@@ -1409,7 +1484,11 @@ pub fn public_bench() {
 
         // Generate Android project
         let result = generate_android_project(&temp_dir, project_name, "test_project::test_func");
-        assert!(result.is_ok(), "generate_android_project failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "generate_android_project failed: {:?}",
+            result.err()
+        );
 
         // Generate iOS project
         let bundle_id_component = sanitize_bundle_id_component(project_name);
@@ -1421,17 +1500,19 @@ pub fn public_bench() {
             &bundle_prefix,
             "test_project::test_func",
         );
-        assert!(result.is_ok(), "generate_ios_project failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "generate_ios_project failed: {:?}",
+            result.err()
+        );
 
         // Read Android build.gradle
-        let android_build_gradle = fs::read_to_string(
-            temp_dir.join("android/app/build.gradle")
-        ).expect("Failed to read Android build.gradle");
+        let android_build_gradle = fs::read_to_string(temp_dir.join("android/app/build.gradle"))
+            .expect("Failed to read Android build.gradle");
 
         // Read iOS project.yml
-        let ios_project_yml = fs::read_to_string(
-            temp_dir.join("ios/BenchRunner/project.yml")
-        ).expect("Failed to read iOS project.yml");
+        let ios_project_yml = fs::read_to_string(temp_dir.join("ios/BenchRunner/project.yml"))
+            .expect("Failed to read iOS project.yml");
 
         // Both should use version "1.0.0"
         assert!(
@@ -1457,7 +1538,10 @@ pub fn public_bench() {
             ("bench_mobile", "dev.world.benchmobile"),
             ("TestApp", "dev.world.testapp"),
             ("app-with-many-dashes", "dev.world.appwithmanydashes"),
-            ("app_with_many_underscores", "dev.world.appwithmanyunderscores"),
+            (
+                "app_with_many_underscores",
+                "dev.world.appwithmanyunderscores",
+            ),
         ];
 
         for (input, expected_prefix) in test_cases {

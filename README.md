@@ -27,13 +27,17 @@ mobench provides a Rust API and a CLI for running benchmarks on real mobile devi
 ## Quick start
 
 ```bash
-# Install the CLI
+# Install the CLI (fast)
+cargo binstall mobench
+
+# Or build from source
 cargo install mobench
 
 # Add the SDK to your project
 cargo add mobench-sdk inventory
 
 # Check prerequisites before building
+cargo mobench doctor --target both
 cargo mobench check --target android
 cargo mobench check --target ios
 
@@ -55,7 +59,7 @@ cargo mobench run --target android --function sample_fns::fibonacci \
 cargo mobench devices --platform android
 
 # View benchmark results summary
-cargo mobench summary results.json
+cargo mobench summary target/mobench/results.json
 ```
 
 ## Configuration

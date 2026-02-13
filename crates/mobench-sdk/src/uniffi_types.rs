@@ -261,7 +261,9 @@ impl From<crate::types::BenchError> for BenchErrorVariant {
             crate::types::BenchError::Serialization(e) => BenchErrorVariant::ConfigError {
                 message: e.to_string(),
             },
-            crate::types::BenchError::Config(msg) => BenchErrorVariant::ConfigError { message: msg },
+            crate::types::BenchError::Config(msg) => {
+                BenchErrorVariant::ConfigError { message: msg }
+            }
             crate::types::BenchError::Build(msg) => BenchErrorVariant::ExecutionFailed {
                 reason: format!("build error: {}", msg),
             },

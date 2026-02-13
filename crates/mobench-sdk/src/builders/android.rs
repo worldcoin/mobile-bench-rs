@@ -55,8 +55,8 @@
 //! builder.build(&config)?;
 //! ```
 
-use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
+use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -186,26 +186,69 @@ impl AndroidBuilder {
 
         if self.dry_run {
             println!("\n[dry-run] Android build plan:");
-            println!("  Step 0: Check/generate Android project scaffolding at {:?}", android_dir);
+            println!(
+                "  Step 0: Check/generate Android project scaffolding at {:?}",
+                android_dir
+            );
             println!("  Step 0.5: Ensure Gradle wrapper exists (run 'gradle wrapper' if needed)");
-            println!("  Step 1: Build Rust libraries for Android ABIs (arm64-v8a, armeabi-v7a, x86_64)");
-            println!("    Command: cargo ndk --target <abi> --platform 24 build {}",
-                if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
+            println!(
+                "  Step 1: Build Rust libraries for Android ABIs (arm64-v8a, armeabi-v7a, x86_64)"
+            );
+            println!(
+                "    Command: cargo ndk --target <abi> --platform 24 build {}",
+                if matches!(config.profile, BuildProfile::Release) {
+                    "--release"
+                } else {
+                    ""
+                }
+            );
             println!("  Step 2: Generate UniFFI Kotlin bindings");
-            println!("    Output: {:?}", android_dir.join("app/src/main/java/uniffi"));
+            println!(
+                "    Output: {:?}",
+                android_dir.join("app/src/main/java/uniffi")
+            );
             println!("  Step 3: Copy .so files to jniLibs directories");
-            println!("    Destination: {:?}", android_dir.join("app/src/main/jniLibs"));
+            println!(
+                "    Destination: {:?}",
+                android_dir.join("app/src/main/jniLibs")
+            );
             println!("  Step 4: Build Android APK with Gradle");
-            println!("    Command: ./gradlew assemble{}", if profile_name == "release" { "Release" } else { "Debug" });
-            println!("    Output: {:?}", android_dir.join(format!("app/build/outputs/apk/{}/app-{}.apk", profile_name, profile_name)));
+            println!(
+                "    Command: ./gradlew assemble{}",
+                if profile_name == "release" {
+                    "Release"
+                } else {
+                    "Debug"
+                }
+            );
+            println!(
+                "    Output: {:?}",
+                android_dir.join(format!(
+                    "app/build/outputs/apk/{}/app-{}.apk",
+                    profile_name, profile_name
+                ))
+            );
             println!("  Step 5: Build Android test APK");
-            println!("    Command: ./gradlew assemble{}AndroidTest", if profile_name == "release" { "Release" } else { "Debug" });
+            println!(
+                "    Command: ./gradlew assemble{}AndroidTest",
+                if profile_name == "release" {
+                    "Release"
+                } else {
+                    "Debug"
+                }
+            );
 
             // Return a placeholder result for dry-run
             return Ok(BuildResult {
                 platform: Target::Android,
-                app_path: android_dir.join(format!("app/build/outputs/apk/{}/app-{}.apk", profile_name, profile_name)),
-                test_suite_path: Some(android_dir.join(format!("app/build/outputs/apk/androidTest/{}/app-{}-androidTest.apk", profile_name, profile_name))),
+                app_path: android_dir.join(format!(
+                    "app/build/outputs/apk/{}/app-{}.apk",
+                    profile_name, profile_name
+                )),
+                test_suite_path: Some(android_dir.join(format!(
+                    "app/build/outputs/apk/androidTest/{}/app-{}-androidTest.apk",
+                    profile_name, profile_name
+                ))),
             });
         }
 
@@ -253,7 +296,11 @@ impl AndroidBuilder {
     }
 
     /// Validates that all expected build artifacts exist after a successful build
-    fn validate_build_artifacts(&self, result: &BuildResult, config: &BuildConfig) -> Result<(), BenchError> {
+    fn validate_build_artifacts(
+        &self,
+        result: &BuildResult,
+        config: &BuildConfig,
+    ) -> Result<(), BenchError> {
         let mut missing = Vec::new();
         let profile_dir = match config.profile {
             BuildProfile::Debug => "debug",
@@ -282,7 +329,12 @@ impl AndroidBuilder {
             if lib_path.exists() {
                 found_libs += 1;
             } else {
-                missing.push(format!("Native library ({} {}): {}", abi, profile_dir, lib_path.display()));
+                missing.push(format!(
+                    "Native library ({} {}): {}",
+                    abi,
+                    profile_dir,
+                    lib_path.display()
+                ));
             }
         }
 
@@ -292,7 +344,11 @@ impl AndroidBuilder {
                  Expected at least one .so file in jniLibs directories.\n\
                  Missing artifacts:\n{}\n\n\
                  This usually means the Rust build step failed. Check the cargo-ndk output above.",
-                missing.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+                missing
+                    .iter()
+                    .map(|s| format!("  - {}", s))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             )));
         }
 
@@ -300,7 +356,11 @@ impl AndroidBuilder {
             eprintln!(
                 "Warning: Some build artifacts are missing:\n{}\n\
                  The build may still work but some features might be unavailable.",
-                missing.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+                missing
+                    .iter()
+                    .map(|s| format!("  - {}", s))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             );
         }
 
@@ -426,11 +486,13 @@ impl AndroidBuilder {
             let command_hint = if release_flag.is_empty() {
                 format!("cargo ndk --target {} --platform 24 build", abi)
             } else {
-                format!("cargo ndk --target {} --platform 24 build {}", abi, release_flag)
+                format!(
+                    "cargo ndk --target {} --platform 24 build {}",
+                    abi, release_flag
+                )
             };
-            let output = cmd
-                .output()
-                .map_err(|e| BenchError::Build(format!(
+            let output = cmd.output().map_err(|e| {
+                BenchError::Build(format!(
                     "Failed to start cargo-ndk for {}.\n\n\
                      Command: {}\n\
                      Crate directory: {}\n\
@@ -442,7 +504,8 @@ impl AndroidBuilder {
                     command_hint,
                     crate_dir.display(),
                     e
-                )))?;
+                ))
+            })?;
 
             if !output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -546,7 +609,14 @@ impl AndroidBuilder {
 
         // Try cargo run first (works if crate has uniffi-bindgen binary target)
         let cargo_run_result = Command::new("cargo")
-            .args(["run", "-p", &self.crate_name, "--bin", "uniffi-bindgen", "--"])
+            .args([
+                "run",
+                "-p",
+                &self.crate_name,
+                "--bin",
+                "uniffi-bindgen",
+                "--",
+            ])
             .arg("generate")
             .arg("--library")
             .arg(&lib_path)
@@ -715,15 +785,22 @@ impl AndroidBuilder {
                 })?;
 
                 if self.verbose {
-                    println!("  Generated local.properties with sdk.dir={}", path.display());
+                    println!(
+                        "  Generated local.properties with sdk.dir={}",
+                        path.display()
+                    );
                 }
             }
             None => {
                 // No env var set - skip generating local.properties
                 // Gradle/Android Studio will auto-detect the SDK or prompt the user
                 if self.verbose {
-                    println!("  Skipping local.properties generation (ANDROID_HOME/ANDROID_SDK_ROOT not set)");
-                    println!("  Gradle will auto-detect SDK or you can create local.properties manually");
+                    println!(
+                        "  Skipping local.properties generation (ANDROID_HOME/ANDROID_SDK_ROOT not set)"
+                    );
+                    println!(
+                        "  Gradle will auto-detect SDK or you can create local.properties manually"
+                    );
                 }
             }
         }
@@ -871,9 +948,8 @@ impl AndroidBuilder {
             cmd.arg("--info");
         }
 
-        let output = cmd
-            .output()
-            .map_err(|e| BenchError::Build(format!(
+        let output = cmd.output().map_err(|e| {
+            BenchError::Build(format!(
                 "Failed to run Gradle wrapper.\n\n\
                  Command: ./gradlew {}\n\
                  Working directory: {}\n\
@@ -884,7 +960,8 @@ impl AndroidBuilder {
                 gradle_task,
                 android_dir.display(),
                 e
-            )))?;
+            ))
+        })?;
 
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -935,7 +1012,12 @@ impl AndroidBuilder {
     ///
     /// This method also checks for `output-metadata.json` which contains the actual
     /// output filename when present.
-    fn find_apk(&self, apk_dir: &Path, profile_name: &str, gradle_task: &str) -> Result<PathBuf, BenchError> {
+    fn find_apk(
+        &self,
+        apk_dir: &Path,
+        profile_name: &str,
+        gradle_task: &str,
+    ) -> Result<PathBuf, BenchError> {
         // First, try to read output-metadata.json for the actual APK name
         let metadata_path = apk_dir.join("output-metadata.json");
         if metadata_path.exists() {
@@ -946,7 +1028,10 @@ impl AndroidBuilder {
                     let apk_path = apk_dir.join(&apk_name);
                     if apk_path.exists() {
                         if self.verbose {
-                            println!("  Found APK from output-metadata.json: {}", apk_path.display());
+                            println!(
+                                "  Found APK from output-metadata.json: {}",
+                                apk_path.display()
+                            );
                         }
                         return Ok(apk_path);
                     }
@@ -957,12 +1042,12 @@ impl AndroidBuilder {
         // Define candidates in order of preference
         let candidates = if profile_name == "release" {
             vec![
-                format!("app-{}.apk", profile_name),           // Signed release
-                format!("app-{}-unsigned.apk", profile_name),  // Unsigned release
+                format!("app-{}.apk", profile_name),          // Signed release
+                format!("app-{}-unsigned.apk", profile_name), // Unsigned release
             ]
         } else {
             vec![
-                format!("app-{}.apk", profile_name),           // Debug
+                format!("app-{}.apk", profile_name), // Debug
             ]
         };
 
@@ -985,7 +1070,11 @@ impl AndroidBuilder {
              Check the build output directory and rerun ./gradlew {} if needed.",
             apk_dir.display(),
             gradle_task,
-            candidates.iter().map(|c| format!("  - {}", c)).collect::<Vec<_>>().join("\n"),
+            candidates
+                .iter()
+                .map(|c| format!("  - {}", c))
+                .collect::<Vec<_>>()
+                .join("\n"),
             gradle_task
         )))
     }
@@ -1051,9 +1140,8 @@ impl AndroidBuilder {
             cmd.arg("--info");
         }
 
-        let output = cmd
-            .output()
-            .map_err(|e| BenchError::Build(format!(
+        let output = cmd.output().map_err(|e| {
+            BenchError::Build(format!(
                 "Failed to run Gradle wrapper.\n\n\
                  Command: ./gradlew {}\n\
                  Working directory: {}\n\
@@ -1064,7 +1152,8 @@ impl AndroidBuilder {
                 gradle_task,
                 android_dir.display(),
                 e
-            )))?;
+            ))
+        })?;
 
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1108,7 +1197,12 @@ impl AndroidBuilder {
     /// Test APKs can have different naming patterns depending on the build:
     /// - `app-debug-androidTest.apk`
     /// - `app-release-androidTest.apk`
-    fn find_test_apk(&self, apk_dir: &Path, profile_name: &str, gradle_task: &str) -> Result<PathBuf, BenchError> {
+    fn find_test_apk(
+        &self,
+        apk_dir: &Path,
+        profile_name: &str,
+        gradle_task: &str,
+    ) -> Result<PathBuf, BenchError> {
         // First, try to read output-metadata.json for the actual APK name
         let metadata_path = apk_dir.join("output-metadata.json");
         if metadata_path.exists() {
@@ -1117,7 +1211,10 @@ impl AndroidBuilder {
                     let apk_path = apk_dir.join(&apk_name);
                     if apk_path.exists() {
                         if self.verbose {
-                            println!("  Found test APK from output-metadata.json: {}", apk_path.display());
+                            println!(
+                                "  Found test APK from output-metadata.json: {}",
+                                apk_path.display()
+                            );
                         }
                         return Ok(apk_path);
                     }
@@ -1261,7 +1358,10 @@ version = "0.1.0"
 
         let builder = AndroidBuilder::new(&temp_dir, "bench-mobile");
         let result = builder.find_crate_dir();
-        assert!(result.is_ok(), "Should find crate in bench-mobile/ directory");
+        assert!(
+            result.is_ok(),
+            "Should find crate in bench-mobile/ directory"
+        );
         assert_eq!(result.unwrap(), temp_dir.join("bench-mobile"));
 
         std::fs::remove_dir_all(&temp_dir).unwrap();
@@ -1335,8 +1435,8 @@ version = "0.1.0"
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(temp_dir.join("custom-location")).unwrap();
 
-        let builder = AndroidBuilder::new(&temp_dir, "any-name")
-            .crate_dir(temp_dir.join("custom-location"));
+        let builder =
+            AndroidBuilder::new(&temp_dir, "any-name").crate_dir(temp_dir.join("custom-location"));
         let result = builder.find_crate_dir();
         assert!(result.is_ok(), "Should use explicit crate_dir");
         assert_eq!(result.unwrap(), temp_dir.join("custom-location"));

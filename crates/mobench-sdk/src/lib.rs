@@ -334,6 +334,9 @@ pub mod types;
 // This module provides template types and conversion traits for UniFFI integration
 pub mod uniffi_types;
 
+// Unified FFI module for UniFFI integration
+pub mod ffi;
+
 // Full SDK modules - only with "full" feature
 #[cfg(feature = "full")]
 #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
@@ -353,6 +356,11 @@ pub mod runner;
 #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
 pub use mobench_macros::benchmark;
 
+// Re-export inventory so users don't need to add it as a separate dependency
+#[cfg(feature = "full")]
+#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+pub use inventory;
+
 // Re-export key types for convenience (full feature)
 #[cfg(feature = "full")]
 #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
@@ -370,7 +378,12 @@ pub use types::{BenchError, BenchSample, BenchSpec, RunnerReport};
 pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, Target};
 
 // Re-export timing types at the crate root for convenience
-pub use timing::{run_closure, TimingError};
+pub use timing::{BenchSummary, TimingError, run_closure};
+
+/// Re-export of [`std::hint::black_box`] for preventing compiler optimizations.
+///
+/// Use this to ensure the compiler doesn't optimize away benchmark computations.
+pub use std::hint::black_box;
 
 /// Library version, matching `Cargo.toml`.
 ///
