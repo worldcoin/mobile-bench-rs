@@ -70,8 +70,8 @@
 //! let ipa = builder.package_ipa("BenchRunner", SigningMethod::Development)?;
 //! ```
 
-use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
+use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -207,21 +207,51 @@ impl IosBuilder {
 
         if self.dry_run {
             println!("\n[dry-run] iOS build plan:");
-            println!("  Step 0: Check/generate iOS project scaffolding at {:?}", ios_dir.join("BenchRunner"));
+            println!(
+                "  Step 0: Check/generate iOS project scaffolding at {:?}",
+                ios_dir.join("BenchRunner")
+            );
             println!("  Step 1: Build Rust libraries for iOS targets");
-            println!("    Command: cargo build --target aarch64-apple-ios --lib {}",
-                if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
-            println!("    Command: cargo build --target aarch64-apple-ios-sim --lib {}",
-                if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
-            println!("    Command: cargo build --target x86_64-apple-ios --lib {}",
-                if matches!(config.profile, BuildProfile::Release) { "--release" } else { "" });
+            println!(
+                "    Command: cargo build --target aarch64-apple-ios --lib {}",
+                if matches!(config.profile, BuildProfile::Release) {
+                    "--release"
+                } else {
+                    ""
+                }
+            );
+            println!(
+                "    Command: cargo build --target aarch64-apple-ios-sim --lib {}",
+                if matches!(config.profile, BuildProfile::Release) {
+                    "--release"
+                } else {
+                    ""
+                }
+            );
+            println!(
+                "    Command: cargo build --target x86_64-apple-ios --lib {}",
+                if matches!(config.profile, BuildProfile::Release) {
+                    "--release"
+                } else {
+                    ""
+                }
+            );
             println!("  Step 2: Generate UniFFI Swift bindings");
-            println!("    Output: {:?}", ios_dir.join("BenchRunner/BenchRunner/Generated"));
+            println!(
+                "    Output: {:?}",
+                ios_dir.join("BenchRunner/BenchRunner/Generated")
+            );
             println!("  Step 3: Create xcframework at {:?}", xcframework_path);
             println!("    - ios-arm64/{}.framework (device)", framework_name);
-            println!("    - ios-arm64_x86_64-simulator/{}.framework (simulator - arm64 + x86_64 lipo)", framework_name);
+            println!(
+                "    - ios-arm64_x86_64-simulator/{}.framework (simulator - arm64 + x86_64 lipo)",
+                framework_name
+            );
             println!("  Step 4: Code-sign xcframework");
-            println!("    Command: codesign --force --deep --sign - {:?}", xcframework_path);
+            println!(
+                "    Command: codesign --force --deep --sign - {:?}",
+                xcframework_path
+            );
             println!("  Step 5: Generate Xcode project with xcodegen (if project.yml exists)");
             println!("    Command: xcodegen generate");
 
@@ -298,7 +328,11 @@ impl IosBuilder {
     }
 
     /// Validates that all expected build artifacts exist after a successful build
-    fn validate_build_artifacts(&self, result: &BuildResult, config: &BuildConfig) -> Result<(), BenchError> {
+    fn validate_build_artifacts(
+        &self,
+        result: &BuildResult,
+        config: &BuildConfig,
+    ) -> Result<(), BenchError> {
         let mut missing = Vec::new();
         let framework_name = self.crate_name.replace("-", "_");
         let profile_dir = match config.profile {
@@ -315,14 +349,23 @@ impl IosBuilder {
         let xcframework_path = &result.app_path;
         let device_slice = xcframework_path.join(format!("ios-arm64/{}.framework", framework_name));
         // Combined simulator slice with arm64 + x86_64
-        let sim_slice = xcframework_path.join(format!("ios-arm64_x86_64-simulator/{}.framework", framework_name));
+        let sim_slice = xcframework_path.join(format!(
+            "ios-arm64_x86_64-simulator/{}.framework",
+            framework_name
+        ));
 
         if xcframework_path.exists() {
             if !device_slice.exists() {
-                missing.push(format!("Device framework slice: {}", device_slice.display()));
+                missing.push(format!(
+                    "Device framework slice: {}",
+                    device_slice.display()
+                ));
             }
             if !sim_slice.exists() {
-                missing.push(format!("Simulator framework slice (arm64+x86_64): {}", sim_slice.display()));
+                missing.push(format!(
+                    "Simulator framework slice (arm64+x86_64): {}",
+                    sim_slice.display()
+                ));
             }
         }
 
@@ -331,22 +374,38 @@ impl IosBuilder {
         let target_dir = get_cargo_target_dir(&crate_dir)?;
         let lib_name = format!("lib{}.a", framework_name);
 
-        let device_lib = target_dir.join("aarch64-apple-ios").join(profile_dir).join(&lib_name);
-        let sim_arm64_lib = target_dir.join("aarch64-apple-ios-sim").join(profile_dir).join(&lib_name);
-        let sim_x86_64_lib = target_dir.join("x86_64-apple-ios").join(profile_dir).join(&lib_name);
+        let device_lib = target_dir
+            .join("aarch64-apple-ios")
+            .join(profile_dir)
+            .join(&lib_name);
+        let sim_arm64_lib = target_dir
+            .join("aarch64-apple-ios-sim")
+            .join(profile_dir)
+            .join(&lib_name);
+        let sim_x86_64_lib = target_dir
+            .join("x86_64-apple-ios")
+            .join(profile_dir)
+            .join(&lib_name);
 
         if !device_lib.exists() {
             missing.push(format!("Device static library: {}", device_lib.display()));
         }
         if !sim_arm64_lib.exists() {
-            missing.push(format!("Simulator (arm64) static library: {}", sim_arm64_lib.display()));
+            missing.push(format!(
+                "Simulator (arm64) static library: {}",
+                sim_arm64_lib.display()
+            ));
         }
         if !sim_x86_64_lib.exists() {
-            missing.push(format!("Simulator (x86_64) static library: {}", sim_x86_64_lib.display()));
+            missing.push(format!(
+                "Simulator (x86_64) static library: {}",
+                sim_x86_64_lib.display()
+            ));
         }
 
         // Check Swift bindings
-        let swift_bindings = self.output_dir
+        let swift_bindings = self
+            .output_dir
             .join("ios/BenchRunner/BenchRunner/Generated")
             .join(format!("{}.swift", framework_name));
         if !swift_bindings.exists() {
@@ -354,19 +413,29 @@ impl IosBuilder {
         }
 
         if !missing.is_empty() {
-            let critical = missing.iter().any(|m| m.contains("XCFramework") || m.contains("static library"));
+            let critical = missing
+                .iter()
+                .any(|m| m.contains("XCFramework") || m.contains("static library"));
             if critical {
                 return Err(BenchError::Build(format!(
                     "Build validation failed: Critical artifacts are missing.\n\n\
                      Missing artifacts:\n{}\n\n\
                      This usually means the Rust build step failed. Check the cargo build output above.",
-                    missing.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+                    missing
+                        .iter()
+                        .map(|s| format!("  - {}", s))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 )));
             } else {
                 eprintln!(
                     "Warning: Some build artifacts are missing:\n{}\n\
                      The build may still work but some features might be unavailable.",
-                    missing.iter().map(|s| format!("  - {}", s)).collect::<Vec<_>>().join("\n")
+                    missing
+                        .iter()
+                        .map(|s| format!("  - {}", s))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 );
             }
         }
@@ -494,9 +563,8 @@ impl IosBuilder {
             } else {
                 format!("cargo build --target {} --lib {}", target, release_flag)
             };
-            let output = cmd
-                .output()
-                .map_err(|e| BenchError::Build(format!(
+            let output = cmd.output().map_err(|e| {
+                BenchError::Build(format!(
                     "Failed to run cargo for {}.\n\n\
                      Command: {}\n\
                      Crate directory: {}\n\
@@ -506,7 +574,8 @@ impl IosBuilder {
                     command_hint,
                     crate_dir.display(),
                     e
-                )))?;
+                ))
+            })?;
 
             if !output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -614,7 +683,14 @@ impl IosBuilder {
 
         // Try cargo run first (works if crate has uniffi-bindgen binary target)
         let cargo_run_result = Command::new("cargo")
-            .args(["run", "-p", &self.crate_name, "--bin", "uniffi-bindgen", "--"])
+            .args([
+                "run",
+                "-p",
+                &self.crate_name,
+                "--bin",
+                "uniffi-bindgen",
+                "--",
+            ])
             .arg("generate")
             .arg("--library")
             .arg(&lib_path)
@@ -1851,8 +1927,14 @@ version = "0.1.0"
 
         let builder = IosBuilder::new(&temp_dir, "bench-mobile");
         let result = builder.find_crate_dir();
-        assert!(result.is_ok(), "Should find crate in bench-mobile/ directory");
-        let expected = temp_dir.canonicalize().unwrap_or(temp_dir.clone()).join("bench-mobile");
+        assert!(
+            result.is_ok(),
+            "Should find crate in bench-mobile/ directory"
+        );
+        let expected = temp_dir
+            .canonicalize()
+            .unwrap_or(temp_dir.clone())
+            .join("bench-mobile");
         assert_eq!(result.unwrap(), expected);
 
         std::fs::remove_dir_all(&temp_dir).unwrap();
@@ -1887,7 +1969,10 @@ version = "0.1.0"
         let builder = IosBuilder::new(&temp_dir, "my-bench");
         let result = builder.find_crate_dir();
         assert!(result.is_ok(), "Should find crate in crates/ directory");
-        let expected = temp_dir.canonicalize().unwrap_or(temp_dir.clone()).join("crates/my-bench");
+        let expected = temp_dir
+            .canonicalize()
+            .unwrap_or(temp_dir.clone())
+            .join("crates/my-bench");
         assert_eq!(result.unwrap(), expected);
 
         std::fs::remove_dir_all(&temp_dir).unwrap();
@@ -1927,8 +2012,8 @@ version = "0.1.0"
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(temp_dir.join("custom-location")).unwrap();
 
-        let builder = IosBuilder::new(&temp_dir, "any-name")
-            .crate_dir(temp_dir.join("custom-location"));
+        let builder =
+            IosBuilder::new(&temp_dir, "any-name").crate_dir(temp_dir.join("custom-location"));
         let result = builder.find_crate_dir();
         assert!(result.is_ok(), "Should use explicit crate_dir");
         assert_eq!(result.unwrap(), temp_dir.join("custom-location"));

@@ -263,6 +263,9 @@ enum Command {
         #[arg(
             long,
             default_value_t = true,
+            action = clap::ArgAction::Set,
+            num_args = 0..=1,
+            default_missing_value = "true",
             help = "Validate BrowserStack credentials"
         )]
         browserstack: bool,
@@ -3160,11 +3163,9 @@ fn run_android_build(_ndk_home: &str, release: bool) -> Result<mobench_sdk::Buil
 
 fn load_dotenv() {
     if let Ok(root) = repo_root() {
-    let env_paths = [root.join(".env"), root.join(".env.local")];
-    for path in env_paths {
-        let _ = dotenvy::from_path(path);
+        let _ = dotenvy::from_path(root.join(".env"));
+        let _ = dotenvy::from_path_override(root.join(".env.local"));
     }
-}
 }
 
 fn repo_root() -> Result<PathBuf> {
@@ -4592,16 +4593,15 @@ fn cmd_doctor(
         config.as_ref().and_then(|cfg| cfg.device_tags.clone())
     };
 
-    if resolved_matrix_path.is_none()
-        && resolved_tags
-            .as_ref()
-            .is_some_and(|tags| !tags.is_empty())
+    if resolved_matrix_path.is_none() && resolved_tags.as_ref().is_some_and(|tags| !tags.is_empty())
     {
         checks.push(PrereqCheck {
             name: "Device matrix".to_string(),
             passed: false,
             detail: Some("device tags provided without a matrix file".to_string()),
-            fix_hint: Some("Provide --device-matrix or set device_matrix in the config".to_string()),
+            fix_hint: Some(
+                "Provide --device-matrix or set device_matrix in the config".to_string(),
+            ),
         });
     } else if let Some(path) = resolved_matrix_path.as_deref() {
         match load_device_matrix(path) {
@@ -5127,6 +5127,24 @@ mod tests {
         assert_eq!(format_ms(Some(1_500_000)), "1.500ms");
         assert_eq!(format_ms(Some(1_500_000_000)), "1.500s");
         assert_eq!(format_ms(None), "-");
+    }
+
+    #[test]
+    fn doctor_browserstack_defaults_to_true() {
+        let cli = Cli::parse_from(["mobench", "doctor"]);
+        match cli.command {
+            Command::Doctor { browserstack, .. } => assert!(browserstack),
+            _ => panic!("expected doctor command"),
+        }
+    }
+
+    #[test]
+    fn doctor_browserstack_can_be_disabled() {
+        let cli = Cli::parse_from(["mobench", "doctor", "--browserstack=false"]);
+        match cli.command {
+            Command::Doctor { browserstack, .. } => assert!(!browserstack),
+            _ => panic!("expected doctor command"),
+        }
     }
 }
 

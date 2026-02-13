@@ -296,13 +296,21 @@ impl BenchReport {
     /// Returns the minimum duration in nanoseconds.
     #[must_use]
     pub fn min_ns(&self) -> u64 {
-        self.samples.iter().map(|s| s.duration_ns).min().unwrap_or(0)
+        self.samples
+            .iter()
+            .map(|s| s.duration_ns)
+            .min()
+            .unwrap_or(0)
     }
 
     /// Returns the maximum duration in nanoseconds.
     #[must_use]
     pub fn max_ns(&self) -> u64 {
-        self.samples.iter().map(|s| s.duration_ns).max().unwrap_or(0)
+        self.samples
+            .iter()
+            .map(|s| s.duration_ns)
+            .max()
+            .unwrap_or(0)
     }
 
     /// Returns a statistical summary of the benchmark results.
@@ -672,7 +680,10 @@ mod tests {
     #[test]
     fn rejects_zero_iterations() {
         let result = BenchSpec::new("test", 0, 10);
-        assert!(matches!(result, Err(TimingError::NoIterations { count: 0 })));
+        assert!(matches!(
+            result,
+            Err(TimingError::NoIterations { count: 0 })
+        ));
     }
 
     #[test]
@@ -761,9 +772,7 @@ mod tests {
                 SETUP_COUNT.fetch_add(1, Ordering::SeqCst);
                 "resource"
             },
-            |_resource| {
-                Ok(())
-            },
+            |_resource| Ok(()),
             |_resource| {
                 TEARDOWN_COUNT.fetch_add(1, Ordering::SeqCst);
             },

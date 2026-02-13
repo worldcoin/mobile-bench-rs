@@ -182,12 +182,7 @@ pub fn host_lib_path(crate_dir: &Path, crate_name: &str) -> Result<PathBuf, Benc
     // Use cargo metadata to find the actual target directory
     let target_dir = get_cargo_target_dir(crate_dir)?;
 
-    let lib_name = format!(
-        "{}{}.{}",
-        lib_prefix,
-        crate_name.replace('-', "_"),
-        lib_ext
-    );
+    let lib_name = format!("{}{}.{}", lib_prefix, crate_name.replace('-', "_"), lib_ext);
     let path = target_dir.join("debug").join(&lib_name);
 
     if !path.exists() {
@@ -327,10 +322,12 @@ pub fn read_package_name(cargo_toml_path: &Path) -> Option<String> {
 ///
 /// embed_bench_spec(Path::new("target/mobench"), &spec)?;
 /// ```
-pub fn embed_bench_spec<S: serde::Serialize>(output_dir: &Path, spec: &S) -> Result<(), BenchError> {
-    let spec_json = serde_json::to_string_pretty(spec).map_err(|e| {
-        BenchError::Build(format!("Failed to serialize bench spec: {}", e))
-    })?;
+pub fn embed_bench_spec<S: serde::Serialize>(
+    output_dir: &Path,
+    spec: &S,
+) -> Result<(), BenchError> {
+    let spec_json = serde_json::to_string_pretty(spec)
+        .map_err(|e| BenchError::Build(format!("Failed to serialize bench spec: {}", e)))?;
 
     // Android: Write to assets directory
     let android_assets_dir = output_dir.join("android/app/src/main/assets");
@@ -472,10 +469,7 @@ pub fn is_git_dirty() -> Option<bool> {
 
 /// Gets the Rust version.
 pub fn get_rust_version() -> Option<String> {
-    let output = Command::new("rustc")
-        .args(["--version"])
-        .output()
-        .ok()?;
+    let output = Command::new("rustc").args(["--version"]).output().ok()?;
 
     if output.status.success() {
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -589,9 +583,8 @@ pub fn embed_bench_meta(
     profile: &str,
 ) -> Result<(), BenchError> {
     let meta = create_bench_meta(spec, target, profile);
-    let meta_json = serde_json::to_string_pretty(&meta).map_err(|e| {
-        BenchError::Build(format!("Failed to serialize bench meta: {}", e))
-    })?;
+    let meta_json = serde_json::to_string_pretty(&meta)
+        .map_err(|e| BenchError::Build(format!("Failed to serialize bench meta: {}", e)))?;
 
     // Android: Write to assets directory
     let android_assets_dir = output_dir.join("android/app/src/main/assets");
@@ -789,9 +782,9 @@ members = ["crates/*"]
     #[test]
     fn test_is_leap_year() {
         assert!(!is_leap_year(1970)); // Not divisible by 4
-        assert!(is_leap_year(2000));  // Divisible by 400
+        assert!(is_leap_year(2000)); // Divisible by 400
         assert!(!is_leap_year(1900)); // Divisible by 100 but not 400
-        assert!(is_leap_year(2024));  // Divisible by 4, not by 100
+        assert!(is_leap_year(2024)); // Divisible by 4, not by 100
     }
 
     #[test]

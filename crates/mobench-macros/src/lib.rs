@@ -71,10 +71,10 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
+    Ident, ItemFn, ReturnType, Token,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
-    Ident, ItemFn, ReturnType, Token,
 };
 
 /// Arguments to the benchmark attribute

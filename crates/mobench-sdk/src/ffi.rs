@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 
 // Re-export from uniffi_types for backwards compatibility
 pub use crate::uniffi_types::{
-    BenchErrorVariant, BenchReportTemplate, BenchSampleTemplate, BenchSpecTemplate,
-    FromSdkError, FromSdkReport, FromSdkSample, FromSdkSpec,
+    BenchErrorVariant, BenchReportTemplate, BenchSampleTemplate, BenchSpecTemplate, FromSdkError,
+    FromSdkReport, FromSdkSample, FromSdkSpec,
 };
 
 /// FFI-ready benchmark specification.
@@ -138,7 +138,9 @@ impl From<crate::types::BenchError> for BenchErrorFfi {
             crate::types::BenchError::UnknownFunction(name, _) => {
                 BenchErrorFfi::UnknownFunction { name }
             }
-            crate::types::BenchError::Execution(msg) => BenchErrorFfi::ExecutionFailed { reason: msg },
+            crate::types::BenchError::Execution(msg) => {
+                BenchErrorFfi::ExecutionFailed { reason: msg }
+            }
             crate::types::BenchError::Io(e) => BenchErrorFfi::IoError {
                 message: e.to_string(),
             },

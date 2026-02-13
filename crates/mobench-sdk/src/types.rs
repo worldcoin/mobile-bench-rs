@@ -62,7 +62,9 @@ pub enum BenchError {
     /// a function name that hasn't been registered via `#[benchmark]`.
     ///
     /// The error includes a list of available benchmarks to help diagnose the issue.
-    #[error("unknown benchmark function: '{0}'. Available benchmarks: {1:?}\n\nEnsure the function is:\n  1. Annotated with #[benchmark]\n  2. Public (pub fn)\n  3. Takes no parameters and returns ()")]
+    #[error(
+        "unknown benchmark function: '{0}'. Available benchmarks: {1:?}\n\nEnsure the function is:\n  1. Annotated with #[benchmark]\n  2. Public (pub fn)\n  3. Takes no parameters and returns ()"
+    )]
     UnknownFunction(String, Vec<String>),
 
     /// An error occurred during benchmark execution.
