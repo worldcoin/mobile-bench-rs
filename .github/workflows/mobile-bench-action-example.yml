@@ -1,10 +1,10 @@
-name: Mobile Benchmarks
+name: Mobile Bench Action Example
 
 on:
   workflow_dispatch:
     inputs:
       platform:
-        description: "android | ios | both"
+        description: "android | ios"
         required: false
         default: "android"
 
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   android:
-    if: ${{ github.event.inputs.platform == 'android' || github.event.inputs.platform == 'both' || github.event.inputs.platform == '' }}
+    if: ${{ github.event.inputs.platform == 'android' || github.event.inputs.platform == '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +22,11 @@ jobs:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - uses: ./.github/actions/mobench
         with:
+          command: cargo mobench ci run
           run-args: >
             --target android
             --function sample_fns::fibonacci
-            --iterations 30
+            --iterations 20
             --warmup 5
             --devices "Google Pixel 7-13.0"
             --release
@@ -37,7 +38,7 @@ jobs:
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
 
   ios:
-    if: ${{ github.event.inputs.platform == 'ios' || github.event.inputs.platform == 'both' || github.event.inputs.platform == '' }}
+    if: ${{ github.event.inputs.platform == 'ios' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,10 +47,11 @@ jobs:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
       - uses: ./.github/actions/mobench
         with:
+          command: cargo mobench ci run
           run-args: >
             --target ios
             --function sample_fns::fibonacci
-            --iterations 30
+            --iterations 20
             --warmup 5
             --devices "iPhone 14-16"
             --release

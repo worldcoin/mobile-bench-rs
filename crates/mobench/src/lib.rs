@@ -114,7 +114,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -451,6 +451,80 @@ enum CiCommand {
         )]
         action_dir: PathBuf,
     },
+    /// Run a full CI benchmark flow with stable output contract.
+    Run(CiRunArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+struct CiRunArgs {
+    #[arg(long, value_enum)]
+    target: MobileTarget,
+    #[arg(long, help = "Fully-qualified Rust function to benchmark")]
+    function: String,
+    #[arg(long, default_value_t = 100)]
+    iterations: u32,
+    #[arg(long, default_value_t = 10)]
+    warmup: u32,
+    #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
+    devices: Vec<String>,
+    #[arg(long, help = "Device matrix YAML file to load device names from")]
+    device_matrix: Option<PathBuf>,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "Device tags to select from the device matrix (comma-separated or repeatable)"
+    )]
+    device_tags: Vec<String>,
+    #[arg(long, help = "Optional path to config file")]
+    config: Option<PathBuf>,
+    #[arg(long, help = "Baseline JSON summary to compare for regressions")]
+    baseline: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = 5.0,
+        help = "Regression threshold percentage when comparing to baseline"
+    )]
+    regression_threshold_pct: f64,
+    #[arg(long, help = "Write JUnit XML report to the given path")]
+    junit: Option<PathBuf>,
+    #[arg(long, help = "Skip mobile builds and only run the host harness")]
+    local_only: bool,
+    #[arg(
+        long,
+        help = "Build in release mode (recommended for BrowserStack to reduce APK size and upload time)"
+    )]
+    release: bool,
+    #[arg(
+        long,
+        help = "Path to iOS app bundle (.ipa or zipped .app) for BrowserStack XCUITest"
+    )]
+    ios_app: Option<PathBuf>,
+    #[arg(long, help = "Path to iOS XCUITest test suite package (.zip or .ipa)")]
+    ios_test_suite: Option<PathBuf>,
+    #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
+    fetch: bool,
+    #[arg(long, default_value = "target/browserstack")]
+    fetch_output_dir: PathBuf,
+    #[arg(long, default_value_t = 5)]
+    fetch_poll_interval_secs: u64,
+    #[arg(long, default_value_t = 300)]
+    fetch_timeout_secs: u64,
+    #[arg(long, help = "Show simplified step-by-step progress output")]
+    progress: bool,
+    #[arg(
+        long,
+        default_value = "target/mobench/ci",
+        help = "Output directory for CI contract files"
+    )]
+    output_dir: PathBuf,
+    #[arg(long, help = "Metadata: user or actor that requested the run")]
+    requested_by: Option<String>,
+    #[arg(long, help = "Metadata: pull request number")]
+    pr_number: Option<String>,
+    #[arg(long, help = "Metadata: original command requested by the caller")]
+    request_command: Option<String>,
+    #[arg(long, help = "Metadata: git ref/sha for this mobench invocation")]
+    mobench_ref: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -480,6 +554,15 @@ enum CheckOutputFormat {
 enum MobileTarget {
     Android,
     Ios,
+}
+
+impl MobileTarget {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Android => "android",
+            Self::Ios => "ios",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -1106,6 +1189,9 @@ pub fn run() -> Result<()> {
             } => {
                 cmd_ci_init(&workflow, &action_dir, cli.yes)?;
             }
+            CiCommand::Run(args) => {
+                cmd_ci_run(args)?;
+            }
         },
         Command::Fetch {
             target,
@@ -1273,6 +1359,214 @@ fn write_device_matrix_template(path: &Path, overwrite: bool) -> Result<()> {
 const CI_WORKFLOW_TEMPLATE: &str = include_str!("../templates/ci/mobile-bench.yml");
 const CI_ACTION_TEMPLATE: &str = include_str!("../templates/ci/action.yml");
 const CI_ACTION_README_TEMPLATE: &str = include_str!("../templates/ci/action.README.md");
+
+#[derive(Debug, Serialize)]
+struct CiContractMetadata {
+    requested_by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_number: Option<String>,
+    request_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mobench_ref: Option<String>,
+    mobench_version: String,
+}
+
+fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
+    fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("creating ci output dir {}", args.output_dir.display()))?;
+
+    let summary_json = args.output_dir.join("summary.json");
+    let summary_md = args.output_dir.join("summary.md");
+    let summary_csv = args.output_dir.join("summary.csv");
+    let results_csv = args.output_dir.join("results.csv");
+
+    let mut cmd = std::process::Command::new(
+        env::current_exe().context("resolving current mobench executable")?,
+    );
+    cmd.arg("run")
+        .arg("--target")
+        .arg(args.target.as_str())
+        .arg("--function")
+        .arg(&args.function)
+        .arg("--iterations")
+        .arg(args.iterations.to_string())
+        .arg("--warmup")
+        .arg(args.warmup.to_string())
+        .arg("--ci")
+        .arg("--summary-csv")
+        .arg("--output")
+        .arg(&summary_json)
+        .arg("--fetch-output-dir")
+        .arg(&args.fetch_output_dir)
+        .arg("--fetch-poll-interval-secs")
+        .arg(args.fetch_poll_interval_secs.to_string())
+        .arg("--fetch-timeout-secs")
+        .arg(args.fetch_timeout_secs.to_string())
+        .arg("--regression-threshold-pct")
+        .arg(args.regression_threshold_pct.to_string());
+
+    for device in &args.devices {
+        cmd.arg("--devices").arg(device);
+    }
+    if let Some(path) = &args.device_matrix {
+        cmd.arg("--device-matrix").arg(path);
+    }
+    for tag in &args.device_tags {
+        cmd.arg("--device-tags").arg(tag);
+    }
+    if let Some(path) = &args.config {
+        cmd.arg("--config").arg(path);
+    }
+    if let Some(path) = &args.baseline {
+        cmd.arg("--baseline").arg(path);
+    }
+    if let Some(path) = &args.junit {
+        cmd.arg("--junit").arg(path);
+    }
+    if args.local_only {
+        cmd.arg("--local-only");
+    }
+    if args.release {
+        cmd.arg("--release");
+    }
+    if let Some(path) = &args.ios_app {
+        cmd.arg("--ios-app").arg(path);
+    }
+    if let Some(path) = &args.ios_test_suite {
+        cmd.arg("--ios-test-suite").arg(path);
+    }
+    if args.fetch {
+        cmd.arg("--fetch");
+    }
+    if args.progress {
+        cmd.arg("--progress");
+    }
+
+    let status = cmd.status().context("running `cargo mobench run` for CI")?;
+    if !status.success() {
+        if let Some(code) = status.code() {
+            std::process::exit(code);
+        }
+        bail!("`cargo mobench run` terminated unexpectedly");
+    }
+
+    if !summary_json.exists() {
+        bail!(
+            "expected CI JSON output at {}",
+            summary_json.to_string_lossy()
+        );
+    }
+    if !summary_md.exists() {
+        bail!(
+            "expected CI markdown output at {}",
+            summary_md.to_string_lossy()
+        );
+    }
+    if !summary_csv.exists() {
+        bail!(
+            "expected CI CSV output at {}",
+            summary_csv.to_string_lossy()
+        );
+    }
+    if results_csv.exists() {
+        fs::remove_file(&results_csv)
+            .with_context(|| format!("removing existing {}", results_csv.display()))?;
+    }
+    fs::rename(&summary_csv, &results_csv).with_context(|| {
+        format!(
+            "renaming {} to {}",
+            summary_csv.display(),
+            results_csv.display()
+        )
+    })?;
+
+    let metadata = CiContractMetadata {
+        requested_by: args
+            .requested_by
+            .or_else(|| ci_env(&["MOBENCH_REQUESTED_BY", "GITHUB_ACTOR"]))
+            .unwrap_or_else(|| "unknown".to_string()),
+        pr_number: args.pr_number.or_else(|| {
+            ci_env(&[
+                "MOBENCH_PR_NUMBER",
+                "PR_NUMBER",
+                "GITHUB_PR_NUMBER",
+                "GITHUB_PULL_REQUEST_NUMBER",
+            ])
+            .or_else(infer_pr_number_from_github_ref)
+        }),
+        request_command: args.request_command.unwrap_or_else(|| {
+            let argv: Vec<String> = env::args().collect();
+            if argv.is_empty() {
+                "cargo mobench ci run".to_string()
+            } else {
+                argv.join(" ")
+            }
+        }),
+        mobench_ref: args
+            .mobench_ref
+            .or_else(|| ci_env(&["MOBENCH_REF", "GITHUB_SHA", "GITHUB_REF"])),
+        mobench_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+
+    let summary_text = fs::read_to_string(&summary_json)
+        .with_context(|| format!("reading {}", summary_json.display()))?;
+    let mut summary_value: Value = serde_json::from_str(&summary_text)
+        .with_context(|| format!("parsing {}", summary_json.display()))?;
+    let ci_value = json!({
+        "metadata": metadata,
+        "outputs": {
+            "summary_json": summary_json.display().to_string(),
+            "summary_md": summary_md.display().to_string(),
+            "results_csv": results_csv.display().to_string(),
+        }
+    });
+    if let Some(obj) = summary_value.as_object_mut() {
+        obj.insert("ci".to_string(), ci_value);
+    } else {
+        summary_value = json!({
+            "run_summary": summary_value,
+            "ci": ci_value
+        });
+    }
+    let rendered = serde_json::to_string_pretty(&summary_value)?;
+    write_file(&summary_json, rendered.as_bytes())?;
+
+    println!("CI outputs ready:");
+    println!("  - {}", summary_json.display());
+    println!("  - {}", summary_md.display());
+    println!("  - {}", results_csv.display());
+
+    Ok(())
+}
+
+fn ci_env(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        env::var(key).ok().and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+    })
+}
+
+fn infer_pr_number_from_github_ref() -> Option<String> {
+    let github_ref = env::var("GITHUB_REF").ok()?;
+    parse_pr_number_from_ref(&github_ref)
+}
+
+fn parse_pr_number_from_ref(github_ref: &str) -> Option<String> {
+    let parts: Vec<&str> = github_ref.split('/').collect();
+    if parts.len() >= 4 && parts[0] == "refs" && parts[1] == "pull" {
+        let pr = parts[2].trim();
+        if !pr.is_empty() {
+            return Some(pr.to_string());
+        }
+    }
+    None
+}
 
 fn cmd_ci_init(workflow_path: &Path, action_dir: &Path, overwrite: bool) -> Result<()> {
     let action_yaml = action_dir.join("action.yml");
@@ -5145,6 +5439,39 @@ mod tests {
             Command::Doctor { browserstack, .. } => assert!(!browserstack),
             _ => panic!("expected doctor command"),
         }
+    }
+
+    #[test]
+    fn ci_run_parses_required_args_with_defaults() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "ci",
+            "run",
+            "--target",
+            "android",
+            "--function",
+            "sample_fns::fibonacci",
+        ]);
+
+        match cli.command {
+            Command::Ci {
+                command: CiCommand::Run(args),
+            } => {
+                assert_eq!(args.target, MobileTarget::Android);
+                assert_eq!(args.function, "sample_fns::fibonacci");
+                assert_eq!(args.output_dir, PathBuf::from("target/mobench/ci"));
+            }
+            _ => panic!("expected ci run command"),
+        }
+    }
+
+    #[test]
+    fn parse_pr_number_from_github_ref_extracts_pull_number() {
+        assert_eq!(
+            parse_pr_number_from_ref("refs/pull/123/merge"),
+            Some("123".to_string())
+        );
+        assert_eq!(parse_pr_number_from_ref("refs/heads/main"), None);
     }
 }
 

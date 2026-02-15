@@ -60,7 +60,15 @@ cargo mobench devices --platform android
 
 # View benchmark results summary
 cargo mobench summary target/mobench/results.json
+
+# CI one-command orchestration with stable outputs
+cargo mobench ci run --target android --function sample_fns::fibonacci --local-only
 ```
+
+CI contract outputs are written to `target/mobench/ci/`:
+- `summary.json`
+- `summary.md`
+- `results.csv`
 
 ## Configuration
 

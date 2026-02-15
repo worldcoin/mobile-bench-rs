@@ -212,6 +212,36 @@ cargo mobench run \
   --fetch
 ```
 
+### `ci run` - One-command CI Orchestration
+
+Run build/package/run/fetch/report end-to-end with stable CI output files:
+
+```bash
+cargo mobench ci run --target <android|ios> --function <NAME> [OPTIONS]
+```
+
+**Contract outputs (default directory: `target/mobench/ci/`):**
+- `summary.json`
+- `summary.md`
+- `results.csv`
+
+`summary.json` includes a `ci` section with metadata fields:
+- `requested_by`
+- `pr_number`
+- `request_command`
+- `mobench_ref`
+- `mobench_version`
+
+**Example:**
+```bash
+cargo mobench ci run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --devices "Google Pixel 7-13.0" \
+  --release \
+  --fetch
+```
+
 ### `package-ipa` - Package iOS IPA
 
 Create a signed IPA for BrowserStack:
@@ -516,6 +546,7 @@ Example workflow excerpt:
 ```yaml
 - uses: ./.github/actions/mobench
   with:
+    command: cargo mobench ci run
     run-args: >
       --target android
       --function my_benchmark
@@ -523,8 +554,7 @@ Example workflow excerpt:
       --iterations 50
       --release
       --fetch
-      --summary-csv
-    ci: true
+    ci: false
   env:
     BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
     BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}

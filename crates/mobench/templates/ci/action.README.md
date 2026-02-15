@@ -1,6 +1,6 @@
 # mobench GitHub Action
 
-Run `mobench run` in GitHub Actions with caching, Android SDK setup, and artifact upload.
+Run `mobench ci run` in GitHub Actions with caching, Android SDK setup, and artifact upload.
 
 ## Usage
 
@@ -15,8 +15,7 @@ Run `mobench run` in GitHub Actions with caching, Android SDK setup, and artifac
       --devices "Google Pixel 7-13.0"
       --release
       --fetch
-      --summary-csv
-    ci: true
+    ci: false
     ndk-version: "26.1.10909125"
   env:
     BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
@@ -25,9 +24,9 @@ Run `mobench run` in GitHub Actions with caching, Android SDK setup, and artifac
 
 ## Inputs
 
-- `command`: command to invoke (default: `cargo mobench run`).
-- `run-args`: arguments passed to `mobench run`.
-- `ci`: append `--ci` to enable job summaries + regression exit codes.
+- `command`: command to invoke (default: `cargo mobench ci run`).
+- `run-args`: arguments passed to the selected command.
+- `ci`: append `--ci` only when `command` is exactly `cargo mobench run`.
 - `install-mobench`: install `mobench` with cargo-binstall/cargo install.
 - `mobench-version`: optional version to install.
 - `install-cargo-ndk`: install `cargo-ndk` for Android builds.

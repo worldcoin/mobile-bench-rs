@@ -2,16 +2,16 @@ name: "mobench"
 description: "Run mobile benchmarks with mobench"
 inputs:
   command:
-    description: "Command to invoke (default: cargo mobench run)"
+    description: "Command to invoke (default: cargo mobench ci run)"
     required: false
-    default: "cargo mobench run"
+    default: "cargo mobench ci run"
   run-args:
-    description: "Arguments passed to mobench run"
+    description: "Arguments passed to the selected mobench command"
     required: true
   ci:
-    description: "Append --ci to the command"
+    description: "Append --ci when command is cargo mobench run"
     required: false
-    default: "true"
+    default: "false"
   install-mobench:
     description: "Install mobench with cargo-binstall or cargo install"
     required: false
@@ -68,9 +68,9 @@ inputs:
     description: "Paths to upload as artifacts"
     required: false
     default: |
-      target/mobench/results.json
-      target/mobench/results.md
-      target/mobench/results.csv
+      target/mobench/ci/summary.json
+      target/mobench/ci/summary.md
+      target/mobench/ci/results.csv
       target/browserstack
 runs:
   using: "composite"
@@ -158,7 +158,7 @@ runs:
         export ANDROID_HOME="${{ inputs.android-sdk-root }}"
         export ANDROID_NDK_HOME="${{ inputs.android-sdk-root }}/ndk/${{ inputs.ndk-version }}"
         extra_args=""
-        if [ "${{ inputs.ci }}" = "true" ]; then
+        if [ "${{ inputs.ci }}" = "true" ] && [ "${{ inputs.command }}" = "cargo mobench run" ]; then
           extra_args="--ci"
         fi
         ${{ inputs.command }} $extra_args ${{ inputs.run-args }}
