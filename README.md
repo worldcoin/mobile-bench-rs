@@ -199,6 +199,19 @@ fn db_query(db: &Database) {
 
 ## Release Notes
 
+### v0.1.14
+
+- Added CI contract-oriented commands and workflows:
+  - `cargo mobench ci run`
+  - `cargo mobench config validate`
+  - `cargo mobench devices resolve`
+  - `cargo mobench fixture init|build|verify|cache-key`
+  - `cargo mobench report summarize|github`
+- Standardized CI outputs under `target/mobench/ci/` with schema-backed metadata.
+- Added baseline comparison source support (`path|url|artifact:<path>`) and regression labels.
+- Improved local action safety for workflow input handling and sticky PR comment publishing.
+- Fixed iOS CI target setup (`x86_64-apple-ios`) and preserved CI outputs on regression exit.
+
 ### v0.1.13
 
 - **Setup and teardown support**: `#[benchmark]` macro now supports `setup`, `teardown`, and `per_iteration` attributes for excluding expensive initialization from timing measurements

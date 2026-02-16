@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
-description = "Rust SDK for mobile benchmarks with timing harness and Android/iOS builders"
+description = "Rust SDK for mobile benchmarking with timing harness and Android/iOS builders"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
 documentation = "https://docs.rs/mobench-sdk"
 readme = "README.md"
@@ -32,7 +32,7 @@ runner-only = []
 
 [dependencies]
 # Proc macros (only with full feature)
-mobench-macros = { version = "0.1.13", path = "../mobench-macros", optional = true }
+mobench-macros = { version = "0.1.14", path = "../mobench-macros", optional = true }
 
 # Registry (only with full feature)
 inventory = { workspace = true, optional = true }
