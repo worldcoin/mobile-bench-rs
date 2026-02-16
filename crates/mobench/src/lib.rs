@@ -1443,11 +1443,14 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
     }
 
     let status = cmd.status().context("running `cargo mobench run` for CI")?;
+    let exit_code = status.code();
     if !status.success() {
-        if let Some(code) = status.code() {
-            std::process::exit(code);
+        if exit_code.is_none() {
+            bail!("`cargo mobench run` terminated unexpectedly");
         }
-        bail!("`cargo mobench run` terminated unexpectedly");
+        if exit_code != Some(EXIT_REGRESSION) {
+            std::process::exit(exit_code.unwrap_or(1));
+        }
     }
 
     if !summary_json.exists() {
@@ -1535,6 +1538,10 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
     println!("  - {}", summary_json.display());
     println!("  - {}", summary_md.display());
     println!("  - {}", results_csv.display());
+
+    if exit_code == Some(EXIT_REGRESSION) {
+        std::process::exit(EXIT_REGRESSION);
+    }
 
     Ok(())
 }
