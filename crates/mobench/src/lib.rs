@@ -1245,16 +1245,43 @@ pub fn run() -> Result<()> {
                 println!("No BrowserStack run to fetch (devices not provided?)");
             }
 
+            let mut baseline_compare_path = None;
+            let mut baseline_snapshot_path = None;
+            if let Some(baseline_source) = baseline.as_deref() {
+                let resolved_baseline = resolve_baseline_source(baseline_source)?;
+                if paths_point_to_same_file(&resolved_baseline, &summary_paths.json)? {
+                    if !resolved_baseline.exists() {
+                        bail!(
+                            "config_error: baseline source `{}` resolves to output path {}; provide an existing baseline file or a different path",
+                            baseline_source,
+                            summary_paths.json.display()
+                        );
+                    }
+                    let snapshot = snapshot_baseline_for_compare(&resolved_baseline)?;
+                    baseline_snapshot_path = Some(snapshot.clone());
+                    baseline_compare_path = Some(snapshot);
+                } else {
+                    baseline_compare_path = Some(resolved_baseline);
+                }
+            }
+
             run_summary.summary = build_summary(&run_summary)?;
             write_summary(&run_summary, &summary_paths, summary_csv)?;
 
             let mut compare_report = None;
             let mut regression_findings: Vec<RegressionFinding> = Vec::new();
-            if let Some(baseline_source) = baseline.as_deref() {
-                let baseline_path = resolve_baseline_source(baseline_source)?;
+            if let Some(baseline_path) = baseline_compare_path.as_deref() {
                 let report = compare_summaries(&baseline_path, &summary_paths.json)?;
                 regression_findings = detect_regressions(&report, regression_threshold_pct);
                 compare_report = Some(report);
+            }
+            if let Some(snapshot_path) = baseline_snapshot_path {
+                if let Err(err) = fs::remove_file(&snapshot_path) {
+                    eprintln!(
+                        "Warning: failed to remove baseline snapshot {}: {err}",
+                        snapshot_path.display()
+                    );
+                }
             }
             if let Some(report) = &compare_report {
                 inject_compare_into_summary(
@@ -2450,7 +2477,8 @@ fn resolve_run_spec(
 ) -> Result<RunSpec> {
     if let Some(cfg_path) = config {
         let cfg = load_config(cfg_path)?;
-        let matrix = load_device_matrix(&cfg.device_matrix)?;
+        let matrix_path = device_matrix.unwrap_or(cfg.device_matrix.as_path());
+        let matrix = load_device_matrix(matrix_path)?;
         let resolved_tags = if !device_tags.is_empty() {
             Some(device_tags)
         } else {
@@ -3715,6 +3743,37 @@ fn resolve_baseline_source(source: &str) -> Result<PathBuf> {
     }
 
     Ok(PathBuf::from(trimmed))
+}
+
+fn normalized_path(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .context("resolving current directory for baseline path comparison")?
+            .join(path)
+    };
+    Ok(fs::canonicalize(&absolute).unwrap_or(absolute))
+}
+
+fn paths_point_to_same_file(lhs: &Path, rhs: &Path) -> Result<bool> {
+    Ok(normalized_path(lhs)? == normalized_path(rhs)?)
+}
+
+fn snapshot_baseline_for_compare(path: &Path) -> Result<PathBuf> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_nanos();
+    let snapshot_path = env::temp_dir().join(format!("mobench-baseline-{stamp}.json"));
+    fs::copy(path, &snapshot_path).with_context(|| {
+        format!(
+            "copying baseline snapshot from {} to {}",
+            path.display(),
+            snapshot_path.display()
+        )
+    })?;
+    Ok(snapshot_path)
 }
 
 fn resolve_artifact_baseline(reference: &str) -> Result<PathBuf> {
@@ -6692,6 +6751,7 @@ fn check_xcodegen() -> PrereqCheck {
 mod tests {
     use super::*;
     use jsonschema::JSONSchema;
+    use tempfile::TempDir;
 
     // Register a lightweight benchmark for tests so the inventory contains at least one entry.
     #[mobench_sdk::benchmark]
@@ -6722,6 +6782,84 @@ mod tests {
         assert_eq!(spec.devices, vec!["pixel".to_string()]);
         assert!(spec.browserstack.is_none());
         assert!(spec.ios_xcuitest.is_none());
+    }
+
+    #[test]
+    fn resolve_run_spec_prefers_cli_device_matrix_with_config() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config_matrix_path = temp_dir.path().join("config-matrix.yml");
+        let cli_matrix_path = temp_dir.path().join("cli-matrix.yml");
+        let config_path = temp_dir.path().join("bench-config.toml");
+
+        write_file(
+            &config_matrix_path,
+            br#"devices:
+  - name: Config Device
+    os: android
+    os_version: "14"
+"#,
+        )
+        .expect("write config matrix");
+        write_file(
+            &cli_matrix_path,
+            br#"devices:
+  - name: CLI Device
+    os: android
+    os_version: "14"
+"#,
+        )
+        .expect("write cli matrix");
+
+        let config_toml = format!(
+            r#"target = "android"
+function = "sample_fns::fibonacci"
+iterations = 10
+warmup = 2
+device_matrix = "{}"
+
+[browserstack]
+app_automate_username = "user"
+app_automate_access_key = "key"
+project = "proj"
+"#,
+            config_matrix_path.display()
+        );
+        write_file(&config_path, config_toml.as_bytes()).expect("write config");
+
+        let spec = resolve_run_spec(
+            MobileTarget::Android,
+            "ignored::value".into(),
+            1,
+            0,
+            Vec::new(),
+            Some(config_path.as_path()),
+            Some(cli_matrix_path.as_path()),
+            Vec::new(),
+            None,
+            None,
+            false,
+            false,
+        )
+        .expect("resolve spec");
+
+        assert_eq!(spec.devices, vec!["CLI Device".to_string()]);
+    }
+
+    #[test]
+    fn snapshot_baseline_creates_distinct_copy() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let baseline = temp_dir.path().join("baseline.json");
+        write_file(&baseline, br#"{"ok":true}"#).expect("write baseline");
+
+        assert!(paths_point_to_same_file(&baseline, &baseline).expect("compare path"));
+
+        let snapshot = snapshot_baseline_for_compare(&baseline).expect("snapshot baseline");
+        assert_ne!(snapshot, baseline);
+        let original_contents = fs::read_to_string(&baseline).expect("read baseline");
+        let snapshot_contents = fs::read_to_string(&snapshot).expect("read snapshot");
+        assert_eq!(snapshot_contents, original_contents);
+
+        fs::remove_file(snapshot).expect("remove snapshot");
     }
 
     #[test]
