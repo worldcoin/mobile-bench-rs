@@ -18,6 +18,8 @@ Included:
 - `cargo mobench ci run` contract
 - output files and metadata fields
 - error taxonomy categories for CI-oriented validation
+- deterministic device-matrix override semantics (`--device-matrix` over config value when both are provided)
+- baseline comparison safety when baseline and candidate paths overlap
 
 Excluded (non-goals):
 - provider-specific API payloads

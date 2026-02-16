@@ -39,7 +39,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Install required targets
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 # https://doc.rust-lang.org/rustup/targets.html
 
 # Install cargo-ndk for Android builds
@@ -214,7 +214,7 @@ cargo mobench build --target ios --progress
 cargo mobench verify --target ios --check-artifacts
 
 # This build step:
-# - Compiles Rust for aarch64-apple-ios (device) and aarch64-apple-ios-sim (simulator)
+# - Compiles Rust for aarch64-apple-ios (device), aarch64-apple-ios-sim (Apple Silicon simulators), and x86_64-apple-ios (Intel simulators)
 # - Creates xcframework with proper structure:
 #   target/mobench/ios/sample_fns.xcframework/
 #     ├── Info.plist

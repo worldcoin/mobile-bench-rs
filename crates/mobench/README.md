@@ -170,7 +170,7 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 - `--iterations <N>` - Number of iterations (default: 100)
 - `--warmup <N>` - Warmup iterations (default: 10)
 - `--devices <LIST>` - Comma-separated device list for BrowserStack
-- `--device-matrix <FILE>` - Load devices from a matrix YAML file
+- `--device-matrix <FILE>` - Load devices from a matrix YAML file (overrides `device_matrix` from `--config` when both are provided)
 - `--device-tags <TAG>` - Filter device matrix by tag (repeatable / comma-separated)
 - `--local-only` - Skip mobile builds (no device run)
 - `--config <FILE>` - Load run spec from config file
@@ -180,7 +180,7 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 - `--summary-csv` - Write CSV summary alongside JSON/Markdown
 - `--fetch` - Fetch BrowserStack results after completion
 - `--ci` - CI mode (step summary + regression exit codes)
-- `--baseline <path|url|artifact:<path>>` - Compare against baseline summary (non-zero on regressions)
+- `--baseline <path|url|artifact:<path>>` - Compare against baseline summary (non-zero on regressions); if baseline resolves to the output file path, mobench snapshots the previous file first
 - `--regression-threshold-pct <N>` - Regression threshold percentage (default: 5.0)
 - `--junit <FILE>` - Write JUnit XML report
 
@@ -252,6 +252,8 @@ cargo mobench ci run \
   --function sample_fns::fibonacci \
   --local-only
 ```
+
+When `--baseline` is omitted for `ci run`, mobench automatically uses the previous successful summary snapshot in the target output directory when present.
 
 ### `config validate` - Validate Run Config Contract
 
@@ -553,6 +555,7 @@ BrowserStack credentials can be provided via:
   ```bash
   rustup target add aarch64-apple-ios
   rustup target add aarch64-apple-ios-sim
+  rustup target add x86_64-apple-ios
   ```
 - **XcodeGen** - Install with `brew install xcodegen`
 
@@ -626,7 +629,7 @@ Example workflow excerpt:
 - uses: ./.github/actions/mobench
   with:
     command: cargo mobench ci run
-    run-args: >
+    run-args: |
       --target android
       --function my_benchmark
       --devices "Google Pixel 7-13.0"
@@ -638,6 +641,8 @@ Example workflow excerpt:
     BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
     BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
 ```
+
+The local action currently supports `command` values `cargo mobench ci run` and `cargo mobench run`.
 
 For CI dashboards, add `--junit path/to/results.junit.xml`.
 

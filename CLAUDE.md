@@ -633,7 +633,7 @@ cargo mobench run --target android --function my_function
 ### Target Architectures
 
 - **Android**: `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android` (emulator)
-- **iOS**: `aarch64-apple-ios` (device), `aarch64-apple-ios-sim` (simulator on M1+ Macs)
+- **iOS**: `aarch64-apple-ios` (device), `aarch64-apple-ios-sim` (Apple Silicon simulators), `x86_64-apple-ios` (Intel simulators)
 
 ### XCFramework Structure
 

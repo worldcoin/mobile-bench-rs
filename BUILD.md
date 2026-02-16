@@ -106,7 +106,7 @@ brew install xcodegen
 ## https://github.com/yonaskolb/XcodeGen
 
 # Install required Rust targets
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 ## https://doc.rust-lang.org/rustup/targets.html
 
 # Verify installation
@@ -237,7 +237,8 @@ cargo mobench build --target ios
 This build step:
 1. Compiles Rust for iOS targets:
    - `aarch64-apple-ios` (physical devices)
-   - `aarch64-apple-ios-sim` (M1+ Mac simulators)
+   - `aarch64-apple-ios-sim` (Apple Silicon simulators)
+   - `x86_64-apple-ios` (Intel simulators)
 
 2. Creates xcframework with structure:
    ```

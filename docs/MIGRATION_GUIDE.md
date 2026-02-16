@@ -59,7 +59,7 @@ jobs:
       - uses: ./.github/actions/mobench
         with:
           command: cargo mobench ci run
-          run-args: >
+          run-args: |
             --target android
             --function sample_fns::fibonacci
             --iterations 20
@@ -68,6 +68,12 @@ jobs:
           pr-comment: true
           github-token: ${{ github.token }}
 ```
+
+### Action input notes
+
+- `command` is allow-listed to `cargo mobench ci run` and `cargo mobench run`.
+- `ci` only appends `--ci` when `command: cargo mobench run`.
+- Prefer multiline `run-args` with explicit quoting for values containing spaces.
 
 ## Compatibility Notes
 

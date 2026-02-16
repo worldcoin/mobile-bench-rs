@@ -19,7 +19,7 @@ It covers:
 
 ### Required CLI inputs
 
-- `--target <android|ios>`
+- `--target <android|ios|both>`
 - `--function <fully-qualified benchmark function>`
 
 ### Optional execution inputs
@@ -30,6 +30,10 @@ It covers:
 - iOS artifacts: `--ios-app`, `--ios-test-suite`
 - Regression mode: `--baseline`, `--regression-threshold-pct`
 - Output path: `--output-dir`
+
+Behavior notes:
+- In config-driven runs (`--config`), `--device-matrix` overrides the matrix path from config when both are provided.
+- If `--baseline` resolves to the same file as the candidate output, mobench snapshots the previous baseline file before writing the candidate summary so regression comparison remains valid.
 
 ### Optional metadata inputs
 

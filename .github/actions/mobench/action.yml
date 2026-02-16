@@ -2,14 +2,14 @@ name: "mobench"
 description: "Run mobile benchmarks with mobench"
 inputs:
   command:
-    description: "Command to invoke (default: cargo mobench ci run)"
+    description: "Command to invoke (supported: cargo mobench ci run | cargo mobench run)"
     required: false
     default: "cargo mobench ci run"
   run-args:
-    description: "Arguments passed to the selected mobench command"
+    description: "Arguments passed to command (quote values containing spaces)"
     required: true
   ci:
-    description: "Append --ci when command is cargo mobench run"
+    description: "Append --ci only when command is cargo mobench run (ignored for ci run)"
     required: false
     default: "false"
   install-mobench:

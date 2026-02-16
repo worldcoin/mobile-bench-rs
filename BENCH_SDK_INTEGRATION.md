@@ -100,7 +100,7 @@ Install the following tools (per platform):
     - Note: Android Gradle Plugin (AGP) officially supports Java 17.
 - iOS (macOS only):
   - Xcode + Command Line Tools: https://developer.apple.com/xcode/
-  - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
+  - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`
     - https://doc.rust-lang.org/rustup/targets.html
   - `xcodegen` (optional): https://github.com/yonaskolb/XcodeGen
 

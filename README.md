@@ -109,6 +109,8 @@ default_warmup = 10
 ```
 
 CLI flags override config file values when provided.
+- In `cargo mobench run --config <FILE>` mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
+- For regression comparisons, `--baseline` should point to a previous run summary; if it resolves to the same output path, mobench snapshots the prior file before writing the candidate summary.
 
 ## Project docs
 
