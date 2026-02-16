@@ -72,6 +72,22 @@ inputs:
       target/mobench/ci/summary.md
       target/mobench/ci/results.csv
       target/browserstack
+  pr-comment:
+    description: "Publish sticky PR comment from CI summary"
+    required: false
+    default: "false"
+  pr-number:
+    description: "PR number (optional, auto-detected from GITHUB_REF when omitted)"
+    required: false
+    default: ""
+  pr-comment-marker:
+    description: "Marker string used to update an existing sticky PR comment"
+    required: false
+    default: "<!-- mobench-report -->"
+  github-token:
+    description: "GitHub token used to publish PR comments"
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -162,6 +178,34 @@ runs:
           extra_args="--ci"
         fi
         ${{ inputs.command }} $extra_args ${{ inputs.run-args }}
+
+    - name: Publish sticky PR comment
+      if: always() && inputs.pr-comment == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        pr_number="${{ inputs.pr-number }}"
+        if [ -z "$pr_number" ] && [ -n "${GITHUB_REF:-}" ]; then
+          pr_number="$(echo "$GITHUB_REF" | awk -F/ '/^refs\/pull\// { print $3 }')"
+        fi
+        if [ -z "$pr_number" ]; then
+          echo "No PR number detected; skipping sticky comment publish."
+          exit 0
+        fi
+        if [ ! -f target/mobench/ci/summary.json ]; then
+          echo "CI summary not found at target/mobench/ci/summary.json; skipping sticky comment publish."
+          exit 0
+        fi
+        if [ -z "${GITHUB_TOKEN:-}" ]; then
+          echo "GITHUB_TOKEN is empty; skipping sticky comment publish."
+          exit 0
+        fi
+        cargo mobench report github \
+          --pr "$pr_number" \
+          --summary target/mobench/ci/summary.json \
+          --marker "${{ inputs.pr-comment-marker }}" \
+          --publish
 
     - name: Upload artifacts
       if: always()

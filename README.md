@@ -6,6 +6,8 @@ Mobile benchmarking SDK for Rust. Build and run Rust benchmarks on Android and i
 
 mobench provides a Rust API and a CLI for running benchmarks on real mobile devices. You define benchmarks in Rust, generate mobile bindings automatically, and drive execution from the CLI with consistent output formats (JSON, Markdown, CSV).
 
+For programmatic CI integrations, `mobench` exposes typed request/result types (`RunRequest`, `RunResult`, `DeviceSelection`, `Report`) via the crate API.
+
 ## How mobench works
 
 - `#[benchmark]` marks functions and registers them via `inventory`
@@ -38,6 +40,7 @@ cargo add mobench-sdk inventory
 
 # Check prerequisites before building
 cargo mobench doctor --target both
+cargo mobench config validate --config bench-config.toml
 cargo mobench check --target android
 cargo mobench check --target ios
 
@@ -58,11 +61,23 @@ cargo mobench run --target android --function sample_fns::fibonacci \
 # List available BrowserStack devices
 cargo mobench devices --platform android
 
+# Resolve matrix devices deterministically for CI
+cargo mobench devices resolve --platform android --profile default --device-matrix device-matrix.yaml
+
+# Fixture lifecycle helpers
+cargo mobench fixture init
+cargo mobench fixture verify
+cargo mobench fixture cache-key
+
 # View benchmark results summary
 cargo mobench summary target/mobench/results.json
 
 # CI one-command orchestration with stable outputs
 cargo mobench ci run --target android --function sample_fns::fibonacci --local-only
+
+# Reporting helpers from standardized outputs
+cargo mobench report summarize --summary target/mobench/ci/summary.json
+cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
 ```
 
 CI contract outputs are written to `target/mobench/ci/`:
@@ -101,6 +116,10 @@ CLI flags override config file values when provided.
 - `BUILD.md`: build prerequisites and troubleshooting
 - `TESTING.md`: testing guide and device workflows
 - `BROWSERSTACK_CI_INTEGRATION.md`: BrowserStack CI setup
+- `docs/CONTRACT_CI_V1.md`: frozen v1 CI input/output/error contract
+- `docs/adr/0001-mobench-ci-contract-v1.md`: CI contract ADR and compatibility policy
+- `docs/schemas/`: machine-readable CI/summary schema artifacts
+- `docs/MIGRATION_GUIDE.md`: migration guide (placeholder, linked from ADR)
 - `FETCH_RESULTS_GUIDE.md`: fetching and summarizing results
 - `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide

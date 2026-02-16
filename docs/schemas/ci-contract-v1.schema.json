@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://world.org/mobench/schemas/ci-contract-v1.schema.json",
+  "title": "Mobench CI Contract v1",
+  "type": "object",
+  "required": ["ci"],
+  "properties": {
+    "ci": {
+      "type": "object",
+      "required": ["metadata", "outputs"],
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "required": ["requested_by", "request_command", "mobench_version"],
+          "properties": {
+            "requested_by": { "type": "string" },
+            "pr_number": { "type": ["string", "null"] },
+            "request_command": { "type": "string" },
+            "mobench_ref": { "type": ["string", "null"] },
+            "mobench_version": { "type": "string" }
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "required": ["summary_json", "summary_md", "results_csv"],
+          "properties": {
+            "summary_json": { "type": "string" },
+            "summary_md": { "type": "string" },
+            "results_csv": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -180,7 +180,7 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 - `--summary-csv` - Write CSV summary alongside JSON/Markdown
 - `--fetch` - Fetch BrowserStack results after completion
 - `--ci` - CI mode (step summary + regression exit codes)
-- `--baseline <FILE>` - Compare against baseline summary (non-zero on regressions)
+- `--baseline <path|url|artifact:<path>>` - Compare against baseline summary (non-zero on regressions)
 - `--regression-threshold-pct <N>` - Regression threshold percentage (default: 5.0)
 - `--junit <FILE>` - Write JUnit XML report
 
@@ -217,7 +217,7 @@ cargo mobench run \
 Run build/package/run/fetch/report end-to-end with stable CI output files:
 
 ```bash
-cargo mobench ci run --target <android|ios> --function <NAME> [OPTIONS]
+cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 ```
 
 **Contract outputs (default directory: `target/mobench/ci/`):**
@@ -232,6 +232,11 @@ cargo mobench ci run --target <android|ios> --function <NAME> [OPTIONS]
 - `mobench_ref`
 - `mobench_version`
 
+Contract references:
+- `docs/CONTRACT_CI_V1.md`
+- `docs/schemas/summary-v1.schema.json`
+- `docs/schemas/ci-contract-v1.schema.json`
+
 **Example:**
 ```bash
 cargo mobench ci run \
@@ -240,6 +245,55 @@ cargo mobench ci run \
   --devices "Google Pixel 7-13.0" \
   --release \
   --fetch
+
+# Combined android + ios contract output
+cargo mobench ci run \
+  --target both \
+  --function sample_fns::fibonacci \
+  --local-only
+```
+
+### `config validate` - Validate Run Config Contract
+
+Validate `bench-config.toml` and referenced matrix/settings with contract-aligned issue categories:
+
+```bash
+cargo mobench config validate --config bench-config.toml
+cargo mobench config validate --config bench-config.toml --format json
+```
+
+### `devices resolve` - Deterministic Matrix Resolution
+
+Resolve matrix devices for a platform/profile without custom scripts:
+
+```bash
+cargo mobench devices resolve \
+  --platform android \
+  --profile default \
+  --device-matrix device-matrix.yaml
+
+cargo mobench devices resolve \
+  --platform ios \
+  --config bench-config.toml \
+  --format json
+```
+
+### `fixture` - Fixture Lifecycle Commands
+
+Manage reproducible fixture setup for CI:
+
+```bash
+# Create starter fixture files
+cargo mobench fixture init
+
+# Build fixture artifacts
+cargo mobench fixture build --target both --release
+
+# Verify fixture config + matrix resolution
+cargo mobench fixture verify --config bench-config.toml
+
+# Generate deterministic cache key
+cargo mobench fixture cache-key --config bench-config.toml --format json
 ```
 
 ### `package-ipa` - Package iOS IPA
@@ -346,6 +400,31 @@ cargo mobench compare \
   --baseline results-v1.json \
   --candidate results-v2.json \
   --output comparison.md
+```
+
+### `report summarize` - Render CI Summary Markdown
+
+Generate natural-language markdown from standardized output JSON:
+
+```bash
+cargo mobench report summarize --summary target/mobench/ci/summary.json
+cargo mobench report summarize --summary target/mobench/ci/summary.json --output report.md
+```
+
+### `report github` - Sticky PR Comment Payload/Publish
+
+Create or update sticky PR comments from standardized outputs:
+
+```bash
+# Print comment body
+cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
+
+# Publish/update comment (requires GITHUB_TOKEN + GITHUB_REPOSITORY)
+cargo mobench report github \
+  --pr 123 \
+  --summary target/mobench/ci/summary.json \
+  --publish \
+  --marker "<!-- mobench-report -->"
 ```
 
 ## Configuration
@@ -561,6 +640,42 @@ Example workflow excerpt:
 ```
 
 For CI dashboards, add `--junit path/to/results.junit.xml`.
+
+### Typed Rust API
+
+`mobench` also exposes a typed request/result surface for integrations:
+
+```rust
+use mobench::{DeviceSelection, MobileTarget, RunRequest, run_request};
+use std::path::PathBuf;
+
+let result = run_request(&RunRequest {
+    target: MobileTarget::Android,
+    function: "sample_fns::fibonacci".to_string(),
+    iterations: 20,
+    warmup: 5,
+    device_selection: DeviceSelection {
+        devices: vec!["Google Pixel 7-13.0".to_string()],
+        device_matrix: None,
+        device_tags: vec![],
+    },
+    config: None,
+    baseline: None,
+    regression_threshold_pct: 5.0,
+    junit: None,
+    local_only: true,
+    release: false,
+    ios_app: None,
+    ios_test_suite: None,
+    fetch: false,
+    fetch_output_dir: PathBuf::from("target/browserstack"),
+    fetch_poll_interval_secs: 5,
+    fetch_timeout_secs: 300,
+    progress: false,
+    output_dir: PathBuf::from("target/mobench/ci"),
+})?;
+println!("summary: {}", result.report.summary_json.display());
+```
 
 ## Workflow
 

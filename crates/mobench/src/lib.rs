@@ -117,6 +117,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fmt::Write;
@@ -199,8 +200,8 @@ enum Command {
             help = "Enable CI mode (job summary, optional JUnit, regression exit codes)"
         )]
         ci: bool,
-        #[arg(long, help = "Baseline JSON summary to compare for regressions")]
-        baseline: Option<PathBuf>,
+        #[arg(long, help = "Baseline summary source (path|url|artifact:<path>)")]
+        baseline: Option<String>,
         #[arg(
             long,
             default_value_t = 5.0,
@@ -245,6 +246,11 @@ enum Command {
     Plan {
         #[arg(long, default_value = "device-matrix.yaml")]
         output: PathBuf,
+    },
+    /// Validate run configuration and associated files.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
     },
     /// Validate local + CI prerequisites and configuration.
     Doctor {
@@ -404,12 +410,24 @@ enum Command {
     ///   mobench devices --json             # Output as JSON
     ///   mobench devices --validate "Google Pixel 7-13.0"  # Validate a device spec
     Devices {
+        #[command(subcommand)]
+        command: Option<DevicesCommand>,
         #[arg(long, value_enum, help = "Filter by platform (android or ios)")]
         platform: Option<DevicePlatform>,
         #[arg(long, help = "Output as JSON")]
         json: bool,
         #[arg(long, help = "Validate device specs against available devices")]
         validate: Vec<String>,
+    },
+    /// Fixture lifecycle helpers for reproducible CI setup.
+    Fixture {
+        #[command(subcommand)]
+        command: FixtureCommand,
+    },
+    /// Reporting helpers for CI summaries and PR comments.
+    Report {
+        #[command(subcommand)]
+        command: ReportCommand,
     },
     /// Check prerequisites for building mobile artifacts.
     ///
@@ -455,10 +473,120 @@ enum CiCommand {
     Run(CiRunArgs),
 }
 
+#[derive(Subcommand, Debug)]
+enum DevicesCommand {
+    /// Resolve devices from a matrix deterministically for CI usage.
+    Resolve {
+        #[arg(long, value_enum)]
+        platform: DevicePlatform,
+        #[arg(long, help = "Device profile/tag to resolve (defaults to `default`)")]
+        profile: Option<String>,
+        #[arg(
+            long,
+            help = "Path to run config file (optional source for matrix/tags)"
+        )]
+        config: Option<PathBuf>,
+        #[arg(long, help = "Path to device matrix YAML file")]
+        device_matrix: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
+        format: CheckOutputFormat,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigCommand {
+    /// Validate bench-config.toml and referenced matrix/settings.
+    Validate {
+        #[arg(long, default_value = "bench-config.toml")]
+        config: PathBuf,
+        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
+        format: CheckOutputFormat,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum FixtureCommand {
+    /// Create starter fixture files for CI runs.
+    Init {
+        #[arg(long, default_value = "bench-config.toml")]
+        config: PathBuf,
+        #[arg(long, default_value = "device-matrix.yaml")]
+        device_matrix: PathBuf,
+        #[arg(long, help = "Overwrite existing fixture files")]
+        force: bool,
+    },
+    /// Build fixture artifacts using existing build commands.
+    Build {
+        #[arg(long, value_enum, default_value_t = SdkTarget::Both)]
+        target: SdkTarget,
+        #[arg(long, help = "Build in release mode")]
+        release: bool,
+        #[arg(long, help = "Output directory for mobile artifacts")]
+        output_dir: Option<PathBuf>,
+        #[arg(long, help = "Path to benchmark crate")]
+        crate_path: Option<PathBuf>,
+        #[arg(long, help = "Show simplified step-by-step progress output")]
+        progress: bool,
+    },
+    /// Verify fixture files and optional profile filtering.
+    Verify {
+        #[arg(long, default_value = "bench-config.toml")]
+        config: PathBuf,
+        #[arg(long)]
+        device_matrix: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = SdkTarget::Both)]
+        target: SdkTarget,
+        #[arg(long, help = "Device profile/tag to verify")]
+        profile: Option<String>,
+        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
+        format: CheckOutputFormat,
+    },
+    /// Compute deterministic fixture cache key from config/toolchain inputs.
+    CacheKey {
+        #[arg(long, default_value = "bench-config.toml")]
+        config: PathBuf,
+        #[arg(long)]
+        device_matrix: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = SdkTarget::Both)]
+        target: SdkTarget,
+        #[arg(long, help = "Device profile/tag for keying")]
+        profile: Option<String>,
+        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
+        format: CheckOutputFormat,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ReportCommand {
+    /// Generate markdown summary from standardized output JSON.
+    Summarize {
+        #[arg(long, default_value = "target/mobench/ci/summary.json")]
+        summary: PathBuf,
+        #[arg(long, help = "Write markdown output to file")]
+        output: Option<PathBuf>,
+    },
+    /// Generate/publish sticky GitHub PR comment from summary output.
+    Github {
+        #[arg(
+            long,
+            help = "Pull request number (auto-detected from GITHUB_REF if omitted)"
+        )]
+        pr: Option<String>,
+        #[arg(long, default_value = "target/mobench/ci/summary.json")]
+        summary: PathBuf,
+        #[arg(long, default_value = "<!-- mobench-report -->")]
+        marker: String,
+        #[arg(long, help = "Publish via GitHub API using GITHUB_TOKEN")]
+        publish: bool,
+        #[arg(long, help = "Write generated comment body to file")]
+        output: Option<PathBuf>,
+    },
+}
+
 #[derive(Args, Debug, Clone)]
 struct CiRunArgs {
     #[arg(long, value_enum)]
-    target: MobileTarget,
+    target: CiTarget,
     #[arg(long, help = "Fully-qualified Rust function to benchmark")]
     function: String,
     #[arg(long, default_value_t = 100)]
@@ -477,8 +605,8 @@ struct CiRunArgs {
     device_tags: Vec<String>,
     #[arg(long, help = "Optional path to config file")]
     config: Option<PathBuf>,
-    #[arg(long, help = "Baseline JSON summary to compare for regressions")]
-    baseline: Option<PathBuf>,
+    #[arg(long, help = "Baseline summary source (path|url|artifact:<path>)")]
+    baseline: Option<String>,
     #[arg(
         long,
         default_value_t = 5.0,
@@ -527,6 +655,24 @@ struct CiRunArgs {
     mobench_ref: Option<String>,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CiTarget {
+    Android,
+    Ios,
+    Both,
+}
+
+impl CiTarget {
+    fn targets(self) -> &'static [MobileTarget] {
+        match self {
+            CiTarget::Android => &[MobileTarget::Android],
+            CiTarget::Ios => &[MobileTarget::Ios],
+            CiTarget::Both => &[MobileTarget::Android, MobileTarget::Ios],
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 #[clap(rename_all = "lowercase")]
 enum DevicePlatform {
@@ -549,9 +695,19 @@ enum CheckOutputFormat {
     Json,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ContractErrorCategory {
+    Config,
+    Preflight,
+    Provider,
+    Build,
+    Benchmark,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum MobileTarget {
+pub enum MobileTarget {
     Android,
     Ios,
 }
@@ -1094,10 +1250,19 @@ pub fn run() -> Result<()> {
 
             let mut compare_report = None;
             let mut regression_findings: Vec<RegressionFinding> = Vec::new();
-            if let Some(baseline_path) = baseline.as_deref() {
-                let report = compare_summaries(baseline_path, &summary_paths.json)?;
+            if let Some(baseline_source) = baseline.as_deref() {
+                let baseline_path = resolve_baseline_source(baseline_source)?;
+                let report = compare_summaries(&baseline_path, &summary_paths.json)?;
                 regression_findings = detect_regressions(&report, regression_threshold_pct);
                 compare_report = Some(report);
+            }
+            if let Some(report) = &compare_report {
+                inject_compare_into_summary(
+                    &summary_paths.json,
+                    report,
+                    regression_threshold_pct,
+                    baseline.as_deref(),
+                )?;
             }
 
             if ci {
@@ -1165,6 +1330,11 @@ pub fn run() -> Result<()> {
             write_device_matrix_template(&output, cli.yes)?;
             println!("Wrote sample device matrix to {:?}", output);
         }
+        Command::Config { command } => match command {
+            ConfigCommand::Validate { config, format } => {
+                cmd_config_validate(&config, format)?;
+            }
+        },
         Command::Doctor {
             target,
             config,
@@ -1287,12 +1457,80 @@ pub fn run() -> Result<()> {
             cmd_summary(&report, format)?;
         }
         Command::Devices {
+            command,
             platform,
             json,
             validate,
-        } => {
-            cmd_devices(platform, json, validate)?;
-        }
+        } => match command {
+            Some(DevicesCommand::Resolve {
+                platform,
+                profile,
+                config,
+                device_matrix,
+                format,
+            }) => {
+                cmd_devices_resolve(
+                    platform,
+                    profile,
+                    config.as_deref(),
+                    device_matrix.as_deref(),
+                    format,
+                )?;
+            }
+            None => {
+                cmd_devices(platform, json, validate)?;
+            }
+        },
+        Command::Fixture { command } => match command {
+            FixtureCommand::Init {
+                config,
+                device_matrix,
+                force,
+            } => {
+                cmd_fixture_init(&config, &device_matrix, force)?;
+            }
+            FixtureCommand::Build {
+                target,
+                release,
+                output_dir,
+                crate_path,
+                progress,
+            } => {
+                cmd_fixture_build(target, release, output_dir, crate_path, progress)?;
+            }
+            FixtureCommand::Verify {
+                config,
+                device_matrix,
+                target,
+                profile,
+                format,
+            } => {
+                cmd_fixture_verify(&config, device_matrix.as_deref(), target, profile, format)?;
+            }
+            FixtureCommand::CacheKey {
+                config,
+                device_matrix,
+                target,
+                profile,
+                format,
+            } => {
+                cmd_fixture_cache_key(&config, device_matrix.as_deref(), target, profile, format)?;
+            }
+        },
+        Command::Report { command } => match command {
+            ReportCommand::Summarize { summary, output } => {
+                cmd_report_summarize(&summary, output.as_deref())?;
+            }
+            ReportCommand::Github {
+                pr,
+                summary,
+                marker,
+                publish,
+                output,
+            } => {
+                cmd_report_github(pr, &summary, &marker, publish, output.as_deref())?;
+            }
+        },
         Command::Check { target, format } => {
             cmd_check(target, format)?;
         }
@@ -1371,86 +1609,131 @@ struct CiContractMetadata {
     mobench_version: String,
 }
 
-fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
-    fs::create_dir_all(&args.output_dir)
-        .with_context(|| format!("creating ci output dir {}", args.output_dir.display()))?;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceSelection {
+    pub devices: Vec<String>,
+    pub device_matrix: Option<PathBuf>,
+    pub device_tags: Vec<String>,
+}
 
-    let summary_json = args.output_dir.join("summary.json");
-    let summary_md = args.output_dir.join("summary.md");
-    let summary_csv = args.output_dir.join("summary.csv");
-    let results_csv = args.output_dir.join("results.csv");
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunRequest {
+    pub target: MobileTarget,
+    pub function: String,
+    pub iterations: u32,
+    pub warmup: u32,
+    pub device_selection: DeviceSelection,
+    pub config: Option<PathBuf>,
+    pub baseline: Option<String>,
+    pub regression_threshold_pct: f64,
+    pub junit: Option<PathBuf>,
+    pub local_only: bool,
+    pub release: bool,
+    pub ios_app: Option<PathBuf>,
+    pub ios_test_suite: Option<PathBuf>,
+    pub fetch: bool,
+    pub fetch_output_dir: PathBuf,
+    pub fetch_poll_interval_secs: u64,
+    pub fetch_timeout_secs: u64,
+    pub progress: bool,
+    pub output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Report {
+    pub summary_json: PathBuf,
+    pub summary_md: PathBuf,
+    pub results_csv: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunResult {
+    pub target: MobileTarget,
+    pub report: Report,
+    pub exit_code: i32,
+    pub regression_detected: bool,
+}
+
+pub fn run_request(request: &RunRequest) -> Result<RunResult> {
+    fs::create_dir_all(&request.output_dir)
+        .with_context(|| format!("creating output dir {}", request.output_dir.display()))?;
+
+    let summary_json = request.output_dir.join("summary.json");
+    let summary_md = request.output_dir.join("summary.md");
+    let summary_csv = request.output_dir.join("summary.csv");
+    let results_csv = request.output_dir.join("results.csv");
 
     let mut cmd = std::process::Command::new(
         env::current_exe().context("resolving current mobench executable")?,
     );
     cmd.arg("run")
         .arg("--target")
-        .arg(args.target.as_str())
+        .arg(request.target.as_str())
         .arg("--function")
-        .arg(&args.function)
+        .arg(&request.function)
         .arg("--iterations")
-        .arg(args.iterations.to_string())
+        .arg(request.iterations.to_string())
         .arg("--warmup")
-        .arg(args.warmup.to_string())
+        .arg(request.warmup.to_string())
         .arg("--ci")
         .arg("--summary-csv")
         .arg("--output")
         .arg(&summary_json)
         .arg("--fetch-output-dir")
-        .arg(&args.fetch_output_dir)
+        .arg(&request.fetch_output_dir)
         .arg("--fetch-poll-interval-secs")
-        .arg(args.fetch_poll_interval_secs.to_string())
+        .arg(request.fetch_poll_interval_secs.to_string())
         .arg("--fetch-timeout-secs")
-        .arg(args.fetch_timeout_secs.to_string())
+        .arg(request.fetch_timeout_secs.to_string())
         .arg("--regression-threshold-pct")
-        .arg(args.regression_threshold_pct.to_string());
+        .arg(request.regression_threshold_pct.to_string());
 
-    for device in &args.devices {
+    for device in &request.device_selection.devices {
         cmd.arg("--devices").arg(device);
     }
-    if let Some(path) = &args.device_matrix {
+    if let Some(path) = &request.device_selection.device_matrix {
         cmd.arg("--device-matrix").arg(path);
     }
-    for tag in &args.device_tags {
+    for tag in &request.device_selection.device_tags {
         cmd.arg("--device-tags").arg(tag);
     }
-    if let Some(path) = &args.config {
+    if let Some(path) = &request.config {
         cmd.arg("--config").arg(path);
     }
-    if let Some(path) = &args.baseline {
+    if let Some(path) = &request.baseline {
         cmd.arg("--baseline").arg(path);
     }
-    if let Some(path) = &args.junit {
+    if let Some(path) = &request.junit {
         cmd.arg("--junit").arg(path);
     }
-    if args.local_only {
+    if request.local_only {
         cmd.arg("--local-only");
     }
-    if args.release {
+    if request.release {
         cmd.arg("--release");
     }
-    if let Some(path) = &args.ios_app {
+    if let Some(path) = &request.ios_app {
         cmd.arg("--ios-app").arg(path);
     }
-    if let Some(path) = &args.ios_test_suite {
+    if let Some(path) = &request.ios_test_suite {
         cmd.arg("--ios-test-suite").arg(path);
     }
-    if args.fetch {
+    if request.fetch {
         cmd.arg("--fetch");
     }
-    if args.progress {
+    if request.progress {
         cmd.arg("--progress");
     }
 
-    let status = cmd.status().context("running `cargo mobench run` for CI")?;
-    let exit_code = status.code();
-    if !status.success() {
-        if exit_code.is_none() {
-            bail!("`cargo mobench run` terminated unexpectedly");
-        }
-        if exit_code != Some(EXIT_REGRESSION) {
-            std::process::exit(exit_code.unwrap_or(1));
-        }
+    let status = cmd.status().with_context(|| {
+        format!(
+            "running `cargo mobench run` for target {}",
+            request.target.as_str()
+        )
+    })?;
+    let exit_code = status.code().unwrap_or(1);
+    if !status.success() && status.code().is_none() {
+        bail!("`cargo mobench run` terminated unexpectedly");
     }
 
     if !summary_json.exists() {
@@ -1483,12 +1766,157 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
         )
     })?;
 
-    let metadata = CiContractMetadata {
+    Ok(RunResult {
+        target: request.target,
+        report: Report {
+            summary_json,
+            summary_md,
+            results_csv,
+        },
+        exit_code,
+        regression_detected: exit_code == EXIT_REGRESSION,
+    })
+}
+
+fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
+    fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("creating ci output dir {}", args.output_dir.display()))?;
+    let metadata = ci_metadata_from_args(&args);
+    let targets = args.target.targets();
+
+    if targets.len() == 1 {
+        let target = targets[0];
+        let exit_code = cmd_ci_run_single(&args, target, &args.output_dir, &metadata)?;
+
+        let summary_json = args.output_dir.join("summary.json");
+        let summary_md = args.output_dir.join("summary.md");
+        let results_csv = args.output_dir.join("results.csv");
+        println!("CI outputs ready:");
+        println!("  - {}", summary_json.display());
+        println!("  - {}", summary_md.display());
+        println!("  - {}", results_csv.display());
+
+        if exit_code == EXIT_REGRESSION {
+            std::process::exit(EXIT_REGRESSION);
+        }
+        if exit_code != 0 {
+            std::process::exit(exit_code);
+        }
+        return Ok(());
+    }
+
+    let mut regression_detected = false;
+    let mut merged_summaries: BTreeMap<String, Value> = BTreeMap::new();
+    let mut merged_markdown_sections = Vec::new();
+    let mut merged_csv_rows = Vec::new();
+    let mut merged_header: Option<String> = None;
+    let mut target_outputs = BTreeMap::new();
+
+    for target in targets {
+        let target_value = *target;
+        let target_dir = args.output_dir.join(target_value.as_str());
+        fs::create_dir_all(&target_dir)
+            .with_context(|| format!("creating target output dir {}", target_dir.display()))?;
+        let exit_code = cmd_ci_run_single(&args, target_value, &target_dir, &metadata)?;
+        if exit_code == EXIT_REGRESSION {
+            regression_detected = true;
+        } else if exit_code != 0 {
+            std::process::exit(exit_code);
+        }
+
+        let summary_json = target_dir.join("summary.json");
+        let summary_md = target_dir.join("summary.md");
+        let results_csv = target_dir.join("results.csv");
+
+        let summary_text = fs::read_to_string(&summary_json)
+            .with_context(|| format!("reading {}", summary_json.display()))?;
+        let summary_value: Value = serde_json::from_str(&summary_text)
+            .with_context(|| format!("parsing {}", summary_json.display()))?;
+        merged_summaries.insert(target_value.as_str().to_string(), summary_value);
+        target_outputs.insert(
+            target_value.as_str().to_string(),
+            json!({
+                "summary_json": summary_json.display().to_string(),
+                "summary_md": summary_md.display().to_string(),
+                "results_csv": results_csv.display().to_string(),
+            }),
+        );
+
+        let markdown = fs::read_to_string(&summary_md)
+            .with_context(|| format!("reading {}", summary_md.display()))?;
+        merged_markdown_sections.push(format!("## {}\n\n{}", target_value.as_str(), markdown));
+
+        let csv = fs::read_to_string(&results_csv)
+            .with_context(|| format!("reading {}", results_csv.display()))?;
+        let mut lines = csv.lines();
+        if let Some(header) = lines.next()
+            && merged_header.is_none()
+        {
+            merged_header = Some(format!("target,{header}"));
+        }
+        for line in lines {
+            if line.trim().is_empty() {
+                continue;
+            }
+            merged_csv_rows.push(format!("{},{}", target_value.as_str(), line));
+        }
+    }
+
+    let root_summary_json = args.output_dir.join("summary.json");
+    let root_summary_md = args.output_dir.join("summary.md");
+    let root_results_csv = args.output_dir.join("results.csv");
+
+    let merged_markdown = merged_markdown_sections.join("\n\n");
+    write_file(&root_summary_md, merged_markdown.as_bytes())?;
+
+    let mut merged_csv = String::new();
+    if let Some(header) = merged_header {
+        merged_csv.push_str(&header);
+        merged_csv.push('\n');
+    }
+    for row in merged_csv_rows {
+        merged_csv.push_str(&row);
+        merged_csv.push('\n');
+    }
+    write_file(&root_results_csv, merged_csv.as_bytes())?;
+
+    let root_ci_value = json!({
+        "metadata": metadata,
+        "outputs": {
+            "summary_json": root_summary_json.display().to_string(),
+            "summary_md": root_summary_md.display().to_string(),
+            "results_csv": root_results_csv.display().to_string(),
+        },
+        "targets": target_outputs
+    });
+    let merged_summary = json!({
+        "targets": merged_summaries,
+        "ci": root_ci_value
+    });
+    write_file(
+        &root_summary_json,
+        serde_json::to_string_pretty(&merged_summary)?.as_bytes(),
+    )?;
+
+    println!("CI outputs ready:");
+    println!("  - {}", root_summary_json.display());
+    println!("  - {}", root_summary_md.display());
+    println!("  - {}", root_results_csv.display());
+
+    if regression_detected {
+        std::process::exit(EXIT_REGRESSION);
+    }
+    Ok(())
+}
+
+fn ci_metadata_from_args(args: &CiRunArgs) -> CiContractMetadata {
+    CiContractMetadata {
         requested_by: args
             .requested_by
+            .clone()
             .or_else(|| ci_env(&["MOBENCH_REQUESTED_BY", "GITHUB_ACTOR"]))
             .unwrap_or_else(|| "unknown".to_string()),
-        pr_number: args.pr_number.or_else(|| {
+        pr_number: args.pr_number.clone().or_else(|| {
             ci_env(&[
                 "MOBENCH_PR_NUMBER",
                 "PR_NUMBER",
@@ -1497,7 +1925,7 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
             ])
             .or_else(infer_pr_number_from_github_ref)
         }),
-        request_command: args.request_command.unwrap_or_else(|| {
+        request_command: args.request_command.clone().unwrap_or_else(|| {
             let argv: Vec<String> = env::args().collect();
             if argv.is_empty() {
                 "cargo mobench ci run".to_string()
@@ -1507,9 +1935,56 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
         }),
         mobench_ref: args
             .mobench_ref
+            .clone()
             .or_else(|| ci_env(&["MOBENCH_REF", "GITHUB_SHA", "GITHUB_REF"])),
         mobench_version: env!("CARGO_PKG_VERSION").to_string(),
-    };
+    }
+}
+
+fn cmd_ci_run_single(
+    args: &CiRunArgs,
+    target: MobileTarget,
+    output_dir: &Path,
+    metadata: &CiContractMetadata,
+) -> Result<i32> {
+    let default_baseline_path = previous_baseline_path(output_dir);
+    let baseline_source = args.baseline.clone().or_else(|| {
+        if default_baseline_path.exists() {
+            Some(default_baseline_path.display().to_string())
+        } else {
+            None
+        }
+    });
+
+    let result = run_request(&RunRequest {
+        target,
+        function: args.function.clone(),
+        iterations: args.iterations,
+        warmup: args.warmup,
+        device_selection: DeviceSelection {
+            devices: args.devices.clone(),
+            device_matrix: args.device_matrix.clone(),
+            device_tags: args.device_tags.clone(),
+        },
+        config: args.config.clone(),
+        baseline: baseline_source,
+        regression_threshold_pct: args.regression_threshold_pct,
+        junit: args.junit.clone(),
+        local_only: args.local_only,
+        release: args.release,
+        ios_app: args.ios_app.clone(),
+        ios_test_suite: args.ios_test_suite.clone(),
+        fetch: args.fetch,
+        fetch_output_dir: args.fetch_output_dir.clone(),
+        fetch_poll_interval_secs: args.fetch_poll_interval_secs,
+        fetch_timeout_secs: args.fetch_timeout_secs,
+        progress: args.progress,
+        output_dir: output_dir.to_path_buf(),
+    })?;
+
+    let summary_json = result.report.summary_json;
+    let summary_md = result.report.summary_md;
+    let results_csv = result.report.results_csv;
 
     let summary_text = fs::read_to_string(&summary_json)
         .with_context(|| format!("reading {}", summary_json.display()))?;
@@ -1521,7 +1996,8 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
             "summary_json": summary_json.display().to_string(),
             "summary_md": summary_md.display().to_string(),
             "results_csv": results_csv.display().to_string(),
-        }
+        },
+        "target": target.as_str()
     });
     if let Some(obj) = summary_value.as_object_mut() {
         obj.insert("ci".to_string(), ci_value);
@@ -1533,17 +2009,18 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
     }
     let rendered = serde_json::to_string_pretty(&summary_value)?;
     write_file(&summary_json, rendered.as_bytes())?;
+    fs::copy(&summary_json, &default_baseline_path).with_context(|| {
+        format!(
+            "writing previous baseline snapshot to {}",
+            default_baseline_path.display()
+        )
+    })?;
 
-    println!("CI outputs ready:");
-    println!("  - {}", summary_json.display());
-    println!("  - {}", summary_md.display());
-    println!("  - {}", results_csv.display());
+    Ok(result.exit_code)
+}
 
-    if exit_code == Some(EXIT_REGRESSION) {
-        std::process::exit(EXIT_REGRESSION);
-    }
-
-    Ok(())
+fn previous_baseline_path(output_dir: &Path) -> PathBuf {
+    output_dir.join(".previous-summary.json")
 }
 
 fn ci_env(keys: &[&str]) -> Option<String> {
@@ -3090,23 +3567,25 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct CompareReport {
     baseline: PathBuf,
     candidate: PathBuf,
     rows: Vec<CompareRow>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct CompareRow {
     device: String,
     function: String,
     baseline_median_ns: Option<u64>,
     candidate_median_ns: Option<u64>,
     median_delta_pct: Option<f64>,
+    median_label: String,
     baseline_p95_ns: Option<u64>,
     candidate_p95_ns: Option<u64>,
     p95_delta_pct: Option<f64>,
+    p95_label: String,
 }
 
 fn compare_summaries(baseline: &Path, candidate: &Path) -> Result<CompareReport> {
@@ -3152,9 +3631,11 @@ fn compare_summaries(baseline: &Path, candidate: &Path) -> Result<CompareReport>
                 baseline_median_ns: baseline_median,
                 candidate_median_ns: candidate_median,
                 median_delta_pct: median_delta,
+                median_label: delta_label(median_delta, 0.0).to_string(),
                 baseline_p95_ns: baseline_p95,
                 candidate_p95_ns: candidate_p95,
                 p95_delta_pct: p95_delta,
+                p95_label: delta_label(p95_delta, 0.0).to_string(),
             });
         }
     }
@@ -3192,6 +3673,117 @@ fn percent_delta(baseline: Option<u64>, candidate: Option<u64>) -> Option<f64> {
     Some(((candidate - baseline) / baseline) * 100.0)
 }
 
+fn delta_label(delta: Option<f64>, threshold_pct: f64) -> &'static str {
+    match delta {
+        Some(value) if value >= threshold_pct => "regressed",
+        Some(value) if value <= -threshold_pct => "improved",
+        Some(_) => "neutral",
+        None => "neutral",
+    }
+}
+
+fn resolve_baseline_source(source: &str) -> Result<PathBuf> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        bail!("config_error: baseline source is empty");
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let root = repo_root()?;
+        let baseline_dir = root.join("target/mobench/baselines");
+        fs::create_dir_all(&baseline_dir)?;
+        let mut hasher = Sha256::new();
+        hasher.update(trimmed.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+        let baseline_path = baseline_dir.join(format!("{hash}.json"));
+
+        let response = reqwest::blocking::Client::new()
+            .get(trimmed)
+            .send()
+            .with_context(|| format!("provider_error: downloading baseline URL {trimmed}"))?
+            .error_for_status()
+            .with_context(|| format!("provider_error: HTTP error for baseline URL {trimmed}"))?;
+        let bytes = response
+            .bytes()
+            .context("provider_error: reading baseline body")?;
+        write_file(&baseline_path, bytes.as_ref())?;
+        return Ok(baseline_path);
+    }
+
+    if let Some(artifact_ref) = trimmed.strip_prefix("artifact:") {
+        return resolve_artifact_baseline(artifact_ref.trim());
+    }
+
+    Ok(PathBuf::from(trimmed))
+}
+
+fn resolve_artifact_baseline(reference: &str) -> Result<PathBuf> {
+    if reference.is_empty() {
+        bail!("config_error: baseline artifact reference is empty");
+    }
+    let root = repo_root()?;
+    let mut candidates = vec![
+        PathBuf::from(reference),
+        root.join(reference),
+        root.join("target/mobench/ci").join(reference),
+    ];
+    let artifact_path = root.join("target/mobench/ci").join(reference);
+    if artifact_path.is_dir() {
+        candidates.push(artifact_path.join("summary.json"));
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    bail!(
+        "config_error: baseline artifact `{}` not found (tried path and target/mobench/ci)",
+        reference
+    )
+}
+
+fn inject_compare_into_summary(
+    summary_json: &Path,
+    report: &CompareReport,
+    threshold_pct: f64,
+    baseline_source: Option<&str>,
+) -> Result<()> {
+    let summary_text =
+        fs::read_to_string(summary_json).with_context(|| format!("reading {:?}", summary_json))?;
+    let mut summary_value: Value = serde_json::from_str(&summary_text)
+        .with_context(|| format!("parsing {:?}", summary_json))?;
+
+    let compare_value = json!({
+        "baseline": report.baseline.display().to_string(),
+        "baseline_source": baseline_source,
+        "candidate": report.candidate.display().to_string(),
+        "threshold_pct": threshold_pct,
+        "rows": report.rows.iter().map(|row| json!({
+            "device": row.device,
+            "function": row.function,
+            "baseline_median_ns": row.baseline_median_ns,
+            "candidate_median_ns": row.candidate_median_ns,
+            "median_delta_pct": row.median_delta_pct,
+            "median_label": delta_label(row.median_delta_pct, threshold_pct),
+            "baseline_p95_ns": row.baseline_p95_ns,
+            "candidate_p95_ns": row.candidate_p95_ns,
+            "p95_delta_pct": row.p95_delta_pct,
+            "p95_label": delta_label(row.p95_delta_pct, threshold_pct),
+        })).collect::<Vec<_>>()
+    });
+
+    if let Some(obj) = summary_value.as_object_mut() {
+        obj.insert("comparison".to_string(), compare_value);
+    }
+    write_file(
+        summary_json,
+        serde_json::to_string_pretty(&summary_value)?.as_bytes(),
+    )?;
+    Ok(())
+}
+
 fn write_compare_report(report: &CompareReport, output: Option<&Path>) -> Result<()> {
     let markdown = render_compare_markdown(report);
     if let Some(path) = output {
@@ -3213,27 +3805,179 @@ fn render_compare_markdown(report: &CompareReport) -> String {
     let _ = writeln!(output);
     let _ = writeln!(
         output,
-        "| Device | Function | Median (base ms) | Median (cand ms) | Median Δ% | P95 (base ms) | P95 (cand ms) | P95 Δ% |"
+        "| Device | Function | Median (base ms) | Median (cand ms) | Median Δ% | Median Label | P95 (base ms) | P95 (cand ms) | P95 Δ% | P95 Label |"
     );
     let _ = writeln!(
         output,
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+        "| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |"
     );
     for row in &report.rows {
         let _ = writeln!(
             output,
-            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             row.device,
             row.function,
             format_ms(row.baseline_median_ns),
             format_ms(row.candidate_median_ns),
             format_delta(row.median_delta_pct),
+            row.median_label,
             format_ms(row.baseline_p95_ns),
             format_ms(row.candidate_p95_ns),
-            format_delta(row.p95_delta_pct)
+            format_delta(row.p95_delta_pct),
+            row.p95_label
         );
     }
     output
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubIssueComment {
+    id: u64,
+    body: String,
+}
+
+fn cmd_report_summarize(summary_path: &Path, output: Option<&Path>) -> Result<String> {
+    let contents = fs::read_to_string(summary_path)
+        .with_context(|| format!("reading summary file {}", summary_path.display()))?;
+    let value: Value = serde_json::from_str(&contents)
+        .with_context(|| format!("parsing summary file {}", summary_path.display()))?;
+    let markdown = render_summary_markdown_from_output(&value)?;
+
+    if let Some(path) = output {
+        ensure_parent_dir(path)?;
+        write_file(path, markdown.as_bytes())?;
+        println!("Wrote report summary markdown to {}", path.display());
+    } else {
+        println!("{markdown}");
+    }
+
+    Ok(markdown)
+}
+
+fn cmd_report_github(
+    pr: Option<String>,
+    summary_path: &Path,
+    marker: &str,
+    publish: bool,
+    output: Option<&Path>,
+) -> Result<()> {
+    let contents = fs::read_to_string(summary_path)
+        .with_context(|| format!("reading summary file {}", summary_path.display()))?;
+    let value: Value = serde_json::from_str(&contents)
+        .with_context(|| format!("parsing summary file {}", summary_path.display()))?;
+    let markdown = render_summary_markdown_from_output(&value)?;
+    let comment_body = format!("{marker}\n\n{markdown}");
+
+    if let Some(path) = output {
+        ensure_parent_dir(path)?;
+        write_file(path, comment_body.as_bytes())?;
+        println!("Wrote GitHub report body to {}", path.display());
+    } else if !publish {
+        println!("{comment_body}");
+    }
+
+    if publish {
+        let pr_number = pr
+            .or_else(|| ci_env(&["MOBENCH_PR_NUMBER", "PR_NUMBER"]))
+            .or_else(infer_pr_number_from_github_ref)
+            .ok_or_else(|| anyhow!("provider_error: missing PR number (`--pr` or GITHUB_REF)"))?;
+        upsert_github_pr_comment(&pr_number, marker, &comment_body)?;
+        println!("Published sticky PR comment for PR #{}", pr_number);
+    }
+
+    Ok(())
+}
+
+fn render_summary_markdown_from_output(value: &Value) -> Result<String> {
+    if let Some(summary) = value.get("summary") {
+        let parsed: SummaryReport =
+            serde_json::from_value(summary.clone()).context("parsing summary report")?;
+        return Ok(render_markdown_summary(&parsed));
+    }
+
+    if let Some(targets) = value.get("targets").and_then(|v| v.as_object()) {
+        let mut target_names: Vec<String> = targets.keys().cloned().collect();
+        target_names.sort();
+
+        let mut sections = Vec::new();
+        for name in target_names {
+            let Some(entry) = targets.get(&name) else {
+                continue;
+            };
+            let summary_value = entry
+                .get("summary")
+                .cloned()
+                .unwrap_or_else(|| entry.clone());
+            let parsed: SummaryReport =
+                serde_json::from_value(summary_value).with_context(|| {
+                    format!("parsing summary report for target `{name}` in merged output")
+                })?;
+            sections.push(format!("## {name}\n\n{}", render_markdown_summary(&parsed)));
+        }
+        if !sections.is_empty() {
+            return Ok(sections.join("\n\n"));
+        }
+    }
+
+    let parsed: SummaryReport =
+        serde_json::from_value(value.clone()).context("parsing summary report")?;
+    Ok(render_markdown_summary(&parsed))
+}
+
+fn upsert_github_pr_comment(pr_number: &str, marker: &str, body: &str) -> Result<()> {
+    let token =
+        env::var("GITHUB_TOKEN").context("provider_error: GITHUB_TOKEN is required for publish")?;
+    let repository = env::var("GITHUB_REPOSITORY")
+        .context("provider_error: GITHUB_REPOSITORY is required for publish")?;
+    let comments_url = format!(
+        "https://api.github.com/repos/{}/issues/{}/comments",
+        repository, pr_number
+    );
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("mobench-report")
+        .build()?;
+
+    let comments: Vec<GitHubIssueComment> = client
+        .get(&comments_url)
+        .bearer_auth(&token)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .context("provider_error: listing PR comments")?
+        .error_for_status()
+        .context("provider_error: failed to list PR comments")?
+        .json()
+        .context("provider_error: failed to parse PR comments")?;
+
+    if let Some(existing) = comments
+        .into_iter()
+        .find(|comment| comment.body.contains(marker))
+    {
+        let update_url = format!(
+            "https://api.github.com/repos/{}/issues/comments/{}",
+            repository, existing.id
+        );
+        client
+            .patch(&update_url)
+            .bearer_auth(&token)
+            .header("Accept", "application/vnd.github+json")
+            .json(&json!({ "body": body }))
+            .send()
+            .context("provider_error: updating sticky PR comment")?
+            .error_for_status()
+            .context("provider_error: failed to update sticky PR comment")?;
+    } else {
+        client
+            .post(&comments_url)
+            .bearer_auth(&token)
+            .header("Accept", "application/vnd.github+json")
+            .json(&json!({ "body": body }))
+            .send()
+            .context("provider_error: creating sticky PR comment")?
+            .error_for_status()
+            .context("provider_error: failed to create sticky PR comment")?;
+    }
+
+    Ok(())
 }
 
 fn format_delta(value: Option<f64>) -> String {
@@ -4821,6 +5565,465 @@ fn cmd_devices(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ResolvedMatrixDevice {
+    name: String,
+    os: String,
+    os_version: String,
+    identifier: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+}
+
+fn cmd_devices_resolve(
+    platform: DevicePlatform,
+    profile: Option<String>,
+    config_path: Option<&Path>,
+    device_matrix_path: Option<&Path>,
+    format: CheckOutputFormat,
+) -> Result<()> {
+    let (matrix_path, config_tags) = resolve_matrix_for_cli(config_path, device_matrix_path)
+        .with_context(
+            || "config_error: unable to resolve device matrix source for `devices resolve`",
+        )?;
+    let matrix = load_device_matrix(&matrix_path).with_context(|| {
+        format!(
+            "config_error: failed to parse device matrix at {}",
+            matrix_path.display()
+        )
+    })?;
+
+    let selected_tags = match profile.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        Some(tag) => vec![tag.to_string()],
+        None => config_tags
+            .filter(|tags| !tags.is_empty())
+            .unwrap_or_else(|| vec!["default".to_string()]),
+    };
+
+    let resolved = resolve_devices_from_matrix(matrix.devices, platform, &selected_tags)?;
+
+    match format {
+        CheckOutputFormat::Text => {
+            for device in &resolved {
+                println!("{}", device.identifier);
+            }
+        }
+        CheckOutputFormat::Json => {
+            let output = json!({
+                "platform": match platform {
+                    DevicePlatform::Android => "android",
+                    DevicePlatform::Ios => "ios",
+                },
+                "profile_tags": selected_tags,
+                "device_matrix": matrix_path.display().to_string(),
+                "count": resolved.len(),
+                "devices": resolved,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_matrix_for_cli(
+    config_path: Option<&Path>,
+    device_matrix_path: Option<&Path>,
+) -> Result<(PathBuf, Option<Vec<String>>)> {
+    let mut discovered_matrix = None;
+    let mut discovered_tags = None;
+
+    if let Some(config_path) = config_path {
+        let cfg = load_config(config_path)?;
+        discovered_tags = cfg.device_tags.clone();
+        discovered_matrix = Some(cfg.device_matrix);
+    } else if device_matrix_path.is_none() {
+        let default_config = PathBuf::from("bench-config.toml");
+        if default_config.exists()
+            && let Ok(cfg) = load_config(&default_config)
+        {
+            discovered_tags = cfg.device_tags.clone();
+            discovered_matrix = Some(cfg.device_matrix);
+        }
+    }
+
+    let matrix_path = device_matrix_path
+        .map(PathBuf::from)
+        .or(discovered_matrix)
+        .or_else(|| {
+            let fallback = PathBuf::from("device-matrix.yaml");
+            if fallback.exists() {
+                Some(fallback)
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            anyhow!("config_error: provide --device-matrix, or provide --config with device_matrix")
+        })?;
+
+    Ok((matrix_path, discovered_tags))
+}
+
+fn resolve_devices_from_matrix(
+    devices: Vec<DeviceEntry>,
+    platform: DevicePlatform,
+    tags: &[String],
+) -> Result<Vec<ResolvedMatrixDevice>> {
+    let wanted: Vec<String> = tags
+        .iter()
+        .map(|tag| tag.trim().to_lowercase())
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    let platform_name = match platform {
+        DevicePlatform::Android => "android",
+        DevicePlatform::Ios => "ios",
+    };
+
+    let mut available_tags = BTreeSet::new();
+    let mut resolved = Vec::new();
+
+    for device in devices {
+        if device.os.trim().to_lowercase() != platform_name {
+            continue;
+        }
+        let normalized_tags: Vec<String> = device
+            .tags
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tag| tag.trim().to_lowercase())
+            .filter(|tag| !tag.is_empty())
+            .collect();
+        for tag in &normalized_tags {
+            available_tags.insert(tag.clone());
+        }
+        let tag_match = wanted.is_empty()
+            || normalized_tags
+                .iter()
+                .any(|tag| wanted.iter().any(|wanted_tag| wanted_tag == tag));
+        if !tag_match {
+            continue;
+        }
+        let identifier = format!("{}-{}", device.name, device.os_version);
+        resolved.push(ResolvedMatrixDevice {
+            name: device.name,
+            os: device.os,
+            os_version: device.os_version,
+            identifier,
+            tags: normalized_tags,
+        });
+    }
+
+    resolved.sort_by(|a, b| {
+        a.identifier
+            .cmp(&b.identifier)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.os_version.cmp(&b.os_version))
+    });
+
+    if resolved.is_empty() {
+        if available_tags.is_empty() {
+            bail!(
+                "config_error: no devices matched platform `{}` and tags [{}]; no tag metadata found in matrix",
+                platform_name,
+                wanted.join(", ")
+            );
+        }
+        bail!(
+            "config_error: no devices matched platform `{}` and tags [{}]. Available tags: {}",
+            platform_name,
+            wanted.join(", "),
+            available_tags.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+
+    Ok(resolved)
+}
+
+fn cmd_fixture_init(config_path: &Path, device_matrix_path: &Path, force: bool) -> Result<()> {
+    write_config_template(config_path, MobileTarget::Android, force)?;
+    write_device_matrix_template(device_matrix_path, force)?;
+    println!(
+        "Initialized fixture files:\n  - {}\n  - {}",
+        config_path.display(),
+        device_matrix_path.display()
+    );
+    Ok(())
+}
+
+fn cmd_fixture_build(
+    target: SdkTarget,
+    release: bool,
+    output_dir: Option<PathBuf>,
+    crate_path: Option<PathBuf>,
+    progress: bool,
+) -> Result<()> {
+    match target {
+        SdkTarget::Android => cmd_build(
+            SdkTarget::Android,
+            release,
+            output_dir,
+            crate_path,
+            false,
+            false,
+            progress,
+        )?,
+        SdkTarget::Ios => {
+            cmd_build(
+                SdkTarget::Ios,
+                release,
+                output_dir.clone(),
+                crate_path,
+                false,
+                false,
+                progress,
+            )?;
+            cmd_package_ipa(
+                "BenchRunner",
+                IosSigningMethodArg::Adhoc,
+                output_dir.clone(),
+            )?;
+            cmd_package_xcuitest("BenchRunner", output_dir)?;
+        }
+        SdkTarget::Both => {
+            cmd_build(
+                SdkTarget::Android,
+                release,
+                output_dir.clone(),
+                crate_path.clone(),
+                false,
+                false,
+                progress,
+            )?;
+            cmd_build(
+                SdkTarget::Ios,
+                release,
+                output_dir.clone(),
+                crate_path,
+                false,
+                false,
+                progress,
+            )?;
+            cmd_package_ipa(
+                "BenchRunner",
+                IosSigningMethodArg::Adhoc,
+                output_dir.clone(),
+            )?;
+            cmd_package_xcuitest("BenchRunner", output_dir)?;
+        }
+    }
+    Ok(())
+}
+
+fn cmd_fixture_verify(
+    config_path: &Path,
+    device_matrix_override: Option<&Path>,
+    target: SdkTarget,
+    profile: Option<String>,
+    format: CheckOutputFormat,
+) -> Result<()> {
+    let mut checks = Vec::new();
+    let mut cfg: Option<BenchConfig> = None;
+    match load_config(config_path) {
+        Ok(parsed) => {
+            checks.push(PrereqCheck {
+                name: "Run config".to_string(),
+                passed: true,
+                detail: Some(config_path.display().to_string()),
+                fix_hint: None,
+            });
+            cfg = Some(parsed);
+        }
+        Err(err) => {
+            checks.push(PrereqCheck {
+                name: "Run config".to_string(),
+                passed: false,
+                detail: Some(err.to_string()),
+                fix_hint: Some(format!("Fix config at {}", config_path.display())),
+            });
+        }
+    }
+
+    let matrix_path = device_matrix_override
+        .map(PathBuf::from)
+        .or_else(|| cfg.as_ref().map(|c| c.device_matrix.clone()));
+    if let Some(matrix_path) = matrix_path.as_deref() {
+        match load_device_matrix(matrix_path) {
+            Ok(matrix) => {
+                let mut tags = profile
+                    .as_ref()
+                    .map(|tag| vec![tag.clone()])
+                    .or_else(|| cfg.as_ref().and_then(|c| c.device_tags.clone()))
+                    .unwrap_or_else(|| vec!["default".to_string()]);
+                tags.retain(|tag| !tag.trim().is_empty());
+
+                let platforms = match target {
+                    SdkTarget::Android => vec![DevicePlatform::Android],
+                    SdkTarget::Ios => vec![DevicePlatform::Ios],
+                    SdkTarget::Both => vec![DevicePlatform::Android, DevicePlatform::Ios],
+                };
+
+                let mut unresolved = Vec::new();
+                for platform in platforms {
+                    if let Err(err) =
+                        resolve_devices_from_matrix(matrix.devices.clone(), platform, &tags)
+                    {
+                        unresolved.push(err.to_string());
+                    }
+                }
+                if unresolved.is_empty() {
+                    checks.push(PrereqCheck {
+                        name: "Device matrix".to_string(),
+                        passed: true,
+                        detail: Some(format!(
+                            "{} (tags: {})",
+                            matrix_path.display(),
+                            tags.join(", ")
+                        )),
+                        fix_hint: None,
+                    });
+                } else {
+                    checks.push(PrereqCheck {
+                        name: "Device matrix".to_string(),
+                        passed: false,
+                        detail: Some(unresolved.join("; ")),
+                        fix_hint: Some(format!(
+                            "Adjust tags/profile or matrix entries in {}",
+                            matrix_path.display()
+                        )),
+                    });
+                }
+            }
+            Err(err) => checks.push(PrereqCheck {
+                name: "Device matrix".to_string(),
+                passed: false,
+                detail: Some(err.to_string()),
+                fix_hint: Some(format!(
+                    "Fix or regenerate device matrix at {}",
+                    matrix_path.display()
+                )),
+            }),
+        }
+    } else {
+        checks.push(PrereqCheck {
+            name: "Device matrix".to_string(),
+            passed: false,
+            detail: Some("missing device matrix path".to_string()),
+            fix_hint: Some(
+                "Provide --device-matrix or set device_matrix in bench-config.toml".to_string(),
+            ),
+        });
+    }
+
+    let cargo_lock_path = repo_root()?.join("Cargo.lock");
+    checks.push(PrereqCheck {
+        name: "Cargo.lock".to_string(),
+        passed: cargo_lock_path.exists(),
+        detail: Some(cargo_lock_path.display().to_string()),
+        fix_hint: if cargo_lock_path.exists() {
+            None
+        } else {
+            Some("Run cargo generate-lockfile".to_string())
+        },
+    });
+
+    let issues = collect_issues(&checks);
+    match format {
+        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
+        CheckOutputFormat::Json => print_check_results_json(&checks, &issues)?,
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "{} issue(s) found. Fix them and rerun `cargo mobench fixture verify`.",
+            issues.len()
+        )
+    }
+}
+
+fn cmd_fixture_cache_key(
+    config_path: &Path,
+    device_matrix_override: Option<&Path>,
+    target: SdkTarget,
+    profile: Option<String>,
+    format: CheckOutputFormat,
+) -> Result<()> {
+    let cfg = load_config(config_path)
+        .with_context(|| format!("config_error: failed to load {}", config_path.display()))?;
+    let matrix_path = device_matrix_override
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cfg.device_matrix.clone());
+    let matrix_bytes = fs::read(&matrix_path).with_context(|| {
+        format!(
+            "config_error: failed to read device matrix {}",
+            matrix_path.display()
+        )
+    })?;
+    let config_bytes = fs::read(config_path)
+        .with_context(|| format!("config_error: failed to read {}", config_path.display()))?;
+    let cargo_lock_path = repo_root()?.join("Cargo.lock");
+    let cargo_lock_bytes = if cargo_lock_path.exists() {
+        fs::read(&cargo_lock_path)?
+    } else {
+        Vec::new()
+    };
+
+    let rustc_version = command_version_line("rustc", &["--version"]).unwrap_or_default();
+    let cargo_version = command_version_line("cargo", &["--version"]).unwrap_or_default();
+    let selected_profile = profile
+        .or_else(|| {
+            cfg.device_tags
+                .clone()
+                .and_then(|mut tags| tags.drain(..1).next())
+        })
+        .unwrap_or_else(|| "default".to_string());
+
+    let mut hasher = Sha256::new();
+    hasher.update(format!("mobench={}\n", env!("CARGO_PKG_VERSION")).as_bytes());
+    hasher.update(format!("target={target:?}\n").as_bytes());
+    hasher.update(format!("profile={selected_profile}\n").as_bytes());
+    hasher.update(format!("rustc={rustc_version}\n").as_bytes());
+    hasher.update(format!("cargo={cargo_version}\n").as_bytes());
+    hasher.update(config_bytes);
+    hasher.update(matrix_bytes);
+    hasher.update(cargo_lock_bytes);
+    let digest = hasher.finalize();
+    let cache_key = format!("mobench-fixture-{:x}", digest);
+
+    match format {
+        CheckOutputFormat::Text => println!("{cache_key}"),
+        CheckOutputFormat::Json => {
+            let payload = json!({
+                "cache_key": cache_key,
+                "target": format!("{target:?}").to_lowercase(),
+                "profile": selected_profile,
+                "config": config_path.display().to_string(),
+                "device_matrix": matrix_path.display().to_string(),
+                "rustc": rustc_version,
+                "cargo": cargo_version,
+                "mobench_version": env!("CARGO_PKG_VERSION"),
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+    }
+    Ok(())
+}
+
+fn command_version_line(cmd: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(cmd).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+}
+
 /// Check prerequisites for building mobile artifacts.
 ///
 /// This validates that all required tools and configurations are in place
@@ -4831,7 +6034,7 @@ fn cmd_check(target: SdkTarget, format: CheckOutputFormat) -> Result<()> {
 
     match format {
         CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
-        CheckOutputFormat::Json => print_check_results_json(&checks)?,
+        CheckOutputFormat::Json => print_check_results_json(&checks, &issues)?,
     }
 
     if issues.is_empty() {
@@ -4841,6 +6044,113 @@ fn cmd_check(target: SdkTarget, format: CheckOutputFormat) -> Result<()> {
             "{} issue(s) found. Fix them and run 'cargo mobench check --target {:?}' again.",
             issues.len(),
             target
+        )
+    }
+}
+
+fn cmd_config_validate(config_path: &Path, format: CheckOutputFormat) -> Result<()> {
+    let mut checks = Vec::new();
+    let mut config: Option<BenchConfig> = None;
+
+    match load_config(config_path) {
+        Ok(cfg) => {
+            checks.push(PrereqCheck {
+                name: "Run config".to_string(),
+                passed: true,
+                detail: Some(config_path.display().to_string()),
+                fix_hint: None,
+            });
+            config = Some(cfg);
+        }
+        Err(err) => {
+            checks.push(PrereqCheck {
+                name: "Run config".to_string(),
+                passed: false,
+                detail: Some(err.to_string()),
+                fix_hint: Some(format!(
+                    "Fix config file syntax/fields at {}",
+                    config_path.display()
+                )),
+            });
+        }
+    }
+
+    if let Some(cfg) = &config {
+        match load_device_matrix(&cfg.device_matrix) {
+            Ok(matrix) => {
+                if let Some(tags) = cfg.device_tags.as_ref().filter(|tags| !tags.is_empty()) {
+                    if let Err(err) = filter_devices_by_tags(matrix.devices, tags) {
+                        checks.push(PrereqCheck {
+                            name: "Device matrix".to_string(),
+                            passed: false,
+                            detail: Some(err.to_string()),
+                            fix_hint: Some(format!(
+                                "Update tags in {} or adjust device_tags in config",
+                                cfg.device_matrix.display()
+                            )),
+                        });
+                    } else {
+                        checks.push(PrereqCheck {
+                            name: "Device matrix".to_string(),
+                            passed: true,
+                            detail: Some(format!(
+                                "{} (tags: {})",
+                                cfg.device_matrix.display(),
+                                tags.join(", ")
+                            )),
+                            fix_hint: None,
+                        });
+                    }
+                } else {
+                    checks.push(PrereqCheck {
+                        name: "Device matrix".to_string(),
+                        passed: true,
+                        detail: Some(cfg.device_matrix.display().to_string()),
+                        fix_hint: None,
+                    });
+                }
+            }
+            Err(err) => {
+                checks.push(PrereqCheck {
+                    name: "Device matrix".to_string(),
+                    passed: false,
+                    detail: Some(err.to_string()),
+                    fix_hint: Some(format!(
+                        "Fix or regenerate device matrix at {}",
+                        cfg.device_matrix.display()
+                    )),
+                });
+            }
+        }
+
+        match resolve_browserstack_credentials(Some(&cfg.browserstack)) {
+            Ok(creds) => checks.push(PrereqCheck {
+                name: "BrowserStack credentials".to_string(),
+                passed: true,
+                detail: Some(format!("user {}", creds.username)),
+                fix_hint: None,
+            }),
+            Err(err) => checks.push(PrereqCheck {
+                name: "BrowserStack credentials".to_string(),
+                passed: false,
+                detail: Some(err.to_string()),
+                fix_hint: Some("Set BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY".to_string()),
+            }),
+        }
+    }
+
+    let issues = collect_issues(&checks);
+    match format {
+        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
+        CheckOutputFormat::Json => print_check_results_json(&checks, &issues)?,
+    }
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "{} issue(s) found. Fix them and rerun 'cargo mobench config validate'.",
+            issues.len()
         )
     }
 }
@@ -4982,7 +6292,7 @@ fn cmd_doctor(
     let issues = collect_issues(&checks);
     match format {
         CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
-        CheckOutputFormat::Json => print_check_results_json(&checks)?,
+        CheckOutputFormat::Json => print_check_results_json(&checks, &issues)?,
     }
 
     if issues.is_empty() {
@@ -5035,16 +6345,29 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
     checks
 }
 
-fn collect_issues(checks: &[PrereqCheck]) -> Vec<String> {
+fn collect_issues(checks: &[PrereqCheck]) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     for check in checks {
         if !check.passed {
             if let Some(ref fix) = check.fix_hint {
-                issues.push(fix.clone());
+                issues.push(ValidationIssue {
+                    category: issue_category_for_check(check),
+                    check: check.name.clone(),
+                    detail: check.detail.clone(),
+                    fix_hint: fix.clone(),
+                });
             }
         }
     }
     issues
+}
+
+fn issue_category_for_check(check: &PrereqCheck) -> ContractErrorCategory {
+    match check.name.as_str() {
+        "Run config" | "Device matrix" => ContractErrorCategory::Config,
+        "BrowserStack credentials" => ContractErrorCategory::Provider,
+        _ => ContractErrorCategory::Preflight,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5055,21 +6378,48 @@ struct PrereqCheck {
     fix_hint: Option<String>,
 }
 
-fn print_check_results_text(checks: &[PrereqCheck], issues: &[String]) {
+#[derive(Debug, Clone, Serialize)]
+struct ValidationIssue {
+    category: ContractErrorCategory,
+    check: String,
+    detail: Option<String>,
+    fix_hint: String,
+}
+
+fn print_check_results_text(checks: &[PrereqCheck], issues: &[ValidationIssue]) {
     for check in checks {
         let status = if check.passed { "\u{2713}" } else { "\u{2717}" };
         let detail = check.detail.as_deref().unwrap_or("");
-        if detail.is_empty() {
-            println!("{} {}", status, check.name);
+        let category = if check.passed {
+            None
         } else {
-            println!("{} {} ({})", status, check.name, detail);
+            Some(issue_category_for_check(check))
+        };
+        if detail.is_empty() {
+            if let Some(category) = category {
+                println!("{} {} [{}]", status, check.name, category_slug(category));
+            } else {
+                println!("{} {}", status, check.name);
+            }
+        } else {
+            if let Some(category) = category {
+                println!(
+                    "{} {} [{}] ({})",
+                    status,
+                    check.name,
+                    category_slug(category),
+                    detail
+                );
+            } else {
+                println!("{} {} ({})", status, check.name, detail);
+            }
         }
     }
 
     if !issues.is_empty() {
         println!("\nTo fix:");
         for issue in issues {
-            println!("  * {}", issue);
+            println!("  * [{}] {}", category_slug(issue.category), issue.fix_hint);
         }
         println!();
         let failed_count = checks.iter().filter(|c| !c.passed).count();
@@ -5079,15 +6429,30 @@ fn print_check_results_text(checks: &[PrereqCheck], issues: &[String]) {
     }
 }
 
-fn print_check_results_json(checks: &[PrereqCheck]) -> Result<()> {
-    let output = json!({
+fn print_check_results_json(checks: &[PrereqCheck], issues: &[ValidationIssue]) -> Result<()> {
+    let output = render_check_results_json(checks, issues);
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn render_check_results_json(checks: &[PrereqCheck], issues: &[ValidationIssue]) -> Value {
+    json!({
         "checks": checks,
+        "issues": issues,
         "all_passed": checks.iter().all(|c| c.passed),
         "passed_count": checks.iter().filter(|c| c.passed).count(),
         "failed_count": checks.iter().filter(|c| !c.passed).count(),
-    });
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    })
+}
+
+fn category_slug(category: ContractErrorCategory) -> &'static str {
+    match category {
+        ContractErrorCategory::Config => "config_error",
+        ContractErrorCategory::Preflight => "preflight_error",
+        ContractErrorCategory::Provider => "provider_error",
+        ContractErrorCategory::Build => "build_error",
+        ContractErrorCategory::Benchmark => "benchmark_error",
+    }
 }
 
 fn check_cargo() -> PrereqCheck {
@@ -5326,6 +6691,7 @@ fn check_xcodegen() -> PrereqCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jsonschema::JSONSchema;
 
     // Register a lightweight benchmark for tests so the inventory contains at least one entry.
     #[mobench_sdk::benchmark]
@@ -5464,12 +6830,246 @@ mod tests {
             Command::Ci {
                 command: CiCommand::Run(args),
             } => {
-                assert_eq!(args.target, MobileTarget::Android);
+                assert_eq!(args.target, CiTarget::Android);
                 assert_eq!(args.function, "sample_fns::fibonacci");
                 assert_eq!(args.output_dir, PathBuf::from("target/mobench/ci"));
             }
             _ => panic!("expected ci run command"),
         }
+    }
+
+    #[test]
+    fn ci_run_parses_both_target() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "ci",
+            "run",
+            "--target",
+            "both",
+            "--function",
+            "sample_fns::fibonacci",
+        ]);
+
+        match cli.command {
+            Command::Ci {
+                command: CiCommand::Run(args),
+            } => {
+                assert_eq!(args.target, CiTarget::Both);
+            }
+            _ => panic!("expected ci run command"),
+        }
+    }
+
+    #[test]
+    fn devices_resolve_parses() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "devices",
+            "resolve",
+            "--platform",
+            "android",
+            "--profile",
+            "default",
+            "--device-matrix",
+            "device-matrix.yaml",
+        ]);
+        match cli.command {
+            Command::Devices {
+                command:
+                    Some(DevicesCommand::Resolve {
+                        platform, profile, ..
+                    }),
+                ..
+            } => {
+                assert_eq!(platform, DevicePlatform::Android);
+                assert_eq!(profile, Some("default".to_string()));
+            }
+            _ => panic!("expected devices resolve command"),
+        }
+    }
+
+    #[test]
+    fn fixture_cache_key_parses() {
+        let cli = Cli::parse_from(["mobench", "fixture", "cache-key"]);
+        match cli.command {
+            Command::Fixture {
+                command:
+                    FixtureCommand::CacheKey {
+                        config,
+                        target,
+                        format,
+                        ..
+                    },
+            } => {
+                assert_eq!(config, PathBuf::from("bench-config.toml"));
+                assert_eq!(target, SdkTarget::Both);
+                assert_eq!(format, CheckOutputFormat::Text);
+            }
+            _ => panic!("expected fixture cache-key command"),
+        }
+    }
+
+    #[test]
+    fn report_github_parses() {
+        let cli = Cli::parse_from(["mobench", "report", "github", "--pr", "123"]);
+        match cli.command {
+            Command::Report {
+                command: ReportCommand::Github { pr, publish, .. },
+            } => {
+                assert_eq!(pr, Some("123".to_string()));
+                assert!(!publish);
+            }
+            _ => panic!("expected report github command"),
+        }
+    }
+
+    #[test]
+    fn config_validate_parses_required_args_with_defaults() {
+        let cli = Cli::parse_from(["mobench", "config", "validate"]);
+        match cli.command {
+            Command::Config {
+                command: ConfigCommand::Validate { config, format },
+            } => {
+                assert_eq!(config, PathBuf::from("bench-config.toml"));
+                assert_eq!(format, CheckOutputFormat::Text);
+            }
+            _ => panic!("expected config validate command"),
+        }
+    }
+
+    #[test]
+    fn issue_categories_align_with_contract_taxonomy() {
+        let checks = vec![
+            PrereqCheck {
+                name: "Run config".to_string(),
+                passed: false,
+                detail: Some("missing".to_string()),
+                fix_hint: Some("fix config".to_string()),
+            },
+            PrereqCheck {
+                name: "BrowserStack credentials".to_string(),
+                passed: false,
+                detail: Some("missing".to_string()),
+                fix_hint: Some("set env".to_string()),
+            },
+            PrereqCheck {
+                name: "cargo installed".to_string(),
+                passed: false,
+                detail: None,
+                fix_hint: Some("install rust".to_string()),
+            },
+        ];
+        let issues = collect_issues(&checks);
+        assert_eq!(issues.len(), 3);
+        assert_eq!(category_slug(issues[0].category), "config_error");
+        assert_eq!(category_slug(issues[1].category), "provider_error");
+        assert_eq!(category_slug(issues[2].category), "preflight_error");
+    }
+
+    #[test]
+    fn check_results_json_includes_issue_categories() {
+        let checks = vec![PrereqCheck {
+            name: "Run config".to_string(),
+            passed: false,
+            detail: Some("missing".to_string()),
+            fix_hint: Some("fix config".to_string()),
+        }];
+        let issues = collect_issues(&checks);
+        let rendered = render_check_results_json(&checks, &issues);
+        let category = rendered
+            .get("issues")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|first| first.get("category"))
+            .and_then(|v| v.as_str());
+        assert_eq!(category, Some("config"));
+    }
+
+    #[test]
+    fn resolve_devices_from_matrix_is_deterministic() {
+        let devices = vec![
+            DeviceEntry {
+                name: "Pixel 7".to_string(),
+                os: "android".to_string(),
+                os_version: "13.0".to_string(),
+                tags: Some(vec!["default".to_string(), "pixel".to_string()]),
+            },
+            DeviceEntry {
+                name: "Pixel 6".to_string(),
+                os: "android".to_string(),
+                os_version: "12.0".to_string(),
+                tags: Some(vec!["default".to_string()]),
+            },
+            DeviceEntry {
+                name: "iPhone 14".to_string(),
+                os: "ios".to_string(),
+                os_version: "16".to_string(),
+                tags: Some(vec!["default".to_string(), "iphone".to_string()]),
+            },
+        ];
+
+        let resolved =
+            resolve_devices_from_matrix(devices, DevicePlatform::Android, &["default".to_string()])
+                .expect("resolved devices");
+        let ids: Vec<String> = resolved.into_iter().map(|d| d.identifier).collect();
+        assert_eq!(ids, vec!["Pixel 6-12.0", "Pixel 7-13.0"]);
+    }
+
+    #[test]
+    fn render_summary_markdown_from_merged_output() {
+        let summary = json!({
+            "generated_at": "2026-02-16T00:00:00Z",
+            "generated_at_unix": 1708041600,
+            "target": "android",
+            "function": "noop_benchmark",
+            "iterations": 3,
+            "warmup": 1,
+            "devices": ["local"],
+            "device_summaries": []
+        });
+        let merged = json!({
+            "targets": {
+                "android": { "summary": summary },
+                "ios": { "summary": {
+                    "generated_at": "2026-02-16T00:00:00Z",
+                    "generated_at_unix": 1708041600,
+                    "target": "ios",
+                    "function": "noop_benchmark",
+                    "iterations": 3,
+                    "warmup": 1,
+                    "devices": ["local"],
+                    "device_summaries": []
+                }}
+            }
+        });
+        let markdown = render_summary_markdown_from_output(&merged).expect("render markdown");
+        assert!(markdown.contains("## android"));
+        assert!(markdown.contains("## ios"));
+    }
+
+    #[test]
+    fn compare_markdown_includes_delta_labels() {
+        let report = CompareReport {
+            baseline: PathBuf::from("baseline.json"),
+            candidate: PathBuf::from("candidate.json"),
+            rows: vec![CompareRow {
+                device: "Pixel 7".to_string(),
+                function: "noop_benchmark".to_string(),
+                baseline_median_ns: Some(100),
+                candidate_median_ns: Some(110),
+                median_delta_pct: Some(10.0),
+                median_label: "regressed".to_string(),
+                baseline_p95_ns: Some(120),
+                candidate_p95_ns: Some(118),
+                p95_delta_pct: Some(-1.66),
+                p95_label: "improved".to_string(),
+            }],
+        };
+        let markdown = render_compare_markdown(&report);
+        assert!(markdown.contains("Median Label"));
+        assert!(markdown.contains("P95 Label"));
+        assert!(markdown.contains("regressed"));
+        assert!(markdown.contains("improved"));
     }
 
     #[test]
@@ -5479,6 +7079,110 @@ mod tests {
             Some("123".to_string())
         );
         assert_eq!(parse_pr_number_from_ref("refs/heads/main"), None);
+    }
+
+    #[test]
+    fn contract_schema_files_compile() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let summary_schema_path = root.join("docs/schemas/summary-v1.schema.json");
+        let ci_schema_path = root.join("docs/schemas/ci-contract-v1.schema.json");
+
+        let summary_schema: Value = serde_json::from_str(
+            &fs::read_to_string(&summary_schema_path).expect("read summary schema"),
+        )
+        .expect("parse summary schema");
+        let ci_schema: Value =
+            serde_json::from_str(&fs::read_to_string(&ci_schema_path).expect("read ci schema"))
+                .expect("parse ci schema");
+
+        JSONSchema::options()
+            .compile(&summary_schema)
+            .expect("compile summary schema");
+        JSONSchema::options()
+            .compile(&ci_schema)
+            .expect("compile ci schema");
+    }
+
+    #[test]
+    fn run_summary_validates_against_summary_schema() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let summary_schema_path = root.join("docs/schemas/summary-v1.schema.json");
+        let summary_schema: Value = serde_json::from_str(
+            &fs::read_to_string(&summary_schema_path).expect("read summary schema"),
+        )
+        .expect("parse summary schema");
+        let validator = JSONSchema::options()
+            .compile(&summary_schema)
+            .expect("compile summary schema");
+
+        let spec = RunSpec {
+            target: MobileTarget::Android,
+            function: "noop_benchmark".into(),
+            iterations: 3,
+            warmup: 1,
+            devices: vec![],
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let local_report = run_local_smoke(&spec).expect("local harness");
+        let mut run_summary = RunSummary {
+            spec,
+            artifacts: None,
+            local_report,
+            remote_run: None,
+            summary: empty_summary(&RunSpec {
+                target: MobileTarget::Android,
+                function: "noop_benchmark".into(),
+                iterations: 3,
+                warmup: 1,
+                devices: vec![],
+                browserstack: None,
+                ios_xcuitest: None,
+            }),
+            benchmark_results: None,
+            performance_metrics: None,
+        };
+        run_summary.summary = build_summary(&run_summary).expect("build summary");
+        let value = serde_json::to_value(&run_summary).expect("serialize run summary");
+
+        if let Err(errors) = validator.validate(&value) {
+            let messages: Vec<String> = errors.map(|e| e.to_string()).collect();
+            panic!("summary schema validation failed: {}", messages.join(" | "));
+        }
+    }
+
+    #[test]
+    fn ci_payload_validates_against_ci_schema() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let ci_schema_path = root.join("docs/schemas/ci-contract-v1.schema.json");
+        let ci_schema: Value =
+            serde_json::from_str(&fs::read_to_string(&ci_schema_path).expect("read ci schema"))
+                .expect("parse ci schema");
+        let validator = JSONSchema::options()
+            .compile(&ci_schema)
+            .expect("compile ci schema");
+
+        let payload = json!({
+            "ci": {
+                "metadata": {
+                    "requested_by": "codex",
+                    "pr_number": "123",
+                    "request_command": "cargo mobench ci run --target android --function noop_benchmark",
+                    "mobench_ref": "refs/heads/codex/ci-devex",
+                    "mobench_version": env!("CARGO_PKG_VERSION")
+                },
+                "outputs": {
+                    "summary_json": "target/mobench/ci/summary.json",
+                    "summary_md": "target/mobench/ci/summary.md",
+                    "results_csv": "target/mobench/ci/results.csv"
+                }
+            }
+        });
+
+        if let Err(errors) = validator.validate(&payload) {
+            let messages: Vec<String> = errors.map(|e| e.to_string()).collect();
+            panic!("ci schema validation failed: {}", messages.join(" | "));
+        }
     }
 }
 

@@ -40,3 +40,30 @@ Run `mobench ci run` in GitHub Actions with caching, Android SDK setup, and arti
 - `cache-android`: cache Android SDK/NDK.
 - `artifact-name`: artifact name.
 - `artifact-path`: paths to upload.
+- `pr-comment`: publish sticky PR comment from CI summary (`true|false`).
+- `pr-number`: PR number override (optional).
+- `pr-comment-marker`: sticky comment marker used for idempotent updates.
+- `github-token`: token for PR comment publishing.
+
+## Cache keys
+
+The action uses deterministic cache keys:
+- Cargo cache: `${runner.os}-cargo-${hashFiles('**/Cargo.lock')}`
+- Target cache: `${runner.os}-target-${hashFiles('**/Cargo.lock')}`
+- Gradle cache: `${runner.os}-gradle-${hashFiles('**/*.gradle*', '**/gradle/wrapper/gradle-wrapper.properties', '**/gradle.properties')}`
+- Android SDK cache: `${runner.os}-android-${inputs.ndk-version}`
+
+## PR comment mode
+
+To enable sticky PR comments, grant workflow permissions and pass token:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+
+- uses: ./.github/actions/mobench
+  with:
+    pr-comment: true
+    github-token: ${{ github.token }}
+```
