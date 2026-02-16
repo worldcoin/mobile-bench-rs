@@ -47,6 +47,12 @@
 //! | `init` | Initialize a new benchmark project |
 //! | `build` | Build mobile artifacts (APK/xcframework) |
 //! | `run` | Execute benchmarks locally or on devices |
+//! | `ci run` | Run standardized CI orchestration (`summary.json`, `summary.md`, `results.csv`) |
+//! | `doctor` | Validate local/CI prerequisites and configuration |
+//! | `config validate` | Validate run config + matrix contract |
+//! | `devices resolve` | Resolve deterministic device sets from matrix/profile |
+//! | `fixture ...` | Fixture lifecycle helpers (`init`, `build`, `verify`, `cache-key`) |
+//! | `report ...` | Render markdown and publish sticky PR comments |
 //! | `list` | List discovered benchmark functions |
 //! | `fetch` | Retrieve results from BrowserStack |
 //! | `package-ipa` | Package iOS app as IPA |
@@ -707,8 +713,11 @@ enum ContractErrorCategory {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+/// Mobile platform target for build/run operations.
 pub enum MobileTarget {
+    /// Android platform.
     Android,
+    /// iOS platform.
     Ios,
 }
 
@@ -1637,50 +1646,91 @@ struct CiContractMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Device input sources used by [`RunRequest`].
 pub struct DeviceSelection {
+    /// Explicit device names/specs to run against.
     pub devices: Vec<String>,
+    /// Optional path to a device matrix YAML file.
     pub device_matrix: Option<PathBuf>,
+    /// Optional tag filters applied to the device matrix.
     pub device_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Programmatic request payload for running a mobench benchmark flow.
 pub struct RunRequest {
+    /// Mobile platform target (`android` or `ios`).
     pub target: MobileTarget,
+    /// Fully-qualified benchmark function name.
     pub function: String,
+    /// Number of benchmark iterations.
     pub iterations: u32,
+    /// Number of warmup iterations.
     pub warmup: u32,
+    /// Device selection inputs.
     pub device_selection: DeviceSelection,
+    /// Optional run configuration file (`bench-config.toml`).
     pub config: Option<PathBuf>,
+    /// Optional baseline source (`path|url|artifact:<path>`).
     pub baseline: Option<String>,
+    /// Regression threshold percentage used for baseline comparison.
     pub regression_threshold_pct: f64,
+    /// Optional JUnit XML output path.
     pub junit: Option<PathBuf>,
+    /// When true, skip mobile builds and run local harness only.
     pub local_only: bool,
+    /// Build in release mode.
     pub release: bool,
+    /// Optional iOS app bundle for BrowserStack XCUITest.
     pub ios_app: Option<PathBuf>,
+    /// Optional iOS XCUITest suite package for BrowserStack.
     pub ios_test_suite: Option<PathBuf>,
+    /// Fetch BrowserStack artifacts after completion.
     pub fetch: bool,
+    /// Output directory for fetched BrowserStack artifacts.
     pub fetch_output_dir: PathBuf,
+    /// Poll interval (seconds) when fetching BrowserStack artifacts.
     pub fetch_poll_interval_secs: u64,
+    /// Timeout (seconds) when fetching BrowserStack artifacts.
     pub fetch_timeout_secs: u64,
+    /// Enable progress-oriented CLI output.
     pub progress: bool,
+    /// Output directory for CI contract files.
     pub output_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Standardized output file locations produced by a run.
 pub struct Report {
+    /// Path to JSON summary output.
     pub summary_json: PathBuf,
+    /// Path to Markdown summary output.
     pub summary_md: PathBuf,
+    /// Path to CSV summary output.
     pub results_csv: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Result of a programmatic mobench run request.
 pub struct RunResult {
+    /// Platform target executed for this run.
     pub target: MobileTarget,
+    /// Generated report file paths.
     pub report: Report,
+    /// Exit code from underlying `mobench run` command.
     pub exit_code: i32,
+    /// True when regression threshold was exceeded (exit code 2).
     pub regression_detected: bool,
 }
 
+/// Executes a [`RunRequest`] by invoking the current `mobench` binary and normalizing outputs.
+///
+/// This function always writes/normalizes CI output file names in `request.output_dir`:
+/// - `summary.json`
+/// - `summary.md`
+/// - `results.csv`
+///
+/// Returns [`RunResult`] containing file paths and process exit semantics.
 pub fn run_request(request: &RunRequest) -> Result<RunResult> {
     fs::create_dir_all(&request.output_dir)
         .with_context(|| format!("creating output dir {}", request.output_dir.display()))?;
@@ -6385,6 +6435,7 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
             checks.push(check_xcodegen());
             checks.push(check_rust_target("aarch64-apple-ios"));
             checks.push(check_rust_target("aarch64-apple-ios-sim"));
+            checks.push(check_rust_target("x86_64-apple-ios"));
         }
         SdkTarget::Both => {
             println!("Checking prerequisites for Android and iOS...\n");
@@ -6398,6 +6449,7 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
             checks.push(check_xcodegen());
             checks.push(check_rust_target("aarch64-apple-ios"));
             checks.push(check_rust_target("aarch64-apple-ios-sim"));
+            checks.push(check_rust_target("x86_64-apple-ios"));
         }
     }
 

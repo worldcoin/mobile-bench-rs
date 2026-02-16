@@ -21,7 +21,14 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::Deserialize;
+
 use crate::types::BenchError;
+
+#[derive(Deserialize)]
+struct CargoMetadata {
+    target_directory: String,
+}
 
 /// Validates that the project root is a valid directory for building.
 ///
@@ -122,21 +129,15 @@ pub fn get_cargo_target_dir(crate_dir: &Path) -> Result<PathBuf, BenchError> {
         return Ok(fallback);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse the JSON to extract target_directory
-    // Using simple string parsing to avoid adding serde_json dependency
-    if let Some(start) = stdout.find("\"target_directory\":\"") {
-        let rest = &stdout[start + 20..];
-        if let Some(end) = rest.find('"') {
-            let target_dir = &rest[..end];
-            // Handle escaped backslashes in Windows paths
-            let target_dir = target_dir.replace("\\\\", "\\");
-            return Ok(PathBuf::from(target_dir));
-        }
+    match serde_json::from_slice::<CargoMetadata>(&output.stdout) {
+        Ok(metadata) => return Ok(PathBuf::from(metadata.target_directory)),
+        Err(err) => eprintln!(
+            "Warning: Failed to parse cargo metadata JSON ({}). Falling back to crate-local target dir.",
+            err
+        ),
     }
 
-    // Fall back to crate_dir/target if parsing fails
+    // Fall back to crate_dir/target if JSON parsing fails
     let fallback = crate_dir.join("target");
     eprintln!(
         "Warning: Failed to parse target_directory from cargo metadata output, \

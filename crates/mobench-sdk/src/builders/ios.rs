@@ -131,8 +131,20 @@ impl IosBuilder {
     /// * `crate_name` - Name of the bench-mobile crate (e.g., "my-project-bench-mobile")
     pub fn new(project_root: impl Into<PathBuf>, crate_name: impl Into<String>) -> Self {
         let root_input = project_root.into();
-        // Canonicalize the path to handle relative paths correctly, regardless of cwd
-        let root = root_input.canonicalize().unwrap_or(root_input);
+        // Canonicalize the path to handle relative paths correctly, regardless of cwd.
+        // Fall back to the input path with an explicit warning so callers know canonicalization
+        // did not succeed.
+        let root = match root_input.canonicalize() {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!(
+                    "Warning: failed to canonicalize project root `{}`: {}. Using provided path.",
+                    root_input.display(),
+                    err
+                );
+                root_input
+            }
+        };
         Self {
             output_dir: root.join("target/mobench"),
             project_root: root,
@@ -1472,19 +1484,17 @@ impl IosBuilder {
         let build_dir = self.output_dir.join("ios/build");
         let build_configuration = "Debug";
         let mut cmd = Command::new("xcodebuild");
-        cmd.args([
-            "-project",
-            project_path.to_str().unwrap(),
-            "-scheme",
-            scheme,
-            "-destination",
-            "generic/platform=iOS",
-            "-configuration",
-            build_configuration,
-            "-derivedDataPath",
-            build_dir.to_str().unwrap(),
-            "build",
-        ]);
+        cmd.arg("-project")
+            .arg(&project_path)
+            .arg("-scheme")
+            .arg(scheme)
+            .arg("-destination")
+            .arg("generic/platform=iOS")
+            .arg("-configuration")
+            .arg(build_configuration)
+            .arg("-derivedDataPath")
+            .arg(&build_dir)
+            .arg("build");
 
         // Add signing parameters based on method
         match method {
@@ -1628,7 +1638,9 @@ impl IosBuilder {
         }
 
         let mut cmd = Command::new("zip");
-        cmd.args(["-qr", ipa_path.to_str().unwrap(), "Payload"])
+        cmd.arg("-qr")
+            .arg(&ipa_path)
+            .arg("Payload")
             .current_dir(&export_path);
 
         if self.verbose {
@@ -1679,31 +1691,29 @@ impl IosBuilder {
         println!("Building XCUITest runner for {}...", scheme);
 
         let mut cmd = Command::new("xcodebuild");
-        cmd.args([
-            "build-for-testing",
-            "-project",
-            project_path.to_str().unwrap(),
-            "-scheme",
-            scheme,
-            "-destination",
-            "generic/platform=iOS",
-            "-sdk",
-            "iphoneos",
-            "-configuration",
-            "Release",
-            "-derivedDataPath",
-            build_dir.to_str().unwrap(),
-            "VALIDATE_PRODUCT=NO",
-            "CODE_SIGN_STYLE=Manual",
-            "CODE_SIGN_IDENTITY=",
-            "CODE_SIGNING_ALLOWED=NO",
-            "CODE_SIGNING_REQUIRED=NO",
-            "DEVELOPMENT_TEAM=",
-            "PROVISIONING_PROFILE_SPECIFIER=",
-            "ENABLE_BITCODE=NO",
-            "BITCODE_GENERATION_MODE=none",
-            "STRIP_BITCODE_FROM_COPIED_FILES=NO",
-        ]);
+        cmd.arg("build-for-testing")
+            .arg("-project")
+            .arg(&project_path)
+            .arg("-scheme")
+            .arg(scheme)
+            .arg("-destination")
+            .arg("generic/platform=iOS")
+            .arg("-sdk")
+            .arg("iphoneos")
+            .arg("-configuration")
+            .arg("Release")
+            .arg("-derivedDataPath")
+            .arg(&build_dir)
+            .arg("VALIDATE_PRODUCT=NO")
+            .arg("CODE_SIGN_STYLE=Manual")
+            .arg("CODE_SIGN_IDENTITY=")
+            .arg("CODE_SIGNING_ALLOWED=NO")
+            .arg("CODE_SIGNING_REQUIRED=NO")
+            .arg("DEVELOPMENT_TEAM=")
+            .arg("PROVISIONING_PROFILE_SPECIFIER=")
+            .arg("ENABLE_BITCODE=NO")
+            .arg("BITCODE_GENERATION_MODE=none")
+            .arg("STRIP_BITCODE_FROM_COPIED_FILES=NO");
 
         if self.verbose {
             println!("  Running: {:?}", cmd);
@@ -1797,10 +1807,19 @@ impl IosBuilder {
             })?;
         }
 
+        let runner_parent = runner_path.parent().ok_or_else(|| {
+            BenchError::Build(format!(
+                "Invalid XCUITest runner path with no parent directory: {}",
+                runner_path.display()
+            ))
+        })?;
+
         let mut zip_cmd = Command::new("zip");
         zip_cmd
-            .args(["-qr", zip_path.to_str().unwrap(), runner_name.as_str()])
-            .current_dir(runner_path.parent().unwrap());
+            .arg("-qr")
+            .arg(&zip_path)
+            .arg(&runner_name)
+            .current_dir(runner_parent);
 
         if self.verbose {
             println!("  Running: {:?}", zip_cmd);
