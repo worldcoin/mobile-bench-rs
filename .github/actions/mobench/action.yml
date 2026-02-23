@@ -1,0 +1,244 @@
+name: "mobench"
+description: "Run mobile benchmarks with mobench"
+inputs:
+  command:
+    description: "Command to invoke (supported: cargo mobench ci run | cargo mobench run)"
+    required: false
+    default: "cargo mobench ci run"
+  run-args:
+    description: "Arguments passed to command (quote values containing spaces)"
+    required: true
+  ci:
+    description: "Append --ci only when command is cargo mobench run (ignored for ci run)"
+    required: false
+    default: "false"
+  install-mobench:
+    description: "Install mobench with cargo-binstall or cargo install"
+    required: false
+    default: "true"
+  mobench-version:
+    description: "Optional mobench version to install"
+    required: false
+    default: ""
+  install-cargo-ndk:
+    description: "Install cargo-ndk"
+    required: false
+    default: "true"
+  setup-android:
+    description: "Setup Android SDK/NDK"
+    required: false
+    default: "true"
+  ndk-version:
+    description: "Android NDK version"
+    required: false
+    default: "26.1.10909125"
+  android-sdk-root:
+    description: "Android SDK root directory on the runner"
+    required: false
+    default: "/usr/local/lib/android/sdk"
+  android-packages:
+    description: "SDK packages to install via setup-android"
+    required: false
+    default: |
+      platform-tools
+      platforms;android-34
+      build-tools;34.0.0
+      ndk;26.1.10909125
+  cache-cargo:
+    description: "Cache cargo registry/git and target"
+    required: false
+    default: "true"
+  cache-target:
+    description: "Cache Cargo target/ directory (can be large)"
+    required: false
+    default: "true"
+  cache-gradle:
+    description: "Cache Gradle wrapper and caches (useful if mobench triggers Gradle builds)"
+    required: false
+    default: "true"
+  cache-android:
+    description: "Cache Android SDK/NDK"
+    required: false
+    default: "true"
+  artifact-name:
+    description: "Artifact name for upload"
+    required: false
+    default: "mobench-results"
+  artifact-path:
+    description: "Paths to upload as artifacts"
+    required: false
+    default: |
+      target/mobench/ci/summary.json
+      target/mobench/ci/summary.md
+      target/mobench/ci/results.csv
+      target/browserstack
+  pr-comment:
+    description: "Publish sticky PR comment from CI summary"
+    required: false
+    default: "false"
+  pr-number:
+    description: "PR number (optional, auto-detected from GITHUB_REF when omitted)"
+    required: false
+    default: ""
+  pr-comment-marker:
+    description: "Marker string used to update an existing sticky PR comment"
+    required: false
+    default: "<!-- mobench-report -->"
+  github-token:
+    description: "GitHub token used to publish PR comments"
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Cache cargo
+      if: inputs.cache-cargo == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Cache target
+      if: inputs.cache-target == 'true'
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-target-
+
+    - name: Cache Gradle
+      if: inputs.cache-gradle == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle/wrapper/gradle-wrapper.properties', '**/gradle.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Cache Android SDK
+      if: inputs.cache-android == 'true' && inputs.setup-android == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ inputs.android-sdk-root }}/ndk/${{ inputs.ndk-version }}
+          ${{ inputs.android-sdk-root }}/platform-tools
+          ${{ inputs.android-sdk-root }}/platforms
+          ${{ inputs.android-sdk-root }}/build-tools
+        key: ${{ runner.os }}-android-${{ inputs.ndk-version }}
+        restore-keys: |
+          ${{ runner.os }}-android-
+
+    - name: Setup Android SDK/NDK
+      if: inputs.setup-android == 'true'
+      uses: android-actions/setup-android@v3
+      with:
+        packages: ${{ inputs.android-packages }}
+
+    - name: Install cargo-ndk
+      if: inputs.install-cargo-ndk == 'true'
+      shell: bash
+      run: |
+        if ! command -v cargo-ndk >/dev/null 2>&1; then
+          cargo install cargo-ndk
+        fi
+
+    - name: Install mobench
+      if: inputs.install-mobench == 'true'
+      shell: bash
+      env:
+        MOBENCH_VERSION: ${{ inputs.mobench-version }}
+      run: |
+        if command -v cargo-mobench >/dev/null 2>&1 || command -v mobench >/dev/null 2>&1; then
+          exit 0
+        fi
+        install_args=()
+        if [ -n "$MOBENCH_VERSION" ]; then
+          install_args=(--version "$MOBENCH_VERSION")
+        fi
+        if command -v cargo-binstall >/dev/null 2>&1; then
+          cargo binstall -y mobench "${install_args[@]}"
+        else
+          cargo install cargo-binstall
+          cargo binstall -y mobench "${install_args[@]}"
+        fi
+
+    - name: Run mobench
+      shell: bash
+      env:
+        ANDROID_SDK_ROOT_INPUT: ${{ inputs.android-sdk-root }}
+        NDK_VERSION_INPUT: ${{ inputs.ndk-version }}
+        MOBENCH_CI: ${{ inputs.ci }}
+        MOBENCH_COMMAND: ${{ inputs.command }}
+        MOBENCH_RUN_ARGS: ${{ inputs.run-args }}
+      run: |
+        export ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT_INPUT"
+        export ANDROID_HOME="$ANDROID_SDK_ROOT_INPUT"
+        export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT_INPUT/ndk/$NDK_VERSION_INPUT"
+        extra_args=()
+        if [ "$MOBENCH_CI" = "true" ] && [ "$MOBENCH_COMMAND" = "cargo mobench run" ]; then
+          extra_args=(--ci)
+        fi
+        case "$MOBENCH_COMMAND" in
+          "cargo mobench run"|"cargo mobench ci run")
+            ;;
+          *)
+            echo "Unsupported command input: $MOBENCH_COMMAND"
+            exit 1
+            ;;
+        esac
+        read -r -a command_parts <<< "$MOBENCH_COMMAND"
+        run_args=()
+        if [ -n "$MOBENCH_RUN_ARGS" ]; then
+          while IFS= read -r line; do
+            if [ -z "$line" ]; then
+              continue
+            fi
+            read -r -a parts <<< "$line"
+            run_args+=("${parts[@]}")
+          done <<< "$MOBENCH_RUN_ARGS"
+        fi
+        "${command_parts[@]}" "${extra_args[@]}" "${run_args[@]}"
+
+    - name: Publish sticky PR comment
+      if: always() && inputs.pr-comment == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER_INPUT: ${{ inputs.pr-number }}
+        PR_COMMENT_MARKER: ${{ inputs.pr-comment-marker }}
+      run: |
+        pr_number="$PR_NUMBER_INPUT"
+        if [ -z "$pr_number" ] && [ -n "${GITHUB_REF:-}" ]; then
+          pr_number="$(echo "$GITHUB_REF" | awk -F/ '/^refs\/pull\// { print $3 }')"
+        fi
+        if [ -z "$pr_number" ]; then
+          echo "No PR number detected; skipping sticky comment publish."
+          exit 0
+        fi
+        if [ ! -f target/mobench/ci/summary.json ]; then
+          echo "CI summary not found at target/mobench/ci/summary.json; skipping sticky comment publish."
+          exit 0
+        fi
+        if [ -z "${GITHUB_TOKEN:-}" ]; then
+          echo "GITHUB_TOKEN is empty; skipping sticky comment publish."
+          exit 0
+        fi
+        cargo mobench report github \
+          --pr "$pr_number" \
+          --summary target/mobench/ci/summary.json \
+          --marker "$PR_COMMENT_MARKER" \
+          --publish
+
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.artifact-path }}

@@ -430,7 +430,7 @@ devices:
 ### For iOS
 
 - macOS with Xcode
-- Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
+- Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`
 - `xcodegen`: `brew install xcodegen`
 
 ## Part of mobench

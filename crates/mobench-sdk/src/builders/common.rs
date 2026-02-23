@@ -21,7 +21,14 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::Deserialize;
+
 use crate::types::BenchError;
+
+#[derive(Deserialize)]
+struct CargoMetadata {
+    target_directory: String,
+}
 
 /// Validates that the project root is a valid directory for building.
 ///
@@ -122,21 +129,15 @@ pub fn get_cargo_target_dir(crate_dir: &Path) -> Result<PathBuf, BenchError> {
         return Ok(fallback);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse the JSON to extract target_directory
-    // Using simple string parsing to avoid adding serde_json dependency
-    if let Some(start) = stdout.find("\"target_directory\":\"") {
-        let rest = &stdout[start + 20..];
-        if let Some(end) = rest.find('"') {
-            let target_dir = &rest[..end];
-            // Handle escaped backslashes in Windows paths
-            let target_dir = target_dir.replace("\\\\", "\\");
-            return Ok(PathBuf::from(target_dir));
-        }
+    match serde_json::from_slice::<CargoMetadata>(&output.stdout) {
+        Ok(metadata) => return Ok(PathBuf::from(metadata.target_directory)),
+        Err(err) => eprintln!(
+            "Warning: Failed to parse cargo metadata JSON ({}). Falling back to crate-local target dir.",
+            err
+        ),
     }
 
-    // Fall back to crate_dir/target if parsing fails
+    // Fall back to crate_dir/target if JSON parsing fails
     let fallback = crate_dir.join("target");
     eprintln!(
         "Warning: Failed to parse target_directory from cargo metadata output, \
@@ -182,12 +183,7 @@ pub fn host_lib_path(crate_dir: &Path, crate_name: &str) -> Result<PathBuf, Benc
     // Use cargo metadata to find the actual target directory
     let target_dir = get_cargo_target_dir(crate_dir)?;
 
-    let lib_name = format!(
-        "{}{}.{}",
-        lib_prefix,
-        crate_name.replace('-', "_"),
-        lib_ext
-    );
+    let lib_name = format!("{}{}.{}", lib_prefix, crate_name.replace('-', "_"), lib_ext);
     let path = target_dir.join("debug").join(&lib_name);
 
     if !path.exists() {
@@ -327,10 +323,12 @@ pub fn read_package_name(cargo_toml_path: &Path) -> Option<String> {
 ///
 /// embed_bench_spec(Path::new("target/mobench"), &spec)?;
 /// ```
-pub fn embed_bench_spec<S: serde::Serialize>(output_dir: &Path, spec: &S) -> Result<(), BenchError> {
-    let spec_json = serde_json::to_string_pretty(spec).map_err(|e| {
-        BenchError::Build(format!("Failed to serialize bench spec: {}", e))
-    })?;
+pub fn embed_bench_spec<S: serde::Serialize>(
+    output_dir: &Path,
+    spec: &S,
+) -> Result<(), BenchError> {
+    let spec_json = serde_json::to_string_pretty(spec)
+        .map_err(|e| BenchError::Build(format!("Failed to serialize bench spec: {}", e)))?;
 
     // Android: Write to assets directory
     let android_assets_dir = output_dir.join("android/app/src/main/assets");
@@ -472,10 +470,7 @@ pub fn is_git_dirty() -> Option<bool> {
 
 /// Gets the Rust version.
 pub fn get_rust_version() -> Option<String> {
-    let output = Command::new("rustc")
-        .args(["--version"])
-        .output()
-        .ok()?;
+    let output = Command::new("rustc").args(["--version"]).output().ok()?;
 
     if output.status.success() {
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -589,9 +584,8 @@ pub fn embed_bench_meta(
     profile: &str,
 ) -> Result<(), BenchError> {
     let meta = create_bench_meta(spec, target, profile);
-    let meta_json = serde_json::to_string_pretty(&meta).map_err(|e| {
-        BenchError::Build(format!("Failed to serialize bench meta: {}", e))
-    })?;
+    let meta_json = serde_json::to_string_pretty(&meta)
+        .map_err(|e| BenchError::Build(format!("Failed to serialize bench meta: {}", e)))?;
 
     // Android: Write to assets directory
     let android_assets_dir = output_dir.join("android/app/src/main/assets");
@@ -789,9 +783,9 @@ members = ["crates/*"]
     #[test]
     fn test_is_leap_year() {
         assert!(!is_leap_year(1970)); // Not divisible by 4
-        assert!(is_leap_year(2000));  // Divisible by 400
+        assert!(is_leap_year(2000)); // Divisible by 400
         assert!(!is_leap_year(1900)); // Divisible by 100 but not 400
-        assert!(is_leap_year(2024));  // Divisible by 4, not by 100
+        assert!(is_leap_year(2024)); // Divisible by 4, not by 100
     }
 
     #[test]

@@ -25,6 +25,12 @@ cargo mobench check --target android
 # Verify iOS build tools are installed
 cargo mobench check --target ios
 
+# Validate CI prerequisites + config in one shot
+cargo mobench doctor --target both --config bench-config.toml --device-matrix device-matrix.yaml
+
+# Validate run config contract directly
+cargo mobench config validate --config bench-config.toml
+
 # Output as JSON for CI parsing
 cargo mobench check --target android --format json
 ```
@@ -48,6 +54,9 @@ cargo mobench devices --platform ios
 
 # Output as JSON
 cargo mobench devices --platform android --json
+
+# Resolve matrix profile deterministically (CI-friendly)
+cargo mobench devices resolve --platform android --profile default --device-matrix device-matrix.yaml
 ```
 
 Invalid device specs return helpful suggestions:
@@ -67,6 +76,9 @@ cargo mobench verify --target android --check-artifacts
 
 # Include smoke test
 cargo mobench verify --target android --smoke-test --function my_benchmark
+
+# Render markdown summary from standardized CI output
+cargo mobench report summarize --summary target/mobench/ci/summary.json
 ```
 
 ## Quick Example
@@ -124,7 +136,8 @@ cargo mobench run \
   --release \
   --fetch \
   --fetch-timeout-secs 600 \
-  --output results.json
+  --ci \
+  --output target/mobench/results.json
 ```
 
 **Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.

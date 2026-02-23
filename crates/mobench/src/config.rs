@@ -262,8 +262,7 @@ impl MobenchConfig {
     /// * `Ok(())` - Successfully saved configuration
     /// * `Err` - If the file cannot be written
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        let contents =
-            toml::to_string_pretty(self).context("Failed to serialize configuration")?;
+        let contents = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
         std::fs::write(path, contents)
             .with_context(|| format!("Failed to write config file: {:?}", path))?;
@@ -273,10 +272,12 @@ impl MobenchConfig {
 
     /// Returns the library name, either from config or derived from crate name.
     pub fn library_name(&self) -> Option<String> {
-        self.project
-            .library_name
-            .clone()
-            .or_else(|| self.project.crate_name.as_ref().map(|c| c.replace('-', "_")))
+        self.project.library_name.clone().or_else(|| {
+            self.project
+                .crate_name
+                .as_ref()
+                .map(|c| c.replace('-', "_"))
+        })
     }
 
     /// Generates a starter configuration with sensible defaults.
