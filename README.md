@@ -6,6 +6,8 @@ Mobile benchmarking SDK for Rust. Build and run Rust benchmarks on Android and i
 
 mobench provides a Rust API and a CLI for running benchmarks on real mobile devices. You define benchmarks in Rust, generate mobile bindings automatically, and drive execution from the CLI with consistent output formats (JSON, Markdown, CSV).
 
+For programmatic CI integrations, `mobench` exposes typed request/result types (`RunRequest`, `RunResult`, `DeviceSelection`, `Report`) via the crate API.
+
 ## How mobench works
 
 - `#[benchmark]` marks functions and registers them via `inventory`
@@ -27,13 +29,18 @@ mobench provides a Rust API and a CLI for running benchmarks on real mobile devi
 ## Quick start
 
 ```bash
-# Install the CLI
+# Install the CLI (fast)
+cargo binstall mobench
+
+# Or build from source
 cargo install mobench
 
 # Add the SDK to your project
 cargo add mobench-sdk inventory
 
 # Check prerequisites before building
+cargo mobench doctor --target both
+cargo mobench config validate --config bench-config.toml
 cargo mobench check --target android
 cargo mobench check --target ios
 
@@ -54,9 +61,29 @@ cargo mobench run --target android --function sample_fns::fibonacci \
 # List available BrowserStack devices
 cargo mobench devices --platform android
 
+# Resolve matrix devices deterministically for CI
+cargo mobench devices resolve --platform android --profile default --device-matrix device-matrix.yaml
+
+# Fixture lifecycle helpers
+cargo mobench fixture init
+cargo mobench fixture verify
+cargo mobench fixture cache-key
+
 # View benchmark results summary
-cargo mobench summary results.json
+cargo mobench summary target/mobench/results.json
+
+# CI one-command orchestration with stable outputs
+cargo mobench ci run --target android --function sample_fns::fibonacci --local-only
+
+# Reporting helpers from standardized outputs
+cargo mobench report summarize --summary target/mobench/ci/summary.json
+cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
 ```
+
+CI contract outputs are written to `target/mobench/ci/`:
+- `summary.json`
+- `summary.md`
+- `results.csv`
 
 ## Configuration
 
@@ -82,6 +109,8 @@ default_warmup = 10
 ```
 
 CLI flags override config file values when provided.
+- In `cargo mobench run --config <FILE>` mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
+- For regression comparisons, `--baseline` should point to a previous run summary; if it resolves to the same output path, mobench snapshots the prior file before writing the candidate summary.
 
 ## Project docs
 
@@ -89,6 +118,10 @@ CLI flags override config file values when provided.
 - `BUILD.md`: build prerequisites and troubleshooting
 - `TESTING.md`: testing guide and device workflows
 - `BROWSERSTACK_CI_INTEGRATION.md`: BrowserStack CI setup
+- `docs/CONTRACT_CI_V1.md`: frozen v1 CI input/output/error contract
+- `docs/adr/0001-mobench-ci-contract-v1.md`: CI contract ADR and compatibility policy
+- `docs/schemas/`: machine-readable CI/summary schema artifacts
+- `docs/MIGRATION_GUIDE.md`: migration guide (placeholder, linked from ADR)
 - `FETCH_RESULTS_GUIDE.md`: fetching and summarizing results
 - `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide
@@ -165,6 +198,19 @@ fn db_query(db: &Database) {
 | `#[benchmark(setup = fn, teardown = fn)]` | Resources requiring cleanup (connections, files, etc.) |
 
 ## Release Notes
+
+### v0.1.14
+
+- Added CI contract-oriented commands and workflows:
+  - `cargo mobench ci run`
+  - `cargo mobench config validate`
+  - `cargo mobench devices resolve`
+  - `cargo mobench fixture init|build|verify|cache-key`
+  - `cargo mobench report summarize|github`
+- Standardized CI outputs under `target/mobench/ci/` with schema-backed metadata.
+- Added baseline comparison source support (`path|url|artifact:<path>`) and regression labels.
+- Improved local action safety for workflow input handling and sticky PR comment publishing.
+- Fixed iOS CI target setup (`x86_64-apple-ios`) and preserved CI outputs on regression exit.
 
 ### v0.1.13
 

@@ -62,10 +62,12 @@
 //! ```
 
 pub mod android;
-pub mod ios;
 pub mod common;
+pub mod ios;
 
 // Re-export builders
 pub use android::AndroidBuilder;
+pub use common::{
+    BenchMeta, EmbeddedBenchSpec, create_bench_meta, embed_bench_meta, embed_bench_spec,
+};
 pub use ios::{IosBuilder, SigningMethod};
-pub use common::{embed_bench_spec, embed_bench_meta, EmbeddedBenchSpec, BenchMeta, create_bench_meta};

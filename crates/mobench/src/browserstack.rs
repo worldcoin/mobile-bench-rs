@@ -141,7 +141,10 @@ impl BrowserStackClient {
         }
 
         let file_size = get_file_size(artifact);
-        println!("Uploading Android test APK ({})...", format_file_size(file_size));
+        println!(
+            "Uploading Android test APK ({})...",
+            format_file_size(file_size)
+        );
         let start = Instant::now();
 
         let form = Form::new().file("file", artifact)?;
@@ -194,7 +197,10 @@ impl BrowserStackClient {
         }
 
         let file_size = get_file_size(artifact);
-        println!("Uploading iOS XCUITest runner ({})...", format_file_size(file_size));
+        println!(
+            "Uploading iOS XCUITest runner ({})...",
+            format_file_size(file_size)
+        );
         let start = Instant::now();
 
         let form = Form::new().file("file", artifact)?;
@@ -276,7 +282,8 @@ impl BrowserStackClient {
             build_name: self.project.clone(),
             // Specify the test method to run (required by BrowserStack for XCUITest)
             only_testing: Some(vec![
-                "BenchRunnerUITests/BenchRunnerUITests/testLaunchAndCaptureBenchmarkReport".to_string(),
+                "BenchRunnerUITests/BenchRunnerUITests/testLaunchAndCaptureBenchmarkReport"
+                    .to_string(),
             ]),
         };
 
@@ -1108,7 +1115,11 @@ fn parse_device_list(json: Value, context: &str) -> Result<Vec<BrowserStackDevic
         let os = device
             .get("os")
             .and_then(|v| v.as_str())
-            .unwrap_or(if context == "xcuitest" { "ios" } else { "android" })
+            .unwrap_or(if context == "xcuitest" {
+                "ios"
+            } else {
+                "android"
+            })
             .to_string();
 
         let os_version = device
@@ -1173,8 +1184,16 @@ fn validate_device_spec(
         let device_part = &spec[..dash_pos];
         let version_part = &spec[dash_pos + 1..];
         // Only treat as version if it looks like a version number
-        if version_part.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-            (device_part.to_lowercase(), Some(version_part.to_lowercase()))
+        if version_part
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            (
+                device_part.to_lowercase(),
+                Some(version_part.to_lowercase()),
+            )
         } else {
             (spec_lower.clone(), None)
         }
@@ -1191,10 +1210,8 @@ fn validate_device_spec(
 
         if !matching_devices.is_empty() {
             // Device exists but with different versions
-            let available_versions: Vec<String> = matching_devices
-                .iter()
-                .map(|d| d.identifier())
-                .collect();
+            let available_versions: Vec<String> =
+                matching_devices.iter().map(|d| d.identifier()).collect();
 
             let mut suggestions = available_versions;
             suggestions.sort();
@@ -1202,10 +1219,7 @@ fn validate_device_spec(
 
             return Err(DeviceValidationError {
                 spec: spec.to_string(),
-                reason: format!(
-                    "OS version '{}' not available for this device",
-                    version
-                ),
+                reason: format!("OS version '{}' not available for this device", version),
                 suggestions,
             });
         }
@@ -1233,9 +1247,10 @@ fn validate_device_spec(
             let spec_words: Vec<&str> = spec_lower.split_whitespace().collect();
             let device_words: Vec<&str> = device_lower.split_whitespace().collect();
 
-            let matches = spec_words.iter().filter(|sw|
-                device_words.iter().any(|dw| dw.contains(*sw))
-            ).count();
+            let matches = spec_words
+                .iter()
+                .filter(|sw| device_words.iter().any(|dw| dw.contains(*sw)))
+                .count();
 
             if matches == spec_words.len() && !spec_words.is_empty() {
                 // All words from spec found in device name
@@ -1254,9 +1269,7 @@ fn validate_device_spec(
     }
 
     // Sort by score (descending), then alphabetically
-    scored_suggestions.sort_by(|a, b| {
-        b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1))
-    });
+    scored_suggestions.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
     // Take top 3 unique suggestions
     let suggestions: Vec<String> = scored_suggestions
@@ -2111,8 +2124,16 @@ BENCH_REPORT_JSON_END
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(error.reason.contains("OS version"));
-        assert!(error.suggestions.contains(&"Google Pixel 7-13.0".to_string()));
-        assert!(error.suggestions.contains(&"Google Pixel 7-14.0".to_string()));
+        assert!(
+            error
+                .suggestions
+                .contains(&"Google Pixel 7-13.0".to_string())
+        );
+        assert!(
+            error
+                .suggestions
+                .contains(&"Google Pixel 7-14.0".to_string())
+        );
     }
 
     #[test]
@@ -2154,7 +2175,11 @@ BENCH_REPORT_JSON_END
         let result = validate_device_spec("Pixel", &devices);
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.suggestions.len() <= 3, "Should have at most 3 suggestions, got {}", error.suggestions.len());
+        assert!(
+            error.suggestions.len() <= 3,
+            "Should have at most 3 suggestions, got {}",
+            error.suggestions.len()
+        );
     }
 
     #[test]

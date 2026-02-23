@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.13):**
+**Published on crates.io as the mobench ecosystem (v0.1.14):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -234,8 +234,48 @@ cargo mobench run \
   --function sample_fns::fibonacci \
   --iterations 100 \
   --warmup 10 \
-  --output run-summary.json
+  --output target/mobench/results.json
 ```
+
+#### Single-Command BrowserStack Flow
+
+The `run` command provides a complete single-command workflow for benchmarking on real devices:
+
+```bash
+# Android: Single command does everything
+cargo mobench run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --iterations 100 \
+  --warmup 10 \
+  --devices "Google Pixel 7-13.0" \
+  --release \
+  --output target/mobench/results.json
+
+# iOS: Single command also works (auto-packages IPA + XCUITest)
+cargo mobench run \
+  --target ios \
+  --function sample_fns::fibonacci \
+  --iterations 100 \
+  --warmup 10 \
+  --devices "iPhone 14-16" \
+  --release \
+  --output target/mobench/results.json
+```
+
+**What happens automatically:**
+1. Builds Rust native libraries for all required ABIs
+2. Generates UniFFI bindings (Kotlin/Swift)
+3. Packages mobile app (APK for Android, IPA for iOS)
+4. Packages test runner (androidTest APK or XCUITest zip)
+5. Uploads artifacts to BrowserStack
+6. Schedules and monitors the test run
+7. Fetches and displays results
+
+**No need to manually call:**
+- `cargo mobench build` (done automatically)
+- `cargo mobench package-ipa` (done automatically for iOS)
+- `cargo mobench package-xcuitest` (done automatically for iOS)
 
 #### BrowserStack Run (Android)
 
@@ -252,7 +292,7 @@ cargo mobench run \
   --warmup 5 \
   --devices "Google Pixel 7-13.0" \
   --release \
-  --output run-summary.json
+  --output target/mobench/results.json
 ```
 
 **Note on `--release` flag**: Debug builds can be very large (~544MB) which may cause BrowserStack upload timeouts. The `--release` flag builds in release mode, reducing APK size significantly (~133MB), and is recommended for all BrowserStack runs.
@@ -274,8 +314,27 @@ cargo mobench run \
   --release \
   --ios-app target/mobench/ios/BenchRunner.ipa \
   --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip \
-  --output run-summary.json
+  --output target/mobench/results.json
 ```
+
+#### Automatic iOS Packaging
+
+When running iOS benchmarks on BrowserStack, mobench automatically packages the IPA and XCUITest runner if you don't provide `--ios-app` and `--ios-test-suite` flags:
+
+```bash
+# This auto-packages iOS artifacts:
+cargo mobench run --target ios --function my_fn --devices "iPhone 14-16" --release
+
+# Equivalent to manually running:
+cargo mobench build --target ios --release
+cargo mobench package-ipa --method adhoc
+cargo mobench package-xcuitest
+cargo mobench run --target ios --function my_fn --devices "iPhone 14-16" \
+  --ios-app target/mobench/ios/BenchRunner.ipa \
+  --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip
+```
+
+You can override auto-packaging by providing both `--ios-app` and `--ios-test-suite` together.
 
 #### Using Config Files
 
@@ -574,7 +633,7 @@ cargo mobench run --target android --function my_function
 ### Target Architectures
 
 - **Android**: `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android` (emulator)
-- **iOS**: `aarch64-apple-ios` (device), `aarch64-apple-ios-sim` (simulator on M1+ Macs)
+- **iOS**: `aarch64-apple-ios` (device), `aarch64-apple-ios-sim` (Apple Silicon simulators), `x86_64-apple-ios` (Intel simulators)
 
 ### XCFramework Structure
 

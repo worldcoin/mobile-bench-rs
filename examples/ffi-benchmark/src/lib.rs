@@ -4,6 +4,14 @@
 //! `run_benchmark`) for Kotlin/Swift bindings. For the minimal SDK-only usage,
 //! see `examples/basic-benchmark`.
 
+// Alternative: The mobench_sdk::ffi module provides pre-defined types that match
+// what UniFFI expects. You can use these directly or as templates for your own types:
+//
+//   use mobench_sdk::ffi::{BenchSpecFfi, BenchReportFfi, BenchErrorFfi, run_benchmark_ffi};
+//
+// This example defines its own types for demonstration, but the ffi module
+// is a simpler starting point for most use cases.
+
 use mobench_sdk::benchmark;
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];

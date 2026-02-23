@@ -1,0 +1,64 @@
+name: Mobile Bench Action Example
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "android | ios"
+        required: false
+        default: "android"
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    if: ${{ github.event.inputs.platform == 'android' || github.event.inputs.platform == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: ./.github/actions/mobench
+        with:
+          command: cargo mobench ci run
+          run-args: >
+            --target android
+            --function sample_fns::fibonacci
+            --iterations 20
+            --warmup 5
+            --devices "Google Pixel 7-13.0"
+            --release
+            --fetch
+          ci: false
+          ndk-version: "26.1.10909125"
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+  ios:
+    if: ${{ github.event.inputs.platform == 'ios' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: ./.github/actions/mobench
+        with:
+          command: cargo mobench ci run
+          run-args: >
+            --target ios
+            --function sample_fns::fibonacci
+            --iterations 20
+            --warmup 5
+            --devices "iPhone 14-16"
+            --release
+            --fetch
+          ci: false
+          setup-android: false
+          install-cargo-ndk: false
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}

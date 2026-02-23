@@ -27,3 +27,6 @@ run-*.json
 browserstack-*.log
 BROWSERSTACK_RUN_*.md
 bench-mobile
+
+# Implementation plans (local only)
+docs/plans/

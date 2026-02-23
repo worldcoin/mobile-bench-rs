@@ -100,7 +100,7 @@ Install the following tools (per platform):
     - Note: Android Gradle Plugin (AGP) officially supports Java 17.
 - iOS (macOS only):
   - Xcode + Command Line Tools: https://developer.apple.com/xcode/
-  - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`
+  - Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`
     - https://doc.rust-lang.org/rustup/targets.html
   - `xcodegen` (optional): https://github.com/yonaskolb/XcodeGen
 
@@ -356,6 +356,57 @@ pub fn db_insert(conn: &DbConnection) {
     conn.execute("INSERT INTO bench_temp VALUES (1, 'test')");
 }
 ```
+
+## Using the FFI Module
+
+For UniFFI integration, mobench-sdk provides a unified `ffi` module with ready-to-use types:
+
+```rust
+use mobench_sdk::ffi::{
+    BenchSpecFfi, BenchSampleFfi, BenchReportFfi, BenchErrorFfi,
+    run_benchmark_ffi,
+};
+
+// These types mirror the SDK types but are designed for FFI
+// You can use them directly or as templates for your UniFFI Record types
+```
+
+### Option 1: Use FFI Types Directly
+
+If you don't need custom UniFFI annotations, you can use the FFI types directly:
+
+```rust
+use mobench_sdk::ffi::run_benchmark_ffi;
+
+fn run_bench(name: &str) {
+    let spec = mobench_sdk::ffi::BenchSpecFfi {
+        name: name.to_string(),
+        iterations: 100,
+        warmup: 10,
+    };
+    let result = run_benchmark_ffi(spec);
+}
+```
+
+### Option 2: Define Your Own UniFFI Types (Recommended)
+
+For full UniFFI support with generated Kotlin/Swift bindings:
+
+```rust
+use uniffi;
+
+#[derive(uniffi::Record)]
+pub struct BenchSpec {
+    pub name: String,
+    pub iterations: u32,
+    pub warmup: u32,
+}
+
+// Implement From<BenchSpec> for mobench_sdk::BenchSpec
+// Then call mobench_sdk::run_benchmark(spec.into())
+```
+
+See `examples/ffi-benchmark` for a complete working example with UniFFI annotations.
 
 ## 4) Scaffold mobile projects
 

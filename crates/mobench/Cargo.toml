@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
-description = "Mobile benchmarking CLI for Rust - Run benchmarks on real Android and iOS devices"
+description = "Rust mobile benchmark CLI with CI contract outputs and BrowserStack automation"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
 documentation = "https://docs.rs/mobench"
 readme = "README.md"
@@ -36,7 +36,7 @@ path = "src/bin/cargo-mobench.rs"
 
 [dependencies]
 anyhow.workspace = true
-mobench-sdk = { version = "0.1.13", path = "../mobench-sdk" }
+mobench-sdk = { version = "0.1.14", path = "../mobench-sdk" }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -45,8 +45,10 @@ toml.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json", "multipart"] }
 dotenvy = "0.15"
 time.workspace = true
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
 inventory = "0.3"
 sample-fns = { path = "../sample-fns" }
+jsonschema = "0.18"
