@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://world.org/mobench/schemas/summary-v1.schema.json",
+  "title": "Mobench Summary v1",
+  "type": "object",
+  "required": ["summary"],
+  "properties": {
+    "summary": {
+      "type": "object",
+      "required": [
+        "generated_at",
+        "generated_at_unix",
+        "target",
+        "function",
+        "iterations",
+        "warmup",
+        "devices",
+        "device_summaries"
+      ],
+      "properties": {
+        "generated_at": { "type": "string" },
+        "generated_at_unix": { "type": "integer" },
+        "target": { "type": "string", "enum": ["android", "ios"] },
+        "function": { "type": "string" },
+        "iterations": { "type": "integer" },
+        "warmup": { "type": "integer" },
+        "devices": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "device_summaries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["device", "benchmarks"],
+            "properties": {
+              "device": { "type": "string" },
+              "benchmarks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["function", "samples"],
+                  "properties": {
+                    "function": { "type": "string" },
+                    "samples": { "type": "integer" },
+                    "mean_ns": { "type": ["integer", "null"] },
+                    "median_ns": { "type": ["integer", "null"] },
+                    "p95_ns": { "type": ["integer", "null"] },
+                    "min_ns": { "type": ["integer", "null"] },
+                    "max_ns": { "type": ["integer", "null"] }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}
