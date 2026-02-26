@@ -1,6 +1,7 @@
 //! Types and logic for the `ci summarize` command.
 
 use anyhow::{Context, Result};
+use comfy_table::{presets::UTF8_FULL, Attribute, Cell, ContentArrangement, Table};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -217,6 +218,187 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
     })
 }
 
+/// Render the full report as terminal tables.
+pub fn render_table(report: &SummarizeReport) -> String {
+    let mut output = String::new();
+
+    for platform in &report.platforms {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&render_platform_table(platform));
+    }
+
+    output
+}
+
+fn render_platform_table(platform: &PlatformReport) -> String {
+    let mut output = String::new();
+
+    // Header line
+    let mut header = format!(
+        "{} — {} ({} {})",
+        platform.platform.to_uppercase(),
+        platform.device.name,
+        platform.device.os,
+        platform.device.os_version,
+    );
+    if let Some(chipset) = &platform.device.chipset {
+        header.push_str(&format!(" · {chipset}"));
+    }
+    if let Some(ram) = platform.device.ram_gb {
+        header.push_str(&format!(" · {ram} GB RAM"));
+    }
+    output.push_str(&header);
+    output.push('\n');
+
+    let has_resource_usage = platform
+        .benchmarks
+        .iter()
+        .any(|b| b.resource_usage.is_some());
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+
+    let mut headers = vec!["Benchmark", "Avg ms", "Best", "Worst", "Median", "P95"];
+    if has_resource_usage {
+        headers.extend(["CPU %", "RAM MB"]);
+    }
+    table.set_header(
+        headers
+            .iter()
+            .map(|h| Cell::new(h).add_attribute(Attribute::Bold)),
+    );
+
+    for bench in &platform.benchmarks {
+        let mut row = vec![
+            Cell::new(&bench.label),
+            Cell::new(format!("{:.1}", bench.timing.avg_ms)).add_attribute(Attribute::Bold),
+            Cell::new(format!("{:.1}", bench.timing.best_ms)),
+            Cell::new(format!("{:.1}", bench.timing.worst_ms)),
+            Cell::new(format!("{:.1}", bench.timing.median_ms)),
+            Cell::new(format!("{:.1}", bench.timing.p95_ms)),
+        ];
+
+        if has_resource_usage {
+            if let Some(ru) = &bench.resource_usage {
+                row.push(Cell::new(
+                    ru.cpu_avg_percent
+                        .map(|v| format!("{v:.0}%"))
+                        .unwrap_or_else(|| "—".to_string()),
+                ));
+                row.push(Cell::new(
+                    ru.ram_avg_mb
+                        .map(|v| format!("{v:.0}"))
+                        .unwrap_or_else(|| "—".to_string()),
+                ));
+            } else {
+                row.push(Cell::new("—"));
+                row.push(Cell::new("—"));
+            }
+        }
+
+        table.add_row(row);
+    }
+
+    output.push_str(&table.to_string());
+    output.push_str(&format!(
+        "\n  {} iterations · {} warmup · avg is primary metric\n",
+        platform.iterations, platform.warmup
+    ));
+
+    output
+}
+
+/// Render the report as a markdown table.
+pub fn render_markdown(report: &SummarizeReport) -> String {
+    let mut output = String::new();
+
+    for platform in &report.platforms {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+
+        let mut header = format!(
+            "### {} — {} ({} {})",
+            platform.platform.to_uppercase(),
+            platform.device.name,
+            platform.device.os,
+            platform.device.os_version,
+        );
+        if let Some(chipset) = &platform.device.chipset {
+            header.push_str(&format!(" · {chipset}"));
+        }
+        if let Some(ram) = platform.device.ram_gb {
+            header.push_str(&format!(" · {ram} GB RAM"));
+        }
+        output.push_str(&header);
+        output.push_str("\n\n");
+
+        let has_ru = platform
+            .benchmarks
+            .iter()
+            .any(|b| b.resource_usage.is_some());
+
+        if has_ru {
+            output.push_str(
+                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU % | RAM MB |\n",
+            );
+            output.push_str(
+                "|-----------|--------|------|-------|--------|-----|-------|--------|\n",
+            );
+        } else {
+            output.push_str("| Benchmark | Avg ms | Best | Worst | Median | P95 |\n");
+            output.push_str("|-----------|--------|------|-------|--------|-----|\n");
+        }
+
+        for bench in &platform.benchmarks {
+            let mut row = format!(
+                "| {} | **{:.1}** | {:.1} | {:.1} | {:.1} | {:.1} |",
+                bench.label,
+                bench.timing.avg_ms,
+                bench.timing.best_ms,
+                bench.timing.worst_ms,
+                bench.timing.median_ms,
+                bench.timing.p95_ms,
+            );
+
+            if has_ru {
+                if let Some(ru) = &bench.resource_usage {
+                    row.push_str(&format!(
+                        " {} | {} |",
+                        ru.cpu_avg_percent
+                            .map(|v| format!("{v:.0}%"))
+                            .unwrap_or_else(|| "—".into()),
+                        ru.ram_avg_mb
+                            .map(|v| format!("{v:.0}"))
+                            .unwrap_or_else(|| "—".into()),
+                    ));
+                } else {
+                    row.push_str(" — | — |");
+                }
+            }
+
+            output.push_str(&row);
+            output.push('\n');
+        }
+
+        output.push_str(&format!(
+            "\n*{} iterations · {} warmup · avg is primary metric*\n",
+            platform.iterations, platform.warmup
+        ));
+    }
+
+    output
+}
+
+/// Render the report as JSON.
+pub fn render_json(report: &SummarizeReport) -> Result<String> {
+    serde_json::to_string_pretty(report).context("Failed to serialize report as JSON")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +491,103 @@ mod tests {
     fn test_load_results_dir_empty() {
         let dir = tempfile::tempdir().unwrap();
         assert!(load_results_dir(dir.path()).is_err());
+    }
+
+    #[test]
+    fn test_render_table_output() {
+        let report = SummarizeReport {
+            platforms: vec![PlatformReport {
+                platform: "ios".to_string(),
+                device: DeviceInfo {
+                    name: "iPhone 14".to_string(),
+                    os: "iOS".to_string(),
+                    os_version: "16.0".to_string(),
+                    chipset: Some("A15 Bionic".to_string()),
+                    ram_gb: Some(6.0),
+                },
+                benchmarks: vec![BenchmarkResult {
+                    name: "bench_nullifier_proving_only".to_string(),
+                    label: "\u{03C0}2 nullifier-proving".to_string(),
+                    timing: TimingStats {
+                        avg_ms: 1204.5,
+                        median_ms: 1198.0,
+                        best_ms: 1180.2,
+                        worst_ms: 1298.1,
+                        p95_ms: 1290.0,
+                        std_dev_ms: 35.2,
+                    },
+                    resource_usage: Some(ResourceUsage {
+                        cpu_avg_percent: Some(94.0),
+                        cpu_peak_percent: Some(98.0),
+                        ram_avg_mb: Some(623.0),
+                        ram_peak_mb: Some(650.0),
+                    }),
+                }],
+                iterations: 30,
+                warmup: 5,
+            }],
+        };
+        let output = render_table(&report);
+        assert!(output.contains("iPhone 14"));
+        assert!(output.contains("1204.5"));
+        assert!(output.contains("A15 Bionic"));
+        assert!(output.contains("6 GB RAM"));
+    }
+
+    #[test]
+    fn test_render_markdown_output() {
+        let report = SummarizeReport {
+            platforms: vec![PlatformReport {
+                platform: "ios".to_string(),
+                device: DeviceInfo {
+                    name: "iPhone 14".to_string(),
+                    os: "iOS".to_string(),
+                    os_version: "16.0".to_string(),
+                    chipset: None,
+                    ram_gb: None,
+                },
+                benchmarks: vec![BenchmarkResult {
+                    name: "bench_nullifier_proving_only".to_string(),
+                    label: "\u{03C0}2 nullifier-proving".to_string(),
+                    timing: TimingStats {
+                        avg_ms: 1204.5,
+                        median_ms: 1198.0,
+                        best_ms: 1180.2,
+                        worst_ms: 1298.1,
+                        p95_ms: 1290.0,
+                        std_dev_ms: 35.2,
+                    },
+                    resource_usage: None,
+                }],
+                iterations: 30,
+                warmup: 5,
+            }],
+        };
+        let output = render_markdown(&report);
+        assert!(output.contains("### IOS"));
+        assert!(output.contains("**1204.5**"));
+        assert!(output.contains("| Benchmark |"));
+    }
+
+    #[test]
+    fn test_render_json_output() {
+        let report = SummarizeReport {
+            platforms: vec![PlatformReport {
+                platform: "ios".to_string(),
+                device: DeviceInfo {
+                    name: "iPhone 14".to_string(),
+                    os: "iOS".to_string(),
+                    os_version: "16.0".to_string(),
+                    chipset: None,
+                    ram_gb: None,
+                },
+                benchmarks: vec![],
+                iterations: 30,
+                warmup: 5,
+            }],
+        };
+        let json_str = render_json(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["platforms"][0]["platform"], "ios");
     }
 }
