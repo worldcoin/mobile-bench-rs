@@ -394,6 +394,39 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
     output
 }
 
+/// Enrich an offline report with BrowserStack session metrics.
+pub fn enrich_with_browserstack(
+    report: &mut SummarizeReport,
+    build_summary: &crate::browserstack::BuildSummary,
+) {
+    for platform in &mut report.platforms {
+        for session in &build_summary.sessions {
+            // Update device info from session details
+            if !session.os.is_empty() {
+                platform.device.os = session.os.clone();
+                platform.device.os_version = session.os_version.clone();
+                if platform.device.name == "unknown" {
+                    platform.device.name = session.device.clone();
+                }
+            }
+
+            // Enrich benchmarks with performance metrics
+            if let Some(perf) = &session.performance {
+                for bench in &mut platform.benchmarks {
+                    if bench.resource_usage.is_none() {
+                        bench.resource_usage = Some(ResourceUsage {
+                            cpu_avg_percent: perf.cpu.as_ref().map(|c| c.average_percent),
+                            cpu_peak_percent: perf.cpu.as_ref().map(|c| c.peak_percent),
+                            ram_avg_mb: perf.memory.as_ref().map(|m| m.average_mb),
+                            ram_peak_mb: perf.memory.as_ref().map(|m| m.peak_mb),
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Render the report as JSON.
 pub fn render_json(report: &SummarizeReport) -> Result<String> {
     serde_json::to_string_pretty(report).context("Failed to serialize report as JSON")
