@@ -477,6 +477,8 @@ enum CiCommand {
     },
     /// Run a full CI benchmark flow with stable output contract.
     Run(CiRunArgs),
+    /// Summarize benchmark results with device metrics.
+    Summarize(CiSummarizeArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -659,6 +661,45 @@ struct CiRunArgs {
     request_command: Option<String>,
     #[arg(long, help = "Metadata: git ref/sha for this mobench invocation")]
     mobench_ref: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+struct CiSummarizeArgs {
+    /// BrowserStack build ID to fetch metrics from (online mode).
+    #[arg(long)]
+    build_id: Option<String>,
+
+    /// Directory containing summary.json/CSV results (offline mode).
+    #[arg(long)]
+    results_dir: Option<PathBuf>,
+
+    /// Output format: table (terminal), markdown, or json.
+    #[arg(long, value_enum, default_value_t = SummarizeFormat::Table)]
+    output_format: SummarizeFormat,
+
+    /// Write output to file in addition to stdout.
+    #[arg(long)]
+    output_file: Option<PathBuf>,
+
+    /// Fetch device hardware specs (chipset, RAM) from BrowserStack.
+    #[arg(long)]
+    include_device_specs: bool,
+
+    /// Show per-iteration breakdown instead of just aggregates.
+    #[arg(long)]
+    verbose: bool,
+
+    /// Platform filter (show only one platform).
+    #[arg(long, value_enum)]
+    platform: Option<MobileTarget>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SummarizeFormat {
+    Table,
+    Markdown,
+    Json,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
@@ -1398,6 +1439,9 @@ pub fn run() -> Result<()> {
             CiCommand::Run(args) => {
                 cmd_ci_run(args)?;
             }
+            CiCommand::Summarize(args) => {
+                cmd_ci_summarize(args)?;
+            }
         },
         Command::Fetch {
             target,
@@ -2016,6 +2060,14 @@ fn ci_metadata_from_args(args: &CiRunArgs) -> CiContractMetadata {
             .or_else(|| ci_env(&["MOBENCH_REF", "GITHUB_SHA", "GITHUB_REF"])),
         mobench_version: env!("CARGO_PKG_VERSION").to_string(),
     }
+}
+
+fn cmd_ci_summarize(args: CiSummarizeArgs) -> Result<()> {
+    if args.build_id.is_none() && args.results_dir.is_none() {
+        anyhow::bail!("Either --build-id or --results-dir must be provided");
+    }
+    eprintln!("ci summarize: not yet implemented");
+    Ok(())
 }
 
 fn cmd_ci_run_single(
