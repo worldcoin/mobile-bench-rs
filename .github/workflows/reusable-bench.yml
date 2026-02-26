@@ -508,6 +508,57 @@ jobs:
           fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
+      # NOTE: This step requires the caller workflow to have `pull-requests: write` permission
+      # so that github.token can post/update PR comments.
+      - name: Post sticky PR comment
+        if: inputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          MARKER="<!-- mobench-summary -->"
+
+          # Build markdown body
+          BODY="${MARKER}
+          ## Mobench Benchmark Results
+
+          "
+          for dir in results/ios results/android; do
+            if [ -d "$dir" ]; then
+              PLATFORM_MD=$(cargo-mobench ci summarize --results-dir "$dir" --output-format markdown 2>/dev/null || true)
+              if [ -n "$PLATFORM_MD" ]; then
+                BODY="${BODY}${PLATFORM_MD}
+
+          "
+              fi
+            fi
+          done
+
+          BODY="${BODY}
+          ---
+          *Posted by [mobench](https://github.com/worldcoin/mobile-bench-rs) · $(date -u '+%Y-%m-%d %H:%M UTC')*"
+
+          # Find existing comment with marker
+          EXISTING_COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
+            2>/dev/null | head -1)
+
+          if [ -n "$EXISTING_COMMENT_ID" ]; then
+            # Update existing comment
+            gh api "repos/${REPO}/issues/comments/${EXISTING_COMMENT_ID}" \
+              -X PATCH \
+              -f body="${BODY}" \
+              --silent
+            echo "Updated existing PR comment #${EXISTING_COMMENT_ID}"
+          else
+            # Create new comment
+            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+              -f body="${BODY}" \
+              --silent
+            echo "Created new PR comment"
+          fi
+
       - name: Create Check Run
         if: inputs.pr_number != ''
         shell: bash
