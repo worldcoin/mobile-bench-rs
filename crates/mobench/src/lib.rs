@@ -138,6 +138,7 @@ use browserstack::{BrowserStackAuth, BrowserStackClient};
 
 mod browserstack;
 pub mod config;
+pub mod summarize;
 
 /// CLI orchestrator for building, packaging, and executing Rust benchmarks on mobile.
 #[derive(Parser, Debug)]
