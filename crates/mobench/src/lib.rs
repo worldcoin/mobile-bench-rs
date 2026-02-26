@@ -2171,8 +2171,85 @@ fn cmd_ci_summarize(args: CiSummarizeArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_ci_check_run(_args: CiCheckRunArgs) -> Result<()> {
-    eprintln!("ci check-run: not yet implemented");
+fn cmd_ci_check_run(args: CiCheckRunArgs) -> Result<()> {
+    // Load results
+    let content = std::fs::read_to_string(&args.results)
+        .with_context(|| format!("Failed to read {}", args.results.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&content)?;
+    let report = summarize::parse_summary_value(&value)?;
+
+    // Generate markdown summary
+    let summary_md = summarize::render_markdown(&report);
+
+    // Check for regressions if baseline provided
+    let mut annotations = Vec::new();
+    let mut has_regression = false;
+
+    if let Some(baseline_path) = &args.baseline {
+        let baseline_content = std::fs::read_to_string(baseline_path)
+            .with_context(|| format!("Failed to read baseline {}", baseline_path.display()))?;
+        let baseline_value: serde_json::Value = serde_json::from_str(&baseline_content)?;
+        let baseline_report = summarize::parse_summary_value(&baseline_value)?;
+
+        for platform in &report.platforms {
+            for bench in &platform.benchmarks {
+                let baseline_bench = baseline_report
+                    .platforms
+                    .iter()
+                    .filter(|p| p.platform == platform.platform)
+                    .flat_map(|p| &p.benchmarks)
+                    .find(|b| b.name == bench.name);
+
+                if let Some(base) = baseline_bench {
+                    if base.timing.avg_ms > 0.0 {
+                        let pct_change =
+                            (bench.timing.avg_ms - base.timing.avg_ms) / base.timing.avg_ms * 100.0;
+
+                        if pct_change > args.regression_threshold_pct {
+                            has_regression = true;
+                            annotations.push(github::CheckRunAnnotation {
+                                path: "src/lib.rs".to_string(),
+                                start_line: 1,
+                                end_line: 1,
+                                annotation_level: "warning".to_string(),
+                                message: format!(
+                                    "{} regressed {pct_change:+.1}% ({:.1}ms \u{2192} {:.1}ms)",
+                                    bench.label, base.timing.avg_ms, bench.timing.avg_ms
+                                ),
+                                title: format!("Regression: {}", bench.label),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let conclusion = if has_regression { "failure" } else { "success" };
+
+    let bench_count: usize = report.platforms.iter().map(|p| p.benchmarks.len()).sum();
+    let title = if has_regression {
+        format!("{bench_count} benchmarks \u{2014} {} regressed", annotations.len())
+    } else {
+        format!("{bench_count} benchmarks passed")
+    };
+
+    let client = github::GitHubClient::new(args.token)?;
+    let result = client.create_check_run(
+        &args.repo,
+        &args.sha,
+        &args.name,
+        conclusion,
+        &title,
+        &summary_md,
+        annotations,
+    )?;
+
+    eprintln!(
+        "Check Run created: conclusion={}, annotations={}",
+        result.conclusion, result.annotations_count
+    );
+
     Ok(())
 }
 
