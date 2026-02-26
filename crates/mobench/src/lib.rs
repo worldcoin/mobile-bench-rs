@@ -480,6 +480,8 @@ enum CiCommand {
     Run(CiRunArgs),
     /// Summarize benchmark results with device metrics.
     Summarize(CiSummarizeArgs),
+    /// Create a GitHub Check Run with benchmark results.
+    CheckRun(CiCheckRunArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -693,6 +695,37 @@ struct CiSummarizeArgs {
     /// Platform filter (show only one platform).
     #[arg(long, value_enum)]
     platform: Option<MobileTarget>,
+}
+
+#[derive(Args, Debug, Clone)]
+struct CiCheckRunArgs {
+    /// Path to summary JSON with benchmark results.
+    #[arg(long)]
+    results: PathBuf,
+
+    /// GitHub repository (owner/repo format).
+    #[arg(long)]
+    repo: String,
+
+    /// Git commit SHA to annotate.
+    #[arg(long)]
+    sha: String,
+
+    /// GitHub App token (from actions/create-github-app-token).
+    #[arg(long, env = "GITHUB_TOKEN")]
+    token: String,
+
+    /// Check Run name displayed in the PR.
+    #[arg(long, default_value = "Mobench")]
+    name: String,
+
+    /// Optional baseline JSON for regression detection.
+    #[arg(long)]
+    baseline: Option<PathBuf>,
+
+    /// Regression threshold percentage.
+    #[arg(long, default_value_t = 5.0)]
+    regression_threshold_pct: f64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
@@ -1443,6 +1476,9 @@ pub fn run() -> Result<()> {
             CiCommand::Summarize(args) => {
                 cmd_ci_summarize(args)?;
             }
+            CiCommand::CheckRun(args) => {
+                cmd_ci_check_run(args)?;
+            }
         },
         Command::Fetch {
             target,
@@ -2131,6 +2167,11 @@ fn cmd_ci_summarize(args: CiSummarizeArgs) -> Result<()> {
         eprintln!("Output written to {}", path.display());
     }
 
+    Ok(())
+}
+
+fn cmd_ci_check_run(_args: CiCheckRunArgs) -> Result<()> {
+    eprintln!("ci check-run: not yet implemented");
     Ok(())
 }
 
