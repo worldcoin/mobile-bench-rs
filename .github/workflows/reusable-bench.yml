@@ -1,0 +1,550 @@
+name: Reusable Mobile Benchmark (BrowserStack)
+
+on:
+  workflow_call:
+    inputs:
+      crate_path:
+        description: "Path to the benchmark crate in the caller repo"
+        required: true
+        type: string
+      functions:
+        description: "JSON array of benchmark function names to run"
+        required: true
+        type: string
+      iterations:
+        description: "Number of benchmark iterations"
+        required: false
+        type: string
+        default: "30"
+      warmup:
+        description: "Number of warmup iterations"
+        required: false
+        type: string
+        default: "5"
+      platform:
+        description: "Target platform: android, ios, or both"
+        required: false
+        type: string
+        default: "both"
+      device_profile:
+        description: "Device profile: low-spec, mid-spec, high-spec, custom"
+        required: false
+        type: string
+        default: "low-spec"
+      ios_device:
+        description: "Custom iOS device name (required when device_profile=custom)"
+        required: false
+        type: string
+      ios_os_version:
+        description: "Custom iOS OS version (required when device_profile=custom)"
+        required: false
+        type: string
+      android_device:
+        description: "Custom Android device name (required when device_profile=custom)"
+        required: false
+        type: string
+      android_os_version:
+        description: "Custom Android OS version (required when device_profile=custom)"
+        required: false
+        type: string
+      rust_targets_ios:
+        description: "Comma-separated iOS Rust targets"
+        required: false
+        type: string
+        default: "aarch64-apple-ios,aarch64-apple-ios-sim"
+      rust_targets_android:
+        description: "Comma-separated Android Rust targets"
+        required: false
+        type: string
+        default: "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android"
+      build_release:
+        description: "Build in release mode"
+        required: false
+        type: boolean
+        default: true
+      mobench_version:
+        description: "Mobench version to install"
+        required: false
+        type: string
+        default: "0.1.15"
+      mobench_ref:
+        description: "Git ref for mobile-bench-rs (overrides mobench_version when set)"
+        required: false
+        type: string
+      pr_number:
+        description: "PR number for reporting"
+        required: false
+        type: string
+      requested_by:
+        description: "Who triggered the run"
+        required: false
+        type: string
+      check_run_name:
+        description: "GitHub Check Run name"
+        required: false
+        type: string
+        default: "Mobench"
+      regression_threshold_pct:
+        description: "Regression threshold percentage"
+        required: false
+        type: string
+        default: "5.0"
+    secrets:
+      BROWSERSTACK_USERNAME:
+        required: true
+      BROWSERSTACK_ACCESS_KEY:
+        required: true
+      MOBENCH_APP_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # iOS BrowserStack benchmark
+  # ---------------------------------------------------------------------------
+  ios:
+    name: iOS BrowserStack benchmark
+    if: inputs.platform == 'ios' || inputs.platform == 'both'
+    runs-on: macos-15
+
+    env:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+      IPHONEOS_DEPLOYMENT_TARGET: "13.0"
+      CFLAGS_aarch64_apple_ios: "-miphoneos-version-min=13.0"
+      CFLAGS_aarch64_apple_ios_sim: "-mios-simulator-version-min=13.0"
+      CFLAGS_x86_64_apple_ios: "-mios-simulator-version-min=13.0"
+      CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS: "-C link-arg=-miphoneos-version-min=13.0"
+      CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS: "-C link-arg=-mios-simulator-version-min=13.0"
+      CARGO_TARGET_X86_64_APPLE_IOS_RUSTFLAGS: "-C link-arg=-mios-simulator-version-min=13.0"
+
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          path: caller
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.rust_targets_ios }}
+
+      - name: Cache cargo registry/git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-ios-${{ hashFiles('caller/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ios-
+
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: caller/target
+          key: ${{ runner.os }}-target-ios-${{ hashFiles('caller/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-ios-
+
+      - name: Install mobench
+        shell: bash
+        env:
+          MOBENCH_VERSION: ${{ inputs.mobench_version }}
+          MOBENCH_REF: ${{ inputs.mobench_ref }}
+        run: |
+          if [ -n "$MOBENCH_REF" ]; then
+            cargo install mobench \
+              --git https://github.com/worldcoin/mobile-bench-rs \
+              --branch "$MOBENCH_REF" \
+              --locked
+          elif [ -n "$MOBENCH_VERSION" ]; then
+            cargo install mobench --version "$MOBENCH_VERSION" --locked
+          else
+            cargo install mobench --locked
+          fi
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Resolve iOS device
+        id: resolve_device
+        working-directory: caller
+        shell: bash
+        env:
+          DEVICE_PROFILE: ${{ inputs.device_profile }}
+          IOS_DEVICE_OVERRIDE: ${{ inputs.ios_device }}
+          IOS_OS_VERSION_OVERRIDE: ${{ inputs.ios_os_version }}
+        run: |
+          if [ -n "$IOS_DEVICE_OVERRIDE" ] && [ -n "$IOS_OS_VERSION_OVERRIDE" ]; then
+            echo "device_name=${IOS_DEVICE_OVERRIDE}" >> "$GITHUB_OUTPUT"
+            echo "os_version=${IOS_OS_VERSION_OVERRIDE}" >> "$GITHUB_OUTPUT"
+            echo "Using custom device: ${IOS_DEVICE_OVERRIDE} (${IOS_OS_VERSION_OVERRIDE})"
+          else
+            output=$(cargo-mobench devices resolve \
+              --platform ios \
+              --profile "${DEVICE_PROFILE}" \
+              --format json 2>&1) || {
+                echo "::error::Failed to resolve iOS device: $output"
+                exit 1
+              }
+            device_name=$(echo "$output" | jq -r '.device // .name')
+            os_version=$(echo "$output" | jq -r '.os_version')
+            echo "device_name=${device_name}" >> "$GITHUB_OUTPUT"
+            echo "os_version=${os_version}" >> "$GITHUB_OUTPUT"
+            echo "Resolved iOS device: ${device_name} (${os_version})"
+          fi
+
+      - name: Build iOS artifacts
+        working-directory: caller
+        shell: bash
+        env:
+          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+        run: |
+          set -euo pipefail
+          cargo-mobench build --target ios $RELEASE_FLAG
+          cargo-mobench package-ipa --method adhoc
+          cargo-mobench package-xcuitest
+          test -f target/mobench/ios/BenchRunner.ipa
+          test -f target/mobench/ios/BenchRunnerUITests.zip
+
+      - name: Run iOS benchmarks
+        working-directory: caller
+        shell: bash
+        env:
+          FUNCTIONS_JSON: ${{ inputs.functions }}
+          ITERATIONS: ${{ inputs.iterations }}
+          WARMUP: ${{ inputs.warmup }}
+          IOS_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
+          IOS_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
+          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/mobench/ci/ios
+
+          device_spec="${IOS_DEVICE}-${IOS_OS_VERSION}"
+          echo "Running iOS benchmarks on: ${device_spec}"
+
+          for func in $(echo "$FUNCTIONS_JSON" | jq -r '.[]'); do
+            slug=$(echo "$func" | tr ':' '_' | tr '/' '-')
+            echo "::group::Benchmark: ${func}"
+            cargo-mobench run \
+              --target ios \
+              --function "${func}" \
+              --iterations "${ITERATIONS}" \
+              --warmup "${WARMUP}" \
+              --devices "${device_spec}" \
+              $RELEASE_FLAG \
+              --fetch \
+              --summary-csv \
+              --output "target/mobench/ci/ios/${slug}.json" || {
+                echo "::warning::iOS benchmark failed for function: ${func}"
+              }
+            echo "::endgroup::"
+          done
+
+      - name: Upload iOS results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobench-results-ios
+          path: |
+            caller/target/mobench/ci/ios/*.json
+            caller/target/mobench/ci/ios/*.csv
+            caller/target/browserstack/**
+          if-no-artifact-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Android BrowserStack benchmark
+  # ---------------------------------------------------------------------------
+  android:
+    name: Android BrowserStack benchmark
+    if: inputs.platform == 'android' || inputs.platform == 'both'
+    runs-on: macos-14
+
+    env:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          path: caller
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.rust_targets_android }}
+
+      - name: Cache cargo registry/git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('caller/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-android-
+
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: caller/target
+          key: ${{ runner.os }}-target-android-${{ hashFiles('caller/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-android-
+
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-34
+            build-tools;34.0.0
+            ndk;26.1.10909125
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Install mobench
+        shell: bash
+        env:
+          MOBENCH_VERSION: ${{ inputs.mobench_version }}
+          MOBENCH_REF: ${{ inputs.mobench_ref }}
+        run: |
+          if [ -n "$MOBENCH_REF" ]; then
+            cargo install mobench \
+              --git https://github.com/worldcoin/mobile-bench-rs \
+              --branch "$MOBENCH_REF" \
+              --locked
+          elif [ -n "$MOBENCH_VERSION" ]; then
+            cargo install mobench --version "$MOBENCH_VERSION" --locked
+          else
+            cargo install mobench --locked
+          fi
+
+      - name: Resolve Android device
+        id: resolve_device
+        working-directory: caller
+        shell: bash
+        env:
+          DEVICE_PROFILE: ${{ inputs.device_profile }}
+          ANDROID_DEVICE_OVERRIDE: ${{ inputs.android_device }}
+          ANDROID_OS_VERSION_OVERRIDE: ${{ inputs.android_os_version }}
+        run: |
+          if [ -n "$ANDROID_DEVICE_OVERRIDE" ] && [ -n "$ANDROID_OS_VERSION_OVERRIDE" ]; then
+            echo "device_name=${ANDROID_DEVICE_OVERRIDE}" >> "$GITHUB_OUTPUT"
+            echo "os_version=${ANDROID_OS_VERSION_OVERRIDE}" >> "$GITHUB_OUTPUT"
+            echo "Using custom device: ${ANDROID_DEVICE_OVERRIDE} (${ANDROID_OS_VERSION_OVERRIDE})"
+          else
+            output=$(cargo-mobench devices resolve \
+              --platform android \
+              --profile "${DEVICE_PROFILE}" \
+              --format json 2>&1) || {
+                echo "::error::Failed to resolve Android device: $output"
+                exit 1
+              }
+            device_name=$(echo "$output" | jq -r '.device // .name')
+            os_version=$(echo "$output" | jq -r '.os_version')
+            echo "device_name=${device_name}" >> "$GITHUB_OUTPUT"
+            echo "os_version=${os_version}" >> "$GITHUB_OUTPUT"
+            echo "Resolved Android device: ${device_name} (${os_version})"
+          fi
+
+      - name: Build Android artifacts
+        working-directory: caller
+        shell: bash
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+        run: |
+          set -euo pipefail
+          cargo-mobench build --target android $RELEASE_FLAG
+
+      - name: Run Android benchmarks
+        working-directory: caller
+        shell: bash
+        env:
+          FUNCTIONS_JSON: ${{ inputs.functions }}
+          ITERATIONS: ${{ inputs.iterations }}
+          WARMUP: ${{ inputs.warmup }}
+          ANDROID_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
+          ANDROID_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/mobench/ci/android
+
+          device_spec="${ANDROID_DEVICE}-${ANDROID_OS_VERSION}"
+          echo "Running Android benchmarks on: ${device_spec}"
+
+          for func in $(echo "$FUNCTIONS_JSON" | jq -r '.[]'); do
+            slug=$(echo "$func" | tr ':' '_' | tr '/' '-')
+            echo "::group::Benchmark: ${func}"
+            cargo-mobench run \
+              --target android \
+              --function "${func}" \
+              --iterations "${ITERATIONS}" \
+              --warmup "${WARMUP}" \
+              --devices "${device_spec}" \
+              $RELEASE_FLAG \
+              --fetch \
+              --summary-csv \
+              --output "target/mobench/ci/android/${slug}.json" || {
+                echo "::warning::Android benchmark failed for function: ${func}"
+              }
+            echo "::endgroup::"
+          done
+
+      - name: Upload Android results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobench-results-android
+          path: |
+            caller/target/mobench/ci/android/*.json
+            caller/target/mobench/ci/android/*.csv
+            caller/target/browserstack/**
+          if-no-artifact-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Summarize results from both platforms
+  # ---------------------------------------------------------------------------
+  summarize:
+    name: Summarize benchmark results
+    needs: [ios, android]
+    if: always() && (needs.ios.result == 'success' || needs.android.result == 'success')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mobench
+        shell: bash
+        env:
+          MOBENCH_VERSION: ${{ inputs.mobench_version }}
+          MOBENCH_REF: ${{ inputs.mobench_ref }}
+        run: |
+          if [ -n "$MOBENCH_REF" ]; then
+            cargo install mobench \
+              --git https://github.com/worldcoin/mobile-bench-rs \
+              --branch "$MOBENCH_REF" \
+              --locked
+          elif [ -n "$MOBENCH_VERSION" ]; then
+            cargo install mobench --version "$MOBENCH_VERSION" --locked
+          else
+            cargo install mobench --locked
+          fi
+
+      - name: Download iOS results
+        if: needs.ios.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: mobench-results-ios
+          path: results/ios
+
+      - name: Download Android results
+        if: needs.android.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: mobench-results-android
+          path: results/android
+
+      - name: Summarize iOS results
+        if: needs.ios.result == 'success'
+        shell: bash
+        run: |
+          echo "## iOS Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -d results/ios ]; then
+            cargo-mobench ci summarize \
+              --results-dir results/ios \
+              --output-format table || true
+
+            cargo-mobench ci summarize \
+              --results-dir results/ios \
+              --output-format markdown \
+              --output-file /tmp/ios-summary.md || true
+
+            if [ -f /tmp/ios-summary.md ]; then
+              cat /tmp/ios-summary.md >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "No iOS results found." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize Android results
+        if: needs.android.result == 'success'
+        shell: bash
+        run: |
+          echo "## Android Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -d results/android ]; then
+            cargo-mobench ci summarize \
+              --results-dir results/android \
+              --output-format table || true
+
+            cargo-mobench ci summarize \
+              --results-dir results/android \
+              --output-format markdown \
+              --output-file /tmp/android-summary.md || true
+
+            if [ -f /tmp/android-summary.md ]; then
+              cat /tmp/android-summary.md >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "No Android results found." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create Check Run
+        if: inputs.pr_number != ''
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CHECK_RUN_NAME: ${{ inputs.check_run_name }}
+          REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
+        run: |
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            echo "::notice::MOBENCH_APP_PRIVATE_KEY not provided; skipping Check Run."
+            exit 0
+          fi
+
+          # Find result JSONs from either platform
+          summary_json=""
+          for dir in results/ios results/android; do
+            if [ -d "$dir" ]; then
+              found=$(find "$dir" -name '*.json' -type f | head -1)
+              if [ -n "$found" ]; then
+                summary_json="$found"
+                break
+              fi
+            fi
+          done
+
+          if [ -z "$summary_json" ]; then
+            echo "::warning::No result JSONs found for Check Run."
+            exit 0
+          fi
+
+          cargo-mobench ci check-run \
+            --results "$summary_json" \
+            --repo "${{ github.repository }}" \
+            --sha "${{ github.sha }}" \
+            --token "$GITHUB_TOKEN" \
+            --name "$CHECK_RUN_NAME" \
+            --regression-threshold-pct "$REGRESSION_THRESHOLD" || {
+              echo "::warning::Check Run creation failed."
+            }
