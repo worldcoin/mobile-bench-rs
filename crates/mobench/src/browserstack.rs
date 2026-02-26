@@ -783,6 +783,85 @@ impl BrowserStackClient {
             Ok((benchmark_results, performance_metrics))
         }
     }
+
+    /// Fetch session details from BrowserStack API.
+    pub fn get_session_details(
+        &self,
+        build_id: &str,
+        session_id: &str,
+    ) -> Result<SessionDetails> {
+        let path = format!("/app-automate/builds/{build_id}/sessions/{session_id}");
+        let value = self.get_json(&path)?;
+
+        let automation_session = value
+            .get("automation_session")
+            .context("Missing automation_session in response")?;
+
+        Ok(SessionDetails {
+            device: automation_session
+                .get("device")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            os: automation_session
+                .get("os")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            os_version: automation_session
+                .get("os_version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            duration: automation_session
+                .get("duration")
+                .and_then(|v| v.as_u64()),
+        })
+    }
+
+    /// Fetch build details with all sessions and performance data.
+    pub fn get_build_summary(&self, build_id: &str, platform: &str) -> Result<BuildSummary> {
+        let status = match platform {
+            "ios" => self.get_xcuitest_build_status(build_id)?,
+            _ => self.get_espresso_build_status(build_id)?,
+        };
+
+        let mut sessions = Vec::new();
+        for device_session in &status.devices {
+            let details = self
+                .get_session_details(build_id, &device_session.session_id)
+                .ok();
+
+            let perf = device_session
+                .device_logs
+                .as_ref()
+                .and_then(|logs| self.extract_performance_metrics(logs).ok());
+
+            sessions.push(SessionSummary {
+                session_id: device_session.session_id.clone(),
+                device: details
+                    .as_ref()
+                    .map(|d| d.device.clone())
+                    .unwrap_or_else(|| device_session.device.clone()),
+                os: details
+                    .as_ref()
+                    .map(|d| d.os.clone())
+                    .unwrap_or_default(),
+                os_version: details
+                    .as_ref()
+                    .map(|d| d.os_version.clone())
+                    .unwrap_or_default(),
+                duration_secs: details.as_ref().and_then(|d| d.duration),
+                performance: perf,
+            });
+        }
+
+        Ok(BuildSummary {
+            build_id: build_id.to_string(),
+            status: status.status,
+            sessions,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1287,6 +1366,34 @@ fn validate_device_spec(
         },
         suggestions,
     })
+}
+
+/// Details about a single BrowserStack session (from the session API).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDetails {
+    pub device: String,
+    pub os: String,
+    pub os_version: String,
+    pub duration: Option<u64>,
+}
+
+/// High-level summary of a BrowserStack build with all sessions and their metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildSummary {
+    pub build_id: String,
+    pub status: String,
+    pub sessions: Vec<SessionSummary>,
+}
+
+/// Summary of a single session within a build.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub device: String,
+    pub os: String,
+    pub os_version: String,
+    pub duration_secs: Option<u64>,
+    pub performance: Option<PerformanceMetrics>,
 }
 
 /// Format a helpful error message for missing BrowserStack credentials.
