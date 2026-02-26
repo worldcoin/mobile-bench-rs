@@ -2067,7 +2067,70 @@ fn cmd_ci_summarize(args: CiSummarizeArgs) -> Result<()> {
     if args.build_id.is_none() && args.results_dir.is_none() {
         anyhow::bail!("Either --build-id or --results-dir must be provided");
     }
-    eprintln!("ci summarize: not yet implemented");
+
+    // Load the report from offline results
+    let mut report = if let Some(ref dir) = args.results_dir {
+        summarize::load_results_dir(dir)?
+    } else {
+        // If only build_id, we need results_dir too for now
+        anyhow::bail!("--results-dir is required (--build-id enriches existing results)");
+    };
+
+    // Enrich with BrowserStack data if build_id provided
+    if let Some(ref build_id) = args.build_id {
+        match resolve_browserstack_credentials(None) {
+            Ok(creds) => {
+                match BrowserStackClient::new(
+                    BrowserStackAuth {
+                        username: creds.username,
+                        access_key: creds.access_key,
+                    },
+                    creds.project,
+                ) {
+                    Ok(client) => {
+                        // Try iOS first, then Android
+                        let build_summary = client
+                            .get_build_summary(build_id, "ios")
+                            .or_else(|_| client.get_build_summary(build_id, "android"));
+
+                        match build_summary {
+                            Ok(summary) => {
+                                summarize::enrich_with_browserstack(&mut report, &summary)
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: could not fetch BrowserStack data: {e}")
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("Warning: could not create BrowserStack client: {e}"),
+                }
+            }
+            Err(e) => eprintln!("Warning: BrowserStack credentials not available: {e}"),
+        }
+    }
+
+    // Filter by platform if requested
+    if let Some(platform) = &args.platform {
+        let target = platform.as_str();
+        report.platforms.retain(|p| p.platform == target);
+    }
+
+    // Render output
+    let output = match args.output_format {
+        SummarizeFormat::Table => summarize::render_table(&report),
+        SummarizeFormat::Markdown => summarize::render_markdown(&report),
+        SummarizeFormat::Json => summarize::render_json(&report)?,
+    };
+
+    println!("{output}");
+
+    // Optionally write to file
+    if let Some(ref path) = args.output_file {
+        std::fs::write(path, &output)
+            .with_context(|| format!("Failed to write output to {}", path.display()))?;
+        eprintln!("Output written to {}", path.display());
+    }
+
     Ok(())
 }
 
