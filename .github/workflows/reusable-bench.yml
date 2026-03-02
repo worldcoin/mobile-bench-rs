@@ -96,9 +96,12 @@ on:
         required: true
       MOBENCH_APP_PRIVATE_KEY:
         required: false
+      MOBENCH_APP_ID:
+        required: false
 
 permissions:
   contents: read
+  pull-requests: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -257,7 +260,7 @@ jobs:
             caller/target/mobench/ci/ios/*.json
             caller/target/mobench/ci/ios/*.csv
             caller/target/browserstack/**
-          if-no-artifact-found: warn
+          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # Android BrowserStack benchmark
@@ -412,7 +415,7 @@ jobs:
             caller/target/mobench/ci/android/*.json
             caller/target/mobench/ci/android/*.csv
             caller/target/browserstack/**
-          if-no-artifact-found: warn
+          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # Summarize results from both platforms
@@ -559,43 +562,33 @@ jobs:
             echo "Created new PR comment"
           fi
 
+      - name: Generate GitHub App token
+        id: app-token
+        if: inputs.pr_number != '' && secrets.MOBENCH_APP_PRIVATE_KEY != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.MOBENCH_APP_ID }}
+          private-key: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
+
       - name: Create Check Run
-        if: inputs.pr_number != ''
+        if: steps.app-token.outputs.token != ''
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_RUN_NAME: ${{ inputs.check_run_name }}
           REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
         run: |
-          if [ -z "${GITHUB_TOKEN:-}" ]; then
-            echo "::notice::MOBENCH_APP_PRIVATE_KEY not provided; skipping Check Run."
-            exit 0
-          fi
-
-          # Find result JSONs from either platform
-          summary_json=""
           for dir in results/ios results/android; do
             if [ -d "$dir" ]; then
-              found=$(find "$dir" -name '*.json' -type f | head -1)
-              if [ -n "$found" ]; then
-                summary_json="$found"
-                break
-              fi
+              PLATFORM=$(basename "$dir")
+              cargo-mobench ci check-run \
+                --results-dir "$dir" \
+                --repo "${{ github.repository }}" \
+                --sha "${{ github.event.pull_request.head.sha || github.sha }}" \
+                --name "$CHECK_RUN_NAME — ${PLATFORM}" \
+                --annotation-path "${{ inputs.crate_path }}/src/lib.rs" \
+                --regression-threshold-pct "$REGRESSION_THRESHOLD" \
+                || true
             fi
           done
-
-          if [ -z "$summary_json" ]; then
-            echo "::warning::No result JSONs found for Check Run."
-            exit 0
-          fi
-
-          cargo-mobench ci check-run \
-            --results "$summary_json" \
-            --repo "${{ github.repository }}" \
-            --sha "${{ github.sha }}" \
-            --token "$GITHUB_TOKEN" \
-            --name "$CHECK_RUN_NAME" \
-            --regression-threshold-pct "$REGRESSION_THRESHOLD" || {
-              echo "::warning::Check Run creation failed."
-            }

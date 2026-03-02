@@ -669,7 +669,7 @@ struct CiRunArgs {
 
 #[derive(Args, Debug, Clone)]
 struct CiSummarizeArgs {
-    /// BrowserStack build ID to fetch metrics from (online mode).
+    /// BrowserStack build ID to enrich results with device metrics (requires --results-dir).
     #[arg(long)]
     build_id: Option<String>,
 
@@ -701,8 +701,12 @@ struct CiSummarizeArgs {
 #[derive(Args, Debug, Clone)]
 struct CiCheckRunArgs {
     /// Path to summary JSON with benchmark results.
-    #[arg(long)]
-    results: PathBuf,
+    #[arg(long, required_unless_present = "results_dir")]
+    results: Option<PathBuf>,
+
+    /// Directory containing summary JSON files (processes all).
+    #[arg(long, required_unless_present = "results")]
+    results_dir: Option<PathBuf>,
 
     /// GitHub repository (owner/repo format).
     #[arg(long)]
@@ -727,6 +731,10 @@ struct CiCheckRunArgs {
     /// Regression threshold percentage.
     #[arg(long, default_value_t = 5.0)]
     regression_threshold_pct: f64,
+
+    /// File path used in Check Run annotations (relative to repo root).
+    #[arg(long, default_value = "src/lib.rs")]
+    annotation_path: String,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
@@ -2110,7 +2118,7 @@ fn cmd_ci_summarize(args: CiSummarizeArgs) -> Result<()> {
         summarize::load_results_dir(dir)?
     } else {
         // If only build_id, we need results_dir too for now
-        anyhow::bail!("--results-dir is required (--build-id enriches existing results)");
+        anyhow::bail!("--results-dir is required. Use --build-id alongside --results-dir to enrich offline results with BrowserStack metrics.");
     };
 
     // Enrich with BrowserStack data if build_id provided
@@ -2173,10 +2181,16 @@ fn cmd_ci_summarize(args: CiSummarizeArgs) -> Result<()> {
 
 fn cmd_ci_check_run(args: CiCheckRunArgs) -> Result<()> {
     // Load results
-    let content = std::fs::read_to_string(&args.results)
-        .with_context(|| format!("Failed to read {}", args.results.display()))?;
-    let value: serde_json::Value = serde_json::from_str(&content)?;
-    let report = summarize::parse_summary_value(&value)?;
+    let report = if let Some(ref dir) = args.results_dir {
+        summarize::load_results_dir(dir)?
+    } else if let Some(ref path) = args.results {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&content)?;
+        summarize::parse_summary_value(&value)?
+    } else {
+        anyhow::bail!("Either --results or --results-dir must be provided");
+    };
 
     // Generate markdown summary
     let summary_md = summarize::render_markdown(&report);
@@ -2208,7 +2222,7 @@ fn cmd_ci_check_run(args: CiCheckRunArgs) -> Result<()> {
                         if pct_change > args.regression_threshold_pct {
                             has_regression = true;
                             annotations.push(github::CheckRunAnnotation {
-                                path: "src/lib.rs".to_string(),
+                                path: args.annotation_path.clone(),
                                 start_line: 1,
                                 end_line: 1,
                                 annotation_level: "warning".to_string(),

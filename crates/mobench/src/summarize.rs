@@ -400,7 +400,18 @@ pub fn enrich_with_browserstack(
     build_summary: &crate::browserstack::BuildSummary,
 ) {
     for platform in &mut report.platforms {
+        // Find sessions that match this platform
         for session in &build_summary.sessions {
+            let session_is_ios = session.os.eq_ignore_ascii_case("ios")
+                || session.os.eq_ignore_ascii_case("iPhone")
+                || session.os.eq_ignore_ascii_case("iPad");
+            let platform_is_ios = platform.platform == "ios";
+
+            // Skip if platform doesn't match
+            if session_is_ios != platform_is_ios {
+                continue;
+            }
+
             // Update device info from session details
             if !session.os.is_empty() {
                 platform.device.os = session.os.clone();
