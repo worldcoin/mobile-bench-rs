@@ -685,14 +685,6 @@ struct CiSummarizeArgs {
     #[arg(long)]
     output_file: Option<PathBuf>,
 
-    /// Fetch device hardware specs (chipset, RAM) from BrowserStack.
-    #[arg(long)]
-    include_device_specs: bool,
-
-    /// Show per-iteration breakdown instead of just aggregates.
-    #[arg(long)]
-    verbose: bool,
-
     /// Platform filter (show only one platform).
     #[arg(long, value_enum)]
     platform: Option<MobileTarget>,
@@ -2221,10 +2213,11 @@ fn cmd_ci_check_run(args: CiCheckRunArgs) -> Result<()> {
 
                         if pct_change > args.regression_threshold_pct {
                             has_regression = true;
+                            let line = annotations.len() as u32 + 1;
                             annotations.push(github::CheckRunAnnotation {
                                 path: args.annotation_path.clone(),
-                                start_line: 1,
-                                end_line: 1,
+                                start_line: line,
+                                end_line: line,
                                 annotation_level: "warning".to_string(),
                                 message: format!(
                                     "{} regressed {pct_change:+.1}% ({:.1}ms \u{2192} {:.1}ms)",
