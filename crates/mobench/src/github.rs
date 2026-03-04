@@ -60,9 +60,16 @@ impl GitHubClient {
         conclusion: &str,
         title: &str,
         summary: &str,
-        annotations: Vec<CheckRunAnnotation>,
+        mut annotations: Vec<CheckRunAnnotation>,
     ) -> Result<CheckRunResult> {
         let url = format!("{GITHUB_API_BASE}/repos/{repo}/check-runs");
+        if annotations.len() > 50 {
+            eprintln!(
+                "Warning: {} annotations exceed GitHub's 50-annotation limit, truncating",
+                annotations.len()
+            );
+            annotations.truncate(50);
+        }
         let annotations_count = annotations.len();
 
         let body = CreateCheckRunRequest {

@@ -1,6 +1,8 @@
 target/
 **/*.DS_Store
 .vscode/
+.claude/
+.conductor/
 .cursor/
 android/app/src/main/jniLibs/*/libsample_fns.so
 android/app/src/main/jniLibs/*/libuniffi_sample_fns.so

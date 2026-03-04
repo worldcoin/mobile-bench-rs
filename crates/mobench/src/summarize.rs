@@ -5,6 +5,10 @@ use comfy_table::{presets::UTF8_FULL, Attribute, Cell, ContentArrangement, Table
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
 /// A fully-assembled summary ready for rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummarizeReport {
@@ -51,6 +55,7 @@ pub struct TimingStats {
     pub best_ms: f64,
     pub worst_ms: f64,
     pub p95_ms: f64,
+    #[serde(skip_serializing_if = "is_zero")]
     pub std_dev_ms: f64,
 }
 
@@ -164,7 +169,7 @@ fn parse_benchmark_entry(value: &serde_json::Value) -> Result<BenchmarkResult> {
         best_ms: ns_to_ms("min_ns"),
         worst_ms: ns_to_ms("max_ns"),
         p95_ms: ns_to_ms("p95_ns"),
-        std_dev_ms: 0.0,
+        std_dev_ms: ns_to_ms("std_dev_ns"),
     };
 
     Ok(BenchmarkResult {
