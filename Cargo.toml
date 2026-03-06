@@ -6,6 +6,7 @@ members = [
     "crates/sample-fns",
     "examples/basic-benchmark",
     "examples/ffi-benchmark",
+    "services/mobench-webhook",
 ]
 resolver = "2"
 

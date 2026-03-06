@@ -1,0 +1,14 @@
+[package]
+name = "mobench-webhook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+axum = "0.8"
+tokio = { version = "1.48", features = ["macros", "net", "rt-multi-thread"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
