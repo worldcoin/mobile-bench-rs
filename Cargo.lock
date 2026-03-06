@@ -1383,8 +1383,11 @@ version = "0.1.15"
 dependencies = [
  "anyhow",
  "axum",
+ "hex",
+ "hmac",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "tower",

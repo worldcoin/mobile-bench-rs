@@ -50,6 +50,31 @@ impl DeliveryRepository {
         Ok(record)
     }
 
+    pub async fn insert_pending_if_new(
+        &self,
+        delivery_id: &str,
+        event: &str,
+        action: Option<&str>,
+        payload: Value,
+    ) -> Result<Option<DeliveryRecord>> {
+        let record = query_as::<_, DeliveryRecord>(
+            r#"
+            INSERT INTO github_webhook_deliveries (delivery_id, event, action, payload)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (delivery_id) DO NOTHING
+            RETURNING id, delivery_id, event, action, payload, status, attempts, last_error
+            "#,
+        )
+        .bind(delivery_id)
+        .bind(event)
+        .bind(action)
+        .bind(Json(payload))
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(record)
+    }
+
     pub async fn claim_next(&self) -> Result<Option<DeliveryRecord>> {
         let mut tx = self.pool.begin().await?;
         let record = query_as::<_, DeliveryRecord>(

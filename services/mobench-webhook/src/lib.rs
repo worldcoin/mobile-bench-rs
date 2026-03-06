@@ -2,14 +2,39 @@ pub mod config;
 pub mod db;
 pub mod ingest;
 mod router;
+pub mod webhook;
 
 use anyhow::{Context, Result};
 use axum::Router;
+use sqlx::PgPool;
 
 pub use router::build_router as app;
 
+#[derive(Clone)]
+pub struct AppState {
+    pub(crate) config: config::Config,
+    pub(crate) repos: db::Repositories,
+}
+
+impl AppState {
+    pub fn new(config: config::Config, pool: PgPool) -> Self {
+        Self {
+            config,
+            repos: db::Repositories::new(pool),
+        }
+    }
+
+    pub fn for_test(pool: PgPool) -> Self {
+        Self::new(config::Config::for_test(), pool)
+    }
+}
+
 pub fn app_for_test() -> Router {
     app()
+}
+
+pub fn app_for_test_with_pool(pool: PgPool) -> Router {
+    router::build_router_with_state(AppState::for_test(pool))
 }
 
 pub async fn serve() -> Result<()> {
