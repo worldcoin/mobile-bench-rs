@@ -17,7 +17,15 @@
             "pr_number": { "type": ["string", "null"] },
             "request_command": { "type": "string" },
             "mobench_ref": { "type": ["string", "null"] },
-            "mobench_version": { "type": "string" }
+            "mobench_version": { "type": "string" },
+            "trigger_source": {
+              "type": ["string", "null"],
+              "enum": ["label", "pr_comment", "workflow_dispatch", "check_rerequest", null]
+            },
+            "dispatch_id": {
+              "type": ["string", "null"],
+              "format": "uuid"
+            }
           }
         },
         "outputs": {

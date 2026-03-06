@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://world.org/mobench/schemas/history-manifest-v1.schema.json",
+  "title": "Mobench History Manifest v1",
+  "type": "object",
+  "required": ["schema_version", "repo", "workflow", "git", "request", "mobench", "platform_runs"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "mobench-history-v1"
+    },
+    "repo": {
+      "type": "string"
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["name", "run_id", "run_attempt"],
+      "properties": {
+        "name": { "type": "string" },
+        "run_id": { "type": "integer" },
+        "run_attempt": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "git": {
+      "type": "object",
+      "required": ["head_sha", "head_ref", "base_ref"],
+      "properties": {
+        "head_sha": { "type": "string" },
+        "head_ref": { "type": "string" },
+        "base_ref": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "request": {
+      "type": "object",
+      "required": ["trigger_source"],
+      "properties": {
+        "dispatch_id": {
+          "type": ["string", "null"],
+          "format": "uuid"
+        },
+        "trigger_source": {
+          "type": "string",
+          "enum": ["label", "pr_comment", "workflow_dispatch", "check_rerequest"]
+        },
+        "requested_by": { "type": ["string", "null"] },
+        "pr_number": { "type": ["integer", "null"] },
+        "request_command": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "mobench": {
+      "type": "object",
+      "required": ["version", "ref"],
+      "properties": {
+        "version": { "type": "string" },
+        "ref": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "platform_runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["platform", "check_run_name", "workflow_inputs", "resolved_device"],
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": ["ios", "android"]
+          },
+          "check_run_name": { "type": "string" },
+          "workflow_inputs": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "resolved_device": {
+            "type": "object",
+            "required": ["device_name", "os_version"],
+            "properties": {
+              "device_name": { "type": "string" },
+              "os_version": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

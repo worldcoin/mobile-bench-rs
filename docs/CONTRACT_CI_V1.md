@@ -44,6 +44,10 @@ Metadata can be provided via flags or CI environment discovery:
 - `request_command` (`--request-command`, fallback to argv)
 - `mobench_ref` (`--mobench-ref`, `MOBENCH_REF`, `GITHUB_SHA`, `GITHUB_REF`)
 - `mobench_version` (derived from package version)
+- `trigger_source` (optional, for example `label`, `pr_comment`, `workflow_dispatch`, `check_rerequest`)
+- `dispatch_id` (optional UUID used to correlate GitHub App dispatch with later ingest)
+
+`request_command` may come from a GitHub App owned PR comment command such as `/mobench platform=both iterations=30 warmup=5 device_profile=low-spec`.
 
 ## Output Contract
 
@@ -62,10 +66,14 @@ Required files:
   - `request_command`
   - `mobench_ref` (optional)
   - `mobench_version`
+  - `trigger_source` (optional)
+  - `dispatch_id` (optional)
 - `ci.outputs` object with:
   - `summary_json`
   - `summary_md`
   - `results_csv`
+
+Canonical history ingest is defined separately by `docs/schemas/history-manifest-v1.schema.json`. That bundle is uploaded as `mobench-history-v1` and is the durable bridge between GitHub App dispatch, workflow completion, and server-side ingest.
 
 Machine-readable schema artifacts:
 - `docs/schemas/summary-v1.schema.json`

@@ -1,4 +1,5 @@
 pub mod config;
+pub mod ingest;
 mod router;
 
 use anyhow::{Context, Result};

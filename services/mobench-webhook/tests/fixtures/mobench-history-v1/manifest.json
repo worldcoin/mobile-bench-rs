@@ -1,0 +1,47 @@
+{
+  "schema_version": "mobench-history-v1",
+  "repo": "worldcoin/world-id-protocol",
+  "workflow": {
+    "name": "Mobile Benchmarks",
+    "run_id": 123456789,
+    "run_attempt": 1
+  },
+  "git": {
+    "head_sha": "abc123",
+    "head_ref": "feature/branch",
+    "base_ref": "main"
+  },
+  "request": {
+    "dispatch_id": "2b5ab4f5-c3a6-4d78-9d62-d1c3f7188d21",
+    "trigger_source": "pr_comment",
+    "requested_by": "octocat",
+    "pr_number": 123,
+    "request_command": "/mobench platform=both iterations=30 warmup=5 device_profile=low-spec"
+  },
+  "mobench": {
+    "version": "0.1.15",
+    "ref": "refs/tags/v0.1.15"
+  },
+  "platform_runs": [
+    {
+      "platform": "ios",
+      "check_run_name": "Mobench - ios",
+      "workflow_inputs": {
+        "platform": "ios",
+        "device_profile": "low-spec",
+        "ios_device": "",
+        "ios_os_version": "",
+        "android_device": "",
+        "android_os_version": "",
+        "iterations": "30",
+        "warmup": "5",
+        "pr_number": "123",
+        "requested_by": "octocat"
+      },
+      "resolved_device": {
+        "device_name": "iPhone 14",
+        "os_version": "16.0"
+      }
+    }
+  ]
+}
