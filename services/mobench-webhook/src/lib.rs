@@ -16,18 +16,32 @@ pub use router::build_router as app;
 pub struct AppState {
     pub(crate) config: config::Config,
     pub(crate) repos: db::Repositories,
+    pub(crate) github: Option<github::GitHubClients>,
 }
 
 impl AppState {
     pub fn new(config: config::Config, pool: PgPool) -> Self {
+        Self::with_github(config, pool, None)
+    }
+
+    pub fn with_github(
+        config: config::Config,
+        pool: PgPool,
+        github: Option<github::GitHubClients>,
+    ) -> Self {
         Self {
             config,
             repos: db::Repositories::new(pool),
+            github,
         }
     }
 
     pub fn for_test(pool: PgPool) -> Self {
         Self::new(config::Config::for_test(), pool)
+    }
+
+    pub fn repos(&self) -> &db::Repositories {
+        &self.repos
     }
 }
 
