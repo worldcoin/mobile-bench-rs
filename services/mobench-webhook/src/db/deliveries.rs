@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 use sqlx::{PgPool, query_as, types::Json};
+use uuid::Uuid;
 
 use crate::db::models::DeliveryRecord;
 
@@ -109,5 +110,66 @@ impl DeliveryRepository {
         tx.commit().await?;
 
         Ok(record)
+    }
+
+    pub async fn mark_processed(&self, delivery_uuid: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE github_webhook_deliveries
+            SET status = 'processed',
+                processed_at = now(),
+                last_error = NULL
+            WHERE id = $1
+            "#,
+        )
+        .bind(delivery_uuid)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn requeue_with_backoff(
+        &self,
+        delivery_uuid: Uuid,
+        last_error: &str,
+        delay_seconds: i32,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE github_webhook_deliveries
+            SET status = 'pending',
+                last_error = $2,
+                claimed_at = NULL,
+                available_at = now() + ($3 * interval '1 second')
+            WHERE id = $1
+            "#,
+        )
+        .bind(delivery_uuid)
+        .bind(last_error)
+        .bind(delay_seconds)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_failed(&self, delivery_uuid: Uuid, last_error: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE github_webhook_deliveries
+            SET status = 'failed',
+                last_error = $2,
+                claimed_at = NULL,
+                processed_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(delivery_uuid)
+        .bind(last_error)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }

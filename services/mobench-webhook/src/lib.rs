@@ -3,6 +3,7 @@ pub mod db;
 pub mod ingest;
 mod router;
 pub mod webhook;
+pub mod worker;
 
 use anyhow::{Context, Result};
 use axum::Router;
