@@ -1,0 +1,15 @@
+{
+  "state": "open",
+  "head": {
+    "ref": "feature/bench-pr",
+    "sha": "abc123def456",
+    "repo": {
+      "full_name": "world/mobile-bench-rs"
+    }
+  },
+  "base": {
+    "repo": {
+      "full_name": "world/mobile-bench-rs"
+    }
+  }
+}

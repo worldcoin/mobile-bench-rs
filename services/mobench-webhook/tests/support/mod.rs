@@ -1,27 +1,35 @@
 #![allow(dead_code)]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
-use axum::{Json, Router, extract::State, routing::post};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    routing::{get, post},
+};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
 struct MockGitHubState {
     workflow_dispatches: Arc<Mutex<Vec<serde_json::Value>>>,
+    pull_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
 }
 
 pub struct Harness {
     state: mobench_webhook::AppState,
     workflow_dispatches: Arc<Mutex<Vec<serde_json::Value>>>,
+    pull_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
 }
 
 impl Harness {
     pub async fn new(pool: PgPool) -> Result<Self> {
         let workflow_dispatches = Arc::new(Mutex::new(Vec::new()));
+        let pull_requests = Arc::new(Mutex::new(HashMap::new()));
         let server_state = MockGitHubState {
             workflow_dispatches: workflow_dispatches.clone(),
+            pull_requests: pull_requests.clone(),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -43,6 +51,10 @@ impl Harness {
                 "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
                 post(record_dispatch),
             )
+            .route(
+                "/repos/{owner}/{repo}/pulls/{number}",
+                get(fetch_pull_request),
+            )
             .with_state(server_state);
         tokio::spawn(async move {
             axum::serve(listener, app)
@@ -62,6 +74,7 @@ impl Harness {
         Ok(Self {
             state,
             workflow_dispatches,
+            pull_requests,
         })
     }
 
@@ -75,6 +88,7 @@ impl Harness {
             .get("action")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
+        self.maybe_seed_pull_request_details(&payload).await?;
 
         self.state
             .repos()
@@ -97,6 +111,49 @@ impl Harness {
 
     pub async fn dispatched_workflows(&self) -> Vec<serde_json::Value> {
         self.workflow_dispatches.lock().await.clone()
+    }
+
+    async fn maybe_seed_pull_request_details(&self, payload: &serde_json::Value) -> Result<()> {
+        let repo_full_name = match payload
+            .get("repository")
+            .and_then(|repo| repo.get("full_name"))
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(full_name) => full_name,
+            None => return Ok(()),
+        };
+        let issue_number = match payload
+            .get("issue")
+            .and_then(|issue| issue.get("pull_request"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|_| payload.get("issue"))
+            .and_then(|issue| issue.get("number"))
+            .and_then(serde_json::Value::as_i64)
+        {
+            Some(number) => number,
+            None => return Ok(()),
+        };
+        let details_fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(format!("pull_request_details_{issue_number}.json"));
+        if !details_fixture.exists() {
+            return Ok(());
+        }
+
+        let raw = std::fs::read_to_string(&details_fixture).with_context(|| {
+            format!("reading pull request fixture {}", details_fixture.display())
+        })?;
+        let details: serde_json::Value = serde_json::from_str(&raw).with_context(|| {
+            format!("parsing pull request fixture {}", details_fixture.display())
+        })?;
+
+        self.pull_requests
+            .lock()
+            .await
+            .insert(format!("{repo_full_name}#{issue_number}"), details);
+
+        Ok(())
     }
 }
 
@@ -130,6 +187,38 @@ async fn record_dispatch(
     state.workflow_dispatches.lock().await.push(payload);
 
     Json(serde_json::json!({}))
+}
+
+async fn fetch_pull_request(
+    Path((owner, repo, number)): Path<(String, String, i32)>,
+    State(state): State<MockGitHubState>,
+) -> Json<serde_json::Value> {
+    let key = format!("{owner}/{repo}#{number}");
+    let payload = state
+        .pull_requests
+        .lock()
+        .await
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "state": "open",
+                "head": {
+                    "ref": "feature/bench-pr",
+                    "sha": "abc123def456",
+                    "repo": {
+                        "full_name": format!("{owner}/{repo}")
+                    }
+                },
+                "base": {
+                    "repo": {
+                        "full_name": format!("{owner}/{repo}")
+                    }
+                }
+            })
+        });
+
+    Json(payload)
 }
 
 fn fixture_event_name(fixture_name: &str) -> &'static str {
