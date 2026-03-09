@@ -1,0 +1,20 @@
+{
+  "action": "rerequested",
+  "repository": {
+    "name": "mobile-bench-rs",
+    "full_name": "world/mobile-bench-rs",
+    "owner": {
+      "login": "world"
+    }
+  },
+  "check_run": {
+    "id": 9001,
+    "name": "Mobench - ios",
+    "app": {
+      "id": 1
+    }
+  },
+  "sender": {
+    "login": "rerun-bot"
+  }
+}

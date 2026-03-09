@@ -136,4 +136,44 @@ impl DispatchRepository {
 
         Ok(records)
     }
+
+    pub async fn attach_workflow_run(
+        &self,
+        dispatch_id: Uuid,
+        workflow_run_id: i64,
+        status: &str,
+    ) -> Result<Option<BenchmarkDispatch>> {
+        let record = query_as::<_, BenchmarkDispatch>(
+            r#"
+            UPDATE benchmark_dispatches
+            SET workflow_run_id = $2,
+                status = $3,
+                updated_at = now(),
+                completed_at = CASE
+                    WHEN $3 = 'completed' THEN now()
+                    ELSE completed_at
+                END
+            WHERE dispatch_id = $1
+            RETURNING id,
+                      dispatch_id,
+                      repo_owner,
+                      repo_name,
+                      head_sha,
+                      head_ref,
+                      pr_number,
+                      trigger_source,
+                      requested_by,
+                      workflow_inputs,
+                      status,
+                      workflow_run_id
+            "#,
+        )
+        .bind(dispatch_id)
+        .bind(workflow_run_id)
+        .bind(status)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(record)
+    }
 }

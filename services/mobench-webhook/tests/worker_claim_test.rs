@@ -1,5 +1,7 @@
 mod support;
 
+use serde_json::json;
+
 #[sqlx::test(migrations = "./migrations")]
 async fn worker_claims_pending_delivery_once(pool: sqlx::PgPool) {
     let repos = support::repos(pool.clone());
@@ -30,7 +32,68 @@ async fn worker_claims_pending_delivery_once(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn worker_run_once_marks_delivery_processed(pool: sqlx::PgPool) {
-    support::seed_labeled_pull_request_delivery(pool.clone(), "delivery-1")
+    let harness = support::Harness::new(pool.clone()).await.unwrap();
+    harness
+        .enqueue_fixture("pull_request_labeled_bench.json")
+        .await
+        .unwrap();
+
+    let worked = harness.run_one_delivery().await.unwrap();
+
+    assert!(worked);
+
+    let row: (String, i32) = sqlx::query_as(
+        "select status, attempts from github_webhook_deliveries where delivery_id = $1",
+    )
+    .bind("pull_request_labeled_bench.json")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(row.0, "processed");
+    assert_eq!(row.1, 1);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn worker_reclaims_timed_out_processing_delivery(pool: sqlx::PgPool) {
+    let harness = support::Harness::new(pool.clone()).await.unwrap();
+    harness
+        .enqueue_fixture("pull_request_labeled_bench.json")
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"
+        UPDATE github_webhook_deliveries
+        SET status = 'processing',
+            claimed_at = now() - interval '10 minutes'
+        WHERE delivery_id = 'pull_request_labeled_bench.json'
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let worked = harness.run_one_delivery().await.unwrap();
+
+    assert!(worked);
+
+    let row: (String, i32) = sqlx::query_as(
+        "select status, attempts from github_webhook_deliveries where delivery_id = $1",
+    )
+    .bind("pull_request_labeled_bench.json")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(row.0, "processed");
+    assert_eq!(row.1, 1);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn worker_marks_unknown_events_ignored(pool: sqlx::PgPool) {
+    support::repos(pool.clone())
+        .deliveries
+        .insert_pending("delivery-ignored", "ping", None, json!({}))
         .await
         .unwrap();
     let state = support::app_state(pool.clone());
@@ -42,11 +105,11 @@ async fn worker_run_once_marks_delivery_processed(pool: sqlx::PgPool) {
     let row: (String, i32) = sqlx::query_as(
         "select status, attempts from github_webhook_deliveries where delivery_id = $1",
     )
-    .bind("delivery-1")
+    .bind("delivery-ignored")
     .fetch_one(&pool)
     .await
     .unwrap();
 
-    assert_eq!(row.0, "processed");
+    assert_eq!(row.0, "ignored");
     assert_eq!(row.1, 1);
 }

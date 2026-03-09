@@ -6,30 +6,63 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{Path, State},
-    routing::{get, post},
+    http::{HeaderName, HeaderValue, StatusCode},
+    response::IntoResponse,
+    routing::{get, patch, post},
 };
 use sqlx::PgPool;
 use tokio::sync::Mutex;
+use zip::{CompressionMethod, ZipWriter, write::FileOptions};
 
 #[derive(Clone)]
 struct MockGitHubState {
     workflow_dispatches: Arc<Mutex<Vec<serde_json::Value>>>,
     pull_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    artifacts: Arc<Mutex<HashMap<i64, Vec<MockArtifact>>>>,
+    check_runs: Arc<Mutex<Vec<serde_json::Value>>>,
+    next_check_run_id: Arc<Mutex<i64>>,
+    workflow_dispatch_failure: Arc<Mutex<Option<MockFailureResponse>>>,
+}
+
+#[derive(Clone)]
+struct MockArtifact {
+    run_id: i64,
+    id: i64,
+    name: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct MockFailureResponse {
+    status: StatusCode,
+    headers: Vec<(String, String)>,
+    body: String,
 }
 
 pub struct Harness {
     state: mobench_webhook::AppState,
     workflow_dispatches: Arc<Mutex<Vec<serde_json::Value>>>,
     pull_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    artifacts: Arc<Mutex<HashMap<i64, Vec<MockArtifact>>>>,
+    check_runs: Arc<Mutex<Vec<serde_json::Value>>>,
+    workflow_dispatch_failure: Arc<Mutex<Option<MockFailureResponse>>>,
 }
 
 impl Harness {
     pub async fn new(pool: PgPool) -> Result<Self> {
         let workflow_dispatches = Arc::new(Mutex::new(Vec::new()));
         let pull_requests = Arc::new(Mutex::new(HashMap::new()));
+        let artifacts = Arc::new(Mutex::new(HashMap::new()));
+        let check_runs = Arc::new(Mutex::new(Vec::new()));
+        let next_check_run_id = Arc::new(Mutex::new(9001));
+        let workflow_dispatch_failure = Arc::new(Mutex::new(None));
         let server_state = MockGitHubState {
             workflow_dispatches: workflow_dispatches.clone(),
             pull_requests: pull_requests.clone(),
+            artifacts: artifacts.clone(),
+            check_runs: check_runs.clone(),
+            next_check_run_id: next_check_run_id.clone(),
+            workflow_dispatch_failure: workflow_dispatch_failure.clone(),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -52,8 +85,21 @@ impl Harness {
                 post(record_dispatch),
             )
             .route(
+                "/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
+                get(list_artifacts),
+            )
+            .route(
+                "/repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip",
+                get(download_artifact),
+            )
+            .route(
                 "/repos/{owner}/{repo}/pulls/{number}",
                 get(fetch_pull_request),
+            )
+            .route("/repos/{owner}/{repo}/check-runs", post(create_check_run))
+            .route(
+                "/repos/{owner}/{repo}/check-runs/{check_run_id}",
+                patch(update_check_run),
             )
             .with_state(server_state);
         tokio::spawn(async move {
@@ -75,6 +121,9 @@ impl Harness {
             state,
             workflow_dispatches,
             pull_requests,
+            artifacts,
+            check_runs,
+            workflow_dispatch_failure,
         })
     }
 
@@ -109,8 +158,95 @@ impl Harness {
         self.state.repos().dispatches.list_all().await
     }
 
+    pub async fn list_deliveries(
+        &self,
+    ) -> Result<Vec<mobench_webhook::db::models::DeliveryRecord>> {
+        self.state.repos().deliveries.list_all().await
+    }
+
     pub async fn dispatched_workflows(&self) -> Vec<serde_json::Value> {
         self.workflow_dispatches.lock().await.clone()
+    }
+
+    pub async fn clear_dispatched_workflows(&self) {
+        self.workflow_dispatches.lock().await.clear();
+    }
+
+    pub async fn stub_history_artifact(&self, fixture_dir: &str) -> Result<()> {
+        self.stub_history_artifact_for_run(424242, fixture_dir).await
+    }
+
+    pub async fn stub_history_artifact_for_run(&self, run_id: i64, fixture_dir: &str) -> Result<()> {
+        let bytes = zip_fixture_directory(fixture_path(fixture_dir))?;
+        let mut artifacts = self.artifacts.lock().await;
+        artifacts.insert(run_id, vec![MockArtifact {
+            run_id,
+            id: 7001,
+            name: "mobench-history-v1".to_string(),
+            bytes,
+        }]);
+
+        Ok(())
+    }
+
+    pub async fn stub_history_artifact_with_overrides_for_run(
+        &self,
+        run_id: i64,
+        fixture_dir: &str,
+        overrides: &[(&str, &str)],
+    ) -> Result<()> {
+        let bytes = zip_fixture_directory_with_overrides(
+            fixture_path(fixture_dir),
+            overrides
+                .iter()
+                .map(|(path, contents)| ((*path).to_string(), contents.as_bytes().to_vec()))
+                .collect(),
+        )?;
+        let mut artifacts = self.artifacts.lock().await;
+        artifacts.insert(run_id, vec![MockArtifact {
+            run_id,
+            id: 7001,
+            name: "mobench-history-v1".to_string(),
+            bytes,
+        }]);
+
+        Ok(())
+    }
+
+    pub async fn stub_workflow_dispatch_rate_limited(&self, retry_after_secs: i32) {
+        self.workflow_dispatch_failure
+            .lock()
+            .await
+            .replace(MockFailureResponse {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                headers: vec![("retry-after".to_string(), retry_after_secs.to_string())],
+                body: serde_json::json!({
+                    "message": "API rate limit exceeded"
+                })
+                .to_string(),
+            });
+    }
+
+    pub async fn list_workflow_runs(
+        &self,
+    ) -> Result<Vec<mobench_webhook::db::models::WorkflowRunRecord>> {
+        self.state.repos().runs.list_workflow_runs().await
+    }
+
+    pub async fn list_platform_runs(
+        &self,
+    ) -> Result<Vec<mobench_webhook::db::models::PlatformRunRecord>> {
+        self.state.repos().runs.list_platform_runs().await
+    }
+
+    pub async fn list_results(
+        &self,
+    ) -> Result<Vec<mobench_webhook::db::models::BenchmarkResultRecord>> {
+        self.state.repos().results.list_all().await
+    }
+
+    pub async fn recorded_check_runs(&self) -> Vec<serde_json::Value> {
+        self.check_runs.lock().await.clone()
     }
 
     async fn maybe_seed_pull_request_details(&self, payload: &serde_json::Value) -> Result<()> {
@@ -183,10 +319,22 @@ pub async fn seed_labeled_pull_request_delivery(
 async fn record_dispatch(
     State(state): State<MockGitHubState>,
     Json(payload): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
+) -> impl IntoResponse {
+    if let Some(failure) = state.workflow_dispatch_failure.lock().await.take() {
+        let mut response = (failure.status, failure.body).into_response();
+        for (name, value) in failure.headers {
+            response.headers_mut().insert(
+                HeaderName::from_bytes(name.as_bytes()).expect("valid mock header name"),
+                HeaderValue::from_str(&value).expect("valid mock header value"),
+            );
+        }
+
+        return response;
+    }
+
     state.workflow_dispatches.lock().await.push(payload);
 
-    Json(serde_json::json!({}))
+    Json(serde_json::json!({})).into_response()
 }
 
 async fn fetch_pull_request(
@@ -221,6 +369,80 @@ async fn fetch_pull_request(
     Json(payload)
 }
 
+async fn list_artifacts(
+    Path((_owner, _repo, run_id)): Path<(String, String, i64)>,
+    State(state): State<MockGitHubState>,
+) -> Json<serde_json::Value> {
+    let artifacts = state.artifacts.lock().await;
+    let items = artifacts
+        .get(&run_id)
+        .cloned()
+        .unwrap_or_default();
+    Json(serde_json::json!({
+        "total_count": items.len(),
+        "artifacts": items.iter().map(|artifact| {
+            serde_json::json!({
+                "id": artifact.id,
+                "name": artifact.name
+            })
+        }).collect::<Vec<_>>()
+    }))
+}
+
+async fn download_artifact(
+    Path((_owner, _repo, artifact_id)): Path<(String, String, i64)>,
+    State(state): State<MockGitHubState>,
+) -> impl IntoResponse {
+    let artifact = state
+        .artifacts
+        .lock()
+        .await
+        .values()
+        .flat_map(|entries| entries.iter())
+        .find(|artifact| artifact.id == artifact_id)
+        .cloned();
+
+    match artifact {
+        Some(artifact) => (
+            StatusCode::OK,
+            [("content-type", "application/zip")],
+            artifact.bytes,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn create_check_run(
+    State(state): State<MockGitHubState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let mut next_id = state.next_check_run_id.lock().await;
+    let check_run_id = *next_id;
+    *next_id += 1;
+    let mut payload = payload;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("id".to_string(), serde_json::json!(check_run_id));
+    }
+    state.check_runs.lock().await.push(payload);
+
+    Json(serde_json::json!({ "id": check_run_id }))
+}
+
+async fn update_check_run(
+    Path((_owner, _repo, check_run_id)): Path<(String, String, i64)>,
+    State(state): State<MockGitHubState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let mut payload = payload;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("id".to_string(), serde_json::json!(check_run_id));
+    }
+    state.check_runs.lock().await.push(payload);
+
+    Json(serde_json::json!({ "id": check_run_id }))
+}
+
 fn fixture_event_name(fixture_name: &str) -> &'static str {
     if fixture_name.starts_with("pull_request_") {
         "pull_request"
@@ -240,4 +462,58 @@ fn fixture_path(fixture_name: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(fixture_name)
+}
+
+fn zip_fixture_directory(path: PathBuf) -> Result<Vec<u8>> {
+    zip_fixture_directory_with_overrides(path, HashMap::new())
+}
+
+fn zip_fixture_directory_with_overrides(
+    path: PathBuf,
+    overrides: HashMap<String, Vec<u8>>,
+) -> Result<Vec<u8>> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = ZipWriter::new(&mut cursor);
+        let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+        add_directory_to_zip(&mut zip, &path, &path, options, &overrides)?;
+        zip.finish().context("finishing fixture zip")?;
+    }
+
+    Ok(cursor.into_inner())
+}
+
+fn add_directory_to_zip(
+    zip: &mut ZipWriter<&mut std::io::Cursor<Vec<u8>>>,
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    options: FileOptions,
+    overrides: &HashMap<String, Vec<u8>>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            add_directory_to_zip(zip, root, &path, options, overrides)?;
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(root)
+            .with_context(|| format!("computing relative path for {}", path.display()))?;
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        zip.start_file(relative.clone(), options)
+            .context("starting zip file entry")?;
+        let bytes = if let Some(bytes) = overrides.get(&relative) {
+            bytes.clone()
+        } else {
+            std::fs::read(&path)
+                .with_context(|| format!("reading fixture file {}", path.display()))?
+        };
+        use std::io::Write as _;
+        zip.write_all(&bytes)
+            .with_context(|| format!("writing fixture file {}", path.display()))?;
+    }
+
+    Ok(())
 }

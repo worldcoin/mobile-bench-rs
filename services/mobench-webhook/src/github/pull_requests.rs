@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 
-use crate::github::auth::GitHubAppAuth;
+use crate::github::{auth::GitHubAppAuth, into_api_result};
 
 #[derive(Clone)]
 pub struct GitHubPullRequestsClient {
@@ -28,7 +28,8 @@ impl GitHubPullRequestsClient {
     ) -> Result<PullRequestDetails> {
         let token = self.auth.installation_token().await?;
 
-        self.http
+        let response = self
+            .http
             .get(format!(
                 "{}/repos/{owner}/{repo}/pulls/{number}",
                 self.api_base_url
@@ -37,9 +38,9 @@ impl GitHubPullRequestsClient {
             .bearer_auth(token)
             .send()
             .await
-            .context("fetching GitHub pull request")?
-            .error_for_status()
-            .context("GitHub pull request lookup failed")?
+            .context("fetching GitHub pull request")?;
+        into_api_result(response, "GitHub pull request lookup failed")
+            .await?
             .json()
             .await
             .context("decoding GitHub pull request response")

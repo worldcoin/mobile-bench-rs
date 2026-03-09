@@ -1,0 +1,25 @@
+{
+  "summary": {
+    "generated_at": "2026-03-06T12:00:00Z",
+    "target": "ios",
+    "iterations": 30,
+    "warmup": 5,
+    "device_summaries": [
+      {
+        "device": "iPhone 14-16.0",
+        "benchmarks": [
+          {
+            "function": "bench_nullifier_proving_only",
+            "samples": 30,
+            "mean_ns": 1204500000,
+            "median_ns": 1198000000,
+            "p95_ns": 1290000000,
+            "min_ns": 1180200000,
+            "max_ns": 1298100000,
+            "std_dev_ns": 40200000
+          }
+        ]
+      }
+    ]
+  }
+}

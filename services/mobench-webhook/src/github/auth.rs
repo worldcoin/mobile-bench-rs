@@ -125,9 +125,12 @@ impl GitHubAppAuth {
             .bearer_auth(jwt)
             .send()
             .await
-            .context("requesting GitHub installation token")?
-            .error_for_status()
-            .context("GitHub installation token request failed")?;
+            .context("requesting GitHub installation token")?;
+        let response = crate::github::into_api_result(
+            response,
+            "GitHub installation token request failed",
+        )
+        .await?;
         let payload: InstallationTokenResponse = response
             .json()
             .await

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::{Value, json};
 
-use crate::github::auth::GitHubAppAuth;
+use crate::github::{auth::GitHubAppAuth, into_api_result};
 
 #[derive(Clone)]
 pub struct GitHubWorkflowsClient {
@@ -29,7 +29,8 @@ impl GitHubWorkflowsClient {
         inputs: &Value,
     ) -> Result<()> {
         let token = self.auth.installation_token().await?;
-        self.http
+        let response = self
+            .http
             .post(format!(
                 "{}/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
                 self.api_base_url
@@ -42,9 +43,8 @@ impl GitHubWorkflowsClient {
             }))
             .send()
             .await
-            .context("dispatching GitHub workflow")?
-            .error_for_status()
-            .context("GitHub workflow dispatch failed")?;
+            .context("dispatching GitHub workflow")?;
+        into_api_result(response, "GitHub workflow dispatch failed").await?;
 
         Ok(())
     }
@@ -53,10 +53,11 @@ impl GitHubWorkflowsClient {
         &self,
         owner: &str,
         repo: &str,
+        workflow_id: &str,
         git_ref: &str,
         inputs: &Value,
     ) -> Result<()> {
-        self.dispatch_workflow(owner, repo, "mobile-bench.yml", git_ref, inputs)
+        self.dispatch_workflow(owner, repo, workflow_id, git_ref, inputs)
             .await
     }
 }

@@ -5,12 +5,11 @@ use std::{
 };
 
 use anyhow::Result;
+use tracing::{info, warn};
 
-use crate::{AppState, webhook::handlers::handle_delivery};
+use crate::{AppState, github, webhook::handlers::{DeliveryOutcome, handle_delivery}};
 
 pub const DELIVERY_POLL_INTERVAL: Duration = Duration::from_secs(1);
-pub const DELIVERY_RETRY_LIMIT: i32 = 5;
-
 pub async fn worker_loop(state: AppState) -> Result<()> {
     loop {
         if !run_once(&state).await? {
@@ -20,16 +19,37 @@ pub async fn worker_loop(state: AppState) -> Result<()> {
 }
 
 pub async fn run_once(state: &AppState) -> Result<bool> {
-    let Some(delivery) = state.repos.deliveries.claim_next().await? else {
+    let Some(delivery) = state
+        .repos
+        .deliveries
+        .claim_next_with_timeout(state.config.delivery_claim_timeout_secs)
+        .await?
+    else {
         return Ok(false);
     };
+    info!(delivery_id = delivery.delivery_id, attempts = delivery.attempts, "delivery.claimed");
 
     match handle_delivery(state, &delivery).await {
-        Ok(()) => state.repos.deliveries.mark_processed(delivery.id).await?,
+        Ok(DeliveryOutcome::Processed) => {
+            state.repos.deliveries.mark_processed(delivery.id).await?;
+            info!(delivery_id = delivery.delivery_id, "delivery.processed");
+        }
+        Ok(DeliveryOutcome::Ignored) => {
+            state.repos.deliveries.mark_ignored(delivery.id).await?;
+            info!(delivery_id = delivery.delivery_id, "delivery.ignored");
+        }
         Err(err) => {
-            let message = err.to_string();
+            let rate_limit_retry_after = github::find_rate_limit_retry_after(&err);
+            let retry_after_secs =
+                rate_limit_retry_after.unwrap_or_else(|| retry_delay_seconds(&delivery));
+            let message = if rate_limit_retry_after.is_some() {
+                format!("GitHub rate limit exceeded; retrying in {retry_after_secs}s")
+            } else {
+                err.to_string()
+            };
+            warn!(delivery_id = delivery.delivery_id, error = message, "delivery.failed");
 
-            if delivery.attempts >= DELIVERY_RETRY_LIMIT {
+            if delivery.attempts >= state.config.delivery_retry_limit {
                 state
                     .repos
                     .deliveries
@@ -39,7 +59,7 @@ pub async fn run_once(state: &AppState) -> Result<bool> {
                 state
                     .repos
                     .deliveries
-                    .requeue_with_backoff(delivery.id, &message, retry_delay_seconds(&delivery))
+                    .requeue_with_backoff(delivery.id, &message, retry_after_secs)
                     .await?;
             }
         }

@@ -1,0 +1,2 @@
+function,label,avg_ms,median_ms,p95_ms,best_ms,worst_ms,std_dev_ms
+bench_query_proof_generation,pi1 query-proof,982.0,970.0,1040.0,950.0,1100.0,31.0

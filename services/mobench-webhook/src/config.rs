@@ -33,20 +33,40 @@ FB+EWpNAfyRm2yyamT6/epQ=
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub database_url: String,
     pub public_http_addr: SocketAddr,
+    pub private_http_addr: SocketAddr,
+    pub delivery_retry_limit: i32,
+    pub delivery_claim_timeout_secs: i32,
     pub github_webhook_secret: String,
     pub github_api_base_url: String,
     pub github_app_id: u64,
     pub github_installation_id: u64,
     pub github_private_key_pem: String,
+    pub github_owner: String,
+    pub github_repo: String,
+    pub github_workflow_id: String,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        let database_url = env::var("DATABASE_URL").unwrap_or_default();
         let public_http_addr = env::var("PUBLIC_HTTP_ADDR")
             .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
             .parse()
             .context("parsing PUBLIC_HTTP_ADDR")?;
+        let private_http_addr = env::var("PRIVATE_HTTP_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:8081".to_string())
+            .parse()
+            .context("parsing PRIVATE_HTTP_ADDR")?;
+        let delivery_retry_limit = env::var("DELIVERY_RETRY_LIMIT")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse()
+            .context("parsing DELIVERY_RETRY_LIMIT")?;
+        let delivery_claim_timeout_secs = env::var("DELIVERY_CLAIM_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse()
+            .context("parsing DELIVERY_CLAIM_TIMEOUT_SECS")?;
         let github_webhook_secret = env::var("GITHUB_WEBHOOK_SECRET")
             .unwrap_or_else(|_| "mobench-webhook-dev-secret".to_string());
         let github_api_base_url = env::var("GITHUB_API_BASE_URL")
@@ -59,26 +79,46 @@ impl Config {
             .unwrap_or_else(|_| "0".to_string())
             .parse()
             .context("parsing GITHUB_INSTALLATION_ID")?;
-        let github_private_key_pem = env::var("GITHUB_PRIVATE_KEY_PEM").unwrap_or_default();
+        let github_private_key_pem = env::var("GITHUB_APP_PRIVATE_KEY")
+            .or_else(|_| env::var("GITHUB_PRIVATE_KEY_PEM"))
+            .unwrap_or_default();
+        let github_owner = env::var("GITHUB_OWNER").unwrap_or_else(|_| "world".to_string());
+        let github_repo = env::var("GITHUB_REPO").unwrap_or_else(|_| "mobile-bench-rs".to_string());
+        let github_workflow_id =
+            env::var("GITHUB_WORKFLOW_ID").unwrap_or_else(|_| "mobile-bench.yml".to_string());
 
         Ok(Self {
+            database_url,
             public_http_addr,
+            private_http_addr,
+            delivery_retry_limit,
+            delivery_claim_timeout_secs,
             github_webhook_secret,
             github_api_base_url,
             github_app_id,
             github_installation_id,
             github_private_key_pem,
+            github_owner,
+            github_repo,
+            github_workflow_id,
         })
     }
 
     pub fn for_test() -> Self {
         Self {
+            database_url: "postgresql://postgres@127.0.0.1:55432/postgres".to_string(),
             public_http_addr: "127.0.0.1:0".parse().expect("valid test listen address"),
+            private_http_addr: "127.0.0.1:0".parse().expect("valid test listen address"),
+            delivery_retry_limit: 5,
+            delivery_claim_timeout_secs: 300,
             github_webhook_secret: TEST_GITHUB_WEBHOOK_SECRET.to_string(),
             github_api_base_url: "http://127.0.0.1:1".to_string(),
             github_app_id: 1,
             github_installation_id: 2,
             github_private_key_pem: TEST_GITHUB_APP_PRIVATE_KEY_PEM.to_string(),
+            github_owner: "world".to_string(),
+            github_repo: "mobile-bench-rs".to_string(),
+            github_workflow_id: "mobile-bench.yml".to_string(),
         }
     }
 }

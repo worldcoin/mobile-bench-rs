@@ -79,6 +79,19 @@ on:
         description: "Who triggered the run"
         required: false
         type: string
+      dispatch_id:
+        description: "GitHub App dispatch correlation id"
+        required: false
+        type: string
+      trigger_source:
+        description: "Trigger source for manifest metadata"
+        required: false
+        type: string
+        default: "workflow_dispatch"
+      request_command:
+        description: "Original request command for manifest metadata"
+        required: false
+        type: string
       check_run_name:
         description: "GitHub Check Run name"
         required: false
@@ -114,6 +127,9 @@ jobs:
     name: iOS BrowserStack benchmark
     if: inputs.platform == 'ios' || inputs.platform == 'both'
     runs-on: macos-15
+    outputs:
+      device_name: ${{ steps.resolve_device.outputs.device_name }}
+      os_version: ${{ steps.resolve_device.outputs.os_version }}
 
     env:
       BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
@@ -269,6 +285,9 @@ jobs:
     name: Android BrowserStack benchmark
     if: inputs.platform == 'android' || inputs.platform == 'both'
     runs-on: macos-14
+    outputs:
+      device_name: ${{ steps.resolve_device.outputs.device_name }}
+      os_version: ${{ steps.resolve_device.outputs.os_version }}
 
     env:
       BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
@@ -465,6 +484,17 @@ jobs:
         if: needs.ios.result == 'success'
         shell: bash
         run: |
+          mkdir -p results/ios
+          cargo-mobench ci summarize \
+            --results-dir results/ios \
+            --output-format json \
+            --output-file results/ios/summary.json
+          cargo-mobench ci summarize \
+            --results-dir results/ios \
+            --output-format markdown \
+            --output-file results/ios/summary.md
+          cargo-mobench summary results/ios/summary.json --format csv > results/ios/results.csv
+
           echo "## iOS Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
@@ -490,6 +520,17 @@ jobs:
         if: needs.android.result == 'success'
         shell: bash
         run: |
+          mkdir -p results/android
+          cargo-mobench ci summarize \
+            --results-dir results/android \
+            --output-format json \
+            --output-file results/android/summary.json
+          cargo-mobench ci summarize \
+            --results-dir results/android \
+            --output-format markdown \
+            --output-file results/android/summary.md
+          cargo-mobench summary results/android/summary.json --format csv > results/android/results.csv
+
           echo "## Android Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
@@ -562,33 +603,136 @@ jobs:
             echo "Created new PR comment"
           fi
 
-      - name: Generate GitHub App token
-        id: app-token
-        if: inputs.pr_number != '' && secrets.MOBENCH_APP_PRIVATE_KEY != ''
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.MOBENCH_APP_ID }}
-          private-key: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
-
-      - name: Create Check Run
-        if: steps.app-token.outputs.token != ''
+      - name: Build canonical history bundle
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_RUN_NAME: ${{ inputs.check_run_name }}
-          REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
+          DISPATCH_ID: ${{ inputs.dispatch_id }}
+          TRIGGER_SOURCE: ${{ inputs.trigger_source }}
+          REQUEST_COMMAND: ${{ inputs.request_command }}
+          REQUESTED_BY: ${{ inputs.requested_by }}
+          MOBENCH_VERSION: ${{ inputs.mobench_version }}
+          MOBENCH_REF: ${{ inputs.mobench_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          BASE_REF: ${{ github.base_ref || 'main' }}
+          IOS_DEVICE_NAME: ${{ needs.ios.outputs.device_name }}
+          IOS_OS_VERSION: ${{ needs.ios.outputs.os_version }}
+          ANDROID_DEVICE_NAME: ${{ needs.android.outputs.device_name }}
+          ANDROID_OS_VERSION: ${{ needs.android.outputs.os_version }}
         run: |
-          for dir in results/ios results/android; do
-            if [ -d "$dir" ]; then
-              PLATFORM=$(basename "$dir")
-              cargo-mobench ci check-run \
-                --results-dir "$dir" \
-                --repo "${{ github.repository }}" \
-                --sha "${{ github.event.pull_request.head.sha || github.sha }}" \
-                --name "$CHECK_RUN_NAME — ${PLATFORM}" \
-                --annotation-path "${{ inputs.crate_path }}/src/lib.rs" \
-                --regression-threshold-pct "$REGRESSION_THRESHOLD" \
-                || true
-            fi
-          done
+          set -euo pipefail
+          mkdir -p history-bundle
+
+          if [ -d results/ios ]; then
+            mkdir -p history-bundle/ios
+            cp results/ios/summary.json history-bundle/ios/summary.json
+            cp results/ios/summary.md history-bundle/ios/summary.md
+            cp results/ios/results.csv history-bundle/ios/results.csv
+          fi
+
+          if [ -d results/android ]; then
+            mkdir -p history-bundle/android
+            cp results/android/summary.json history-bundle/android/summary.json
+            cp results/android/summary.md history-bundle/android/summary.md
+            cp results/android/results.csv history-bundle/android/results.csv
+          fi
+
+          jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg workflow_name "${{ github.workflow }}" \
+            --argjson run_id "${{ github.run_id }}" \
+            --argjson run_attempt "${{ github.run_attempt }}" \
+            --arg head_sha "${HEAD_SHA}" \
+            --arg head_ref "${HEAD_REF}" \
+            --arg base_ref "${BASE_REF}" \
+            --arg dispatch_id "${DISPATCH_ID}" \
+            --arg trigger_source "${TRIGGER_SOURCE}" \
+            --arg requested_by "${REQUESTED_BY:-${GITHUB_ACTOR}}" \
+            --arg workflow_requested_by "${REQUESTED_BY:-${GITHUB_ACTOR}}" \
+            --arg request_command "${REQUEST_COMMAND}" \
+            --arg pr_number "${PR_NUMBER}" \
+            --arg mobench_version "${MOBENCH_VERSION}" \
+            --arg mobench_ref "${MOBENCH_REF:-${GITHUB_SHA}}" \
+            --arg check_run_name "${CHECK_RUN_NAME}" \
+            --arg ios_device_name "${IOS_DEVICE_NAME}" \
+            --arg ios_os_version "${IOS_OS_VERSION}" \
+            --arg android_device_name "${ANDROID_DEVICE_NAME}" \
+            --arg android_os_version "${ANDROID_OS_VERSION}" \
+            '{
+              schema_version: "mobench-history-v1",
+              repo: $repo,
+              workflow: {
+                name: $workflow_name,
+                run_id: $run_id,
+                run_attempt: $run_attempt
+              },
+              git: {
+                head_sha: $head_sha,
+                head_ref: $head_ref,
+                base_ref: $base_ref
+              },
+              request: {
+                dispatch_id: (if $dispatch_id == "" then null else $dispatch_id end),
+                trigger_source: $trigger_source,
+                requested_by: (if $requested_by == "" then null else $requested_by end),
+                pr_number: (if $pr_number == "" then null else ($pr_number | tonumber) end),
+                request_command: (if $request_command == "" then null else $request_command end)
+              },
+              mobench: {
+                version: $mobench_version,
+                ref: $mobench_ref
+              },
+              platform_runs: [
+                (if $ios_device_name == "" then empty else {
+                  platform: "ios",
+                  check_run_name: ($check_run_name + " - ios"),
+                  workflow_inputs: {
+                    platform: "ios",
+                    device_profile: "${{ inputs.device_profile }}",
+                    ios_device: "${{ inputs.ios_device }}",
+                    ios_os_version: "${{ inputs.ios_os_version }}",
+                    android_device: "${{ inputs.android_device }}",
+                    android_os_version: "${{ inputs.android_os_version }}",
+                    iterations: "${{ inputs.iterations }}",
+                    warmup: "${{ inputs.warmup }}",
+                    pr_number: "${{ inputs.pr_number }}",
+                    requested_by: $workflow_requested_by
+                  },
+                  resolved_device: {
+                    device_name: $ios_device_name,
+                    os_version: $ios_os_version
+                  }
+                } end),
+                (if $android_device_name == "" then empty else {
+                  platform: "android",
+                  check_run_name: ($check_run_name + " - android"),
+                  workflow_inputs: {
+                    platform: "android",
+                    device_profile: "${{ inputs.device_profile }}",
+                    ios_device: "${{ inputs.ios_device }}",
+                    ios_os_version: "${{ inputs.ios_os_version }}",
+                    android_device: "${{ inputs.android_device }}",
+                    android_os_version: "${{ inputs.android_os_version }}",
+                    iterations: "${{ inputs.iterations }}",
+                    warmup: "${{ inputs.warmup }}",
+                    pr_number: "${{ inputs.pr_number }}",
+                    requested_by: $workflow_requested_by
+                  },
+                  resolved_device: {
+                    device_name: $android_device_name,
+                    os_version: $android_os_version
+                  }
+                } end)
+              ]
+            }' > history-bundle/manifest.json
+
+      - name: Upload canonical history bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobench-history-v1
+          path: history-bundle
+          if-no-files-found: error
+          compression-level: 6

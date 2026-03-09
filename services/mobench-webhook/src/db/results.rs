@@ -1,5 +1,6 @@
 use anyhow::Result;
 use sqlx::{PgPool, query_as};
+use uuid::Uuid;
 
 use crate::db::models::{BenchmarkResultRecord, UpsertBenchmarkResult};
 
@@ -80,5 +81,78 @@ impl ResultRepository {
         .await?;
 
         Ok(record)
+    }
+
+    pub async fn delete_for_platform_run(&self, platform_run_uuid: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"
+            DELETE FROM benchmark_results
+            WHERE platform_run_uuid = $1
+            "#,
+        )
+        .bind(platform_run_uuid)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn list_all(&self) -> Result<Vec<BenchmarkResultRecord>> {
+        let records = query_as::<_, BenchmarkResultRecord>(
+            r#"
+            SELECT id,
+                   platform_run_uuid,
+                   function_name,
+                   function_label,
+                   avg_ms,
+                   median_ms,
+                   p95_ms,
+                   best_ms,
+                   worst_ms,
+                   std_dev_ms,
+                   cpu_avg_percent,
+                   cpu_peak_percent,
+                   ram_avg_mb,
+                   ram_peak_mb
+            FROM benchmark_results
+            ORDER BY created_at ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(records)
+    }
+
+    pub async fn list_for_platform_run(
+        &self,
+        platform_run_uuid: Uuid,
+    ) -> Result<Vec<BenchmarkResultRecord>> {
+        let records = query_as::<_, BenchmarkResultRecord>(
+            r#"
+            SELECT id,
+                   platform_run_uuid,
+                   function_name,
+                   function_label,
+                   avg_ms,
+                   median_ms,
+                   p95_ms,
+                   best_ms,
+                   worst_ms,
+                   std_dev_ms,
+                   cpu_avg_percent,
+                   cpu_peak_percent,
+                   ram_avg_mb,
+                   ram_peak_mb
+            FROM benchmark_results
+            WHERE platform_run_uuid = $1
+            ORDER BY function_name ASC
+            "#,
+        )
+        .bind(platform_run_uuid)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(records)
     }
 }

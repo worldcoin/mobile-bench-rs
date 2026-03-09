@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
+use serde::Deserialize;
 
-use crate::github::auth::GitHubAppAuth;
+use crate::github::{auth::GitHubAppAuth, into_api_result};
 
 #[derive(Clone)]
 pub struct GitHubArtifactsClient {
@@ -36,9 +37,8 @@ impl GitHubArtifactsClient {
             .bearer_auth(token)
             .send()
             .await
-            .context("downloading GitHub artifact")?
-            .error_for_status()
-            .context("GitHub artifact download failed")?;
+            .context("downloading GitHub artifact")?;
+        let response = into_api_result(response, "GitHub artifact download failed").await?;
 
         response
             .bytes()
@@ -46,4 +46,61 @@ impl GitHubArtifactsClient {
             .map(|bytes| bytes.to_vec())
             .context("reading GitHub artifact response bytes")
     }
+
+    pub async fn download_history_bundle(
+        &self,
+        owner: &str,
+        repo: &str,
+        run_id: i64,
+    ) -> Result<Vec<u8>> {
+        let artifacts = self
+            .list_workflow_run_artifacts(owner, repo, run_id)
+            .await?;
+        let artifact = artifacts
+            .into_iter()
+            .find(|artifact| artifact.name == "mobench-history-v1")
+            .ok_or_else(|| {
+                anyhow!("missing mobench-history-v1 artifact for workflow run {run_id}")
+            })?;
+
+        self.download_artifact(owner, repo, artifact.id).await
+    }
+
+    async fn list_workflow_run_artifacts(
+        &self,
+        owner: &str,
+        repo: &str,
+        run_id: i64,
+    ) -> Result<Vec<ArtifactSummary>> {
+        let token = self.auth.installation_token().await?;
+        let response = self
+            .http
+            .get(format!(
+                "{}/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
+                self.api_base_url
+            ))
+            .header("Accept", "application/vnd.github+json")
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("listing GitHub workflow artifacts")?;
+        let response = into_api_result(response, "GitHub workflow artifact list failed").await?;
+        let payload: WorkflowArtifactsResponse = response
+            .json()
+            .await
+            .context("decoding GitHub workflow artifact list response")?;
+
+        Ok(payload.artifacts)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowArtifactsResponse {
+    artifacts: Vec<ArtifactSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArtifactSummary {
+    id: i64,
+    name: String,
 }

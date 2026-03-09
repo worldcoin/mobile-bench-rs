@@ -1,14 +1,14 @@
 {
   "schema_version": "mobench-history-v1",
-  "repo": "worldcoin/world-id-protocol",
+  "repo": "world/mobile-bench-rs",
   "workflow": {
     "name": "Mobile Benchmarks",
-    "run_id": 123456789,
+    "run_id": 424242,
     "run_attempt": 1
   },
   "git": {
-    "head_sha": "abc123",
-    "head_ref": "feature/branch",
+    "head_sha": "abc123def456",
+    "head_ref": "feature/bench-pr",
     "base_ref": "main"
   },
   "request": {
@@ -41,6 +41,26 @@
       "resolved_device": {
         "device_name": "iPhone 14",
         "os_version": "16.0"
+      }
+    },
+    {
+      "platform": "android",
+      "check_run_name": "Mobench - android",
+      "workflow_inputs": {
+        "platform": "android",
+        "device_profile": "low-spec",
+        "ios_device": "",
+        "ios_os_version": "",
+        "android_device": "",
+        "android_os_version": "",
+        "iterations": "30",
+        "warmup": "5",
+        "pr_number": "123",
+        "requested_by": "octocat"
+      },
+      "resolved_device": {
+        "device_name": "Pixel 8",
+        "os_version": "14"
       }
     }
   ]

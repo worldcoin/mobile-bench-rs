@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::Value;
+use tracing::{info, warn};
 
 use crate::{
     AppState,
@@ -17,7 +18,10 @@ pub async fn receive_webhook(
     body: Bytes,
 ) -> Result<StatusCode, ReceiveError> {
     verify_signature(&state.config.github_webhook_secret, &headers, body.as_ref())
-        .map_err(ReceiveError::InvalidSignature)?;
+        .map_err(|err| {
+            warn!("webhook.signature_error");
+            ReceiveError::InvalidSignature(err)
+        })?;
 
     let delivery_id = required_header(&headers, "X-GitHub-Delivery")?;
     let event = required_header(&headers, "X-GitHub-Event")?;
@@ -26,13 +30,17 @@ pub async fn receive_webhook(
         .get("action")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    info!(delivery_id, event, action = ?action, "webhook.received");
 
-    state
+    let persisted = state
         .repos
         .deliveries
         .insert_pending_if_new(delivery_id, event, action.as_deref(), payload)
         .await
         .map_err(ReceiveError::Database)?;
+    if persisted.is_some() {
+        info!(delivery_id, "delivery.persisted");
+    }
 
     Ok(StatusCode::ACCEPTED)
 }

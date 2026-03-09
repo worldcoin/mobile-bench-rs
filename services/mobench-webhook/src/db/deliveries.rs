@@ -77,14 +77,27 @@ impl DeliveryRepository {
     }
 
     pub async fn claim_next(&self) -> Result<Option<DeliveryRecord>> {
+        self.claim_next_with_timeout(300).await
+    }
+
+    pub async fn claim_next_with_timeout(
+        &self,
+        claim_timeout_secs: i32,
+    ) -> Result<Option<DeliveryRecord>> {
         let mut tx = self.pool.begin().await?;
         let record = query_as::<_, DeliveryRecord>(
             r#"
             WITH next_delivery AS (
                 SELECT id
                 FROM github_webhook_deliveries
-                WHERE status = 'pending'
-                  AND available_at <= now()
+                WHERE (
+                        status = 'pending'
+                        AND available_at <= now()
+                    ) OR (
+                        status = 'processing'
+                        AND claimed_at IS NOT NULL
+                        AND claimed_at <= now() - ($1 * interval '1 second')
+                    )
                 ORDER BY received_at
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -105,6 +118,7 @@ impl DeliveryRepository {
                       deliveries.last_error
             "#,
         )
+        .bind(claim_timeout_secs)
         .fetch_optional(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -112,11 +126,49 @@ impl DeliveryRepository {
         Ok(record)
     }
 
+    pub async fn list_all(&self) -> Result<Vec<DeliveryRecord>> {
+        let records = query_as::<_, DeliveryRecord>(
+            r#"
+            SELECT id,
+                   delivery_id,
+                   event,
+                   action,
+                   payload,
+                   status,
+                   attempts,
+                   last_error
+            FROM github_webhook_deliveries
+            ORDER BY received_at ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(records)
+    }
+
     pub async fn mark_processed(&self, delivery_uuid: Uuid) -> Result<()> {
         sqlx::query(
             r#"
             UPDATE github_webhook_deliveries
             SET status = 'processed',
+                processed_at = now(),
+                last_error = NULL
+            WHERE id = $1
+            "#,
+        )
+        .bind(delivery_uuid)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_ignored(&self, delivery_uuid: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE github_webhook_deliveries
+            SET status = 'ignored',
                 processed_at = now(),
                 last_error = NULL
             WHERE id = $1

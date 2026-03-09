@@ -1,0 +1,25 @@
+{
+  "summary": {
+    "generated_at": "2026-03-06T12:00:00Z",
+    "target": "android",
+    "iterations": 30,
+    "warmup": 5,
+    "device_summaries": [
+      {
+        "device": "Pixel 8-14",
+        "benchmarks": [
+          {
+            "function": "bench_query_proof_generation",
+            "samples": 30,
+            "mean_ns": 982000000,
+            "median_ns": 970000000,
+            "p95_ns": 1040000000,
+            "min_ns": 950000000,
+            "max_ns": 1100000000,
+            "std_dev_ns": 31000000
+          }
+        ]
+      }
+    ]
+  }
+}

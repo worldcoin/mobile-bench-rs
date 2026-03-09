@@ -1,8 +1,9 @@
+use serde::Serialize;
 use serde_json::Value;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DeliveryRecord {
     pub id: Uuid,
     pub delivery_id: String,
@@ -14,7 +15,7 @@ pub struct DeliveryRecord {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct BenchmarkDispatch {
     pub id: Uuid,
     pub dispatch_id: Uuid,
@@ -30,7 +31,7 @@ pub struct BenchmarkDispatch {
     pub workflow_run_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct WorkflowRunRecord {
     pub id: Uuid,
     pub workflow_run_id: i64,
@@ -50,7 +51,7 @@ pub struct WorkflowRunRecord {
     pub conclusion: Option<String>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct PlatformRunRecord {
     pub id: Uuid,
     pub workflow_run_uuid: Uuid,
@@ -66,7 +67,7 @@ pub struct PlatformRunRecord {
     pub status: String,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct BenchmarkResultRecord {
     pub id: Uuid,
     pub platform_run_uuid: Uuid,
@@ -82,6 +83,47 @@ pub struct BenchmarkResultRecord {
     pub cpu_peak_percent: Option<f64>,
     pub ram_avg_mb: Option<f64>,
     pub ram_peak_mb: Option<f64>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct PlatformRunWithWorkflowRecord {
+    pub id: Uuid,
+    pub workflow_run_uuid: Uuid,
+    pub platform: String,
+    pub check_run_id: Option<i64>,
+    pub check_run_name: String,
+    pub workflow_inputs: Value,
+    pub device_profile: Option<String>,
+    pub device_name: String,
+    pub os_version: String,
+    pub iterations: i32,
+    pub warmup: i32,
+    pub status: String,
+    pub workflow_run_id: i64,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub head_sha: String,
+    pub head_ref: String,
+    pub base_ref: Option<String>,
+    pub pr_number: Option<i32>,
+    pub trigger_source: String,
+    pub requested_by: Option<String>,
+    pub request_command: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct TrendPointRecord {
+    pub platform_run_id: Uuid,
+    pub workflow_run_id: i64,
+    pub head_sha: String,
+    pub head_ref: String,
+    pub function_name: String,
+    pub function_label: String,
+    pub avg_ms: f64,
+    pub median_ms: Option<f64>,
+    pub p95_ms: Option<f64>,
+    pub device_name: String,
+    pub os_version: String,
 }
 
 #[derive(Debug, Clone)]

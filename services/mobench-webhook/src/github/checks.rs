@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::github::auth::GitHubAppAuth;
+use crate::github::{auth::GitHubAppAuth, into_api_result};
 
 #[derive(Clone)]
 pub struct GitHubChecksClient {
@@ -44,9 +44,8 @@ impl GitHubChecksClient {
             .json(payload)
             .send()
             .await
-            .context("sending GitHub check run request")?
-            .error_for_status()
-            .context("GitHub check run request failed")?;
+            .context("sending GitHub check run request")?;
+        let response = into_api_result(response, "GitHub check run request failed").await?;
 
         response
             .json()

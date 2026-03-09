@@ -49,3 +49,37 @@ async fn bench_label_duplicate_delivery_inputs_are_deduped(pool: sqlx::PgPool) {
     assert_eq!(dispatches.len(), 1);
     assert_eq!(workflow_requests.len(), 1);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn bench_label_rate_limit_requeues_delivery_using_retry_after(pool: sqlx::PgPool) {
+    let harness = support::Harness::new(pool.clone()).await.unwrap();
+    harness.stub_workflow_dispatch_rate_limited(17).await;
+    harness
+        .enqueue_fixture("pull_request_labeled_bench.json")
+        .await
+        .unwrap();
+
+    let worked = harness.run_one_delivery().await.unwrap();
+
+    assert!(worked);
+
+    let row: (String, i32, Option<String>, i64) = sqlx::query_as(
+        r#"
+        select status,
+               attempts,
+               last_error,
+               greatest(0, extract(epoch from available_at - now())::bigint) as retry_after_secs
+        from github_webhook_deliveries
+        where delivery_id = $1
+        "#,
+    )
+    .bind("pull_request_labeled_bench.json")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(row.0, "pending");
+    assert_eq!(row.1, 1);
+    assert!(row.2.unwrap_or_default().contains("rate limit"));
+    assert!(row.3 >= 15, "expected retry delay to honor Retry-After, got {}", row.3);
+}

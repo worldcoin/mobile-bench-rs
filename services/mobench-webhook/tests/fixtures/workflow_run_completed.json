@@ -1,0 +1,18 @@
+{
+  "action": "completed",
+  "repository": {
+    "name": "mobile-bench-rs",
+    "full_name": "world/mobile-bench-rs",
+    "owner": {
+      "login": "world"
+    }
+  },
+  "workflow_run": {
+    "id": 424242,
+    "run_attempt": 1,
+    "name": "Mobile Benchmarks",
+    "head_sha": "abc123def456",
+    "head_branch": "feature/bench-pr",
+    "conclusion": "success"
+  }
+}

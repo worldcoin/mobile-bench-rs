@@ -1,0 +1,2 @@
+function,label,avg_ms,median_ms,p95_ms,best_ms,worst_ms,std_dev_ms
+bench_nullifier_proving_only,pi2 nullifier-proving,1204.5,1198.0,1290.0,1180.2,1298.1,40.2
