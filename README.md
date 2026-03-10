@@ -85,6 +85,12 @@ CI contract outputs are written to `target/mobench/ci/`:
 - `summary.md`
 - `results.csv`
 
+Repository benchmark automation defaults to stateless GitHub Actions:
+- `mobile-bench.yml` is the only benchmark runner.
+- `compile-gate.yml` is the compile gate for the exact PR head SHA.
+- `mobile-bench-after-ci.yml`, `mobile-bench-pr-auto.yml`, and `mobile-bench-pr-command.yml` are metadata-only controllers.
+- Stateless v1 only auto-runs for same-repo PRs. Fork PRs are ignored.
+
 ## Configuration
 
 mobench supports a `mobench.toml` configuration file for project settings:
@@ -121,7 +127,7 @@ CLI flags override config file values when provided.
 - `docs/CONTRACT_CI_V1.md`: frozen v1 CI input/output/error contract
 - `docs/adr/0001-mobench-ci-contract-v1.md`: CI contract ADR and compatibility policy
 - `docs/schemas/`: machine-readable CI/summary schema artifacts
-- `docs/MIGRATION_GUIDE.md`: migration guide (placeholder, linked from ADR)
+- `docs/MIGRATION_GUIDE.md`: migration guide for the stateless GitHub Actions default flow
 - `FETCH_RESULTS_GUIDE.md`: fetching and summarizing results
 - `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide

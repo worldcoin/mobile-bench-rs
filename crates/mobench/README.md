@@ -237,6 +237,8 @@ Contract references:
 - `docs/schemas/summary-v1.schema.json`
 - `docs/schemas/ci-contract-v1.schema.json`
 
+Repository default automation keeps `mobile-bench.yml` as the only benchmark runner. In this repo, stateless controller workflows gate benchmark dispatch on compile success for the exact same-repo PR head SHA, and fork PRs are ignored for v1 automation.
+
 **Example:**
 ```bash
 cargo mobench ci run \

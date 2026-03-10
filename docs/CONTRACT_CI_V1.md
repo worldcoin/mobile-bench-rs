@@ -15,6 +15,22 @@ It covers:
 - Output contract (`summary.json`, `summary.md`, `results.csv`)
 - Error taxonomy categories used by CI-focused validation commands
 
+## Default Repo Integration
+
+Stateless GitHub Actions is the default v1 integration for this repository.
+
+The default workflow model is:
+- `compile-gate.yml` compiles the exact same-repo PR head SHA with `pull_request`.
+- `mobile-bench-after-ci.yml` dispatches benchmarks after a successful compile gate when the PR still has the `bench` label.
+- `mobile-bench-pr-auto.yml` handles bench-label events without checking out PR code and dispatches immediately only when the compile gate is already green for that exact SHA.
+- `mobile-bench-pr-command.yml` handles trusted `/mobench ...` PR comments without checking out PR code and dispatches only after the compile gate is green for that exact SHA.
+- `mobile-bench.yml` remains the single benchmark runner and delegates execution to `reusable-bench.yml`.
+
+Security constraints for the default path:
+- Stateless v1 is restricted to same-repo PRs. Fork PRs are ignored.
+- Controller workflows are metadata-only and must never checkout PR code.
+- `pull_request_target` is used only for metadata-only label handling and not for benchmark execution.
+
 ## Input Contract
 
 ### Required CLI inputs
@@ -41,13 +57,14 @@ Metadata can be provided via flags or CI environment discovery:
 
 - `requested_by` (`--requested-by`, `MOBENCH_REQUESTED_BY`, `GITHUB_ACTOR`)
 - `pr_number` (`--pr-number`, `MOBENCH_PR_NUMBER`, `PR_NUMBER`, `GITHUB_PR_NUMBER`, `GITHUB_PULL_REQUEST_NUMBER`, or parsed from `GITHUB_REF`)
+- `base_ref` (`--base-ref`, `MOBENCH_BASE_REF`, `GITHUB_BASE_REF`)
 - `request_command` (`--request-command`, fallback to argv)
 - `mobench_ref` (`--mobench-ref`, `MOBENCH_REF`, `GITHUB_SHA`, `GITHUB_REF`)
 - `mobench_version` (derived from package version)
 - `trigger_source` (optional, for example `label`, `pr_comment`, `workflow_dispatch`, `check_rerequest`)
-- `dispatch_id` (optional UUID used to correlate GitHub App dispatch with later ingest)
+- `dispatch_id` (optional UUID used to correlate external dispatch state; empty in stateless GitHub Actions mode)
 
-`request_command` may come from a GitHub App owned PR comment command such as `/mobench platform=both iterations=30 warmup=5 device_profile=low-spec`.
+`request_command` may come from a trusted PR comment command such as `/mobench platform=both iterations=30 warmup=5 device_profile=low-spec`.
 
 ## Output Contract
 
@@ -63,6 +80,7 @@ Required files:
 - `ci.metadata` object with:
   - `requested_by`
   - `pr_number` (optional)
+  - `base_ref` (optional)
   - `request_command`
   - `mobench_ref` (optional)
   - `mobench_version`
@@ -73,7 +91,7 @@ Required files:
   - `summary_md`
   - `results_csv`
 
-Canonical history ingest is defined separately by `docs/schemas/history-manifest-v1.schema.json`. That bundle is uploaded as `mobench-history-v1` and is the durable bridge between GitHub App dispatch, workflow completion, and server-side ingest.
+Canonical history ingest is defined separately by `docs/schemas/history-manifest-v1.schema.json`. That bundle is uploaded as `mobench-history-v1` and is the durable bridge between workflow-owned benchmark execution, stateless baseline reuse, and any optional downstream history ingestion.
 
 Machine-readable schema artifacts:
 - `docs/schemas/summary-v1.schema.json`

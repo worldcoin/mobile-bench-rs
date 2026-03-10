@@ -6,7 +6,8 @@ This guide migrates custom BrowserStack benchmark CI flows to the standardized `
 
 - One-command orchestration via `cargo mobench ci run`
 - Stable contract outputs: `summary.json`, `summary.md`, `results.csv`
-- Optional sticky PR comments and deterministic matrix resolution
+- Workflow-owned GitHub checks, sticky PR comments, and deterministic matrix resolution
+- Stateless GitHub Actions automation keyed to compile success for the exact PR head SHA
 
 ## Old -> New Mapping
 
@@ -34,9 +35,27 @@ This guide migrates custom BrowserStack benchmark CI flows to the standardized `
 | Summary markdown | `cargo mobench report summarize --summary target/mobench/ci/summary.json` |
 | Sticky PR comment | `cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json --publish` |
 
+## Default Repository Automation
+
+The default v1 repository flow is stateless GitHub Actions, not the webhook/App service.
+
+Workflow layout:
+- `compile-gate.yml` is the authoritative compile gate and runs on `pull_request` for the exact PR head SHA.
+- `mobile-bench-after-ci.yml` dispatches `mobile-bench.yml` after a successful compile gate when the PR is same-repo, open, and still labeled `bench`.
+- `mobile-bench-pr-auto.yml` handles `bench` label events with `pull_request_target`, but it stays metadata-only and never checks out PR code.
+- `mobile-bench-pr-command.yml` handles trusted `/mobench ...` PR comments and posts an explanatory sticky comment when the compile gate is not green yet.
+- `mobile-bench.yml` remains the only benchmark runner and delegates execution to `reusable-bench.yml`.
+
+Security constraints:
+- Stateless v1 only supports same-repo PRs. Fork PRs are ignored.
+- Controller workflows must never run or checkout PR head code.
+- `pull_request_target` is used only for metadata checks and workflow dispatch.
+
 ## Minimal Reference Workflow
 
-Use `.github/workflows/mobile-bench-action-example.yml` as the copy-paste baseline. Minimal form:
+Use `.github/workflows/mobile-bench-action-example.yml` as the copy-paste baseline when you want the local action in another repository or a standalone setup. The default automation in this repo is the controller + single-runner model above.
+
+Minimal action-based form:
 
 ```yaml
 name: Mobench CI (minimal)
@@ -74,6 +93,7 @@ jobs:
 - `command` is allow-listed to `cargo mobench ci run` and `cargo mobench run`.
 - `ci` only appends `--ci` when `command: cargo mobench run`.
 - Prefer multiline `run-args` with explicit quoting for values containing spaces.
+- In the stateless repository flow, `dispatch_id` stays empty and `base_ref` is provided by the controller workflows for baseline resolution.
 
 ## Compatibility Notes
 

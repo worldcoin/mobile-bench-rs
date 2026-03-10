@@ -1,5 +1,7 @@
 # Mobench Webhook Server Design
 
+> Note: This document describes an alternative stateful webhook/App design. The default v1 path in this repository is the stateless GitHub Actions flow described in `docs/CONTRACT_CI_V1.md` and `docs/MIGRATION_GUIDE.md`.
+
 ## Status
 Design - 2026-03-06
 

@@ -309,3 +309,9 @@ test('mobile-bench runner has stateless concurrency and checks write permission'
   assert.match(yaml, /checks:\s+write/);
   assert.match(yaml, /^concurrency:/m);
 });
+
+test('contract docs describe stateless GitHub Actions v1 as the default path', () => {
+  const contract = fs.readFileSync('docs/CONTRACT_CI_V1.md', 'utf8');
+  assert.match(contract, /stateless GitHub Actions/i);
+  assert.doesNotMatch(contract, /GitHub App owned PR comment command/i);
+});
