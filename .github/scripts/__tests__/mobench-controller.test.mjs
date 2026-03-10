@@ -93,3 +93,92 @@ test('compile gate workflow file exists with stable name', () => {
   assert.match(yaml, /^name: Compile Gate$/m);
   assert.match(yaml, /cargo test --all --locked --no-run/);
 });
+
+test('workflow_run auto path dispatches only same-repo open PRs with bench label', () => {
+  const decision = controller.decideWorkflowRunDispatch({
+    workflowRun: {
+      conclusion: 'success',
+      head_sha: 'abc123',
+      head_branch: 'feature/bench-pr',
+      pull_requests: [{ number: 123 }],
+    },
+    pullRequest: {
+      number: 123,
+      state: 'open',
+      base: { ref: 'main' },
+      head: {
+        ref: 'feature/bench-pr',
+        repo: { full_name: 'world/mobile-bench-rs' },
+      },
+      labels: [{ name: 'bench' }],
+    },
+    repositoryFullName: 'world/mobile-bench-rs',
+  });
+
+  assert.equal(decision.dispatch, true);
+  assert.equal(decision.inputs.trigger_source, 'label');
+  assert.equal(decision.inputs.requested_by, 'github-actions');
+});
+
+test('workflow_run auto path rejects closed PRs unlabeled PRs and forks', () => {
+  const workflowRun = {
+    conclusion: 'success',
+    head_sha: 'abc123',
+    head_branch: 'feature/bench-pr',
+    pull_requests: [{ number: 123 }],
+  };
+
+  assert.deepEqual(
+    controller.decideWorkflowRunDispatch({
+      workflowRun,
+      pullRequest: {
+        number: 123,
+        state: 'closed',
+        base: { ref: 'main' },
+        head: {
+          ref: 'feature/bench-pr',
+          repo: { full_name: 'world/mobile-bench-rs' },
+        },
+        labels: [{ name: 'bench' }],
+      },
+      repositoryFullName: 'world/mobile-bench-rs',
+    }),
+    { dispatch: false, reason: 'no-open-pr' },
+  );
+
+  assert.deepEqual(
+    controller.decideWorkflowRunDispatch({
+      workflowRun,
+      pullRequest: {
+        number: 123,
+        state: 'open',
+        base: { ref: 'main' },
+        head: {
+          ref: 'feature/bench-pr',
+          repo: { full_name: 'world/mobile-bench-rs' },
+        },
+        labels: [],
+      },
+      repositoryFullName: 'world/mobile-bench-rs',
+    }),
+    { dispatch: false, reason: 'bench-label-missing' },
+  );
+
+  assert.deepEqual(
+    controller.decideWorkflowRunDispatch({
+      workflowRun,
+      pullRequest: {
+        number: 123,
+        state: 'open',
+        base: { ref: 'main' },
+        head: {
+          ref: 'feature/bench-pr',
+          repo: { full_name: 'fork/mobile-bench-rs' },
+        },
+        labels: [{ name: 'bench' }],
+      },
+      repositoryFullName: 'world/mobile-bench-rs',
+    }),
+    { dispatch: false, reason: 'fork-pr' },
+  );
+});

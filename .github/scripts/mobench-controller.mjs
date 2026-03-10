@@ -1,5 +1,6 @@
 export const COMPILE_GATE_WORKFLOW_FILE = 'compile-gate.yml';
 export const COMPILE_GATE_WORKFLOW_NAME = 'Compile Gate';
+export const MOBILE_BENCH_WORKFLOW_FILE = 'mobile-bench.yml';
 export const TRUSTED_ASSOCIATIONS = new Set([
   'OWNER',
   'MEMBER',
@@ -110,6 +111,92 @@ export function buildDispatchInputs({
   };
 }
 
+export function decideWorkflowRunDispatch({
+  workflowRun,
+  pullRequest,
+  repositoryFullName,
+}) {
+  if (workflowRun?.conclusion !== 'success') {
+    return { dispatch: false, reason: 'compile-gate-failed' };
+  }
+  if (!pullRequest || pullRequest.state !== 'open') {
+    return { dispatch: false, reason: 'no-open-pr' };
+  }
+  if (!isSameRepoPullRequest(pullRequest, repositoryFullName)) {
+    return { dispatch: false, reason: 'fork-pr' };
+  }
+  if (!hasBenchLabel(pullRequest)) {
+    return { dispatch: false, reason: 'bench-label-missing' };
+  }
+
+  return {
+    dispatch: true,
+    ref: pullRequest.head.ref,
+    inputs: buildDispatchInputs({
+      prNumber: pullRequest.number,
+      baseRef: pullRequest.base.ref,
+      requestedBy: 'github-actions',
+      triggerSource: 'label',
+      requestCommand: '',
+      overrides: DEFAULT_INPUTS,
+    }),
+  };
+}
+
+export async function handleWorkflowRun({ github, context, core }) {
+  const workflowRun = context.payload.workflow_run;
+  if (!workflowRun) {
+    core.setFailed('Missing workflow_run payload.');
+    return;
+  }
+
+  const repositoryFullName = `${context.repo.owner}/${context.repo.repo}`;
+  const pullNumber = await findAssociatedPullRequestNumber({
+    github,
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    repositoryFullName,
+    workflowRun,
+  });
+
+  if (!pullNumber) {
+    core.info(
+      `No associated pull request found for workflow run ${workflowRun.id ?? 'unknown'}.`,
+    );
+    return;
+  }
+
+  const pullRequest = (
+    await github.rest.pulls.get({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      pull_number: pullNumber,
+    })
+  ).data;
+
+  const decision = decideWorkflowRunDispatch({
+    workflowRun,
+    pullRequest,
+    repositoryFullName,
+  });
+  if (!decision.dispatch) {
+    core.info(`Skipping mobench dispatch: ${decision.reason}.`);
+    return;
+  }
+
+  await github.rest.actions.createWorkflowDispatch({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    workflow_id: MOBILE_BENCH_WORKFLOW_FILE,
+    ref: decision.ref,
+    inputs: decision.inputs,
+  });
+
+  core.notice(
+    `Dispatched ${MOBILE_BENCH_WORKFLOW_FILE} for PR #${pullRequest.number} at ${workflowRun.head_sha}.`,
+  );
+}
+
 function applyToken(args, key, value) {
   if (!key) {
     return true;
@@ -136,4 +223,41 @@ function isPositiveInteger(value) {
   }
 
   return Number.parseInt(value, 10) > 0;
+}
+
+async function findAssociatedPullRequestNumber({
+  github,
+  owner,
+  repo,
+  repositoryFullName,
+  workflowRun,
+}) {
+  const directPullNumber = workflowRun.pull_requests
+    ?.find((pullRequest) => Number.isInteger(pullRequest.number))
+    ?.number;
+  if (directPullNumber) {
+    return directPullNumber;
+  }
+
+  const response =
+    await github.rest.repos.listPullRequestsAssociatedWithCommit({
+      owner,
+      repo,
+      commit_sha: workflowRun.head_sha,
+    });
+  const pullRequests = response.data ?? [];
+
+  return (
+    pullRequests.find((pullRequest) =>
+      pullRequest.state === 'open' &&
+      isSameRepoPullRequest(pullRequest, repositoryFullName) &&
+      pullRequest.head?.sha === workflowRun.head_sha,
+    )?.number ??
+    pullRequests.find((pullRequest) =>
+      pullRequest.state === 'open' &&
+      isSameRepoPullRequest(pullRequest, repositoryFullName) &&
+      pullRequest.head?.ref === workflowRun.head_branch,
+    )?.number ??
+    null
+  );
 }
