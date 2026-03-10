@@ -182,3 +182,45 @@ test('workflow_run auto path rejects closed PRs unlabeled PRs and forks', () => 
     { dispatch: false, reason: 'fork-pr' },
   );
 });
+
+test('bench label dispatches immediately when compile gate already passed for current SHA', () => {
+  const decision = controller.decideBenchLabelDispatch({
+    labelName: 'bench',
+    compileGatePassed: true,
+    pullRequest: {
+      number: 123,
+      state: 'open',
+      base: { ref: 'main' },
+      head: {
+        ref: 'feature/bench-pr',
+        repo: { full_name: 'world/mobile-bench-rs' },
+      },
+      labels: [{ name: 'bench' }],
+    },
+    repositoryFullName: 'world/mobile-bench-rs',
+  });
+
+  assert.equal(decision.dispatch, true);
+  assert.equal(decision.inputs.trigger_source, 'label');
+});
+
+test('bench label exits cleanly when compile gate has not passed yet', () => {
+  const decision = controller.decideBenchLabelDispatch({
+    labelName: 'bench',
+    compileGatePassed: false,
+    pullRequest: {
+      number: 123,
+      state: 'open',
+      base: { ref: 'main' },
+      head: {
+        ref: 'feature/bench-pr',
+        repo: { full_name: 'world/mobile-bench-rs' },
+      },
+      labels: [{ name: 'bench' }],
+    },
+    repositoryFullName: 'world/mobile-bench-rs',
+  });
+
+  assert.equal(decision.dispatch, false);
+  assert.equal(decision.reason, 'compile-gate-pending');
+});

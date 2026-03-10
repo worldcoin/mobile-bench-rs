@@ -143,6 +143,39 @@ export function decideWorkflowRunDispatch({
   };
 }
 
+export function decideBenchLabelDispatch({
+  labelName,
+  compileGatePassed,
+  pullRequest,
+  repositoryFullName,
+}) {
+  if (labelName !== 'bench') {
+    return { dispatch: false, reason: 'not-bench-label' };
+  }
+  if (!pullRequest || pullRequest.state !== 'open') {
+    return { dispatch: false, reason: 'pr-closed' };
+  }
+  if (!isSameRepoPullRequest(pullRequest, repositoryFullName)) {
+    return { dispatch: false, reason: 'fork-pr' };
+  }
+  if (!compileGatePassed) {
+    return { dispatch: false, reason: 'compile-gate-pending' };
+  }
+
+  return {
+    dispatch: true,
+    ref: pullRequest.head.ref,
+    inputs: buildDispatchInputs({
+      prNumber: pullRequest.number,
+      baseRef: pullRequest.base.ref,
+      requestedBy: 'github-actions',
+      triggerSource: 'label',
+      requestCommand: '',
+      overrides: DEFAULT_INPUTS,
+    }),
+  };
+}
+
 export async function handleWorkflowRun({ github, context, core }) {
   const workflowRun = context.payload.workflow_run;
   if (!workflowRun) {
@@ -194,6 +227,46 @@ export async function handleWorkflowRun({ github, context, core }) {
 
   core.notice(
     `Dispatched ${MOBILE_BENCH_WORKFLOW_FILE} for PR #${pullRequest.number} at ${workflowRun.head_sha}.`,
+  );
+}
+
+export async function handleBenchLabelEvent({ github, context, core }) {
+  const repositoryFullName = `${context.repo.owner}/${context.repo.repo}`;
+  const labelName = context.payload.label?.name ?? '';
+  const pullRequest = withBenchLabel(
+    context.payload.pull_request,
+    context.payload.label,
+  );
+  const compileGatePassed = pullRequest
+    ? await hasSuccessfulCompileGateForSha({
+        github,
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        headSha: pullRequest.head?.sha,
+      })
+    : false;
+
+  const decision = decideBenchLabelDispatch({
+    labelName,
+    compileGatePassed,
+    pullRequest,
+    repositoryFullName,
+  });
+  if (!decision.dispatch) {
+    core.info(`Skipping mobench dispatch: ${decision.reason}.`);
+    return;
+  }
+
+  await github.rest.actions.createWorkflowDispatch({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    workflow_id: MOBILE_BENCH_WORKFLOW_FILE,
+    ref: decision.ref,
+    inputs: decision.inputs,
+  });
+
+  core.notice(
+    `Dispatched ${MOBILE_BENCH_WORKFLOW_FILE} for PR #${pullRequest.number} from bench label event.`,
   );
 }
 
@@ -260,4 +333,42 @@ async function findAssociatedPullRequestNumber({
     )?.number ??
     null
   );
+}
+
+async function hasSuccessfulCompileGateForSha({ github, owner, repo, headSha }) {
+  if (!headSha) {
+    return false;
+  }
+
+  const response = await github.rest.actions.listWorkflowRuns({
+    owner,
+    repo,
+    workflow_id: COMPILE_GATE_WORKFLOW_FILE,
+    event: 'pull_request',
+    head_sha: headSha,
+    per_page: 20,
+  });
+
+  return (response.data.workflow_runs ?? []).some(
+    (workflowRun) =>
+      workflowRun.head_sha === headSha &&
+      workflowRun.conclusion === 'success',
+  );
+}
+
+function withBenchLabel(pullRequest, label) {
+  if (!pullRequest) {
+    return null;
+  }
+  if (pullRequest.labels) {
+    return pullRequest;
+  }
+  if (!label?.name) {
+    return pullRequest;
+  }
+
+  return {
+    ...pullRequest,
+    labels: [label],
+  };
 }
