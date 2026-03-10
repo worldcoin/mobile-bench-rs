@@ -224,3 +224,80 @@ test('bench label exits cleanly when compile gate has not passed yet', () => {
   assert.equal(decision.dispatch, false);
   assert.equal(decision.reason, 'compile-gate-pending');
 });
+
+test('trusted /mobench comment dispatches only when compile gate already passed', () => {
+  const payload = fixture('issue_comment_mobench_custom.json');
+  const decision = controller.decideCommentDispatch({
+    issueComment: payload.comment,
+    pullRequest: {
+      number: 123,
+      state: 'open',
+      base: { ref: 'release/1.2' },
+      head: {
+        ref: 'feature/bench-pr',
+        sha: 'abc123def456',
+        repo: { full_name: 'world/mobile-bench-rs' },
+      },
+    },
+    compileGatePassed: true,
+    repositoryFullName: 'world/mobile-bench-rs',
+  });
+
+  assert.equal(decision.dispatch, true);
+  assert.equal(decision.inputs.requested_by, 'octocat');
+  assert.equal(
+    decision.inputs.request_command,
+    '/mobench platform=ios iterations=50 ios_device=iPhone 15 ios_os_version=17',
+  );
+});
+
+test('untrusted /mobench comment is ignored', () => {
+  const decision = controller.decideCommentDispatch({
+    issueComment: {
+      body: '/mobench',
+      author_association: 'NONE',
+      user: { login: 'rando' },
+    },
+    pullRequest: {
+      number: 123,
+      state: 'open',
+      base: { ref: 'main' },
+      head: {
+        ref: 'feature/bench-pr',
+        sha: 'abc123def456',
+        repo: { full_name: 'world/mobile-bench-rs' },
+      },
+    },
+    compileGatePassed: false,
+    repositoryFullName: 'world/mobile-bench-rs',
+  });
+
+  assert.equal(decision.dispatch, false);
+  assert.equal(decision.reason, 'untrusted-actor');
+});
+
+test('trusted /mobench comment before compile gate green returns a sticky explanation', () => {
+  const payload = fixture('issue_comment_mobench_custom.json');
+  const decision = controller.decideCommentDispatch({
+    issueComment: payload.comment,
+    pullRequest: {
+      number: 123,
+      state: 'open',
+      base: { ref: 'release/1.2' },
+      head: {
+        ref: 'feature/bench-pr',
+        sha: 'abc123def456',
+        repo: { full_name: 'world/mobile-bench-rs' },
+      },
+    },
+    compileGatePassed: false,
+    repositoryFullName: 'world/mobile-bench-rs',
+  });
+
+  assert.equal(decision.dispatch, false);
+  assert.equal(decision.reason, 'compile-gate-pending');
+  assert.match(
+    decision.commentBody,
+    /required CI for the current head SHA .* has not passed/i,
+  );
+});

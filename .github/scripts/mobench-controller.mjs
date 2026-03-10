@@ -1,6 +1,7 @@
 export const COMPILE_GATE_WORKFLOW_FILE = 'compile-gate.yml';
 export const COMPILE_GATE_WORKFLOW_NAME = 'Compile Gate';
 export const MOBILE_BENCH_WORKFLOW_FILE = 'mobile-bench.yml';
+export const COMMENT_MARKER = '<!-- mobench-compile-gate -->';
 export const TRUSTED_ASSOCIATIONS = new Set([
   'OWNER',
   'MEMBER',
@@ -176,6 +177,61 @@ export function decideBenchLabelDispatch({
   };
 }
 
+export function buildCompileGatePendingComment({ sha, workflowName }) {
+  return `${COMMENT_MARKER}
+Required CI for the current head SHA \`${sha}\` has not passed yet.
+
+Benchmarks were not started. Wait for **${workflowName}** to succeed for this exact commit, then retry \`/mobench\`.`;
+}
+
+export function decideCommentDispatch({
+  issueComment,
+  pullRequest,
+  compileGatePassed,
+  repositoryFullName,
+}) {
+  if (!pullRequest) {
+    return { dispatch: false, reason: 'not-a-pr-comment' };
+  }
+  if (!isTrustedAssociation(issueComment?.author_association)) {
+    return { dispatch: false, reason: 'untrusted-actor' };
+  }
+  if (pullRequest.state !== 'open') {
+    return { dispatch: false, reason: 'pr-closed' };
+  }
+  if (!isSameRepoPullRequest(pullRequest, repositoryFullName)) {
+    return { dispatch: false, reason: 'fork-pr' };
+  }
+
+  const overrides = parseMobenchCommand(issueComment?.body ?? '');
+  if (!overrides) {
+    return { dispatch: false, reason: 'not-a-valid-command' };
+  }
+  if (!compileGatePassed) {
+    return {
+      dispatch: false,
+      reason: 'compile-gate-pending',
+      commentBody: buildCompileGatePendingComment({
+        sha: pullRequest.head.sha,
+        workflowName: COMPILE_GATE_WORKFLOW_NAME,
+      }),
+    };
+  }
+
+  return {
+    dispatch: true,
+    ref: pullRequest.head.ref,
+    inputs: buildDispatchInputs({
+      prNumber: pullRequest.number,
+      baseRef: pullRequest.base.ref,
+      requestedBy: issueComment.user.login,
+      triggerSource: 'pr_comment',
+      requestCommand: issueComment.body.trim(),
+      overrides,
+    }),
+  };
+}
+
 export async function handleWorkflowRun({ github, context, core }) {
   const workflowRun = context.payload.workflow_run;
   if (!workflowRun) {
@@ -267,6 +323,71 @@ export async function handleBenchLabelEvent({ github, context, core }) {
 
   core.notice(
     `Dispatched ${MOBILE_BENCH_WORKFLOW_FILE} for PR #${pullRequest.number} from bench label event.`,
+  );
+}
+
+export async function handleIssueCommentEvent({ github, context, core }) {
+  const issue = context.payload.issue;
+  const issueComment = context.payload.comment;
+  const repositoryFullName = `${context.repo.owner}/${context.repo.repo}`;
+
+  if (!issue?.pull_request) {
+    core.info('Skipping mobench dispatch: not-a-pr-comment.');
+    return;
+  }
+  if (!isTrustedAssociation(issueComment?.author_association)) {
+    core.info('Skipping mobench dispatch: untrusted-actor.');
+    return;
+  }
+  if (!parseMobenchCommand(issueComment?.body ?? '')) {
+    core.info('Skipping mobench dispatch: not-a-valid-command.');
+    return;
+  }
+
+  const pullRequest = (
+    await github.rest.pulls.get({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      pull_number: issue.number,
+    })
+  ).data;
+  const compileGatePassed = await hasSuccessfulCompileGateForSha({
+    github,
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    headSha: pullRequest.head?.sha,
+  });
+
+  const decision = decideCommentDispatch({
+    issueComment,
+    pullRequest,
+    compileGatePassed,
+    repositoryFullName,
+  });
+  if (!decision.dispatch) {
+    if (decision.reason === 'compile-gate-pending' && decision.commentBody) {
+      await upsertIssueComment({
+        github,
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issueNumber: issue.number,
+        body: decision.commentBody,
+      });
+    }
+    core.info(`Skipping mobench dispatch: ${decision.reason}.`);
+    return;
+  }
+
+  await github.rest.actions.createWorkflowDispatch({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    workflow_id: MOBILE_BENCH_WORKFLOW_FILE,
+    ref: decision.ref,
+    inputs: decision.inputs,
+  });
+
+  core.notice(
+    `Dispatched ${MOBILE_BENCH_WORKFLOW_FILE} for PR #${pullRequest.number} from /mobench comment.`,
   );
 }
 
@@ -371,4 +492,33 @@ function withBenchLabel(pullRequest, label) {
     ...pullRequest,
     labels: [label],
   };
+}
+
+async function upsertIssueComment({ github, owner, repo, issueNumber, body }) {
+  const response = await github.rest.issues.listComments({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    per_page: 100,
+  });
+  const existingComment = (response.data ?? []).find((comment) =>
+    comment.body?.includes(COMMENT_MARKER),
+  );
+
+  if (existingComment) {
+    await github.rest.issues.updateComment({
+      owner,
+      repo,
+      comment_id: existingComment.id,
+      body,
+    });
+    return;
+  }
+
+  await github.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body,
+  });
 }
