@@ -304,6 +304,8 @@ test('trusted /mobench comment before compile gate green returns a sticky explan
 
 test('mobile-bench runner has stateless concurrency and checks write permission', () => {
   const yaml = fs.readFileSync('.github/workflows/mobile-bench.yml', 'utf8');
+  assert.match(yaml, /^\s*base_ref:\s*$/m);
+  assert.match(yaml, /actions:\s+read/);
   assert.match(yaml, /checks:\s+write/);
   assert.match(yaml, /^concurrency:/m);
 });

@@ -75,6 +75,10 @@ on:
         description: "PR number for reporting"
         required: false
         type: string
+      base_ref:
+        description: "Base branch ref for stateless baseline resolution"
+        required: false
+        type: string
       requested_by:
         description: "Who triggered the run"
         required: false
@@ -107,14 +111,12 @@ on:
         required: true
       BROWSERSTACK_ACCESS_KEY:
         required: true
-      MOBENCH_APP_PRIVATE_KEY:
-        required: false
-      MOBENCH_APP_ID:
-        required: false
 
 permissions:
+  actions: read
   contents: read
   pull-requests: write
+  checks: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -248,11 +250,12 @@ jobs:
 
           device_spec="${IOS_DEVICE}-${IOS_OS_VERSION}"
           echo "Running iOS benchmarks on: ${device_spec}"
+          status=0
 
           for func in $(echo "$FUNCTIONS_JSON" | jq -r '.[]'); do
             slug=$(echo "$func" | tr ':' '_' | tr '/' '-')
             echo "::group::Benchmark: ${func}"
-            cargo-mobench run \
+            if cargo-mobench run \
               --target ios \
               --function "${func}" \
               --iterations "${ITERATIONS}" \
@@ -261,11 +264,17 @@ jobs:
               $RELEASE_FLAG \
               --fetch \
               --summary-csv \
-              --output "target/mobench/ci/ios/${slug}.json" || {
-                echo "::warning::iOS benchmark failed for function: ${func}"
-              }
+              --output "target/mobench/ci/ios/${slug}.json"; then
+              :
+            else
+              exit_code=$?
+              status=$exit_code
+              echo "::warning::iOS benchmark failed for function: ${func}"
+            fi
             echo "::endgroup::"
           done
+
+          exit "$status"
 
       - name: Upload iOS results
         if: always()
@@ -406,11 +415,12 @@ jobs:
 
           device_spec="${ANDROID_DEVICE}-${ANDROID_OS_VERSION}"
           echo "Running Android benchmarks on: ${device_spec}"
+          status=0
 
           for func in $(echo "$FUNCTIONS_JSON" | jq -r '.[]'); do
             slug=$(echo "$func" | tr ':' '_' | tr '/' '-')
             echo "::group::Benchmark: ${func}"
-            cargo-mobench run \
+            if cargo-mobench run \
               --target android \
               --function "${func}" \
               --iterations "${ITERATIONS}" \
@@ -419,11 +429,17 @@ jobs:
               $RELEASE_FLAG \
               --fetch \
               --summary-csv \
-              --output "target/mobench/ci/android/${slug}.json" || {
-                echo "::warning::Android benchmark failed for function: ${func}"
-              }
+              --output "target/mobench/ci/android/${slug}.json"; then
+              :
+            else
+              exit_code=$?
+              status=$exit_code
+              echo "::warning::Android benchmark failed for function: ${func}"
+            fi
             echo "::endgroup::"
           done
+
+          exit "$status"
 
       - name: Upload Android results
         if: always()
@@ -444,8 +460,15 @@ jobs:
     needs: [ios, android]
     if: always() && (needs.ios.result == 'success' || needs.android.result == 'success')
     runs-on: ubuntu-latest
+    env:
+      HEAD_SHA: ${{ github.sha }}
+      BASE_REF: ${{ inputs.base_ref || 'main' }}
+      CHECK_RUN_NAME: ${{ inputs.check_run_name }}
 
     steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -479,6 +502,73 @@ jobs:
         with:
           name: mobench-results-android
           path: results/android
+
+      - name: Resolve baseline run
+        id: baseline
+        uses: actions/github-script@v7
+        env:
+          BASE_REF: ${{ env.BASE_REF }}
+        with:
+          script: |
+            const baseline = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/mobench-baseline.mjs`);
+            const workflowRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'mobile-bench.yml',
+              branch: process.env.BASE_REF,
+              status: 'completed',
+              per_page: 100,
+            });
+            const hydratedRuns = [];
+            for (const run of workflowRuns.slice(0, 25)) {
+              const artifacts = (
+                await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                })
+              ).data.artifacts ?? [];
+              hydratedRuns.push({
+                ...run,
+                artifacts: artifacts.map((artifact) => artifact.name),
+              });
+            }
+
+            const selected = baseline.selectBaselineRun({
+              baseRef: process.env.BASE_REF,
+              currentRunId: Number(process.env.GITHUB_RUN_ID),
+              runs: hydratedRuns,
+            });
+
+            if (selected) {
+              core.setOutput('run_id', String(selected.id));
+              core.info(`Selected baseline run ${selected.id} on ${selected.head_branch}.`);
+            } else {
+              core.info(`No successful baseline run found for ${process.env.BASE_REF}.`);
+            }
+
+      - name: Download baseline artifact
+        if: steps.baseline.outputs.run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.baseline.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p baseline
+          artifact_url=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.name=="mobench-history-v1") | .archive_download_url' || true)
+          if [ -z "$artifact_url" ]; then
+            echo "No mobench-history-v1 artifact found for baseline run ${RUN_ID}"
+            exit 0
+          fi
+          gh api "$artifact_url" > baseline.zip
+          unzip -q baseline.zip -d baseline
+          if [ -d baseline/history-bundle ]; then
+            cp -R baseline/history-bundle/. baseline/
+            rm -rf baseline/history-bundle
+          fi
 
       - name: Summarize iOS results
         if: needs.ios.result == 'success'
@@ -516,6 +606,25 @@ jobs:
           fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Publish iOS check run
+        if: needs.ios.result == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          args=(
+            ci check-run
+            --results results/ios/summary.json
+            --repo "${GITHUB_REPOSITORY}"
+            --sha "${HEAD_SHA}"
+            --name "${CHECK_RUN_NAME} - ios"
+            --regression-threshold-pct "${{ inputs.regression_threshold_pct }}"
+            --token "${GITHUB_TOKEN}"
+          )
+          if [ -f baseline/ios/summary.json ]; then
+            args+=(--baseline baseline/ios/summary.json)
+          fi
+          cargo-mobench "${args[@]}"
+
       - name: Summarize Android results
         if: needs.android.result == 'success'
         shell: bash
@@ -551,6 +660,25 @@ jobs:
             echo "No Android results found." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish Android check run
+        if: needs.android.result == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          args=(
+            ci check-run
+            --results results/android/summary.json
+            --repo "${GITHUB_REPOSITORY}"
+            --sha "${HEAD_SHA}"
+            --name "${CHECK_RUN_NAME} - android"
+            --regression-threshold-pct "${{ inputs.regression_threshold_pct }}"
+            --token "${GITHUB_TOKEN}"
+          )
+          if [ -f baseline/android/summary.json ]; then
+            args+=(--baseline baseline/android/summary.json)
+          fi
+          cargo-mobench "${args[@]}"
 
       # NOTE: This step requires the caller workflow to have `pull-requests: write` permission
       # so that github.token can post/update PR comments.
@@ -614,9 +742,9 @@ jobs:
           REQUESTED_BY: ${{ inputs.requested_by }}
           MOBENCH_VERSION: ${{ inputs.mobench_version }}
           MOBENCH_REF: ${{ inputs.mobench_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
           HEAD_REF: ${{ github.head_ref || github.ref_name }}
-          BASE_REF: ${{ github.base_ref || 'main' }}
+          BASE_REF: ${{ inputs.base_ref || 'main' }}
           IOS_DEVICE_NAME: ${{ needs.ios.outputs.device_name }}
           IOS_OS_VERSION: ${{ needs.ios.outputs.os_version }}
           ANDROID_DEVICE_NAME: ${{ needs.android.outputs.device_name }}

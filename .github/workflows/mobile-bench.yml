@@ -57,6 +57,11 @@ on:
         required: false
         type: string
         default: ""
+      base_ref:
+        description: "Base branch ref for stateless baseline resolution"
+        required: false
+        type: string
+        default: ""
       requested_by:
         description: "Who triggered the run"
         required: false
@@ -99,6 +104,7 @@ on:
         default: "5.0"
 
 permissions:
+  actions: read
   contents: read
   pull-requests: write
   checks: write
@@ -125,6 +131,7 @@ jobs:
       mobench_version: ${{ inputs.mobench_version }}
       mobench_ref: ${{ inputs.mobench_ref }}
       pr_number: ${{ inputs.pr_number }}
+      base_ref: ${{ inputs.base_ref }}
       requested_by: ${{ inputs.requested_by }}
       dispatch_id: ${{ inputs.dispatch_id }}
       trigger_source: ${{ inputs.trigger_source }}
