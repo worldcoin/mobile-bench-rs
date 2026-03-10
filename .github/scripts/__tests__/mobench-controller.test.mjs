@@ -244,6 +244,7 @@ test('trusted /mobench comment dispatches only when compile gate already passed'
   });
 
   assert.equal(decision.dispatch, true);
+  assert.equal(decision.inputs.trigger_source, 'pr_comment');
   assert.equal(decision.inputs.requested_by, 'octocat');
   assert.equal(
     decision.inputs.request_command,
@@ -308,6 +309,8 @@ test('mobile-bench runner has stateless concurrency and checks write permission'
   assert.match(yaml, /actions:\s+read/);
   assert.match(yaml, /checks:\s+write/);
   assert.match(yaml, /^concurrency:/m);
+  assert.match(yaml, /trigger_source == 'pr_comment' && 'comment'/);
+  assert.match(yaml, /cancel-in-progress:\s+\${{\s*inputs\.trigger_source == 'label'\s*}}/);
 });
 
 test('contract docs describe stateless GitHub Actions v1 as the default path', () => {
