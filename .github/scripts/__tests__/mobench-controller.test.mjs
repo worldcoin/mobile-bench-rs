@@ -301,3 +301,9 @@ test('trusted /mobench comment before compile gate green returns a sticky explan
     /required CI for the current head SHA .* has not passed/i,
   );
 });
+
+test('mobile-bench runner has stateless concurrency and checks write permission', () => {
+  const yaml = fs.readFileSync('.github/workflows/mobile-bench.yml', 'utf8');
+  assert.match(yaml, /checks:\s+write/);
+  assert.match(yaml, /^concurrency:/m);
+});

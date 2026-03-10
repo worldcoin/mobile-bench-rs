@@ -101,6 +101,11 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  checks: write
+
+concurrency:
+  group: mobench-${{ inputs.pr_number != '' && inputs.pr_number || github.run_id }}-${{ inputs.trigger_source == 'pr_comment' && 'comment' || inputs.trigger_source == 'label' && 'auto' || 'manual' }}
+  cancel-in-progress: ${{ inputs.trigger_source == 'label' }}
 
 jobs:
   browserstack:
