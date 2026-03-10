@@ -87,3 +87,9 @@ test('same-repo bench label is required for auto dispatch', () => {
   );
   assert.equal(controller.hasBenchLabel(pullRequest), true);
 });
+
+test('compile gate workflow file exists with stable name', () => {
+  const yaml = fs.readFileSync('.github/workflows/compile-gate.yml', 'utf8');
+  assert.match(yaml, /^name: Compile Gate$/m);
+  assert.match(yaml, /cargo test --all --locked --no-run/);
+});
