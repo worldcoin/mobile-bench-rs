@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectBaselineRun } from '../mobench-baseline.mjs';
+import {
+  resolveBaselineRun,
+  selectBaselineRun,
+} from '../mobench-baseline.mjs';
 
 test('selectBaselineRun prefers the latest successful base-ref run with mobench-history-v1', () => {
   const run = selectBaselineRun({
@@ -47,4 +50,27 @@ test('selectBaselineRun returns null when there is no successful base-ref benchm
     }),
     null,
   );
+});
+
+test('resolveBaselineRun keeps scanning candidates until it finds a usable artifact', async () => {
+  const runs = Array.from({ length: 30 }, (_, index) => ({
+    id: 500 - index,
+    head_branch: 'main',
+    conclusion: 'success',
+  }));
+  const seen = [];
+
+  const run = await resolveBaselineRun({
+    baseRef: 'main',
+    currentRunId: 999,
+    runs,
+    hydrateArtifacts: async (candidate) => {
+      seen.push(candidate.id);
+      return candidate.id === 471 ? ['mobench-history-v1'] : [];
+    },
+  });
+
+  assert.equal(run.id, 471);
+  assert.equal(seen.at(-1), 471);
+  assert.equal(seen.length, 30);
 });

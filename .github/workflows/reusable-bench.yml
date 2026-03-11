@@ -511,35 +511,35 @@ jobs:
         with:
           script: |
             const baseline = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/mobench-baseline.mjs`);
-            const workflowRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+            let selected = null;
+            for await (const response of github.paginate.iterator(github.rest.actions.listWorkflowRuns, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'mobile-bench.yml',
               branch: process.env.BASE_REF,
               status: 'completed',
               per_page: 100,
-            });
-            const hydratedRuns = [];
-            for (const run of workflowRuns.slice(0, 25)) {
-              const artifacts = (
-                await github.rest.actions.listWorkflowRunArtifacts({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  run_id: run.id,
-                  per_page: 100,
-                })
-              ).data.artifacts ?? [];
-              hydratedRuns.push({
-                ...run,
-                artifacts: artifacts.map((artifact) => artifact.name),
+            })) {
+              selected = await baseline.resolveBaselineRun({
+                baseRef: process.env.BASE_REF,
+                currentRunId: Number(process.env.GITHUB_RUN_ID),
+                runs: response.data.workflow_runs ?? [],
+                hydrateArtifacts: async (run) => {
+                  const artifacts = (
+                    await github.rest.actions.listWorkflowRunArtifacts({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      run_id: run.id,
+                      per_page: 100,
+                    })
+                  ).data.artifacts ?? [];
+                  return artifacts.map((artifact) => artifact.name);
+                },
               });
+              if (selected) {
+                break;
+              }
             }
-
-            const selected = baseline.selectBaselineRun({
-              baseRef: process.env.BASE_REF,
-              currentRunId: Number(process.env.GITHUB_RUN_ID),
-              runs: hydratedRuns,
-            });
 
             if (selected) {
               core.setOutput('run_id', String(selected.id));
