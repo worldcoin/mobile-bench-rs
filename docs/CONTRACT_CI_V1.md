@@ -93,6 +93,8 @@ Required files:
 
 Canonical history ingest is defined separately by `docs/schemas/history-manifest-v1.schema.json`. That bundle is uploaded as `mobench-history-v1` and is the durable bridge between workflow-owned benchmark execution, stateless baseline reuse, and any optional downstream history ingestion.
 
+In the repository's stateless GitHub Actions flow, controller workflows also pass the exact PR `head_sha` into `mobile-bench.yml` so the runner checks out, summarizes, and reports against the same commit that satisfied the compile gate.
+
 Machine-readable schema artifacts:
 - `docs/schemas/summary-v1.schema.json`
 - `docs/schemas/ci-contract-v1.schema.json`

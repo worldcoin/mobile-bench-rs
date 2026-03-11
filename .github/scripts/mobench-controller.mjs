@@ -95,6 +95,7 @@ export function parseMobenchCommand(body) {
 export function buildDispatchInputs({
   prNumber,
   baseRef,
+  headSha,
   requestedBy,
   triggerSource,
   requestCommand,
@@ -105,6 +106,7 @@ export function buildDispatchInputs({
     ...overrides,
     pr_number: String(prNumber),
     base_ref: baseRef,
+    head_sha: headSha ?? '',
     requested_by: requestedBy,
     trigger_source: triggerSource,
     request_command: requestCommand ?? '',
@@ -132,10 +134,11 @@ export function decideWorkflowRunDispatch({
 
   return {
     dispatch: true,
-    ref: pullRequest.head.ref,
+    ref: workflowRun.head_branch,
     inputs: buildDispatchInputs({
       prNumber: pullRequest.number,
       baseRef: pullRequest.base.ref,
+      headSha: workflowRun.head_sha,
       requestedBy: 'github-actions',
       triggerSource: 'label',
       requestCommand: '',
@@ -169,6 +172,7 @@ export function decideBenchLabelDispatch({
     inputs: buildDispatchInputs({
       prNumber: pullRequest.number,
       baseRef: pullRequest.base.ref,
+      headSha: pullRequest.head.sha,
       requestedBy: 'github-actions',
       triggerSource: 'label',
       requestCommand: '',
@@ -224,6 +228,7 @@ export function decideCommentDispatch({
     inputs: buildDispatchInputs({
       prNumber: pullRequest.number,
       baseRef: pullRequest.base.ref,
+      headSha: pullRequest.head.sha,
       requestedBy: issueComment.user.login,
       triggerSource: 'pr_comment',
       requestCommand: issueComment.body.trim(),

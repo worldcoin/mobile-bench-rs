@@ -93,7 +93,7 @@ jobs:
 - `command` is allow-listed to `cargo mobench ci run` and `cargo mobench run`.
 - `ci` only appends `--ci` when `command: cargo mobench run`.
 - Prefer multiline `run-args` with explicit quoting for values containing spaces.
-- In the stateless repository flow, `dispatch_id` stays empty and `base_ref` is provided by the controller workflows for baseline resolution.
+- In the stateless repository flow, `dispatch_id` stays empty, `base_ref` is provided by the controller workflows for baseline resolution, and `head_sha` is provided so the runner checks out and reports on the exact commit that passed the compile gate.
 
 ## Compatibility Notes
 

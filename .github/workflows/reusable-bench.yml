@@ -79,6 +79,10 @@ on:
         description: "Base branch ref for stateless baseline resolution"
         required: false
         type: string
+      head_sha:
+        description: "Exact commit SHA to benchmark and report against"
+        required: false
+        type: string
       requested_by:
         description: "Who triggered the run"
         required: false
@@ -148,6 +152,7 @@ jobs:
       - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.head_sha || github.sha }}
           path: caller
 
       - name: Setup Rust
@@ -306,6 +311,7 @@ jobs:
       - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.head_sha || github.sha }}
           path: caller
 
       - name: Setup Rust
@@ -461,13 +467,15 @@ jobs:
     if: always() && (needs.ios.result == 'success' || needs.android.result == 'success')
     runs-on: ubuntu-latest
     env:
-      HEAD_SHA: ${{ github.sha }}
+      HEAD_SHA: ${{ inputs.head_sha || github.sha }}
       BASE_REF: ${{ inputs.base_ref || 'main' }}
       CHECK_RUN_NAME: ${{ inputs.check_run_name }}
 
     steps:
       - name: Checkout workflow repo
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha || github.sha }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -742,7 +750,7 @@ jobs:
           REQUESTED_BY: ${{ inputs.requested_by }}
           MOBENCH_VERSION: ${{ inputs.mobench_version }}
           MOBENCH_REF: ${{ inputs.mobench_ref }}
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ inputs.head_sha || github.sha }}
           HEAD_REF: ${{ github.head_ref || github.ref_name }}
           BASE_REF: ${{ inputs.base_ref || 'main' }}
           IOS_DEVICE_NAME: ${{ needs.ios.outputs.device_name }}

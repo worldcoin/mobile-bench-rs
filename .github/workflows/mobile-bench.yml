@@ -62,6 +62,11 @@ on:
         required: false
         type: string
         default: ""
+      head_sha:
+        description: "Exact commit SHA to benchmark and report against"
+        required: false
+        type: string
+        default: ""
       requested_by:
         description: "Who triggered the run"
         required: false
@@ -132,6 +137,7 @@ jobs:
       mobench_ref: ${{ inputs.mobench_ref }}
       pr_number: ${{ inputs.pr_number }}
       base_ref: ${{ inputs.base_ref }}
+      head_sha: ${{ inputs.head_sha }}
       requested_by: ${{ inputs.requested_by }}
       dispatch_id: ${{ inputs.dispatch_id }}
       trigger_source: ${{ inputs.trigger_source }}

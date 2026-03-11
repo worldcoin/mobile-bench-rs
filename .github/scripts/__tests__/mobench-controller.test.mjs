@@ -53,6 +53,7 @@ test('buildDispatchInputs matches the existing webhook normalization contract', 
   const inputs = controller.buildDispatchInputs({
     prNumber: 123,
     baseRef: 'release/1.2',
+    headSha: 'abc123def456',
     requestedBy: 'octocat',
     triggerSource: 'pr_comment',
     requestCommand:
@@ -64,6 +65,7 @@ test('buildDispatchInputs matches the existing webhook normalization contract', 
 
   assert.equal(inputs.pr_number, '123');
   assert.equal(inputs.base_ref, 'release/1.2');
+  assert.equal(inputs.head_sha, 'abc123def456');
   assert.equal(inputs.requested_by, 'octocat');
   assert.equal(inputs.trigger_source, 'pr_comment');
   assert.equal(
@@ -108,6 +110,7 @@ test('workflow_run auto path dispatches only same-repo open PRs with bench label
       base: { ref: 'main' },
       head: {
         ref: 'feature/bench-pr',
+        sha: 'abc123def456',
         repo: { full_name: 'world/mobile-bench-rs' },
       },
       labels: [{ name: 'bench' }],
@@ -116,8 +119,36 @@ test('workflow_run auto path dispatches only same-repo open PRs with bench label
   });
 
   assert.equal(decision.dispatch, true);
+  assert.equal(decision.ref, 'feature/bench-pr');
+  assert.equal(decision.inputs.head_sha, 'abc123');
   assert.equal(decision.inputs.trigger_source, 'label');
   assert.equal(decision.inputs.requested_by, 'github-actions');
+});
+
+test('workflow_run auto path preserves the compile-gated sha when the PR head has moved', () => {
+  const decision = controller.decideWorkflowRunDispatch({
+    workflowRun: {
+      conclusion: 'success',
+      head_sha: 'gated123',
+      head_branch: 'feature/bench-pr',
+      pull_requests: [{ number: 123 }],
+    },
+    pullRequest: {
+      number: 123,
+      state: 'open',
+      base: { ref: 'main' },
+      head: {
+        ref: 'feature/bench-pr',
+        sha: 'newer456',
+        repo: { full_name: 'world/mobile-bench-rs' },
+      },
+      labels: [{ name: 'bench' }],
+    },
+    repositoryFullName: 'world/mobile-bench-rs',
+  });
+
+  assert.equal(decision.dispatch, true);
+  assert.equal(decision.inputs.head_sha, 'gated123');
 });
 
 test('workflow_run auto path rejects closed PRs unlabeled PRs and forks', () => {
@@ -193,6 +224,7 @@ test('bench label dispatches immediately when compile gate already passed for cu
       base: { ref: 'main' },
       head: {
         ref: 'feature/bench-pr',
+        sha: 'abc123def456',
         repo: { full_name: 'world/mobile-bench-rs' },
       },
       labels: [{ name: 'bench' }],
@@ -201,6 +233,7 @@ test('bench label dispatches immediately when compile gate already passed for cu
   });
 
   assert.equal(decision.dispatch, true);
+  assert.equal(decision.inputs.head_sha, 'abc123def456');
   assert.equal(decision.inputs.trigger_source, 'label');
 });
 
@@ -244,6 +277,7 @@ test('trusted /mobench comment dispatches only when compile gate already passed'
   });
 
   assert.equal(decision.dispatch, true);
+  assert.equal(decision.inputs.head_sha, 'abc123def456');
   assert.equal(decision.inputs.trigger_source, 'pr_comment');
   assert.equal(decision.inputs.requested_by, 'octocat');
   assert.equal(
@@ -304,17 +338,21 @@ test('trusted /mobench comment before compile gate green returns a sticky explan
 });
 
 test('mobile-bench runner has stateless concurrency and checks write permission', () => {
-  const yaml = fs.readFileSync('.github/workflows/mobile-bench.yml', 'utf8');
-  assert.match(yaml, /^\s*base_ref:\s*$/m);
-  assert.match(yaml, /actions:\s+read/);
-  assert.match(yaml, /checks:\s+write/);
-  assert.match(yaml, /^concurrency:/m);
-  assert.match(yaml, /trigger_source == 'pr_comment' && 'comment'/);
-  assert.match(yaml, /cancel-in-progress:\s+\${{\s*inputs\.trigger_source == 'label'\s*}}/);
+  const runnerYaml = fs.readFileSync('.github/workflows/mobile-bench.yml', 'utf8');
+  const reusableYaml = fs.readFileSync('.github/workflows/reusable-bench.yml', 'utf8');
+  assert.match(runnerYaml, /^\s*base_ref:\s*$/m);
+  assert.match(runnerYaml, /^\s*head_sha:\s*$/m);
+  assert.match(runnerYaml, /actions:\s+read/);
+  assert.match(runnerYaml, /checks:\s+write/);
+  assert.match(runnerYaml, /^concurrency:/m);
+  assert.match(runnerYaml, /trigger_source == 'pr_comment' && 'comment'/);
+  assert.match(runnerYaml, /cancel-in-progress:\s+\${{\s*inputs\.trigger_source == 'label'\s*}}/);
+  assert.match(reusableYaml, /ref:\s+\${{\s*inputs\.head_sha \|\| github\.sha\s*}}/);
 });
 
 test('contract docs describe stateless GitHub Actions v1 as the default path', () => {
   const contract = fs.readFileSync('docs/CONTRACT_CI_V1.md', 'utf8');
   assert.match(contract, /stateless GitHub Actions/i);
+  assert.match(contract, /same commit that satisfied the compile gate/i);
   assert.doesNotMatch(contract, /GitHub App owned PR comment command/i);
 });
