@@ -66,13 +66,17 @@ on:
         description: "Mobench version to install"
         required: false
         type: string
-        default: "0.1.15"
+        default: "0.1.15-patch-1"
       mobench_ref:
         description: "Git ref for mobile-bench-rs (overrides mobench_version when set)"
         required: false
         type: string
       pr_number:
         description: "PR number for reporting"
+        required: false
+        type: string
+      base_ref:
+        description: "Base branch for baseline selection metadata"
         required: false
         type: string
       requested_by:
@@ -178,9 +182,18 @@ jobs:
           MOBENCH_REF: ${{ inputs.mobench_ref }}
         run: |
           if [ -n "$MOBENCH_REF" ]; then
+            if [[ "$MOBENCH_REF" == refs/heads/* ]]; then
+              mobench_ref_flag=(--branch "${MOBENCH_REF#refs/heads/}")
+            elif [[ "$MOBENCH_REF" == refs/tags/* ]]; then
+              mobench_ref_flag=(--tag "${MOBENCH_REF#refs/tags/}")
+            elif [[ "$MOBENCH_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+              mobench_ref_flag=(--rev "$MOBENCH_REF")
+            else
+              mobench_ref_flag=(--branch "$MOBENCH_REF")
+            fi
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
-              --branch "$MOBENCH_REF" \
+              "${mobench_ref_flag[@]}" \
               --locked
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
@@ -341,9 +354,18 @@ jobs:
           MOBENCH_REF: ${{ inputs.mobench_ref }}
         run: |
           if [ -n "$MOBENCH_REF" ]; then
+            if [[ "$MOBENCH_REF" == refs/heads/* ]]; then
+              mobench_ref_flag=(--branch "${MOBENCH_REF#refs/heads/}")
+            elif [[ "$MOBENCH_REF" == refs/tags/* ]]; then
+              mobench_ref_flag=(--tag "${MOBENCH_REF#refs/tags/}")
+            elif [[ "$MOBENCH_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+              mobench_ref_flag=(--rev "$MOBENCH_REF")
+            else
+              mobench_ref_flag=(--branch "$MOBENCH_REF")
+            fi
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
-              --branch "$MOBENCH_REF" \
+              "${mobench_ref_flag[@]}" \
               --locked
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
@@ -456,9 +478,18 @@ jobs:
           MOBENCH_REF: ${{ inputs.mobench_ref }}
         run: |
           if [ -n "$MOBENCH_REF" ]; then
+            if [[ "$MOBENCH_REF" == refs/heads/* ]]; then
+              mobench_ref_flag=(--branch "${MOBENCH_REF#refs/heads/}")
+            elif [[ "$MOBENCH_REF" == refs/tags/* ]]; then
+              mobench_ref_flag=(--tag "${MOBENCH_REF#refs/tags/}")
+            elif [[ "$MOBENCH_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+              mobench_ref_flag=(--rev "$MOBENCH_REF")
+            else
+              mobench_ref_flag=(--branch "$MOBENCH_REF")
+            fi
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
-              --branch "$MOBENCH_REF" \
+              "${mobench_ref_flag[@]}" \
               --locked
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
@@ -616,7 +647,7 @@ jobs:
           MOBENCH_REF: ${{ inputs.mobench_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           HEAD_REF: ${{ github.head_ref || github.ref_name }}
-          BASE_REF: ${{ github.base_ref || 'main' }}
+          BASE_REF: ${{ inputs.base_ref || github.base_ref || 'main' }}
           IOS_DEVICE_NAME: ${{ needs.ios.outputs.device_name }}
           IOS_OS_VERSION: ${{ needs.ios.outputs.os_version }}
           ANDROID_DEVICE_NAME: ${{ needs.android.outputs.device_name }}
@@ -697,6 +728,8 @@ jobs:
                     android_os_version: "${{ inputs.android_os_version }}",
                     iterations: "${{ inputs.iterations }}",
                     warmup: "${{ inputs.warmup }}",
+                    base_ref: $base_ref,
+                    regression_threshold_pct: "${{ inputs.regression_threshold_pct }}",
                     pr_number: "${{ inputs.pr_number }}",
                     requested_by: $workflow_requested_by
                   },
@@ -717,6 +750,8 @@ jobs:
                     android_os_version: "${{ inputs.android_os_version }}",
                     iterations: "${{ inputs.iterations }}",
                     warmup: "${{ inputs.warmup }}",
+                    base_ref: $base_ref,
+                    regression_threshold_pct: "${{ inputs.regression_threshold_pct }}",
                     pr_number: "${{ inputs.pr_number }}",
                     requested_by: $workflow_requested_by
                   },

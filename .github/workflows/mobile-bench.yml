@@ -57,6 +57,11 @@ on:
         required: false
         type: string
         default: ""
+      base_ref:
+        description: "Base branch for baseline selection metadata"
+        required: false
+        type: string
+        default: ""
       requested_by:
         description: "Who triggered the run"
         required: false
@@ -81,7 +86,7 @@ on:
         description: "Mobench version to install"
         required: false
         type: string
-        default: "0.1.15"
+        default: "0.1.15-patch-1"
       mobench_ref:
         description: "Git ref for mobile-bench-rs (overrides mobench_version when set)"
         required: false
@@ -105,6 +110,7 @@ permissions:
 jobs:
   browserstack:
     name: BrowserStack benchmarks
+    if: ${{ secrets.BROWSERSTACK_USERNAME != '' && secrets.BROWSERSTACK_ACCESS_KEY != '' }}
     uses: ./.github/workflows/reusable-bench.yml
     with:
       crate_path: ./crates/sample-fns
@@ -120,6 +126,7 @@ jobs:
       mobench_version: ${{ inputs.mobench_version }}
       mobench_ref: ${{ inputs.mobench_ref }}
       pr_number: ${{ inputs.pr_number }}
+      base_ref: ${{ inputs.base_ref }}
       requested_by: ${{ inputs.requested_by }}
       dispatch_id: ${{ inputs.dispatch_id }}
       trigger_source: ${{ inputs.trigger_source }}

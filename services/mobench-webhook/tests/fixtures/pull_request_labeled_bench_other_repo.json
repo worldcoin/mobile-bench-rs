@@ -1,0 +1,34 @@
+{
+  "action": "labeled",
+  "number": 123,
+  "label": {
+    "name": "bench"
+  },
+  "sender": {
+    "login": "octocat"
+  },
+  "pull_request": {
+    "state": "open",
+    "head": {
+      "ref": "feature/bench-pr",
+      "sha": "abc123def456",
+      "repo": {
+        "name": "other-mobile-bench-rs",
+        "full_name": "octo-org/other-mobile-bench-rs",
+        "owner": {
+          "login": "octo-org"
+        }
+      }
+    },
+    "base": {
+      "ref": "release/1.2",
+      "repo": {
+        "name": "other-mobile-bench-rs",
+        "full_name": "octo-org/other-mobile-bench-rs",
+        "owner": {
+          "login": "octo-org"
+        }
+      }
+    }
+  }
+}

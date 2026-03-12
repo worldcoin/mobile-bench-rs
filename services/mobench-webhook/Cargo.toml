@@ -25,4 +25,5 @@ uuid = { version = "1", features = ["serde", "v4"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+serde_yaml.workspace = true
 tower = { version = "0.5", features = ["util"] }

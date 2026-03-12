@@ -22,7 +22,10 @@ pub enum DeliveryOutcome {
     Ignored,
 }
 
-pub async fn handle_delivery(state: &AppState, delivery: &DeliveryRecord) -> Result<DeliveryOutcome> {
+pub async fn handle_delivery(
+    state: &AppState,
+    delivery: &DeliveryRecord,
+) -> Result<DeliveryOutcome> {
     match (delivery.event.as_str(), delivery.action.as_deref()) {
         ("pull_request", Some("labeled")) => {
             handle_pull_request_labeled(state, &delivery.payload).await
@@ -30,7 +33,9 @@ pub async fn handle_delivery(state: &AppState, delivery: &DeliveryRecord) -> Res
         ("issue_comment", Some("created")) => {
             handle_issue_comment_created(state, &delivery.payload).await
         }
-        ("check_run", Some("rerequested")) => handle_check_run_rerequested(state, &delivery.payload).await,
+        ("check_run", Some("rerequested")) => {
+            handle_check_run_rerequested(state, &delivery.payload).await
+        }
         ("workflow_run", Some("completed")) => {
             handle_workflow_run_completed(state, &delivery.payload).await
         }
@@ -56,8 +61,18 @@ async fn handle_pull_request_labeled(state: &AppState, payload: &Value) -> Resul
         return Ok(DeliveryOutcome::Ignored);
     }
 
-    let workflow_inputs =
-        ManualRunArgs::default().workflow_inputs(event.number, &event.sender.login);
+    if !state.config.matches_repo(
+        event.pull_request.base.repo.owner.login.as_str(),
+        event.pull_request.base.repo.name.as_str(),
+    ) {
+        return Ok(DeliveryOutcome::Ignored);
+    }
+
+    let workflow_inputs = ManualRunArgs::default().workflow_inputs(
+        event.number,
+        &event.sender.login,
+        &event.pull_request.base.reference,
+    );
     let repo_owner = event.pull_request.base.repo.owner.login.as_str();
     let repo_name = event.pull_request.base.repo.name.as_str();
     let head_sha = event.pull_request.head.sha.as_str();
@@ -105,12 +120,20 @@ async fn handle_pull_request_labeled(state: &AppState, payload: &Value) -> Resul
             &workflow_inputs_for_dispatch(dispatch.dispatch_id, "label", None, &workflow_inputs),
         )
         .await?;
-    info!(head_sha, pr_number = event.number, trigger_source = "label", "dispatch.triggered");
+    info!(
+        head_sha,
+        pr_number = event.number,
+        trigger_source = "label",
+        "dispatch.triggered"
+    );
 
     Ok(DeliveryOutcome::Processed)
 }
 
-async fn handle_issue_comment_created(state: &AppState, payload: &Value) -> Result<DeliveryOutcome> {
+async fn handle_issue_comment_created(
+    state: &AppState,
+    payload: &Value,
+) -> Result<DeliveryOutcome> {
     let event = match serde_json::from_value::<IssueCommentCreatedEvent>(payload.clone()) {
         Ok(event) => event,
         Err(_) => return Ok(DeliveryOutcome::Ignored),
@@ -126,10 +149,18 @@ async fn handle_issue_comment_created(state: &AppState, payload: &Value) -> Resu
         return Ok(DeliveryOutcome::Ignored);
     }
 
-    let workflow_inputs = match ManualRunArgs::parse_manual_command(&event.comment.body) {
-        Some(args) => args.workflow_inputs(event.issue.number, &event.comment.user.login),
+    let args = match ManualRunArgs::parse_manual_command(&event.comment.body) {
+        Some(args) => args,
         None => return Ok(DeliveryOutcome::Ignored),
     };
+
+    if !state.config.matches_repo(
+        event.repository.owner.login.as_str(),
+        event.repository.name.as_str(),
+    ) {
+        return Ok(DeliveryOutcome::Ignored);
+    }
+
     let github = state
         .github
         .as_ref()
@@ -148,6 +179,11 @@ async fn handle_issue_comment_created(state: &AppState, payload: &Value) -> Resu
         return Ok(DeliveryOutcome::Ignored);
     }
 
+    let workflow_inputs = args.workflow_inputs(
+        event.issue.number,
+        &event.comment.user.login,
+        &pull_request.base.reference,
+    );
     let head_sha = pull_request.head.sha.as_str();
     let head_ref = pull_request.head.reference.as_str();
 
@@ -194,12 +230,20 @@ async fn handle_issue_comment_created(state: &AppState, payload: &Value) -> Resu
             ),
         )
         .await?;
-    info!(head_sha, pr_number = event.issue.number, trigger_source = "pr_comment", "dispatch.triggered");
+    info!(
+        head_sha,
+        pr_number = event.issue.number,
+        trigger_source = "pr_comment",
+        "dispatch.triggered"
+    );
 
     Ok(DeliveryOutcome::Processed)
 }
 
-async fn handle_check_run_rerequested(state: &AppState, payload: &Value) -> Result<DeliveryOutcome> {
+async fn handle_check_run_rerequested(
+    state: &AppState,
+    payload: &Value,
+) -> Result<DeliveryOutcome> {
     let event = match serde_json::from_value::<CheckRunRerequestedEvent>(payload.clone()) {
         Ok(event) => event,
         Err(_) => return Ok(DeliveryOutcome::Ignored),
@@ -223,9 +267,15 @@ async fn handle_check_run_rerequested(state: &AppState, payload: &Value) -> Resu
         .context("missing GitHub clients for dispatch handling")?;
     let mut workflow_inputs = platform_run.workflow_inputs.clone();
     if let Some(object) = workflow_inputs.as_object_mut() {
-        object.insert("platform".to_string(), Value::String(platform_run.platform.clone()));
+        object.insert(
+            "platform".to_string(),
+            Value::String(platform_run.platform.clone()),
+        );
         if let Some(sender) = event.sender.as_ref() {
-            object.insert("requested_by".to_string(), Value::String(sender.login.clone()));
+            object.insert(
+                "requested_by".to_string(),
+                Value::String(sender.login.clone()),
+            );
         }
     }
 
@@ -272,12 +322,22 @@ async fn handle_check_run_rerequested(state: &AppState, payload: &Value) -> Resu
     Ok(DeliveryOutcome::Processed)
 }
 
-async fn handle_workflow_run_completed(state: &AppState, payload: &Value) -> Result<DeliveryOutcome> {
+async fn handle_workflow_run_completed(
+    state: &AppState,
+    payload: &Value,
+) -> Result<DeliveryOutcome> {
     let event = match serde_json::from_value::<WorkflowRunCompletedEvent>(payload.clone()) {
         Ok(event) => event,
         Err(_) => return Ok(DeliveryOutcome::Ignored),
     };
     if !matches_workflow_run(state, &event.workflow_run) {
+        return Ok(DeliveryOutcome::Ignored);
+    }
+
+    if !state.config.matches_repo(
+        event.repository.owner.login.as_str(),
+        event.repository.name.as_str(),
+    ) {
         return Ok(DeliveryOutcome::Ignored);
     }
 
@@ -287,14 +347,66 @@ async fn handle_workflow_run_completed(state: &AppState, payload: &Value) -> Res
         .context("missing GitHub clients for ingest handling")?;
     let repo_owner = event.repository.owner.login.as_str();
     let repo_name = event.repository.name.as_str();
+    let correlated_dispatch_id = state
+        .repos
+        .dispatches
+        .find_latest_inflight_for_head(
+            repo_owner,
+            repo_name,
+            event.workflow_run.head_sha.as_str(),
+            event.workflow_run.head_branch.as_str(),
+        )
+        .await?
+        .map(|dispatch| dispatch.dispatch_id);
     info!(workflow_run_id = event.workflow_run.id, "ingest.started");
-    let bundle_bytes = github
+    let bundle_bytes = match github
         .artifacts
         .download_history_bundle(repo_owner, repo_name, event.workflow_run.id)
-        .await?;
-    info!(workflow_run_id = event.workflow_run.id, artifact_name = "mobench-history-v1", "ingest.bundle_fetched");
-    let bundle = HistoryBundle::from_zip(&bundle_bytes)?;
-    let manifest: ingest::manifest::HistoryManifest = bundle.read_json("manifest.json")?;
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            attach_correlated_dispatch(
+                state,
+                correlated_dispatch_id,
+                event.workflow_run.id,
+                "failed",
+            )
+            .await?;
+            return Err(err);
+        }
+    };
+    info!(
+        workflow_run_id = event.workflow_run.id,
+        artifact_name = "mobench-history-v1",
+        "ingest.bundle_fetched"
+    );
+    let bundle = match HistoryBundle::from_zip(&bundle_bytes) {
+        Ok(bundle) => bundle,
+        Err(err) => {
+            attach_correlated_dispatch(
+                state,
+                correlated_dispatch_id,
+                event.workflow_run.id,
+                "failed",
+            )
+            .await?;
+            return Err(err);
+        }
+    };
+    let manifest: ingest::manifest::HistoryManifest = match bundle.read_json("manifest.json") {
+        Ok(manifest) => manifest,
+        Err(err) => {
+            attach_correlated_dispatch(
+                state,
+                correlated_dispatch_id,
+                event.workflow_run.id,
+                "failed",
+            )
+            .await?;
+            return Err(err);
+        }
+    };
     let base_ref = ingest::compare::preferred_base_ref(Some(manifest.git.base_ref.as_str()));
     let workflow_run = state
         .repos
@@ -325,13 +437,8 @@ async fn handle_workflow_run_completed(state: &AppState, payload: &Value) -> Res
         })
         .await?;
 
-    if let Some(dispatch_id) = manifest.request.dispatch_id {
-        state
-            .repos
-            .dispatches
-            .attach_workflow_run(dispatch_id, workflow_run.workflow_run_id, "running")
-            .await?;
-    }
+    let dispatch_id = manifest.request.dispatch_id.or(correlated_dispatch_id);
+    attach_correlated_dispatch(state, dispatch_id, workflow_run.workflow_run_id, "running").await?;
 
     let mut successful_platforms = 0usize;
     let mut platform_failures = Vec::new();
@@ -364,13 +471,8 @@ async fn handle_workflow_run_completed(state: &AppState, payload: &Value) -> Res
     }
 
     if successful_platforms == 0 {
-        if let Some(dispatch_id) = manifest.request.dispatch_id {
-            state
-                .repos
-                .dispatches
-                .attach_workflow_run(dispatch_id, workflow_run.workflow_run_id, "failed")
-                .await?;
-        }
+        attach_correlated_dispatch(state, dispatch_id, workflow_run.workflow_run_id, "failed")
+            .await?;
         return Err(anyhow!(
             "failed to ingest any platform results for workflow run {}: {}",
             workflow_run.workflow_run_id,
@@ -378,15 +480,19 @@ async fn handle_workflow_run_completed(state: &AppState, payload: &Value) -> Res
         ));
     }
 
-    if let Some(dispatch_id) = manifest.request.dispatch_id {
-        state
-            .repos
-            .dispatches
-            .attach_workflow_run(dispatch_id, workflow_run.workflow_run_id, "completed")
-            .await?;
-    }
+    attach_correlated_dispatch(
+        state,
+        dispatch_id,
+        workflow_run.workflow_run_id,
+        "completed",
+    )
+    .await?;
 
-    info!(workflow_run_id = workflow_run.workflow_run_id, platform_runs = successful_platforms, "ingest.completed");
+    info!(
+        workflow_run_id = workflow_run.workflow_run_id,
+        platform_runs = successful_platforms,
+        "ingest.completed"
+    );
 
     Ok(DeliveryOutcome::Processed)
 }
@@ -436,8 +542,7 @@ async fn ingest_platform_run(
             os_version: platform_run.resolved_device.os_version.as_str(),
             iterations: i32::try_from(summary_platform.iterations)
                 .context("summary iterations exceed i32")?,
-            warmup: i32::try_from(summary_platform.warmup)
-                .context("summary warmup exceed i32")?,
+            warmup: i32::try_from(summary_platform.warmup).context("summary warmup exceed i32")?,
             status: "completed",
         })
         .await?;
@@ -493,8 +598,15 @@ async fn ingest_platform_run(
         .results
         .list_for_platform_run(persisted_platform_run.id)
         .await?;
-    let comparison_rows =
-        ingest::compare::compare_result_sets(&baseline_results, &candidate_results, 5.0);
+    let comparison_rows = ingest::compare::compare_result_sets(
+        &baseline_results,
+        &candidate_results,
+        parse_workflow_input_f64(
+            &platform_run.workflow_inputs,
+            "regression_threshold_pct",
+            5.0,
+        ),
+    );
     let check_run_payload = build_check_run_payload(
         workflow_run,
         platform_run.check_run_name.as_str(),
@@ -528,8 +640,7 @@ async fn ingest_platform_run(
     );
     info!(
         platform_run_id = persisted_platform_run.id.to_string(),
-        check_run_id,
-        "check_run.upserted"
+        check_run_id, "check_run.upserted"
     );
 
     Ok(())
@@ -578,6 +689,17 @@ fn parse_workflow_input_i32(
         .get(key)
         .and_then(|value| value.parse::<i32>().ok())
         .unwrap_or_default()
+}
+
+fn parse_workflow_input_f64(
+    workflow_inputs: &std::collections::BTreeMap<String, String>,
+    key: &str,
+    default: f64,
+) -> f64 {
+    workflow_inputs
+        .get(key)
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(default)
 }
 
 fn workflow_inputs_for_dispatch(
@@ -654,6 +776,8 @@ struct CompletedWorkflowRun {
     id: i64,
     name: String,
     path: Option<String>,
+    head_sha: String,
+    head_branch: String,
     conclusion: Option<String>,
 }
 
@@ -691,6 +815,8 @@ struct GitHubRef {
 
 #[derive(Debug, Deserialize)]
 struct GitHubBaseRef {
+    #[serde(rename = "ref")]
+    reference: String,
     repo: GitHubRepo,
 }
 
@@ -821,4 +947,21 @@ fn build_check_run_payload(
             "annotations": annotations
         }
     })
+}
+
+async fn attach_correlated_dispatch(
+    state: &AppState,
+    dispatch_id: Option<Uuid>,
+    workflow_run_id: i64,
+    status: &str,
+) -> Result<()> {
+    if let Some(dispatch_id) = dispatch_id {
+        state
+            .repos
+            .dispatches
+            .attach_workflow_run(dispatch_id, workflow_run_id, status)
+            .await?;
+    }
+
+    Ok(())
 }

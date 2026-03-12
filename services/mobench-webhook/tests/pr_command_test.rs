@@ -26,6 +26,7 @@ async fn mobench_comment_with_custom_overrides_creates_dispatch(pool: sqlx::PgPo
     assert_eq!(dispatch.workflow_inputs["ios_os_version"], "17");
     assert_eq!(dispatch.workflow_inputs["pr_number"], "123");
     assert_eq!(dispatch.workflow_inputs["requested_by"], "octocat");
+    assert_eq!(dispatch.workflow_inputs["base_ref"], "release/1.2");
 
     assert_eq!(workflow_requests.len(), 1);
     assert_eq!(
@@ -36,4 +37,24 @@ async fn mobench_comment_with_custom_overrides_creates_dispatch(pool: sqlx::PgPo
         workflow_requests[0]["inputs"]["trigger_source"],
         "pr_comment"
     );
+    assert_eq!(workflow_requests[0]["inputs"]["base_ref"], "release/1.2");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn foreign_repo_comment_is_ignored(pool: sqlx::PgPool) {
+    let harness = support::Harness::new(pool).await.unwrap();
+    harness
+        .enqueue_fixture("issue_comment_mobench_custom_other_repo.json")
+        .await
+        .unwrap();
+
+    let worked = harness.run_one_delivery().await.unwrap();
+    let dispatches = harness.list_dispatches().await.unwrap();
+    let workflow_requests = harness.dispatched_workflows().await;
+    let recorded_requests = harness.recorded_requests().await;
+
+    assert!(worked);
+    assert!(dispatches.is_empty());
+    assert!(workflow_requests.is_empty());
+    assert!(recorded_requests.is_empty());
 }

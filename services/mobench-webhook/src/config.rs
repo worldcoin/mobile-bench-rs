@@ -49,6 +49,10 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn matches_repo(&self, owner: &str, repo: &str) -> bool {
+        self.github_owner.eq_ignore_ascii_case(owner) && self.github_repo.eq_ignore_ascii_case(repo)
+    }
+
     pub fn from_env() -> Result<Self> {
         let database_url = env::var("DATABASE_URL").unwrap_or_default();
         let public_http_addr = env::var("PUBLIC_HTTP_ADDR")

@@ -405,42 +405,138 @@ pub fn enrich_with_browserstack(
     build_summary: &crate::browserstack::BuildSummary,
 ) {
     for platform in &mut report.platforms {
-        // Find sessions that match this platform
-        for session in &build_summary.sessions {
-            let session_is_ios = session.os.eq_ignore_ascii_case("ios")
-                || session.os.eq_ignore_ascii_case("iPhone")
-                || session.os.eq_ignore_ascii_case("iPad");
-            let platform_is_ios = platform.platform == "ios";
+        let platform_sessions: Vec<_> = build_summary
+            .sessions
+            .iter()
+            .filter(|session| session_matches_platform(platform, session))
+            .collect();
+        let Some(session) = select_session_for_platform(platform, &platform_sessions) else {
+            continue;
+        };
 
-            // Skip if platform doesn't match
-            if session_is_ios != platform_is_ios {
-                continue;
+        if !session.os.is_empty() {
+            platform.device.os = session.os.clone();
+            platform.device.os_version = session.os_version.clone();
+            if platform.device.name == "unknown" && !session.device.is_empty() {
+                platform.device.name = session.device.clone();
             }
+        }
 
-            // Update device info from session details
-            if !session.os.is_empty() {
-                platform.device.os = session.os.clone();
-                platform.device.os_version = session.os_version.clone();
-                if platform.device.name == "unknown" {
-                    platform.device.name = session.device.clone();
-                }
-            }
-
-            // Enrich benchmarks with performance metrics
-            if let Some(perf) = &session.performance {
-                for bench in &mut platform.benchmarks {
-                    if bench.resource_usage.is_none() {
-                        bench.resource_usage = Some(ResourceUsage {
-                            cpu_avg_percent: perf.cpu.as_ref().map(|c| c.average_percent),
-                            cpu_peak_percent: perf.cpu.as_ref().map(|c| c.peak_percent),
-                            ram_avg_mb: perf.memory.as_ref().map(|m| m.average_mb),
-                            ram_peak_mb: perf.memory.as_ref().map(|m| m.peak_mb),
-                        });
-                    }
+        if let Some(perf) = &session.performance {
+            for bench in &mut platform.benchmarks {
+                if bench.resource_usage.is_none() {
+                    bench.resource_usage = Some(ResourceUsage {
+                        cpu_avg_percent: perf.cpu.as_ref().map(|c| c.average_percent),
+                        cpu_peak_percent: perf.cpu.as_ref().map(|c| c.peak_percent),
+                        ram_avg_mb: perf.memory.as_ref().map(|m| m.average_mb),
+                        ram_peak_mb: perf.memory.as_ref().map(|m| m.peak_mb),
+                    });
                 }
             }
         }
     }
+}
+
+fn session_matches_platform(
+    platform: &PlatformReport,
+    session: &crate::browserstack::SessionSummary,
+) -> bool {
+    let session_is_ios = session.os.eq_ignore_ascii_case("ios")
+        || session.os.eq_ignore_ascii_case("iphone")
+        || session.os.eq_ignore_ascii_case("ipad");
+    let platform_is_ios = platform.platform.eq_ignore_ascii_case("ios");
+    session_is_ios == platform_is_ios
+}
+
+fn select_session_for_platform<'a>(
+    platform: &PlatformReport,
+    sessions: &[&'a crate::browserstack::SessionSummary],
+) -> Option<&'a crate::browserstack::SessionSummary> {
+    let platform_device = normalize_device_match_key(&platform.device.name);
+    let platform_os_version = normalize_version_match_key(&platform.device.os_version);
+
+    let matched = sessions
+        .iter()
+        .filter_map(|session| {
+            let score = device_match_score(&platform_device, &platform_os_version, session);
+            (score > 0).then_some((score, *session))
+        })
+        .max_by_key(|(score, _)| *score)
+        .map(|(_, session)| session);
+
+    matched.or_else(|| (sessions.len() == 1).then_some(sessions[0]))
+}
+
+fn device_match_score(
+    platform_device: &str,
+    platform_os_version: &str,
+    session: &crate::browserstack::SessionSummary,
+) -> usize {
+    let session_device = normalize_device_match_key(&session.device);
+    let session_os_version = normalize_version_match_key(&session.os_version);
+
+    let device_score = if platform_device.is_empty() || session_device.is_empty() {
+        0
+    } else if platform_device == session_device {
+        100
+    } else if platform_device.contains(&session_device) || session_device.contains(platform_device) {
+        75
+    } else if token_subset_match(platform_device, &session_device)
+        || token_subset_match(&session_device, platform_device)
+    {
+        50
+    } else {
+        0
+    };
+
+    if device_score == 0 {
+        return 0;
+    }
+
+    let version_score =
+        usize::from(!platform_os_version.is_empty() && platform_os_version == session_os_version)
+            * 10;
+
+    device_score + version_score
+}
+
+fn normalize_device_match_key(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_version_match_key(value: &str) -> String {
+    let mut parts: Vec<&str> = value
+        .trim()
+        .split('.')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    while parts.last() == Some(&"0") {
+        parts.pop();
+    }
+    parts.join(".")
+}
+
+fn token_subset_match(left: &str, right: &str) -> bool {
+    let left_tokens: Vec<&str> = left.split_whitespace().collect();
+    let right_tokens: Vec<&str> = right.split_whitespace().collect();
+
+    !left_tokens.is_empty()
+        && left_tokens
+            .iter()
+            .all(|left_token| right_tokens.iter().any(|right_token| right_token == left_token))
 }
 
 /// Render the report as JSON.
@@ -451,6 +547,10 @@ pub fn render_json(report: &SummarizeReport) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browserstack::{
+        AggregateCpuMetrics, AggregateMemoryMetrics, BuildSummary, PerformanceMetrics,
+        SessionSummary,
+    };
 
     fn sample_summary_json() -> serde_json::Value {
         serde_json::json!({
@@ -638,5 +738,148 @@ mod tests {
         let json_str = render_json(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["platforms"][0]["platform"], "ios");
+    }
+
+    #[test]
+    fn test_enrich_with_browserstack_matches_device_names() {
+        let mut report = SummarizeReport {
+            platforms: vec![
+                PlatformReport {
+                    platform: "ios".to_string(),
+                    device: DeviceInfo {
+                        name: "iPhone 14".to_string(),
+                        os: "iOS".to_string(),
+                        os_version: "16.0".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![BenchmarkResult {
+                        name: "bench_nullifier_proving_only".to_string(),
+                        label: "\u{03C0}2 nullifier-proving".to_string(),
+                        timing: TimingStats {
+                            avg_ms: 1204.5,
+                            median_ms: 1198.0,
+                            best_ms: 1180.2,
+                            worst_ms: 1298.1,
+                            p95_ms: 1290.0,
+                            std_dev_ms: 35.2,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 30,
+                    warmup: 5,
+                },
+                PlatformReport {
+                    platform: "ios".to_string(),
+                    device: DeviceInfo {
+                        name: "iPhone 15".to_string(),
+                        os: "iOS".to_string(),
+                        os_version: "17.0".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![BenchmarkResult {
+                        name: "bench_query_proof_generation".to_string(),
+                        label: "\u{03C0}1 query-proof".to_string(),
+                        timing: TimingStats {
+                            avg_ms: 802.3,
+                            median_ms: 798.0,
+                            best_ms: 780.2,
+                            worst_ms: 840.1,
+                            p95_ms: 835.0,
+                            std_dev_ms: 18.4,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 30,
+                    warmup: 5,
+                },
+            ],
+        };
+        let build_summary = BuildSummary {
+            build_id: "build-123".to_string(),
+            status: "done".to_string(),
+            sessions: vec![
+                SessionSummary {
+                    session_id: "session-15".to_string(),
+                    device: "iPhone 15".to_string(),
+                    os: "iOS".to_string(),
+                    os_version: "17.0".to_string(),
+                    duration_secs: Some(120),
+                    performance: Some(PerformanceMetrics {
+                        sample_count: 3,
+                        memory: Some(AggregateMemoryMetrics {
+                            peak_mb: 750.0,
+                            average_mb: 700.0,
+                            min_mb: 680.0,
+                        }),
+                        cpu: Some(AggregateCpuMetrics {
+                            peak_percent: 92.0,
+                            average_percent: 81.0,
+                            min_percent: 74.0,
+                        }),
+                        snapshots: Vec::new(),
+                    }),
+                },
+                SessionSummary {
+                    session_id: "session-14".to_string(),
+                    device: "iPhone 14".to_string(),
+                    os: "iOS".to_string(),
+                    os_version: "16.0".to_string(),
+                    duration_secs: Some(115),
+                    performance: Some(PerformanceMetrics {
+                        sample_count: 3,
+                        memory: Some(AggregateMemoryMetrics {
+                            peak_mb: 550.0,
+                            average_mb: 500.0,
+                            min_mb: 480.0,
+                        }),
+                        cpu: Some(AggregateCpuMetrics {
+                            peak_percent: 55.0,
+                            average_percent: 44.0,
+                            min_percent: 32.0,
+                        }),
+                        snapshots: Vec::new(),
+                    }),
+                },
+            ],
+        };
+
+        enrich_with_browserstack(&mut report, &build_summary);
+
+        let iphone_14 = &report.platforms[0];
+        let iphone_15 = &report.platforms[1];
+
+        assert_eq!(iphone_14.device.os_version, "16.0");
+        assert_eq!(
+            iphone_14.benchmarks[0]
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.cpu_avg_percent),
+            Some(44.0)
+        );
+        assert_eq!(
+            iphone_14.benchmarks[0]
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.ram_avg_mb),
+            Some(500.0)
+        );
+
+        assert_eq!(iphone_15.device.os_version, "17.0");
+        assert_eq!(
+            iphone_15.benchmarks[0]
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.cpu_avg_percent),
+            Some(81.0)
+        );
+        assert_eq!(
+            iphone_15.benchmarks[0]
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.ram_avg_mb),
+            Some(700.0)
+        );
     }
 }
