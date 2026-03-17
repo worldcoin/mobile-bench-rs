@@ -32,3 +32,4 @@ bench-mobile
 
 # Implementation plans (local only)
 docs/plans/
+.worktrees/
