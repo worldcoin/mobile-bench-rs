@@ -116,7 +116,7 @@ impl RunRepository {
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (workflow_run_uuid, platform) DO UPDATE
-            SET check_run_id = EXCLUDED.check_run_id,
+            SET check_run_id = COALESCE(EXCLUDED.check_run_id, benchmark_platform_runs.check_run_id),
                 check_run_name = EXCLUDED.check_run_name,
                 workflow_inputs = EXCLUDED.workflow_inputs,
                 device_profile = EXCLUDED.device_profile,

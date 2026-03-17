@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::{HeaderName, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{get, patch, post},
 };
@@ -20,6 +20,7 @@ struct MockGitHubState {
     pull_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     artifacts: Arc<Mutex<HashMap<i64, Vec<MockArtifact>>>>,
     check_runs: Arc<Mutex<Vec<serde_json::Value>>>,
+    recorded_requests: Arc<Mutex<Vec<RecordedRequest>>>,
     next_check_run_id: Arc<Mutex<i64>>,
     workflow_dispatch_failure: Arc<Mutex<Option<MockFailureResponse>>>,
 }
@@ -39,12 +40,20 @@ struct MockFailureResponse {
     body: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct RecordedRequest {
+    pub method: String,
+    pub path: String,
+    pub user_agent: Option<String>,
+}
+
 pub struct Harness {
     state: mobench_webhook::AppState,
     workflow_dispatches: Arc<Mutex<Vec<serde_json::Value>>>,
     pull_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     artifacts: Arc<Mutex<HashMap<i64, Vec<MockArtifact>>>>,
     check_runs: Arc<Mutex<Vec<serde_json::Value>>>,
+    recorded_requests: Arc<Mutex<Vec<RecordedRequest>>>,
     workflow_dispatch_failure: Arc<Mutex<Option<MockFailureResponse>>>,
 }
 
@@ -54,6 +63,7 @@ impl Harness {
         let pull_requests = Arc::new(Mutex::new(HashMap::new()));
         let artifacts = Arc::new(Mutex::new(HashMap::new()));
         let check_runs = Arc::new(Mutex::new(Vec::new()));
+        let recorded_requests = Arc::new(Mutex::new(Vec::new()));
         let next_check_run_id = Arc::new(Mutex::new(9001));
         let workflow_dispatch_failure = Arc::new(Mutex::new(None));
         let server_state = MockGitHubState {
@@ -61,6 +71,7 @@ impl Harness {
             pull_requests: pull_requests.clone(),
             artifacts: artifacts.clone(),
             check_runs: check_runs.clone(),
+            recorded_requests: recorded_requests.clone(),
             next_check_run_id: next_check_run_id.clone(),
             workflow_dispatch_failure: workflow_dispatch_failure.clone(),
         };
@@ -123,11 +134,16 @@ impl Harness {
             pull_requests,
             artifacts,
             check_runs,
+            recorded_requests,
             workflow_dispatch_failure,
         })
     }
 
     pub async fn enqueue_fixture(&self, fixture_name: &str) -> Result<()> {
+        self.enqueue_fixture_as(fixture_name, fixture_name).await
+    }
+
+    pub async fn enqueue_fixture_as(&self, fixture_name: &str, delivery_id: &str) -> Result<()> {
         let raw = std::fs::read_to_string(fixture_path(fixture_name))
             .with_context(|| format!("reading fixture {fixture_name}"))?;
         let payload: serde_json::Value = serde_json::from_str(&raw)
@@ -142,7 +158,7 @@ impl Harness {
         self.state
             .repos()
             .deliveries
-            .insert_pending(fixture_name, event, action.as_deref(), payload)
+            .insert_pending(delivery_id, event, action.as_deref(), payload)
             .await?;
 
         Ok(())
@@ -173,18 +189,26 @@ impl Harness {
     }
 
     pub async fn stub_history_artifact(&self, fixture_dir: &str) -> Result<()> {
-        self.stub_history_artifact_for_run(424242, fixture_dir).await
+        self.stub_history_artifact_for_run(424242, fixture_dir)
+            .await
     }
 
-    pub async fn stub_history_artifact_for_run(&self, run_id: i64, fixture_dir: &str) -> Result<()> {
+    pub async fn stub_history_artifact_for_run(
+        &self,
+        run_id: i64,
+        fixture_dir: &str,
+    ) -> Result<()> {
         let bytes = zip_fixture_directory(fixture_path(fixture_dir))?;
         let mut artifacts = self.artifacts.lock().await;
-        artifacts.insert(run_id, vec![MockArtifact {
+        artifacts.insert(
             run_id,
-            id: 7001,
-            name: "mobench-history-v1".to_string(),
-            bytes,
-        }]);
+            vec![MockArtifact {
+                run_id,
+                id: 7001,
+                name: "mobench-history-v1".to_string(),
+                bytes,
+            }],
+        );
 
         Ok(())
     }
@@ -203,12 +227,15 @@ impl Harness {
                 .collect(),
         )?;
         let mut artifacts = self.artifacts.lock().await;
-        artifacts.insert(run_id, vec![MockArtifact {
+        artifacts.insert(
             run_id,
-            id: 7001,
-            name: "mobench-history-v1".to_string(),
-            bytes,
-        }]);
+            vec![MockArtifact {
+                run_id,
+                id: 7001,
+                name: "mobench-history-v1".to_string(),
+                bytes,
+            }],
+        );
 
         Ok(())
     }
@@ -247,6 +274,10 @@ impl Harness {
 
     pub async fn recorded_check_runs(&self) -> Vec<serde_json::Value> {
         self.check_runs.lock().await.clone()
+    }
+
+    pub async fn recorded_requests(&self) -> Vec<RecordedRequest> {
+        self.recorded_requests.lock().await.clone()
     }
 
     async fn maybe_seed_pull_request_details(&self, payload: &serde_json::Value) -> Result<()> {
@@ -317,9 +348,18 @@ pub async fn seed_labeled_pull_request_delivery(
 }
 
 async fn record_dispatch(
+    Path((owner, repo, workflow_id)): Path<(String, String, String)>,
     State(state): State<MockGitHubState>,
+    headers: HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    record_request(
+        &state,
+        "POST",
+        format!("/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"),
+        &headers,
+    )
+    .await;
     if let Some(failure) = state.workflow_dispatch_failure.lock().await.take() {
         let mut response = (failure.status, failure.body).into_response();
         for (name, value) in failure.headers {
@@ -340,7 +380,15 @@ async fn record_dispatch(
 async fn fetch_pull_request(
     Path((owner, repo, number)): Path<(String, String, i32)>,
     State(state): State<MockGitHubState>,
+    headers: HeaderMap,
 ) -> Json<serde_json::Value> {
+    record_request(
+        &state,
+        "GET",
+        format!("/repos/{owner}/{repo}/pulls/{number}"),
+        &headers,
+    )
+    .await;
     let key = format!("{owner}/{repo}#{number}");
     let payload = state
         .pull_requests
@@ -370,14 +418,19 @@ async fn fetch_pull_request(
 }
 
 async fn list_artifacts(
-    Path((_owner, _repo, run_id)): Path<(String, String, i64)>,
+    Path((owner, repo, run_id)): Path<(String, String, i64)>,
     State(state): State<MockGitHubState>,
+    headers: HeaderMap,
 ) -> Json<serde_json::Value> {
+    record_request(
+        &state,
+        "GET",
+        format!("/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"),
+        &headers,
+    )
+    .await;
     let artifacts = state.artifacts.lock().await;
-    let items = artifacts
-        .get(&run_id)
-        .cloned()
-        .unwrap_or_default();
+    let items = artifacts.get(&run_id).cloned().unwrap_or_default();
     Json(serde_json::json!({
         "total_count": items.len(),
         "artifacts": items.iter().map(|artifact| {
@@ -390,9 +443,17 @@ async fn list_artifacts(
 }
 
 async fn download_artifact(
-    Path((_owner, _repo, artifact_id)): Path<(String, String, i64)>,
+    Path((owner, repo, artifact_id)): Path<(String, String, i64)>,
     State(state): State<MockGitHubState>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    record_request(
+        &state,
+        "GET",
+        format!("/repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip"),
+        &headers,
+    )
+    .await;
     let artifact = state
         .artifacts
         .lock()
@@ -414,9 +475,18 @@ async fn download_artifact(
 }
 
 async fn create_check_run(
+    Path((owner, repo)): Path<(String, String)>,
     State(state): State<MockGitHubState>,
+    headers: HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
+    record_request(
+        &state,
+        "POST",
+        format!("/repos/{owner}/{repo}/check-runs"),
+        &headers,
+    )
+    .await;
     let mut next_id = state.next_check_run_id.lock().await;
     let check_run_id = *next_id;
     *next_id += 1;
@@ -430,10 +500,18 @@ async fn create_check_run(
 }
 
 async fn update_check_run(
-    Path((_owner, _repo, check_run_id)): Path<(String, String, i64)>,
+    Path((owner, repo, check_run_id)): Path<(String, String, i64)>,
     State(state): State<MockGitHubState>,
+    headers: HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
+    record_request(
+        &state,
+        "PATCH",
+        format!("/repos/{owner}/{repo}/check-runs/{check_run_id}"),
+        &headers,
+    )
+    .await;
     let mut payload = payload;
     if let Some(object) = payload.as_object_mut() {
         object.insert("id".to_string(), serde_json::json!(check_run_id));
@@ -516,4 +594,16 @@ fn add_directory_to_zip(
     }
 
     Ok(())
+}
+
+async fn record_request(state: &MockGitHubState, method: &str, path: String, headers: &HeaderMap) {
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    state.recorded_requests.lock().await.push(RecordedRequest {
+        method: method.to_string(),
+        path,
+        user_agent,
+    });
 }

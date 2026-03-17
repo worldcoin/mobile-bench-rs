@@ -76,7 +76,7 @@ impl ManualRunArgs {
         Some(args)
     }
 
-    pub fn workflow_inputs(&self, pr_number: i32, requested_by: &str) -> Value {
+    pub fn workflow_inputs(&self, pr_number: i32, requested_by: &str, base_ref: &str) -> Value {
         json!({
             "platform": self.platform,
             "device_profile": self.device_profile,
@@ -86,6 +86,7 @@ impl ManualRunArgs {
             "android_os_version": self.android_os_version,
             "iterations": self.iterations,
             "warmup": self.warmup,
+            "base_ref": base_ref,
             "pr_number": pr_number.to_string(),
             "requested_by": requested_by,
         })

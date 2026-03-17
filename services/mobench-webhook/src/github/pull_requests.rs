@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 
-use crate::github::{auth::GitHubAppAuth, into_api_result};
+use crate::github::{api_http_client, auth::GitHubAppAuth, into_api_result};
 
 #[derive(Clone)]
 pub struct GitHubPullRequestsClient {
@@ -15,7 +15,7 @@ impl GitHubPullRequestsClient {
     pub fn new(auth: GitHubAppAuth, api_base_url: impl Into<String>) -> Self {
         Self {
             auth,
-            http: Client::new(),
+            http: api_http_client(),
             api_base_url: api_base_url.into().trim_end_matches('/').to_string(),
         }
     }
@@ -64,6 +64,8 @@ pub struct PullRequestRef {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PullRequestBaseRef {
+    #[serde(rename = "ref")]
+    pub reference: String,
     pub repo: PullRequestRepo,
 }
 

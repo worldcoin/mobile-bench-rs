@@ -7,8 +7,10 @@ pub mod workflows;
 use std::{error::Error as StdError, fmt};
 
 use anyhow::{Context, Result, anyhow};
-use reqwest::{Response, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use time::OffsetDateTime;
+
+pub const USER_AGENT: &str = "mobench-webhook";
 
 #[derive(Clone)]
 pub struct GitHubClients {
@@ -29,6 +31,13 @@ impl GitHubClients {
             pull_requests: pull_requests::GitHubPullRequestsClient::new(auth, api_base_url),
         }
     }
+}
+
+pub fn api_http_client() -> Client {
+    Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .expect("GitHub API HTTP client should initialize")
 }
 
 #[derive(Debug)]
