@@ -525,4 +525,4 @@ cargo test --all
 - **`TESTING.md`**: Comprehensive testing guide with troubleshooting
 - **`README.md`**: Project overview and quick start
 - **`CLAUDE.md`**: Developer guide for this codebase
-- **`PROJECT_PLAN.md`**: Architecture and roadmap
+- **`docs/2026-03-06-mobench-webhook-server-design.md`**: Webhook/history architecture

@@ -2,6 +2,8 @@
 
 Procedural macros for the [mobench](https://crates.io/crates/mobench) mobile benchmarking framework.
 
+This crate ships as part of the mobench `0.1.16` ecosystem release.
+
 This crate provides the `#[benchmark]` attribute macro that automatically registers functions for mobile benchmarking. It uses compile-time registration via the `inventory` crate to build a registry of benchmark functions.
 
 ## Features

@@ -702,5 +702,5 @@ To trigger manually:
 - [UniFFI Documentation](https://mozilla.github.io/uniffi-rs/)
 - [Android NDK Documentation](https://developer.android.com/ndk)
 - [Rust Cross-Compilation Guide](https://rust-lang.github.io/rustup/cross-compilation.html)
-- [PROJECT_PLAN.md](PROJECT_PLAN.md) - Roadmap and architecture
+- [docs/2026-03-06-mobench-webhook-server-design.md](docs/2026-03-06-mobench-webhook-server-design.md) - Webhook/history architecture
 - [CLAUDE.md](CLAUDE.md) - Developer guide for this codebase

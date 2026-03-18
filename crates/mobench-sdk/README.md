@@ -441,6 +441,8 @@ This is the core SDK of the mobench ecosystem:
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - This crate (SDK library with timing harness, build automation, and codegen)
 - **[mobench-macros](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
 
+In the `0.1.16` release line, repository CI commonly uses the `mobench` CLI's hybrid GitHub integration: compile-gated stateless controller workflows start benchmark runs, while `mobench-webhook` owns history ingest and GitHub Check Runs when deployed.
+
 ## See Also
 
 - [CLI Documentation](https://crates.io/crates/mobench) for command-line usage

@@ -6,6 +6,8 @@
 //!
 //! Procedural macros for the mobench mobile benchmarking SDK.
 //!
+//! This crate ships as part of the mobench `0.1.16` ecosystem release.
+//!
 //! This crate provides the [`#[benchmark]`](macro@benchmark) attribute macro
 //! that marks functions for mobile benchmarking. Functions annotated with this
 //! macro are automatically registered in a global registry and can be discovered

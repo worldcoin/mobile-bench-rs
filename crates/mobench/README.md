@@ -255,6 +255,15 @@ cargo mobench ci run \
 
 When `--baseline` is omitted for `ci run`, mobench automatically uses the previous successful summary snapshot in the target output directory when present.
 
+### GitHub PR Automation in `0.1.16`
+
+The `0.1.16` release line supports both PR-trigger styles:
+
+- **Stateless controller workflows** dispatch `mobile-bench.yml` after a compile gate passes for the exact `head_sha`, covering same-repo `bench` labels and trusted `/mobench ...` PR comments.
+- **`mobench-webhook`** can still own dispatch dedupe, `mobench-history-v1` ingest, GitHub Check Runs, and exact `check_run.rerequested` replay.
+
+That hybrid model keeps benchmark execution in Actions while letting a deployed webhook service remain the source of truth for history and GitHub state.
+
 ### `config validate` - Validate Run Config Contract
 
 Validate `bench-config.toml` and referenced matrix/settings with contract-aligned issue categories:

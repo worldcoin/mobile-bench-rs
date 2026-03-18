@@ -120,11 +120,21 @@ CLI flags override config file values when provided.
 - `BROWSERSTACK_CI_INTEGRATION.md`: BrowserStack CI setup
 - `docs/CONTRACT_CI_V1.md`: frozen v1 CI input/output/error contract
 - `docs/adr/0001-mobench-ci-contract-v1.md`: CI contract ADR and compatibility policy
+- `docs/2026-03-06-mobench-webhook-server-design.md`: webhook/history/check-run architecture
+- `docs/plans/2026-03-10-stateless-mobench-v1.md`: stateless controller workflow implementation notes
 - `docs/schemas/`: machine-readable CI/summary schema artifacts
 - `docs/MIGRATION_GUIDE.md`: migration guide (placeholder, linked from ADR)
 - `FETCH_RESULTS_GUIDE.md`: fetching and summarizing results
-- `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide
+
+## GitHub Automation Modes
+
+mobench `0.1.16` supports both GitHub-trigger styles for PR benchmarking:
+
+- **Stateless controller workflows**: a compile-gate workflow and metadata-only controller workflows dispatch `mobile-bench.yml` for same-repo `bench` labels and trusted `/mobench ...` PR comments, pinned to the exact gated head SHA.
+- **GitHub App webhook flow**: `mobench-webhook` can still accept the same label/comment/check-rerun events, dedupe dispatches, ingest `mobench-history-v1`, own GitHub Check Runs, and persist benchmark history.
+
+The current hybrid model keeps execution in GitHub Actions while using the webhook service as the durable source of truth for ingest, reruns, and history APIs.
 
 ## Setup and Teardown
 
@@ -198,6 +208,15 @@ fn db_query(db: &Database) {
 | `#[benchmark(setup = fn, teardown = fn)]` | Resources requiring cleanup (connections, files, etc.) |
 
 ## Release Notes
+
+### v0.1.16
+
+- Added compile-gated stateless PR automation with controller workflows for same-repo `bench` labels, trusted `/mobench ...` comments, and exact `head_sha` dispatch pinning.
+- Kept the GitHub App/webhook flow available for dispatch dedupe, history ingest, Check Run ownership, and exact rerequests.
+- Fixed webhook ingest compatibility with `cargo-mobench ci summarize --output-format json`.
+- Fixed multi-function same-platform result ingest, capped GitHub Check Run annotations, and deduped active `check_run.rerequested` dispatches.
+- Standardized GitHub API clients on the required `mobench-webhook` `User-Agent`.
+- Fixed the reusable BrowserStack workflow to honor its `crate_path` input.
 
 ### v0.1.14
 

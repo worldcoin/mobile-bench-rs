@@ -96,6 +96,19 @@
 //! export BROWSERSTACK_ACCESS_KEY="your_access_key"
 //! ```
 //!
+//! ## GitHub PR Automation
+//!
+//! As of `0.1.16`, the repository supports both GitHub automation styles:
+//!
+//! - stateless controller workflows that wait for a compile gate and dispatch
+//!   `mobile-bench.yml` for same-repo `bench` labels and trusted `/mobench ...`
+//!   comments, pinned to the exact passing `head_sha`,
+//! - a stateful `mobench-webhook` service that can still own dispatch dedupe,
+//!   history ingest, GitHub Check Runs, and exact check-rerun replay.
+//!
+//! That keeps benchmark execution inside GitHub Actions while allowing durable
+//! history and Check Run ownership when the webhook service is deployed.
+//!
 //! ## Crate Ecosystem
 //!
 //! This crate is part of the mobench ecosystem:

@@ -29,7 +29,7 @@ Run `mobench ci run` in GitHub Actions with caching, Android SDK setup, and arti
 - `run-args`: arguments passed to `command`. Use quoted values for arguments containing spaces (for example device names).
 - `ci`: append `--ci` only when `command` is exactly `cargo mobench run`; ignored for `cargo mobench ci run`.
 - `install-mobench`: install `mobench` with cargo-binstall/cargo install.
-- `mobench-version`: optional version to install.
+- `mobench-version`: optional version to install. Set `0.1.16` to pin this release explicitly.
 - `install-cargo-ndk`: install `cargo-ndk` for Android builds.
 - `setup-android`: install Android SDK/NDK packages.
 - `ndk-version`: Android NDK version (used for setup + `ANDROID_NDK_HOME`).

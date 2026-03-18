@@ -121,6 +121,11 @@
 //! | [`codegen`] | Mobile app template generation (requires `full` feature) |
 //! | [`types`] | Common types and error definitions |
 //!
+//! In repository CI, the SDK is typically exercised through the `mobench` CLI's
+//! hybrid GitHub integration: compile-gated stateless controller workflows can
+//! start benchmark runs, while `mobench-webhook` owns history ingest and GitHub
+//! Check Runs when deployed.
+//!
 //! ## Crate Ecosystem
 //!
 //! The mobench ecosystem consists of three published crates:

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.14):**
+**Published on crates.io as the mobench ecosystem (v0.1.16):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -65,6 +65,15 @@ The CLI supports both Espresso (Android) and XCUITest (iOS) test automation fram
 - **Android**: Uploads app APK + test-suite APK (androidTest), schedules Espresso runs
 - **iOS**: Uploads app IPA/bundle + XCUITest runner package, schedules XCUITest runs
 - Credentials: `BROWSERSTACK_USERNAME`, `BROWSERSTACK_ACCESS_KEY` (from env or config)
+
+### GitHub Integration
+
+The repo now supports two PR-trigger styles at the same time:
+
+- **Stateless controller workflows**: compile-gated Actions workflows dispatch `mobile-bench.yml` for same-repo `bench` labels and trusted `/mobench ...` comments, pinned to the exact head SHA that passed compile.
+- **GitHub App webhook service**: `services/mobench-webhook` can receive the same label/comment/check-rerun events, dedupe dispatches, ingest `mobench-history-v1`, own GitHub Check Runs, and persist history in Postgres.
+
+In the current hybrid architecture, Actions remain the execution engine while the webhook service is the durable owner of ingest, Check Runs, rerequests, and history APIs.
 
 ## Build and Testing Documentation
 
@@ -795,7 +804,8 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
 - **`BUILD.md`**: Complete build reference with prerequisites and troubleshooting
 - **`TESTING.md`**: Comprehensive testing guide with detailed troubleshooting
 - **`BENCH_SDK_INTEGRATION.md`**: Integration guide for SDK users
-- **`PROJECT_PLAN.md`**: Goals, architecture, task backlog
+- **`docs/2026-03-06-mobench-webhook-server-design.md`**: Webhook/history architecture
+- **`docs/plans/2026-03-10-stateless-mobench-v1.md`**: Stateless controller workflow plan/status
 - **`CLAUDE.md`**: This file - developer guide for the codebase
 
 ### Build Tooling

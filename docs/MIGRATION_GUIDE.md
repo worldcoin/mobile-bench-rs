@@ -7,6 +7,7 @@ This guide migrates custom BrowserStack benchmark CI flows to the standardized `
 - One-command orchestration via `cargo mobench ci run`
 - Stable contract outputs: `summary.json`, `summary.md`, `results.csv`
 - Optional sticky PR comments and deterministic matrix resolution
+- Support either stateless controller workflows, GitHub App webhook dispatch, or the current hybrid model
 
 ## Old -> New Mapping
 
@@ -80,5 +81,8 @@ jobs:
 - Contract docs: `docs/CONTRACT_CI_V1.md`
 - ADR: `docs/adr/0001-mobench-ci-contract-v1.md`
 - Schemas: `docs/schemas/summary-v1.schema.json`, `docs/schemas/ci-contract-v1.schema.json`
+- Architecture/status docs:
+  - `docs/2026-03-06-mobench-webhook-server-design.md`
+  - `docs/plans/2026-03-10-stateless-mobench-v1.md`
 
 Any change to required output files or metadata keys requires a contract-version bump.
