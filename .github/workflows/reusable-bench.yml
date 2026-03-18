@@ -79,6 +79,10 @@ on:
         description: "Base branch for baseline selection metadata"
         required: false
         type: string
+      head_sha:
+        description: "Exact commit SHA to benchmark and report against"
+        required: false
+        type: string
       requested_by:
         description: "Who triggered the run"
         required: false
@@ -150,6 +154,7 @@ jobs:
       - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.head_sha || github.sha }}
           path: caller
 
       - name: Setup Rust
@@ -310,6 +315,7 @@ jobs:
       - name: Checkout caller repo
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.head_sha || github.sha }}
           path: caller
 
       - name: Setup Rust
@@ -645,7 +651,7 @@ jobs:
           REQUESTED_BY: ${{ inputs.requested_by }}
           MOBENCH_VERSION: ${{ inputs.mobench_version }}
           MOBENCH_REF: ${{ inputs.mobench_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_SHA: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
           HEAD_REF: ${{ github.head_ref || github.ref_name }}
           BASE_REF: ${{ inputs.base_ref || github.base_ref || 'main' }}
           IOS_DEVICE_NAME: ${{ needs.ios.outputs.device_name }}
