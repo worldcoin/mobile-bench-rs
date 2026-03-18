@@ -91,6 +91,20 @@ async fn handle_pull_request_labeled(state: &AppState, payload: &Value) -> Resul
         return Ok(DeliveryOutcome::Ignored);
     }
 
+    let github = state
+        .github
+        .as_ref()
+        .context("missing GitHub clients for dispatch handling")?;
+    if !compile_gate_passed_for_head(state, github, repo_owner, repo_name, head_sha).await? {
+        info!(
+            head_sha,
+            pr_number = event.number,
+            workflow_id = state.config.github_compile_gate_workflow_id.as_str(),
+            "dispatch.skipped.compile_gate_pending"
+        );
+        return Ok(DeliveryOutcome::Ignored);
+    }
+
     let dispatch_id = Uuid::new_v4();
     let dispatch = state
         .repos
@@ -107,10 +121,6 @@ async fn handle_pull_request_labeled(state: &AppState, payload: &Value) -> Resul
             workflow_inputs.clone(),
         )
         .await?;
-    let github = state
-        .github
-        .as_ref()
-        .context("missing GitHub clients for dispatch handling")?;
 
     github
         .workflows
@@ -200,6 +210,16 @@ async fn handle_issue_comment_created(
         return Ok(DeliveryOutcome::Ignored);
     }
 
+    if !compile_gate_passed_for_head(state, github, repo_owner, repo_name, head_sha).await? {
+        info!(
+            head_sha,
+            pr_number = event.issue.number,
+            workflow_id = state.config.github_compile_gate_workflow_id.as_str(),
+            "dispatch.skipped.compile_gate_pending"
+        );
+        return Ok(DeliveryOutcome::Ignored);
+    }
+
     let dispatch_id = Uuid::new_v4();
     let dispatch = state
         .repos
@@ -279,6 +299,26 @@ async fn handle_check_run_rerequested(
                 Value::String(sender.login.clone()),
             );
         }
+    }
+
+    if state
+        .repos
+        .dispatches
+        .find_active_duplicate(
+            platform_run.repo_owner.as_str(),
+            platform_run.repo_name.as_str(),
+            platform_run.head_sha.as_str(),
+            &workflow_inputs,
+        )
+        .await?
+        .is_some()
+    {
+        info!(
+            check_run_id = event.check_run.id,
+            workflow_run_id = platform_run.workflow_run_id,
+            "dispatch.skipped"
+        );
+        return Ok(DeliveryOutcome::Ignored);
     }
 
     let requested_by = event.sender.as_ref().map(|sender| sender.login.as_str());
@@ -763,6 +803,28 @@ fn workflow_inputs_for_dispatch(
     }
 
     workflow_inputs
+}
+
+async fn compile_gate_passed_for_head(
+    state: &AppState,
+    github: &crate::github::GitHubClients,
+    repo_owner: &str,
+    repo_name: &str,
+    head_sha: &str,
+) -> Result<bool> {
+    if state.config.github_compile_gate_workflow_id.is_empty() {
+        return Ok(true);
+    }
+
+    github
+        .workflows
+        .has_successful_workflow_run_for_head(
+            repo_owner,
+            repo_name,
+            &state.config.github_compile_gate_workflow_id,
+            head_sha,
+        )
+        .await
 }
 
 #[derive(Debug, Deserialize)]

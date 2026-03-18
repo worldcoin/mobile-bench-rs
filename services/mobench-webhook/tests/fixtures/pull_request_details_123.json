@@ -8,6 +8,7 @@
     }
   },
   "base": {
+    "ref": "release/1.2",
     "repo": {
       "full_name": "world/mobile-bench-rs"
     }

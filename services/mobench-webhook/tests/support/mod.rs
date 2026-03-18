@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{get, patch, post},
@@ -17,6 +17,7 @@ use zip::{CompressionMethod, ZipWriter, write::FileOptions};
 #[derive(Clone)]
 struct MockGitHubState {
     workflow_dispatches: Arc<Mutex<Vec<serde_json::Value>>>,
+    compile_gate_by_sha: Arc<Mutex<HashMap<String, bool>>>,
     pull_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     artifacts: Arc<Mutex<HashMap<i64, Vec<MockArtifact>>>>,
     check_runs: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -50,6 +51,7 @@ pub struct RecordedRequest {
 pub struct Harness {
     state: mobench_webhook::AppState,
     workflow_dispatches: Arc<Mutex<Vec<serde_json::Value>>>,
+    compile_gate_by_sha: Arc<Mutex<HashMap<String, bool>>>,
     pull_requests: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     artifacts: Arc<Mutex<HashMap<i64, Vec<MockArtifact>>>>,
     check_runs: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -60,6 +62,7 @@ pub struct Harness {
 impl Harness {
     pub async fn new(pool: PgPool) -> Result<Self> {
         let workflow_dispatches = Arc::new(Mutex::new(Vec::new()));
+        let compile_gate_by_sha = Arc::new(Mutex::new(HashMap::new()));
         let pull_requests = Arc::new(Mutex::new(HashMap::new()));
         let artifacts = Arc::new(Mutex::new(HashMap::new()));
         let check_runs = Arc::new(Mutex::new(Vec::new()));
@@ -68,6 +71,7 @@ impl Harness {
         let workflow_dispatch_failure = Arc::new(Mutex::new(None));
         let server_state = MockGitHubState {
             workflow_dispatches: workflow_dispatches.clone(),
+            compile_gate_by_sha: compile_gate_by_sha.clone(),
             pull_requests: pull_requests.clone(),
             artifacts: artifacts.clone(),
             check_runs: check_runs.clone(),
@@ -94,6 +98,10 @@ impl Harness {
             .route(
                 "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
                 post(record_dispatch),
+            )
+            .route(
+                "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+                get(list_workflow_runs),
             )
             .route(
                 "/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
@@ -131,6 +139,7 @@ impl Harness {
         Ok(Self {
             state,
             workflow_dispatches,
+            compile_gate_by_sha,
             pull_requests,
             artifacts,
             check_runs,
@@ -254,6 +263,13 @@ impl Harness {
             });
     }
 
+    pub async fn stub_compile_gate_for_sha(&self, sha: &str, success: bool) {
+        self.compile_gate_by_sha
+            .lock()
+            .await
+            .insert(sha.to_string(), success);
+    }
+
     pub async fn list_workflow_runs(
         &self,
     ) -> Result<Vec<mobench_webhook::db::models::WorkflowRunRecord>> {
@@ -375,6 +391,43 @@ async fn record_dispatch(
     state.workflow_dispatches.lock().await.push(payload);
 
     Json(serde_json::json!({})).into_response()
+}
+
+async fn list_workflow_runs(
+    Path((owner, repo, workflow_id)): Path<(String, String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+    State(state): State<MockGitHubState>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    record_request(
+        &state,
+        "GET",
+        format!("/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"),
+        &headers,
+    )
+    .await;
+
+    let workflow_runs = if let Some(head_sha) = query.get("head_sha") {
+        let success = state
+            .compile_gate_by_sha
+            .lock()
+            .await
+            .get(head_sha)
+            .copied()
+            .unwrap_or(true);
+        vec![serde_json::json!({
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": if success { "success" } else { "failure" }
+        })]
+    } else {
+        Vec::new()
+    };
+
+    Json(serde_json::json!({
+        "total_count": workflow_runs.len(),
+        "workflow_runs": workflow_runs
+    }))
 }
 
 async fn fetch_pull_request(

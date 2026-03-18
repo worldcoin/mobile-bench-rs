@@ -46,6 +46,7 @@ pub struct Config {
     pub github_owner: String,
     pub github_repo: String,
     pub github_workflow_id: String,
+    pub github_compile_gate_workflow_id: String,
 }
 
 impl Config {
@@ -90,6 +91,8 @@ impl Config {
         let github_repo = env::var("GITHUB_REPO").unwrap_or_else(|_| "mobile-bench-rs".to_string());
         let github_workflow_id =
             env::var("GITHUB_WORKFLOW_ID").unwrap_or_else(|_| "mobile-bench.yml".to_string());
+        let github_compile_gate_workflow_id = env::var("GITHUB_COMPILE_GATE_WORKFLOW_ID")
+            .unwrap_or_else(|_| "compile-gate.yml".to_string());
 
         Ok(Self {
             database_url,
@@ -105,6 +108,7 @@ impl Config {
             github_owner,
             github_repo,
             github_workflow_id,
+            github_compile_gate_workflow_id,
         })
     }
 
@@ -123,6 +127,7 @@ impl Config {
             github_owner: "world".to_string(),
             github_repo: "mobile-bench-rs".to_string(),
             github_workflow_id: "mobile-bench.yml".to_string(),
+            github_compile_gate_workflow_id: "compile-gate.yml".to_string(),
         }
     }
 }

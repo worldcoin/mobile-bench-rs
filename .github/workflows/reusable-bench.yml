@@ -244,7 +244,7 @@ jobs:
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
         run: |
           set -euo pipefail
-          cargo-mobench build --target ios $RELEASE_FLAG
+          cargo-mobench build --target ios $RELEASE_FLAG --crate-path "${{ inputs.crate_path }}"
           cargo-mobench package-ipa --method adhoc
           cargo-mobench package-xcuitest
           test -f target/mobench/ios/BenchRunner.ipa
@@ -272,6 +272,7 @@ jobs:
             echo "::group::Benchmark: ${func}"
             cargo-mobench run \
               --target ios \
+              --crate-path "${{ inputs.crate_path }}" \
               --function "${func}" \
               --iterations "${ITERATIONS}" \
               --warmup "${WARMUP}" \
@@ -415,7 +416,7 @@ jobs:
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
         run: |
           set -euo pipefail
-          cargo-mobench build --target android $RELEASE_FLAG
+          cargo-mobench build --target android $RELEASE_FLAG --crate-path "${{ inputs.crate_path }}"
 
       - name: Run Android benchmarks
         working-directory: caller
@@ -440,6 +441,7 @@ jobs:
             echo "::group::Benchmark: ${func}"
             cargo-mobench run \
               --target android \
+              --crate-path "${{ inputs.crate_path }}" \
               --function "${func}" \
               --iterations "${ITERATIONS}" \
               --warmup "${WARMUP}" \

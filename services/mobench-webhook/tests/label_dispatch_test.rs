@@ -142,3 +142,23 @@ async fn bench_label_rate_limit_requeues_delivery_using_retry_after(pool: sqlx::
         row.3
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn bench_label_waits_for_compile_gate_success(pool: sqlx::PgPool) {
+    let harness = support::Harness::new(pool).await.unwrap();
+    harness
+        .stub_compile_gate_for_sha("abc123def456", false)
+        .await;
+    harness
+        .enqueue_fixture("pull_request_labeled_bench.json")
+        .await
+        .unwrap();
+
+    let worked = harness.run_one_delivery().await.unwrap();
+    let dispatches = harness.list_dispatches().await.unwrap();
+    let workflow_requests = harness.dispatched_workflows().await;
+
+    assert!(worked);
+    assert!(dispatches.is_empty());
+    assert!(workflow_requests.is_empty());
+}

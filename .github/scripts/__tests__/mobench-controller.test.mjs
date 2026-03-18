@@ -349,6 +349,10 @@ test('mobile-bench runner has stateless concurrency and exact sha plumbing', () 
     /cancel-in-progress:\s+\${{\s*inputs\.trigger_source == 'label'\s*}}/,
   );
   assert.match(reusableYaml, /ref:\s+\${{\s*inputs\.head_sha \|\| github\.sha\s*}}/);
+  assert.match(reusableYaml, /cargo-mobench build --target ios .*--crate-path "\${{ inputs\.crate_path }}"/);
+  assert.match(reusableYaml, /cargo-mobench run \\\s*\n\s+--target ios[\s\S]*?--crate-path "\${{ inputs\.crate_path }}"/);
+  assert.match(reusableYaml, /cargo-mobench build --target android .*--crate-path "\${{ inputs\.crate_path }}"/);
+  assert.match(reusableYaml, /cargo-mobench run \\\s*\n\s+--target android[\s\S]*?--crate-path "\${{ inputs\.crate_path }}"/);
   assert.match(labelYaml, /^name: Mobile Bench PR Auto$/m);
   assert.match(commandYaml, /^name: Mobile Bench PR Command$/m);
 });

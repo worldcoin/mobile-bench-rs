@@ -58,3 +58,23 @@ async fn foreign_repo_comment_is_ignored(pool: sqlx::PgPool) {
     assert!(workflow_requests.is_empty());
     assert!(recorded_requests.is_empty());
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn mobench_comment_waits_for_compile_gate_success(pool: sqlx::PgPool) {
+    let harness = support::Harness::new(pool).await.unwrap();
+    harness
+        .stub_compile_gate_for_sha("abc123def456", false)
+        .await;
+    harness
+        .enqueue_fixture("issue_comment_mobench_custom.json")
+        .await
+        .unwrap();
+
+    let worked = harness.run_one_delivery().await.unwrap();
+    let dispatches = harness.list_dispatches().await.unwrap();
+    let workflow_requests = harness.dispatched_workflows().await;
+
+    assert!(worked);
+    assert!(dispatches.is_empty());
+    assert!(workflow_requests.is_empty());
+}
