@@ -16,6 +16,8 @@ use crate::{
     webhook::commands::ManualRunArgs,
 };
 
+const MAX_CHECK_RUN_ANNOTATIONS: usize = 50;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliveryOutcome {
     Processed,
@@ -517,12 +519,7 @@ async fn ingest_platform_run(
             .context("serializing platform summary value")?
             .as_bytes(),
     )?;
-    let summary_platform = report
-        .platforms
-        .iter()
-        .find(|candidate| candidate.platform == platform_run.platform)
-        .or_else(|| report.platforms.first())
-        .with_context(|| format!("missing platform report for {}", platform_run.platform))?;
+    let summary_platform = merged_platform_report(&report, platform_run.platform.as_str())?;
 
     let persisted_platform_run = state
         .repos
@@ -700,6 +697,45 @@ fn parse_workflow_input_f64(
         .get(key)
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(default)
+}
+
+fn merged_platform_report(
+    report: &mobench::summarize::SummarizeReport,
+    platform: &str,
+) -> Result<mobench::summarize::PlatformReport> {
+    let mut matching = report
+        .platforms
+        .iter()
+        .filter(|candidate| candidate.platform == platform)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if matching.is_empty() {
+        if let Some(first) = report.platforms.first().cloned() {
+            matching.push(first);
+        }
+    }
+
+    let mut merged = matching
+        .into_iter()
+        .next()
+        .with_context(|| format!("missing platform report for {platform}"))?;
+    for candidate in report
+        .platforms
+        .iter()
+        .filter(|candidate| candidate.platform == platform)
+        .skip(1)
+    {
+        merged.benchmarks.extend(candidate.benchmarks.clone());
+        if merged.iterations == 0 {
+            merged.iterations = candidate.iterations;
+        }
+        if merged.warmup == 0 {
+            merged.warmup = candidate.warmup;
+        }
+    }
+
+    Ok(merged)
 }
 
 fn workflow_inputs_for_dispatch(
@@ -911,10 +947,16 @@ fn build_check_run_payload(
                 row.function_label, baseline, row.candidate_avg_ms, delta, row.label
             ));
         }
+        if regressions.len() > MAX_CHECK_RUN_ANNOTATIONS {
+            summary.push_str(&format!(
+                "\nOnly the first {MAX_CHECK_RUN_ANNOTATIONS} regression annotations were attached due to the GitHub Checks API limit.\n"
+            ));
+        }
     }
 
     let annotations = regressions
         .iter()
+        .take(MAX_CHECK_RUN_ANNOTATIONS)
         .enumerate()
         .map(|(index, row)| {
             json!({
@@ -947,6 +989,153 @@ fn build_check_run_payload(
             "annotations": annotations
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::{build_check_run_payload, merged_platform_report};
+    use crate::{
+        db::models::WorkflowRunRecord,
+        ingest::compare::ComparisonRow,
+    };
+
+    #[test]
+    fn merged_platform_report_collects_all_same_platform_benchmarks() {
+        let report = mobench::summarize::SummarizeReport {
+            platforms: vec![
+                mobench::summarize::PlatformReport {
+                    platform: "ios".to_string(),
+                    device: mobench::summarize::DeviceInfo {
+                        name: "iPhone 14".to_string(),
+                        os: "iOS".to_string(),
+                        os_version: "16.0".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![mobench::summarize::BenchmarkResult {
+                        name: "sample_fns::fibonacci".to_string(),
+                        label: "fibonacci".to_string(),
+                        timing: mobench::summarize::TimingStats {
+                            avg_ms: 12.4,
+                            median_ms: 12.1,
+                            best_ms: 11.8,
+                            worst_ms: 13.2,
+                            p95_ms: 13.0,
+                            std_dev_ms: 0.4,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 30,
+                    warmup: 5,
+                },
+                mobench::summarize::PlatformReport {
+                    platform: "ios".to_string(),
+                    device: mobench::summarize::DeviceInfo {
+                        name: "iPhone 14".to_string(),
+                        os: "iOS".to_string(),
+                        os_version: "16.0".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![mobench::summarize::BenchmarkResult {
+                        name: "sample_fns::checksum".to_string(),
+                        label: "checksum".to_string(),
+                        timing: mobench::summarize::TimingStats {
+                            avg_ms: 7.8,
+                            median_ms: 7.6,
+                            best_ms: 7.1,
+                            worst_ms: 8.4,
+                            p95_ms: 8.2,
+                            std_dev_ms: 0.3,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 30,
+                    warmup: 5,
+                },
+                mobench::summarize::PlatformReport {
+                    platform: "android".to_string(),
+                    device: mobench::summarize::DeviceInfo {
+                        name: "Pixel 8".to_string(),
+                        os: "Android".to_string(),
+                        os_version: "14".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![mobench::summarize::BenchmarkResult {
+                        name: "sample_fns::android_only".to_string(),
+                        label: "android-only".to_string(),
+                        timing: mobench::summarize::TimingStats {
+                            avg_ms: 5.5,
+                            median_ms: 5.4,
+                            best_ms: 5.1,
+                            worst_ms: 5.8,
+                            p95_ms: 5.7,
+                            std_dev_ms: 0.2,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 30,
+                    warmup: 5,
+                },
+            ],
+        };
+
+        let merged = merged_platform_report(&report, "ios").unwrap();
+
+        assert_eq!(merged.platform, "ios");
+        assert_eq!(merged.iterations, 30);
+        assert_eq!(merged.warmup, 5);
+        assert_eq!(merged.benchmarks.len(), 2);
+        assert_eq!(merged.benchmarks[0].name, "sample_fns::fibonacci");
+        assert_eq!(merged.benchmarks[1].name, "sample_fns::checksum");
+    }
+
+    #[test]
+    fn build_check_run_payload_caps_annotations_to_github_limit() {
+        let workflow_run = WorkflowRunRecord {
+            id: Uuid::nil(),
+            workflow_run_id: 424242,
+            workflow_run_attempt: 1,
+            repo_owner: "world".to_string(),
+            repo_name: "mobile-bench-rs".to_string(),
+            workflow_name: "Mobile Benchmarks".to_string(),
+            head_sha: "abc123".to_string(),
+            head_ref: "feature/bench-pr".to_string(),
+            base_ref: Some("main".to_string()),
+            pr_number: Some(123),
+            trigger_source: "label".to_string(),
+            requested_by: Some("octocat".to_string()),
+            request_command: None,
+            mobench_version: Some("0.1.15".to_string()),
+            mobench_ref: Some("refs/heads/main".to_string()),
+            conclusion: Some("success".to_string()),
+        };
+        let comparison_rows = (0..55)
+            .map(|index| ComparisonRow {
+                function_name: format!("sample_fns::bench_{index}"),
+                function_label: format!("bench-{index}"),
+                baseline_avg_ms: Some(10.0),
+                candidate_avg_ms: 11.0,
+                delta_pct: Some(10.0),
+                label: "regressed".to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let payload = build_check_run_payload(
+            &workflow_run,
+            "Mobench - ios",
+            "summary",
+            &comparison_rows,
+            "mobile-bench.yml",
+        );
+
+        let annotations = payload["output"]["annotations"].as_array().unwrap();
+        assert_eq!(annotations.len(), 50);
+        assert_eq!(payload["output"]["title"], "55 benchmarks - 55 regressed");
+    }
 }
 
 async fn attach_correlated_dispatch(

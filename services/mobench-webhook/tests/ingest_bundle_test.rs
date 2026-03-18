@@ -276,3 +276,89 @@ fn platform_check_run_ids(
         .map(|run| (run.platform.clone(), run.check_run_id.unwrap()))
         .collect()
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn workflow_run_completed_persists_all_benchmarks_from_multi_entry_platform_summary(
+    pool: sqlx::PgPool,
+) {
+    let harness = support::Harness::new(pool).await.unwrap();
+    let ios_summary = r#"{
+      "platforms": [
+        {
+          "platform": "ios",
+          "device": {
+            "name": "iPhone 14",
+            "os": "iOS",
+            "os_version": "16.0"
+          },
+          "benchmarks": [
+            {
+              "name": "sample_fns::fibonacci",
+              "label": "fibonacci",
+              "timing": {
+                "avg_ms": 12.4,
+                "median_ms": 12.1,
+                "best_ms": 11.8,
+                "worst_ms": 13.2,
+                "p95_ms": 13.0,
+                "std_dev_ms": 0.4
+              }
+            }
+          ],
+          "iterations": 30,
+          "warmup": 5
+        },
+        {
+          "platform": "ios",
+          "device": {
+            "name": "iPhone 14",
+            "os": "iOS",
+            "os_version": "16.0"
+          },
+          "benchmarks": [
+            {
+              "name": "sample_fns::checksum",
+              "label": "checksum",
+              "timing": {
+                "avg_ms": 7.8,
+                "median_ms": 7.6,
+                "best_ms": 7.1,
+                "worst_ms": 8.4,
+                "p95_ms": 8.2,
+                "std_dev_ms": 0.3
+              }
+            }
+          ],
+          "iterations": 30,
+          "warmup": 5
+        }
+      ]
+    }"#;
+    harness
+        .stub_history_artifact_with_overrides_for_run(
+            424242,
+            "mobench-history-v1",
+            &[("ios/summary.json", ios_summary)],
+        )
+        .await
+        .unwrap();
+    harness
+        .enqueue_fixture("workflow_run_completed.json")
+        .await
+        .unwrap();
+
+    harness.run_one_delivery().await.unwrap();
+    let results = harness.list_results().await.unwrap();
+
+    assert!(
+        results
+            .iter()
+            .any(|result| result.function_name == "sample_fns::fibonacci")
+    );
+    assert!(
+        results
+            .iter()
+            .any(|result| result.function_name == "sample_fns::checksum")
+    );
+    assert_eq!(results.len(), 3);
+}
