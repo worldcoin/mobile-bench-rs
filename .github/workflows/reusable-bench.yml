@@ -241,10 +241,11 @@ jobs:
         working-directory: caller
         shell: bash
         env:
+          CRATE_PATH: ${{ inputs.crate_path }}
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
         run: |
           set -euo pipefail
-          cargo-mobench build --target ios $RELEASE_FLAG --crate-path "${{ inputs.crate_path }}"
+          cargo-mobench build --target ios $RELEASE_FLAG --crate-path "$CRATE_PATH"
           cargo-mobench package-ipa --method adhoc
           cargo-mobench package-xcuitest
           test -f target/mobench/ios/BenchRunner.ipa
@@ -254,6 +255,7 @@ jobs:
         working-directory: caller
         shell: bash
         env:
+          CRATE_PATH: ${{ inputs.crate_path }}
           FUNCTIONS_JSON: ${{ inputs.functions }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
@@ -272,7 +274,7 @@ jobs:
             echo "::group::Benchmark: ${func}"
             cargo-mobench run \
               --target ios \
-              --crate-path "${{ inputs.crate_path }}" \
+              --crate-path "$CRATE_PATH" \
               --function "${func}" \
               --iterations "${ITERATIONS}" \
               --warmup "${WARMUP}" \
@@ -413,15 +415,17 @@ jobs:
         shell: bash
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          CRATE_PATH: ${{ inputs.crate_path }}
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
         run: |
           set -euo pipefail
-          cargo-mobench build --target android $RELEASE_FLAG --crate-path "${{ inputs.crate_path }}"
+          cargo-mobench build --target android $RELEASE_FLAG --crate-path "$CRATE_PATH"
 
       - name: Run Android benchmarks
         working-directory: caller
         shell: bash
         env:
+          CRATE_PATH: ${{ inputs.crate_path }}
           FUNCTIONS_JSON: ${{ inputs.functions }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
@@ -441,7 +445,7 @@ jobs:
             echo "::group::Benchmark: ${func}"
             cargo-mobench run \
               --target android \
-              --crate-path "${{ inputs.crate_path }}" \
+              --crate-path "$CRATE_PATH" \
               --function "${func}" \
               --iterations "${ITERATIONS}" \
               --warmup "${WARMUP}" \
