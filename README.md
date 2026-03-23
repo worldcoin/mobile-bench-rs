@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/mobench.jpg" width="280" alt="mobench" />
+</p>
+
 # mobench
 
 Mobile benchmarking SDK for Rust. Build and run Rust benchmarks on Android and iOS, locally or on BrowserStack, with a library-first workflow and config-first project resolution for custom repository layouts.
