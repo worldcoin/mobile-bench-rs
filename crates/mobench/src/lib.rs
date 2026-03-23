@@ -196,6 +196,16 @@ enum Command {
         target: MobileTarget,
         #[arg(long, help = "Fully-qualified Rust function to benchmark")]
         function: String,
+        #[arg(
+            long,
+            help = "Project root containing mobench.toml or the Cargo workspace"
+        )]
+        project_root: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Path to the benchmark crate directory containing Cargo.toml"
+        )]
+        crate_path: Option<PathBuf>,
         #[arg(long, default_value_t = 100)]
         iterations: u32,
         #[arg(long, default_value_t = 10)]
@@ -347,6 +357,11 @@ enum Command {
         release: bool,
         #[arg(
             long,
+            help = "Project root containing mobench.toml or the Cargo workspace"
+        )]
+        project_root: Option<PathBuf>,
+        #[arg(
+            long,
             help = "Output directory for mobile artifacts (default: target/mobench)"
         )]
         output_dir: Option<PathBuf>,
@@ -366,6 +381,16 @@ enum Command {
         method: IosSigningMethodArg,
         #[arg(
             long,
+            help = "Project root containing mobench.toml or the Cargo workspace"
+        )]
+        project_root: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Path to the benchmark crate directory containing Cargo.toml"
+        )]
+        crate_path: Option<PathBuf>,
+        #[arg(
+            long,
             help = "Output directory for mobile artifacts (default: target/mobench)"
         )]
         output_dir: Option<PathBuf>,
@@ -380,12 +405,33 @@ enum Command {
         scheme: String,
         #[arg(
             long,
+            help = "Project root containing mobench.toml or the Cargo workspace"
+        )]
+        project_root: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Path to the benchmark crate directory containing Cargo.toml"
+        )]
+        crate_path: Option<PathBuf>,
+        #[arg(
+            long,
             help = "Output directory for mobile artifacts (default: target/mobench)"
         )]
         output_dir: Option<PathBuf>,
     },
     /// List all discovered benchmark functions (Phase 1 MVP).
-    List,
+    List {
+        #[arg(
+            long,
+            help = "Project root containing mobench.toml or the Cargo workspace"
+        )]
+        project_root: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Path to the benchmark crate directory containing Cargo.toml"
+        )]
+        crate_path: Option<PathBuf>,
+    },
     /// Verify benchmark setup: registry, spec, artifacts, and optional smoke test.
     ///
     /// This command validates:
@@ -394,6 +440,16 @@ enum Command {
     /// - Artifacts are present and consistent (if --check-artifacts)
     /// - Runs a local smoke test (if --smoke-test and function is specified)
     Verify {
+        #[arg(
+            long,
+            help = "Project root containing mobench.toml or the Cargo workspace"
+        )]
+        project_root: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Path to the benchmark crate directory containing Cargo.toml"
+        )]
+        crate_path: Option<PathBuf>,
         #[arg(long, value_enum, help = "Target platform to verify artifacts for")]
         target: Option<SdkTarget>,
         #[arg(long, help = "Path to bench_spec.json to validate")]
@@ -937,6 +993,37 @@ struct RunSummary {
     performance_metrics: Option<BTreeMap<String, browserstack::PerformanceMetrics>>,
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedProjectLayout {
+    project_root: PathBuf,
+    crate_dir: PathBuf,
+    crate_name: String,
+    library_name: String,
+    config_path: Option<PathBuf>,
+    output_dir: PathBuf,
+    default_function: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectLayoutOptions<'a> {
+    start_dir: Option<&'a Path>,
+    project_root: Option<&'a Path>,
+    crate_path: Option<&'a Path>,
+    config_path: Option<&'a Path>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoMetadataPackage {
+    name: String,
+    manifest_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoMetadataOutput {
+    workspace_root: PathBuf,
+    packages: Vec<CargoMetadataPackage>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct SummaryReport {
     generated_at: String,
@@ -981,12 +1068,13 @@ enum RemoteRun {
 }
 
 pub fn run() -> Result<()> {
-    load_dotenv();
     let cli = Cli::parse();
     match cli.command {
         Command::Run {
             target,
             function,
+            project_root,
+            crate_path,
             iterations,
             warmup,
             devices,
@@ -1009,12 +1097,21 @@ pub fn run() -> Result<()> {
             fetch_timeout_secs,
             progress,
         } => {
+            let layout = resolve_project_layout(ProjectLayoutOptions {
+                start_dir: None,
+                project_root: project_root.as_deref(),
+                crate_path: crate_path.as_deref(),
+                config_path: config.as_deref(),
+            })?;
+            load_dotenv_for_layout(&layout);
             let spec = resolve_run_spec(
                 target,
                 function,
                 iterations,
                 warmup,
                 devices,
+                project_root.as_deref(),
+                crate_path.as_deref(),
                 config.as_deref(),
                 device_matrix.as_deref(),
                 device_tags,
@@ -1022,14 +1119,18 @@ pub fn run() -> Result<()> {
                 ios_test_suite,
                 local_only,
                 release,
+                cli.dry_run,
             )?;
             let summary_paths = resolve_summary_paths(output.as_deref())?;
-            let root = repo_root()?;
-            let output_dir = root.join("target/mobench");
+            let output_dir = layout.output_dir.clone();
 
             // Validate device specs early to catch errors before building (C2: Device validation)
             if !spec.devices.is_empty() && !local_only {
-                if let Ok(creds) = resolve_browserstack_credentials(spec.browserstack.as_ref()) {
+                if cli.dry_run {
+                    println!("[dry-run] Skipping BrowserStack device validation");
+                } else if let Ok(creds) =
+                    resolve_browserstack_credentials(spec.browserstack.as_ref())
+                {
                     let client = BrowserStackClient::new(
                         BrowserStackAuth {
                             username: creds.username,
@@ -1085,6 +1186,9 @@ pub fn run() -> Result<()> {
                     "  Profile:     {}",
                     if release { "release" } else { "debug" }
                 );
+                if cli.dry_run {
+                    println!("  Mode:        dry-run");
+                }
                 if !spec.devices.is_empty() {
                     println!("  Devices:     {}", spec.devices.join(", "));
                 } else {
@@ -1128,14 +1232,21 @@ pub fn run() -> Result<()> {
 
             // A2: Validate that the requested benchmark function exists (if we can detect it)
             if !progress {
-                validate_benchmark_function(&root, &spec.function)?;
+                validate_benchmark_function(&layout, &spec.function)?;
             }
 
             // Persist the spec and metadata to mobile app bundles
             if progress {
                 println!("[1/4] Preparing benchmark spec...");
             }
-            persist_mobile_spec(&spec, release)?;
+            if cli.dry_run {
+                println!(
+                    "[dry-run] Would write bench_spec.json and bench_meta.json under {}",
+                    output_dir.display()
+                );
+            } else {
+                persist_mobile_spec(&layout, &spec, release)?;
+            }
 
             // Skip local smoke test - sample-fns uses direct dispatch, not inventory registry
             // Benchmarks will run on the actual mobile device
@@ -1164,7 +1275,7 @@ pub fn run() -> Result<()> {
                         let ndk = std::env::var("ANDROID_NDK_HOME").context(
                             "ANDROID_NDK_HOME must be set for Android builds. Example: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>",
                         )?;
-                        let build = run_android_build(&ndk, release)?;
+                        let build = run_android_build(&layout, &ndk, release, cli.dry_run)?;
                         let apk = build.app_path;
                         if !progress {
                             println!("\u{2713} Built Android APK at {:?}", apk);
@@ -1172,6 +1283,11 @@ pub fn run() -> Result<()> {
                         if spec.devices.is_empty() {
                             if !progress {
                                 println!("Skipping BrowserStack upload/run: no devices provided");
+                            }
+                            Some(MobileArtifacts::Android { apk })
+                        } else if cli.dry_run {
+                            if !progress {
+                                println!("[dry-run] Skipping BrowserStack upload/run for Android");
                             }
                             Some(MobileArtifacts::Android { apk })
                         } else {
@@ -1193,7 +1309,7 @@ pub fn run() -> Result<()> {
                             println!("Building for iOS...");
                             println!("  Building Rust library for iOS targets...");
                         }
-                        let (xcframework, header) = run_ios_build(release)?;
+                        let (xcframework, header) = run_ios_build(&layout, release, cli.dry_run)?;
                         if !progress {
                             println!("\u{2713} Built iOS xcframework at {:?}", xcframework);
                         }
@@ -1202,6 +1318,10 @@ pub fn run() -> Result<()> {
                         if spec.devices.is_empty() {
                             if !progress {
                                 println!("Skipping BrowserStack upload/run: no devices provided");
+                            }
+                        } else if cli.dry_run {
+                            if !progress {
+                                println!("[dry-run] Skipping BrowserStack upload/run for iOS");
                             }
                         } else {
                             if progress {
@@ -1234,6 +1354,12 @@ pub fn run() -> Result<()> {
                 benchmark_results: None,
                 performance_metrics: None,
             };
+
+            if cli.dry_run {
+                println!();
+                println!("[dry-run] Run simulation completed. No changes were made.");
+                return Ok(());
+            }
 
             if fetch && let Some(remote) = &run_summary.remote_run {
                 let build_id = match remote {
@@ -1540,6 +1666,7 @@ pub fn run() -> Result<()> {
         Command::Build {
             target,
             release,
+            project_root,
             output_dir,
             crate_path,
             progress,
@@ -1547,6 +1674,7 @@ pub fn run() -> Result<()> {
             cmd_build(
                 target,
                 release,
+                project_root,
                 output_dir,
                 crate_path,
                 cli.dry_run,
@@ -1557,17 +1685,29 @@ pub fn run() -> Result<()> {
         Command::PackageIpa {
             scheme,
             method,
+            project_root,
+            crate_path,
             output_dir,
         } => {
-            cmd_package_ipa(&scheme, method, output_dir)?;
+            cmd_package_ipa(&scheme, method, project_root, crate_path, output_dir)?;
         }
-        Command::PackageXcuitest { scheme, output_dir } => {
-            cmd_package_xcuitest(&scheme, output_dir)?;
+        Command::PackageXcuitest {
+            scheme,
+            project_root,
+            crate_path,
+            output_dir,
+        } => {
+            cmd_package_xcuitest(&scheme, project_root, crate_path, output_dir)?;
         }
-        Command::List => {
-            cmd_list()?;
+        Command::List {
+            project_root,
+            crate_path,
+        } => {
+            cmd_list(project_root, crate_path)?;
         }
         Command::Verify {
+            project_root,
+            crate_path,
             target,
             spec_path,
             check_artifacts,
@@ -1576,6 +1716,8 @@ pub fn run() -> Result<()> {
             output_dir,
         } => {
             cmd_verify(
+                project_root,
+                crate_path,
                 target,
                 spec_path,
                 check_artifacts,
@@ -1668,6 +1810,279 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn canonicalize_from(base: &Path, path: &Path) -> Result<PathBuf> {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    };
+    joined
+        .canonicalize()
+        .with_context(|| format!("resolving path {}", joined.display()))
+}
+
+fn resolve_existing_path_arg(base: &Path, path: Option<&Path>) -> Result<Option<PathBuf>> {
+    path.map(|value| canonicalize_from(base, value)).transpose()
+}
+
+fn cargo_metadata_from(start: &Path) -> Option<CargoMetadataOutput> {
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(start)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn git_root_from(start: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(start)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let path = stdout.trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(path))
+    }
+}
+
+fn config_discovery_base(
+    start_dir: &Path,
+    explicit_project_root: Option<&PathBuf>,
+    explicit_crate_path: Option<&PathBuf>,
+) -> PathBuf {
+    explicit_project_root
+        .cloned()
+        .or_else(|| explicit_crate_path.cloned())
+        .unwrap_or_else(|| start_dir.to_path_buf())
+}
+
+fn load_layout_config(
+    start_dir: &Path,
+    explicit_project_root: Option<&PathBuf>,
+    explicit_crate_path: Option<&PathBuf>,
+    explicit_config_path: Option<&PathBuf>,
+) -> Result<Option<(config::MobenchConfig, PathBuf)>> {
+    if let Some(path) = explicit_config_path {
+        return Ok(Some((
+            config::MobenchConfig::load_from_file(path)?,
+            path.to_path_buf(),
+        )));
+    }
+
+    let discovery_base =
+        config_discovery_base(start_dir, explicit_project_root, explicit_crate_path);
+    config::MobenchConfig::discover_from(&discovery_base)
+}
+
+fn resolve_project_root_for_layout(
+    start_dir: &Path,
+    explicit_project_root: Option<PathBuf>,
+    explicit_crate_path: Option<&PathBuf>,
+    config_path: Option<&Path>,
+) -> PathBuf {
+    if let Some(root) = explicit_project_root {
+        return root;
+    }
+    if let Some(path) = config_path
+        && let Some(parent) = path.parent()
+    {
+        return parent.to_path_buf();
+    }
+    if let Some(crate_path) = explicit_crate_path
+        && let Some(metadata) = cargo_metadata_from(crate_path)
+    {
+        return metadata.workspace_root;
+    }
+    if let Some(metadata) = cargo_metadata_from(start_dir) {
+        return metadata.workspace_root;
+    }
+    if let Some(crate_path) = explicit_crate_path
+        && let Some(root) = git_root_from(crate_path)
+    {
+        return root;
+    }
+    if let Some(root) = git_root_from(start_dir) {
+        return root;
+    }
+    start_dir.to_path_buf()
+}
+
+fn read_package_name_from_dir(dir: &Path) -> Option<String> {
+    mobench_sdk::builders::common::read_package_name(&dir.join("Cargo.toml"))
+}
+
+fn package_dir_from_metadata(metadata: &CargoMetadataOutput, crate_name: &str) -> Option<PathBuf> {
+    metadata
+        .packages
+        .iter()
+        .find(|pkg| pkg.name == crate_name)
+        .and_then(|pkg| pkg.manifest_path.parent().map(Path::to_path_buf))
+}
+
+fn resolve_configured_crate_dir(project_root: &Path, crate_name: &str) -> Result<Option<PathBuf>> {
+    if let Some(pkg_name) = read_package_name_from_dir(project_root)
+        && pkg_name == crate_name
+    {
+        return Ok(Some(project_root.to_path_buf()));
+    }
+
+    if let Some(metadata) = cargo_metadata_from(project_root)
+        && let Some(dir) = package_dir_from_metadata(&metadata, crate_name)
+    {
+        return Ok(Some(dir));
+    }
+
+    let candidates = [
+        project_root.join("crates").join(crate_name),
+        project_root.join(crate_name),
+        project_root.join("bench-mobile"),
+    ];
+
+    for candidate in candidates {
+        let manifest = candidate.join("Cargo.toml");
+        if !manifest.exists() {
+            continue;
+        }
+        if read_package_name_from_dir(&candidate).as_deref() == Some(crate_name) {
+            return Ok(Some(candidate));
+        }
+    }
+
+    Ok(None)
+}
+
+fn resolve_legacy_crate_dir(project_root: &Path) -> Result<PathBuf> {
+    let candidates = [
+        project_root.to_path_buf(),
+        project_root.join("bench-mobile"),
+        project_root.join("crates/sample-fns"),
+    ];
+
+    for candidate in candidates {
+        let manifest = candidate.join("Cargo.toml");
+        if !manifest.exists() {
+            continue;
+        }
+        if read_package_name_from_dir(&candidate).is_some() {
+            return Ok(candidate);
+        }
+    }
+
+    bail!(
+        "No benchmark crate found. Pass --crate-path, set [project].crate in mobench.toml, or use a legacy bench-mobile layout."
+    )
+}
+
+fn resolve_project_layout(options: ProjectLayoutOptions<'_>) -> Result<ResolvedProjectLayout> {
+    let start_dir = match options.start_dir {
+        Some(path) => canonicalize_from(Path::new("."), path)?,
+        None => std::env::current_dir().context("Failed to get current directory")?,
+    };
+    let explicit_project_root = resolve_existing_path_arg(&start_dir, options.project_root)?;
+    let explicit_crate_path = resolve_existing_path_arg(&start_dir, options.crate_path)?;
+    let explicit_config_path = resolve_existing_path_arg(&start_dir, options.config_path)?;
+
+    let loaded_config = load_layout_config(
+        &start_dir,
+        explicit_project_root.as_ref(),
+        explicit_crate_path.as_ref(),
+        explicit_config_path.as_ref(),
+    )?;
+    let (config, config_path) = match loaded_config {
+        Some((config, path)) => (Some(config), Some(path)),
+        None => (None, None),
+    };
+
+    let project_root = resolve_project_root_for_layout(
+        &start_dir,
+        explicit_project_root,
+        explicit_crate_path.as_ref(),
+        config_path.as_deref(),
+    );
+
+    let crate_dir = if let Some(crate_path) = explicit_crate_path {
+        crate_path
+    } else if let Some(configured_name) = config
+        .as_ref()
+        .and_then(|cfg| cfg.project.crate_name.as_deref())
+    {
+        resolve_configured_crate_dir(&project_root, configured_name)?.ok_or_else(|| {
+            anyhow!(
+                "Configured benchmark crate '{}' was not found under {}",
+                configured_name,
+                project_root.display()
+            )
+        })?
+    } else {
+        resolve_legacy_crate_dir(&project_root)?
+    };
+
+    let crate_name = read_package_name_from_dir(&crate_dir).ok_or_else(|| {
+        anyhow!(
+            "package.name not found in {}",
+            crate_dir.join("Cargo.toml").display()
+        )
+    })?;
+    let library_name = config
+        .as_ref()
+        .and_then(|cfg| cfg.library_name())
+        .unwrap_or_else(|| crate_name.replace('-', "_"));
+    let output_dir = config
+        .as_ref()
+        .and_then(|cfg| cfg.project.output_dir.clone())
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                project_root.join(path)
+            }
+        })
+        .unwrap_or_else(|| project_root.join("target/mobench"));
+    let default_function = config
+        .as_ref()
+        .and_then(|cfg| cfg.benchmarks.default_function.clone());
+
+    Ok(ResolvedProjectLayout {
+        project_root,
+        crate_dir,
+        crate_name,
+        library_name,
+        config_path,
+        output_dir,
+        default_function,
+    })
+}
+
+fn discover_benchmarks_for_layout(layout: &ResolvedProjectLayout) -> Result<Vec<String>> {
+    let mut benchmarks =
+        mobench_sdk::codegen::detect_all_benchmarks(&layout.crate_dir, &layout.crate_name);
+    benchmarks.sort();
+    benchmarks.dedup();
+    Ok(benchmarks)
+}
+
+fn ensure_verify_smoke_test_supported(layout: &ResolvedProjectLayout) -> Result<()> {
+    let supported_embedded_crates = ["sample-fns", "basic-benchmark", "ffi-benchmark"];
+    if supported_embedded_crates.contains(&layout.crate_name.as_str()) {
+        return Ok(());
+    }
+
+    bail!(
+        "verify --smoke-test is unsupported for external crate '{}'; smoke tests only work for benchmark crates linked into the mobench CLI binary",
+        layout.crate_name
+    )
 }
 
 fn write_config_template(path: &Path, target: MobileTarget, overwrite: bool) -> Result<()> {
@@ -2123,7 +2538,9 @@ fn cmd_ci_summarize(args: CiSummarizeArgs) -> Result<()> {
         summarize::load_results_dir(dir)?
     } else {
         // If only build_id, we need results_dir too for now
-        anyhow::bail!("--results-dir is required. Use --build-id alongside --results-dir to enrich offline results with BrowserStack metrics.");
+        anyhow::bail!(
+            "--results-dir is required. Use --build-id alongside --results-dir to enrich offline results with BrowserStack metrics."
+        );
     };
 
     // Enrich with BrowserStack data if build_id provided
@@ -2249,7 +2666,10 @@ fn cmd_ci_check_run(args: CiCheckRunArgs) -> Result<()> {
 
     let bench_count: usize = report.platforms.iter().map(|p| p.benchmarks.len()).sum();
     let title = if has_regression {
-        format!("{bench_count} benchmarks \u{2014} {} regressed", annotations.len())
+        format!(
+            "{bench_count} benchmarks \u{2014} {} regressed",
+            annotations.len()
+        )
     } else {
         format!("{bench_count} benchmarks passed")
     };
@@ -2772,6 +3192,8 @@ fn resolve_run_spec(
     iterations: u32,
     warmup: u32,
     devices: Vec<String>,
+    project_root: Option<&Path>,
+    crate_path: Option<&Path>,
     config: Option<&Path>,
     device_matrix: Option<&Path>,
     device_tags: Vec<String>,
@@ -2779,6 +3201,7 @@ fn resolve_run_spec(
     ios_test_suite: Option<PathBuf>,
     local_only: bool,
     release: bool,
+    dry_run: bool,
 ) -> Result<RunSpec> {
     if let Some(cfg_path) = config {
         let cfg = load_config(cfg_path)?;
@@ -2843,10 +3266,25 @@ fn resolve_run_spec(
         && !resolved_devices.is_empty()
         && ios_xcuitest.is_none()
     {
-        println!("📦 Auto-packaging iOS artifacts for BrowserStack...");
-        let artifacts = package_ios_xcuitest_artifacts(release)?;
-        println!("  ✓ IPA: {}", artifacts.app.display());
-        println!("  ✓ XCUITest: {}", artifacts.test_suite.display());
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: None,
+            project_root,
+            crate_path,
+            config_path: config,
+        })?;
+        let artifacts = if dry_run {
+            println!("📦 [dry-run] Would auto-package iOS artifacts for BrowserStack...");
+            IosXcuitestArtifacts {
+                app: layout.output_dir.join("ios/BenchRunner.ipa"),
+                test_suite: layout.output_dir.join("ios/BenchRunnerUITests.zip"),
+            }
+        } else {
+            println!("📦 Auto-packaging iOS artifacts for BrowserStack...");
+            let artifacts = package_ios_xcuitest_artifacts(&layout, release)?;
+            println!("  ✓ IPA: {}", artifacts.app.display());
+            println!("  ✓ XCUITest: {}", artifacts.test_suite.display());
+            artifacts
+        };
         Some(artifacts)
     } else {
         ios_xcuitest
@@ -2923,11 +3361,17 @@ fn filter_devices_by_tags(devices: Vec<DeviceEntry>, tags: &[String]) -> Result<
     Ok(matched)
 }
 
-fn run_ios_build(release: bool) -> Result<(PathBuf, PathBuf)> {
-    let root = repo_root()?;
-    let crate_name =
-        detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
-    let builder = mobench_sdk::builders::IosBuilder::new(&root, crate_name).verbose(true);
+fn run_ios_build(
+    layout: &ResolvedProjectLayout,
+    release: bool,
+    dry_run: bool,
+) -> Result<(PathBuf, PathBuf)> {
+    let builder =
+        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
+            .verbose(true)
+            .dry_run(dry_run)
+            .crate_dir(&layout.crate_dir)
+            .output_dir(&layout.output_dir);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -2939,22 +3383,22 @@ fn run_ios_build(release: bool) -> Result<(PathBuf, PathBuf)> {
         incremental: true,
     };
     let result = builder.build(&cfg)?;
-    let header = root.join("target/ios/include").join(format!(
-        "{}.h",
-        result
-            .app_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("module")
-    ));
+    let header = layout
+        .output_dir
+        .join("ios/include")
+        .join(format!("{}.h", layout.library_name));
     Ok((result.app_path, header))
 }
 
-fn package_ios_xcuitest_artifacts(release: bool) -> Result<IosXcuitestArtifacts> {
-    let root = repo_root()?;
-    let crate_name =
-        detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
-    let builder = mobench_sdk::builders::IosBuilder::new(&root, crate_name).verbose(true);
+fn package_ios_xcuitest_artifacts(
+    layout: &ResolvedProjectLayout,
+    release: bool,
+) -> Result<IosXcuitestArtifacts> {
+    let builder =
+        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
+            .verbose(true)
+            .crate_dir(&layout.crate_dir)
+            .output_dir(&layout.output_dir);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -3331,54 +3775,16 @@ fn run_local_smoke(spec: &RunSpec) -> Result<Value> {
 ///
 /// This provides early feedback when a function name is misspelled or doesn't exist.
 /// If validation fails, it warns but continues (the final validation happens on device).
-fn validate_benchmark_function(project_root: &Path, function_name: &str) -> Result<()> {
-    // Try to find the benchmark crate
-    let crate_name = detect_bench_mobile_crate_name(project_root).ok();
-
-    // Check common crate locations
-    let search_dirs = [
-        project_root.join("bench-mobile"),
-        project_root.join("crates/sample-fns"),
-        project_root.to_path_buf(),
-    ];
-
-    // Extract the crate name from the function (e.g., "sample_fns::fibonacci" -> "sample_fns")
-    let function_crate = function_name.split("::").next().unwrap_or("");
-
-    let mut found_any_benchmarks = false;
-    let mut found_function = false;
-
-    for dir in &search_dirs {
-        if !dir.join("Cargo.toml").exists() {
-            continue;
-        }
-
-        // Determine the crate name for this directory
-        let dir_crate_name = crate_name.as_deref().unwrap_or(function_crate);
-
-        // Detect all benchmarks in this directory
-        let benchmarks = mobench_sdk::codegen::detect_all_benchmarks(dir, dir_crate_name);
-
-        if !benchmarks.is_empty() {
-            found_any_benchmarks = true;
-
-            // Check if our function is in the list
-            if benchmarks.iter().any(|b| b == function_name) {
-                found_function = true;
-                break;
-            }
-
-            // Also check without crate prefix (in case user specified just the function name)
-            let simple_name = function_name.split("::").last().unwrap_or(function_name);
-            if benchmarks
-                .iter()
-                .any(|b| b.ends_with(&format!("::{}", simple_name)))
-            {
-                found_function = true;
-                break;
-            }
-        }
-    }
+fn validate_benchmark_function(layout: &ResolvedProjectLayout, function_name: &str) -> Result<()> {
+    let benchmarks = discover_benchmarks_for_layout(layout)?;
+    let found_any_benchmarks = !benchmarks.is_empty();
+    let simple_name = function_name.split("::").last().unwrap_or(function_name);
+    let found_function = benchmarks
+        .iter()
+        .any(|benchmark| benchmark == function_name)
+        || benchmarks
+            .iter()
+            .any(|benchmark| benchmark.ends_with(&format!("::{}", simple_name)));
 
     if found_any_benchmarks && !found_function {
         // We found benchmarks but not the one requested - this is likely an error
@@ -3388,15 +3794,8 @@ fn validate_benchmark_function(project_root: &Path, function_name: &str) -> Resu
             function_name
         );
         println!("  Available benchmarks:");
-        for dir in &search_dirs {
-            if !dir.join("Cargo.toml").exists() {
-                continue;
-            }
-            let dir_crate_name = crate_name.as_deref().unwrap_or(function_crate);
-            let benchmarks = mobench_sdk::codegen::detect_all_benchmarks(dir, dir_crate_name);
-            for bench in benchmarks {
-                println!("    - {}", bench);
-            }
+        for bench in benchmarks {
+            println!("    - {}", bench);
         }
         println!();
         println!("  The run will continue, but the benchmark may fail on the device.");
@@ -3419,8 +3818,12 @@ fn validate_benchmark_function(project_root: &Path, function_name: &str) -> Resu
     Ok(())
 }
 
-fn persist_mobile_spec(spec: &RunSpec, release: bool) -> Result<()> {
-    let root = repo_root()?;
+fn persist_mobile_spec(
+    layout: &ResolvedProjectLayout,
+    spec: &RunSpec,
+    release: bool,
+) -> Result<()> {
+    let root = &layout.project_root;
     let payload = json!({
         "function": spec.function,
         "iterations": spec.iterations,
@@ -3444,7 +3847,7 @@ fn persist_mobile_spec(spec: &RunSpec, release: bool) -> Result<()> {
     // IMPORTANT: Also embed the spec directly into the mobile app bundles
     // This ensures the requested benchmark function is always used, even when
     // the app is run via BrowserStack where file paths are different.
-    let mobench_output_dir = root.join("target/mobench");
+    let mobench_output_dir = layout.output_dir.clone();
     let apps_exist =
         mobench_output_dir.join("android").exists() || mobench_output_dir.join("ios").exists();
 
@@ -4550,11 +4953,12 @@ fn format_ms(value: Option<u64>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn run_android_build(_ndk_home: &str, release: bool) -> Result<mobench_sdk::BuildResult> {
-    let root = repo_root()?;
-    let crate_name =
-        detect_bench_mobile_crate_name(&root).unwrap_or_else(|_| "bench-mobile".to_string());
-
+fn run_android_build(
+    layout: &ResolvedProjectLayout,
+    _ndk_home: &str,
+    release: bool,
+    dry_run: bool,
+) -> Result<mobench_sdk::BuildResult> {
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -4565,15 +4969,28 @@ fn run_android_build(_ndk_home: &str, release: bool) -> Result<mobench_sdk::Buil
         profile,
         incremental: true,
     };
-    let builder = mobench_sdk::builders::AndroidBuilder::new(&root, crate_name).verbose(true);
+    let builder =
+        mobench_sdk::builders::AndroidBuilder::new(&layout.project_root, layout.crate_name.clone())
+            .verbose(true)
+            .dry_run(dry_run)
+            .crate_dir(&layout.crate_dir)
+            .output_dir(&layout.output_dir);
     let result = builder.build(&cfg)?;
     Ok(result)
 }
 
-fn load_dotenv() {
-    if let Ok(root) = repo_root() {
-        let _ = dotenvy::from_path(root.join(".env"));
-        let _ = dotenvy::from_path_override(root.join(".env.local"));
+fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
+    let mut directories = vec![layout.project_root.clone()];
+    if let Some(config_path) = &layout.config_path
+        && let Some(config_dir) = config_path.parent()
+        && config_dir != layout.project_root
+    {
+        directories.push(config_dir.to_path_buf());
+    }
+
+    for dir in directories {
+        let _ = dotenvy::from_path(dir.join(".env"));
+        let _ = dotenvy::from_path_override(dir.join(".env.local"));
     }
 }
 
@@ -4670,23 +5087,23 @@ fn cmd_init_sdk(
 fn cmd_build(
     target: SdkTarget,
     release: bool,
+    project_root: Option<PathBuf>,
     output_dir: Option<PathBuf>,
     crate_path: Option<PathBuf>,
     dry_run: bool,
     verbose: bool,
     progress: bool,
 ) -> Result<()> {
-    // Load config file if present (mobench.toml)
-    let config_resolver = config::ConfigResolver::new().unwrap_or_default();
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: project_root.as_deref(),
+        crate_path: crate_path.as_deref(),
+        config_path: None,
+    })?;
+    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
 
     // Progress mode: simplified output
     if progress {
-        let project_root = std::env::current_dir().context("Failed to get current directory")?;
-        let crate_name = detect_bench_mobile_crate_name(&project_root)
-            .unwrap_or_else(|_| "bench-mobile".to_string());
-        let effective_output_dir =
-            output_dir.or_else(|| config_resolver.output_dir().map(|p| p.to_path_buf()));
-
         let build_config = mobench_sdk::BuildConfig {
             target: target.into(),
             profile: if release {
@@ -4700,16 +5117,14 @@ fn cmd_build(
         match target {
             SdkTarget::Android => {
                 println!("[1/3] Building Rust library...");
-                let mut builder =
-                    mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name)
-                        .verbose(false)
-                        .dry_run(dry_run);
-                if let Some(ref dir) = effective_output_dir {
-                    builder = builder.output_dir(dir);
-                }
-                if let Some(ref path) = crate_path {
-                    builder = builder.crate_dir(path);
-                }
+                let builder = mobench_sdk::builders::AndroidBuilder::new(
+                    &layout.project_root,
+                    layout.crate_name.clone(),
+                )
+                .verbose(false)
+                .dry_run(dry_run)
+                .output_dir(&effective_output_dir)
+                .crate_dir(&layout.crate_dir);
                 println!("[2/3] Building Android APK...");
                 let result = builder.build(&build_config)?;
                 println!("[3/3] Done!");
@@ -4719,15 +5134,14 @@ fn cmd_build(
             }
             SdkTarget::Ios => {
                 println!("[1/3] Building Rust library...");
-                let mut builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
-                    .verbose(false)
-                    .dry_run(dry_run);
-                if let Some(ref dir) = effective_output_dir {
-                    builder = builder.output_dir(dir);
-                }
-                if let Some(ref path) = crate_path {
-                    builder = builder.crate_dir(path);
-                }
+                let builder = mobench_sdk::builders::IosBuilder::new(
+                    &layout.project_root,
+                    layout.crate_name.clone(),
+                )
+                .verbose(false)
+                .dry_run(dry_run)
+                .output_dir(&effective_output_dir)
+                .crate_dir(&layout.crate_dir);
                 println!("[2/3] Building iOS xcframework...");
                 let result = builder.build(&build_config)?;
                 println!("[3/3] Done!");
@@ -4737,30 +5151,26 @@ fn cmd_build(
             }
             SdkTarget::Both => {
                 println!("[1/5] Building Rust library for Android...");
-                let mut android_builder =
-                    mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
-                        .verbose(false)
-                        .dry_run(dry_run);
-                if let Some(ref dir) = effective_output_dir {
-                    android_builder = android_builder.output_dir(dir);
-                }
-                if let Some(ref path) = crate_path {
-                    android_builder = android_builder.crate_dir(path);
-                }
+                let android_builder = mobench_sdk::builders::AndroidBuilder::new(
+                    &layout.project_root,
+                    layout.crate_name.clone(),
+                )
+                .verbose(false)
+                .dry_run(dry_run)
+                .output_dir(&effective_output_dir)
+                .crate_dir(&layout.crate_dir);
                 println!("[2/5] Building Android APK...");
                 let android_result = android_builder.build(&build_config)?;
 
                 println!("[3/5] Building Rust library for iOS...");
-                let mut ios_builder =
-                    mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
-                        .verbose(false)
-                        .dry_run(dry_run);
-                if let Some(ref dir) = effective_output_dir {
-                    ios_builder = ios_builder.output_dir(dir);
-                }
-                if let Some(ref path) = crate_path {
-                    ios_builder = ios_builder.crate_dir(path);
-                }
+                let ios_builder = mobench_sdk::builders::IosBuilder::new(
+                    &layout.project_root,
+                    layout.crate_name.clone(),
+                )
+                .verbose(false)
+                .dry_run(dry_run)
+                .output_dir(&effective_output_dir)
+                .crate_dir(&layout.crate_dir);
                 println!("[4/5] Building iOS xcframework...");
                 let ios_result = ios_builder.build(&build_config)?;
 
@@ -4775,7 +5185,7 @@ fn cmd_build(
     }
 
     // Normal (verbose) mode
-    if let Some(config_path) = &config_resolver.config_path {
+    if let Some(config_path) = &layout.config_path {
         println!("Using config file: {:?}", config_path);
     }
 
@@ -4789,28 +5199,9 @@ fn cmd_build(
         println!("  Verbose: enabled");
     }
 
-    let project_root = std::env::current_dir().context("Failed to get current directory")?;
-
-    // Use crate name from config if not auto-detected
-    let crate_name = detect_bench_mobile_crate_name(&project_root)
-        .or_else(|_| {
-            config_resolver
-                .crate_name()
-                .map(|s| s.to_string())
-                .ok_or_else(|| anyhow!("Could not detect crate name"))
-        })
-        .unwrap_or_else(|_| "bench-mobile".to_string()); // Fallback for legacy layouts
-
-    // CLI flags override config file values
-    let effective_output_dir =
-        output_dir.or_else(|| config_resolver.output_dir().map(|p| p.to_path_buf()));
-
-    if let Some(ref dir) = effective_output_dir {
-        println!("  Output: {:?}", dir);
-    }
-    if let Some(ref path) = crate_path {
-        println!("  Crate: {:?}", path);
-    }
+    println!("  Output: {:?}", effective_output_dir);
+    println!("  Project root: {:?}", layout.project_root);
+    println!("  Crate: {:?}", layout.crate_dir);
 
     let build_config = mobench_sdk::BuildConfig {
         target: target.into(),
@@ -4826,16 +5217,14 @@ fn cmd_build(
         SdkTarget::Android => {
             println!("\nBuilding for Android...");
             println!("  Building Rust library for Android targets...");
-            let mut builder =
-                mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
-                    .verbose(verbose)
-                    .dry_run(dry_run);
-            if let Some(ref dir) = effective_output_dir {
-                builder = builder.output_dir(dir);
-            }
-            if let Some(ref path) = crate_path {
-                builder = builder.crate_dir(path);
-            }
+            let builder = mobench_sdk::builders::AndroidBuilder::new(
+                &layout.project_root,
+                layout.crate_name.clone(),
+            )
+            .verbose(verbose)
+            .dry_run(dry_run)
+            .output_dir(&effective_output_dir)
+            .crate_dir(&layout.crate_dir);
             let result = builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
@@ -4846,16 +5235,14 @@ fn cmd_build(
         SdkTarget::Ios => {
             println!("\nBuilding for iOS...");
             println!("  Building Rust library for iOS targets...");
-            let mut builder =
-                mobench_sdk::builders::IosBuilder::new(&project_root, crate_name.clone())
-                    .verbose(verbose)
-                    .dry_run(dry_run);
-            if let Some(ref dir) = effective_output_dir {
-                builder = builder.output_dir(dir);
-            }
-            if let Some(ref path) = crate_path {
-                builder = builder.crate_dir(path);
-            }
+            let builder = mobench_sdk::builders::IosBuilder::new(
+                &layout.project_root,
+                layout.crate_name.clone(),
+            )
+            .verbose(verbose)
+            .dry_run(dry_run)
+            .output_dir(&effective_output_dir)
+            .crate_dir(&layout.crate_dir);
             let result = builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
@@ -4867,16 +5254,14 @@ fn cmd_build(
             // Build Android
             println!("\nBuilding for Android...");
             println!("  Building Rust library for Android targets...");
-            let mut android_builder =
-                mobench_sdk::builders::AndroidBuilder::new(&project_root, crate_name.clone())
-                    .verbose(verbose)
-                    .dry_run(dry_run);
-            if let Some(ref dir) = effective_output_dir {
-                android_builder = android_builder.output_dir(dir);
-            }
-            if let Some(ref path) = crate_path {
-                android_builder = android_builder.crate_dir(path);
-            }
+            let android_builder = mobench_sdk::builders::AndroidBuilder::new(
+                &layout.project_root,
+                layout.crate_name.clone(),
+            )
+            .verbose(verbose)
+            .dry_run(dry_run)
+            .output_dir(&effective_output_dir)
+            .crate_dir(&layout.crate_dir);
             let android_result = android_builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
@@ -4887,15 +5272,14 @@ fn cmd_build(
             // Build iOS
             println!("\nBuilding for iOS...");
             println!("  Building Rust library for iOS targets...");
-            let mut ios_builder = mobench_sdk::builders::IosBuilder::new(&project_root, crate_name)
-                .verbose(verbose)
-                .dry_run(dry_run);
-            if let Some(ref dir) = effective_output_dir {
-                ios_builder = ios_builder.output_dir(dir);
-            }
-            if let Some(ref path) = crate_path {
-                ios_builder = ios_builder.crate_dir(path);
-            }
+            let ios_builder = mobench_sdk::builders::IosBuilder::new(
+                &layout.project_root,
+                layout.crate_name.clone(),
+            )
+            .verbose(verbose)
+            .dry_run(dry_run)
+            .output_dir(&effective_output_dir)
+            .crate_dir(&layout.crate_dir);
             let ios_result = ios_builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
@@ -4912,86 +5296,21 @@ fn cmd_build(
     Ok(())
 }
 
-fn detect_bench_mobile_crate_name(root: &Path) -> Result<String> {
-    // Try bench-mobile/ first (SDK projects)
-    let bench_mobile_path = root.join("bench-mobile").join("Cargo.toml");
-    if bench_mobile_path.exists() {
-        let contents = fs::read_to_string(&bench_mobile_path)
-            .with_context(|| format!("reading bench-mobile manifest at {:?}", bench_mobile_path))?;
-        let value: toml::Value = toml::from_str(&contents)
-            .with_context(|| format!("parsing bench-mobile manifest {:?}", bench_mobile_path))?;
-        let name = value
-            .get("package")
-            .and_then(|pkg| pkg.get("name"))
-            .and_then(|n| n.as_str())
-            .ok_or_else(|| {
-                anyhow!(
-                    "bench-mobile package.name missing in {:?}",
-                    bench_mobile_path
-                )
-            })?;
-        return Ok(name.to_string());
-    }
-
-    // Fallback: Try crates/sample-fns (repository testing)
-    let sample_fns_path = root.join("crates").join("sample-fns").join("Cargo.toml");
-    if sample_fns_path.exists() {
-        let contents = fs::read_to_string(&sample_fns_path)
-            .with_context(|| format!("reading sample-fns manifest at {:?}", sample_fns_path))?;
-        let value: toml::Value = toml::from_str(&contents)
-            .with_context(|| format!("parsing sample-fns manifest {:?}", sample_fns_path))?;
-        let name = value
-            .get("package")
-            .and_then(|pkg| pkg.get("name"))
-            .and_then(|n| n.as_str())
-            .ok_or_else(|| anyhow!("sample-fns package.name missing in {:?}", sample_fns_path))?;
-        return Ok(name.to_string());
-    }
-
-    bail!(
-        "No benchmark crate found. Expected bench-mobile/Cargo.toml or crates/sample-fns/Cargo.toml under the project root. Run from the project root or set [project].crate in mobench.toml."
-    )
-}
-
 /// List all discovered benchmark functions
 ///
 /// This uses source code scanning to find `#[benchmark]` functions, which works
 /// without requiring a full build. It also falls back to the inventory registry
 /// for any benchmarks that may be registered at runtime.
-fn cmd_list() -> Result<()> {
+fn cmd_list(_project_root: Option<PathBuf>, _crate_path: Option<PathBuf>) -> Result<()> {
     println!("Discovering benchmark functions...\n");
 
-    let project_root = repo_root()?;
-    let mut all_benchmarks = Vec::new();
-
-    // Method 1: Source code scanning (works without build)
-    let search_dirs = [
-        ("bench-mobile", project_root.join("bench-mobile")),
-        ("sample-fns", project_root.join("crates/sample-fns")),
-        ("ffi-benchmark", project_root.join("crates/ffi-benchmark")),
-        ("", project_root.clone()),
-    ];
-
-    for (default_crate_name, dir) in &search_dirs {
-        if !dir.join("Cargo.toml").exists() {
-            continue;
-        }
-        let crate_name = if default_crate_name.is_empty() {
-            if let Ok(name) = get_crate_name_from_cargo_toml(&dir.join("Cargo.toml")) {
-                name
-            } else {
-                continue;
-            }
-        } else {
-            default_crate_name.to_string()
-        };
-        let benchmarks = mobench_sdk::codegen::detect_all_benchmarks(dir, &crate_name);
-        for bench in benchmarks {
-            if !all_benchmarks.contains(&bench) {
-                all_benchmarks.push(bench);
-            }
-        }
-    }
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: _project_root.as_deref(),
+        crate_path: _crate_path.as_deref(),
+        config_path: None,
+    })?;
+    let mut all_benchmarks = discover_benchmarks_for_layout(&layout)?;
 
     // Method 2: Inventory registry (for runtime-registered benchmarks)
     let registry_benchmarks = mobench_sdk::discover_benchmarks();
@@ -5006,12 +5325,7 @@ fn cmd_list() -> Result<()> {
 
     if all_benchmarks.is_empty() {
         println!("No benchmarks found.\n");
-        println!("Searched locations:");
-        for (name, dir) in &search_dirs {
-            if !name.is_empty() {
-                println!("  - {}: {}", name, dir.display());
-            }
-        }
+        println!("Resolved crate: {}", layout.crate_dir.display());
         println!("\nTo add benchmarks:");
         println!("  1. Add #[benchmark] attribute to functions");
         println!("  2. Make sure mobench-sdk is in your dependencies");
@@ -5032,21 +5346,12 @@ fn cmd_list() -> Result<()> {
     Ok(())
 }
 
-fn get_crate_name_from_cargo_toml(cargo_toml: &Path) -> Result<String> {
-    let contents = fs::read_to_string(cargo_toml)?;
-    let value: toml::Value = toml::from_str(&contents)?;
-    let name = value
-        .get("package")
-        .and_then(|pkg| pkg.get("name"))
-        .and_then(|n| n.as_str())
-        .ok_or_else(|| anyhow!("package.name not found in {:?}", cargo_toml))?;
-    Ok(name.to_string())
-}
-
 /// Package iOS app as IPA for distribution or testing
 fn cmd_package_ipa(
     scheme: &str,
     method: IosSigningMethodArg,
+    project_root: Option<PathBuf>,
+    crate_path: Option<PathBuf>,
     output_dir: Option<PathBuf>,
 ) -> Result<()> {
     println!("Packaging iOS app as IPA...");
@@ -5056,15 +5361,19 @@ fn cmd_package_ipa(
         println!("  Output: {:?}", dir);
     }
 
-    let project_root = repo_root()?;
-    let crate_name = detect_bench_mobile_crate_name(&project_root)
-        .unwrap_or_else(|_| "bench-mobile".to_string());
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: project_root.as_deref(),
+        crate_path: crate_path.as_deref(),
+        config_path: None,
+    })?;
+    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
 
-    let mut builder =
-        mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
-    if let Some(ref dir) = output_dir {
-        builder = builder.output_dir(dir);
-    }
+    let builder =
+        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
+            .verbose(true)
+            .crate_dir(&layout.crate_dir)
+            .output_dir(&effective_output_dir);
 
     let signing_method: mobench_sdk::builders::SigningMethod = method.into();
     let ipa_path = builder
@@ -5084,22 +5393,31 @@ fn cmd_package_ipa(
 }
 
 /// Package XCUITest runner for BrowserStack testing
-fn cmd_package_xcuitest(scheme: &str, output_dir: Option<PathBuf>) -> Result<()> {
+fn cmd_package_xcuitest(
+    scheme: &str,
+    project_root: Option<PathBuf>,
+    crate_path: Option<PathBuf>,
+    output_dir: Option<PathBuf>,
+) -> Result<()> {
     println!("Packaging XCUITest runner...");
     println!("  Scheme: {}", scheme);
     if let Some(ref dir) = output_dir {
         println!("  Output: {:?}", dir);
     }
 
-    let project_root = repo_root()?;
-    let crate_name = detect_bench_mobile_crate_name(&project_root)
-        .unwrap_or_else(|_| "bench-mobile".to_string());
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: project_root.as_deref(),
+        crate_path: crate_path.as_deref(),
+        config_path: None,
+    })?;
+    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
 
-    let mut builder =
-        mobench_sdk::builders::IosBuilder::new(&project_root, crate_name).verbose(true);
-    if let Some(ref dir) = output_dir {
-        builder = builder.output_dir(dir);
-    }
+    let builder =
+        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
+            .verbose(true)
+            .crate_dir(&layout.crate_dir)
+            .output_dir(&effective_output_dir);
 
     let zip_path = builder
         .package_xcuitest(scheme)
@@ -5118,6 +5436,8 @@ fn cmd_package_xcuitest(scheme: &str, output_dir: Option<PathBuf>) -> Result<()>
 
 /// Verify benchmark setup: registry, spec, artifacts, and optional smoke test
 fn cmd_verify(
+    project_root: Option<PathBuf>,
+    crate_path: Option<PathBuf>,
     target: Option<SdkTarget>,
     spec_path: Option<PathBuf>,
     check_artifacts: bool,
@@ -5127,14 +5447,23 @@ fn cmd_verify(
 ) -> Result<()> {
     println!("Verifying benchmark setup...\n");
 
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: project_root.as_deref(),
+        crate_path: crate_path.as_deref(),
+        config_path: None,
+    })?;
+    let resolved_benchmarks = discover_benchmarks_for_layout(&layout)?;
+    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
+
     let mut checks_passed = 0;
     let mut checks_failed = 0;
     let mut warnings = 0;
 
     // 1. Check benchmark registry
     print!("  [1/4] Checking benchmark registry... ");
-    let benchmarks = mobench_sdk::discover_benchmarks();
-    if benchmarks.is_empty() {
+    let registry_benchmarks = mobench_sdk::discover_benchmarks();
+    if resolved_benchmarks.is_empty() && registry_benchmarks.is_empty() {
         println!("WARNING");
         println!("        No benchmarks found in registry.");
         println!("        This may be expected if benchmarks are in a separate crate.");
@@ -5143,9 +5472,15 @@ fn cmd_verify(
         );
         warnings += 1;
     } else {
-        println!("OK ({} benchmark(s) found)", benchmarks.len());
-        for bench in &benchmarks {
-            println!("        - {}", bench.name);
+        let total = resolved_benchmarks.len().max(registry_benchmarks.len());
+        println!("OK ({} benchmark(s) found)", total);
+        for bench in &resolved_benchmarks {
+            println!("        - {}", bench);
+        }
+        if resolved_benchmarks.is_empty() {
+            for bench in &registry_benchmarks {
+                println!("        - {}", bench.name);
+            }
         }
         checks_passed += 1;
     }
@@ -5169,15 +5504,15 @@ fn cmd_verify(
         }
     } else {
         // Try default locations
-        let project_root = repo_root().unwrap_or_else(|_| PathBuf::from("."));
-        let output_base = output_dir
-            .clone()
-            .unwrap_or_else(|| project_root.join("target/mobench"));
         let default_paths = [
-            output_base.join("android/app/src/main/assets/bench_spec.json"),
-            output_base.join("ios/BenchRunner/BenchRunner/bench_spec.json"),
-            project_root.join("target/mobile-spec/android/bench_spec.json"),
-            project_root.join("target/mobile-spec/ios/bench_spec.json"),
+            effective_output_dir.join("android/app/src/main/assets/bench_spec.json"),
+            effective_output_dir.join("ios/BenchRunner/BenchRunner/bench_spec.json"),
+            layout
+                .project_root
+                .join("target/mobile-spec/android/bench_spec.json"),
+            layout
+                .project_root
+                .join("target/mobile-spec/ios/bench_spec.json"),
         ];
 
         let mut found_any = false;
@@ -5212,20 +5547,15 @@ fn cmd_verify(
     // 3. Check artifacts if requested
     print!("  [3/4] Checking build artifacts... ");
     if check_artifacts {
-        let project_root = repo_root().unwrap_or_else(|_| PathBuf::from("."));
-        let output_base = output_dir
-            .clone()
-            .unwrap_or_else(|| project_root.join("target/mobench"));
-
         let mut artifacts_ok = true;
         let mut artifact_details = Vec::new();
 
         if let Some(ref t) = target {
             match t {
                 SdkTarget::Android | SdkTarget::Both => {
-                    let apk_path =
-                        output_base.join("android/app/build/outputs/apk/debug/app-debug.apk");
-                    let apk_release = output_base
+                    let apk_path = effective_output_dir
+                        .join("android/app/build/outputs/apk/debug/app-debug.apk");
+                    let apk_release = effective_output_dir
                         .join("android/app/build/outputs/apk/release/app-release-unsigned.apk");
                     if apk_path.exists() {
                         artifact_details.push(format!("Android APK (debug): {:?}", apk_path));
@@ -5237,10 +5567,12 @@ fn cmd_verify(
                     }
 
                     // Check JNI libs
-                    let jni_base = output_base.join("android/app/src/main/jniLibs");
+                    let jni_base = effective_output_dir.join("android/app/src/main/jniLibs");
                     let abis = ["arm64-v8a", "armeabi-v7a", "x86_64"];
                     for abi in abis {
-                        let lib_path = jni_base.join(abi).join("libsample_fns.so");
+                        let lib_path = jni_base
+                            .join(abi)
+                            .join(format!("lib{}.so", layout.library_name));
                         if lib_path.exists() {
                             artifact_details.push(format!("JNI lib ({}): OK", abi));
                         }
@@ -5251,7 +5583,9 @@ fn cmd_verify(
 
             match t {
                 SdkTarget::Ios | SdkTarget::Both => {
-                    let xcframework = output_base.join("ios/sample_fns.xcframework");
+                    let xcframework = effective_output_dir
+                        .join("ios")
+                        .join(format!("{}.xcframework", layout.library_name));
                     if xcframework.exists() {
                         artifact_details.push(format!("iOS xcframework: {:?}", xcframework));
                     } else {
@@ -5259,12 +5593,12 @@ fn cmd_verify(
                         artifacts_ok = false;
                     }
 
-                    let ipa_path = output_base.join("ios/BenchRunner.ipa");
+                    let ipa_path = effective_output_dir.join("ios/BenchRunner.ipa");
                     if ipa_path.exists() {
                         artifact_details.push(format!("iOS IPA: {:?}", ipa_path));
                     }
 
-                    let xcuitest_path = output_base.join("ios/BenchRunnerUITests.zip");
+                    let xcuitest_path = effective_output_dir.join("ios/BenchRunnerUITests.zip");
                     if xcuitest_path.exists() {
                         artifact_details.push(format!("XCUITest runner: {:?}", xcuitest_path));
                     }
@@ -5273,8 +5607,11 @@ fn cmd_verify(
             }
         } else {
             // Check both platforms by default
-            let android_apk = output_base.join("android/app/build/outputs/apk/debug/app-debug.apk");
-            let ios_xcframework = output_base.join("ios/sample_fns.xcframework");
+            let android_apk =
+                effective_output_dir.join("android/app/build/outputs/apk/debug/app-debug.apk");
+            let ios_xcframework = effective_output_dir
+                .join("ios")
+                .join(format!("{}.xcframework", layout.library_name));
 
             if android_apk.exists() {
                 artifact_details.push(format!("Android APK: {:?}", android_apk));
@@ -5307,7 +5644,11 @@ fn cmd_verify(
     // 4. Run smoke test if requested
     print!("  [4/4] Running smoke test... ");
     if smoke_test {
-        if let Some(ref func) = function {
+        if let Err(err) = ensure_verify_smoke_test_supported(&layout) {
+            println!("SKIPPED");
+            println!("        {}", err);
+            warnings += 1;
+        } else if let Some(ref func) = function {
             match run_verify_smoke_test(func) {
                 Ok(report) => {
                     println!("OK");
@@ -5332,9 +5673,11 @@ fn cmd_verify(
                     checks_failed += 1;
                 }
             }
-        } else if !benchmarks.is_empty() {
-            // Use first discovered benchmark
-            let func = &benchmarks[0].name;
+        } else if let Some(func) = layout
+            .default_function
+            .as_ref()
+            .or_else(|| resolved_benchmarks.first())
+        {
             match run_verify_smoke_test(func) {
                 Ok(report) => {
                     println!("OK");
@@ -6127,6 +6470,7 @@ fn cmd_fixture_build(
         SdkTarget::Android => cmd_build(
             SdkTarget::Android,
             release,
+            None,
             output_dir,
             crate_path,
             false,
@@ -6137,6 +6481,7 @@ fn cmd_fixture_build(
             cmd_build(
                 SdkTarget::Ios,
                 release,
+                None,
                 output_dir.clone(),
                 crate_path,
                 false,
@@ -6146,14 +6491,17 @@ fn cmd_fixture_build(
             cmd_package_ipa(
                 "BenchRunner",
                 IosSigningMethodArg::Adhoc,
+                None,
+                None,
                 output_dir.clone(),
             )?;
-            cmd_package_xcuitest("BenchRunner", output_dir)?;
+            cmd_package_xcuitest("BenchRunner", None, None, output_dir)?;
         }
         SdkTarget::Both => {
             cmd_build(
                 SdkTarget::Android,
                 release,
+                None,
                 output_dir.clone(),
                 crate_path.clone(),
                 false,
@@ -6163,6 +6511,7 @@ fn cmd_fixture_build(
             cmd_build(
                 SdkTarget::Ios,
                 release,
+                None,
                 output_dir.clone(),
                 crate_path,
                 false,
@@ -6172,9 +6521,11 @@ fn cmd_fixture_build(
             cmd_package_ipa(
                 "BenchRunner",
                 IosSigningMethodArg::Adhoc,
+                None,
+                None,
                 output_dir.clone(),
             )?;
-            cmd_package_xcuitest("BenchRunner", output_dir)?;
+            cmd_package_xcuitest("BenchRunner", None, None, output_dir)?;
         }
     }
     Ok(())
@@ -7060,6 +7411,55 @@ mod tests {
     use jsonschema::JSONSchema;
     use tempfile::TempDir;
 
+    fn write_custom_layout_project(temp_dir: &TempDir) -> (PathBuf, PathBuf) {
+        let project_root = temp_dir.path().to_path_buf();
+        let crate_dir = project_root.join("crates/zk-mobile-bench");
+
+        fs::create_dir_all(crate_dir.join("src")).expect("create custom crate dir");
+        write_file(
+            &project_root.join("Cargo.toml"),
+            br#"[workspace]
+members = ["crates/zk-mobile-bench"]
+resolver = "2"
+"#,
+        )
+        .expect("write workspace manifest");
+        write_file(
+            &project_root.join("mobench.toml"),
+            br#"[project]
+crate = "zk-mobile-bench"
+library_name = "zk_mobile_bench"
+
+[benchmarks]
+default_function = "zk_mobile_bench::bench_query_proof_generation"
+"#,
+        )
+        .expect("write mobench config");
+        write_file(
+            &crate_dir.join("Cargo.toml"),
+            br#"[package]
+name = "zk-mobile-bench"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )
+        .expect("write custom crate manifest");
+        write_file(
+            &crate_dir.join("src/lib.rs"),
+            br#"#[benchmark]
+pub fn bench_query_proof_generation() {}
+"#,
+        )
+        .expect("write custom crate source");
+
+        (
+            project_root
+                .canonicalize()
+                .expect("canonicalize project root"),
+            crate_dir.canonicalize().expect("canonicalize crate dir"),
+        )
+    }
+
     // Register a lightweight benchmark for tests so the inventory contains at least one entry.
     #[mobench_sdk::benchmark]
     fn noop_benchmark() {
@@ -7076,11 +7476,14 @@ mod tests {
             vec!["pixel".into()],
             None,
             None,
+            None,
+            None,
             Vec::new(),
             None,
             None,
             false,
             false, // release
+            false,
         )
         .unwrap();
         assert_eq!(spec.function, "sample_fns::fibonacci");
@@ -7139,6 +7542,8 @@ project = "proj"
             1,
             0,
             Vec::new(),
+            None,
+            None,
             Some(config_path.as_path()),
             Some(cli_matrix_path.as_path()),
             Vec::new(),
@@ -7146,10 +7551,244 @@ project = "proj"
             None,
             false,
             false,
+            false,
         )
         .expect("resolve spec");
 
         assert_eq!(spec.devices, vec!["CLI Device".to_string()]);
+    }
+
+    #[test]
+    fn parses_project_resolution_flags() {
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "run",
+                "--target",
+                "ios",
+                "--function",
+                "zk_mobile_bench::bench_query_proof_generation",
+                "--crate-path",
+                "/tmp/custom-crate",
+                "--project-root",
+                "/tmp/project-root",
+            ])
+            .is_ok()
+        );
+
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "build",
+                "--target",
+                "ios",
+                "--project-root",
+                "/tmp/project-root",
+            ])
+            .is_ok()
+        );
+
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "package-ipa",
+                "--crate-path",
+                "/tmp/custom-crate",
+                "--project-root",
+                "/tmp/project-root",
+            ])
+            .is_ok()
+        );
+
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "package-xcuitest",
+                "--crate-path",
+                "/tmp/custom-crate",
+                "--project-root",
+                "/tmp/project-root",
+            ])
+            .is_ok()
+        );
+
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "list",
+                "--crate-path",
+                "/tmp/custom-crate",
+                "--project-root",
+                "/tmp/project-root",
+            ])
+            .is_ok()
+        );
+
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "verify",
+                "--crate-path",
+                "/tmp/custom-crate",
+                "--project-root",
+                "/tmp/project-root",
+                "--smoke-test",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn resolver_uses_mobench_toml_for_custom_crate() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, crate_dir) = write_custom_layout_project(&temp_dir);
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve project layout");
+
+        assert_eq!(layout.project_root, project_root);
+        assert_eq!(layout.crate_dir, crate_dir);
+        assert_eq!(layout.crate_name, "zk-mobile-bench");
+        assert_eq!(layout.library_name, "zk_mobile_bench");
+        assert_eq!(
+            layout.default_function.as_deref(),
+            Some("zk_mobile_bench::bench_query_proof_generation")
+        );
+    }
+
+    #[test]
+    fn list_uses_resolved_layout_for_custom_crate() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve project layout");
+
+        let benchmarks = discover_benchmarks_for_layout(&layout).expect("discover benchmarks");
+        assert_eq!(
+            benchmarks,
+            vec!["zk_mobile_bench::bench_query_proof_generation".to_string()]
+        );
+    }
+
+    #[test]
+    fn verify_external_crate_smoke_test_is_unsupported() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve project layout");
+
+        let err = ensure_verify_smoke_test_supported(&layout)
+            .expect_err("external crate smoke tests should be unsupported");
+        assert!(
+            err.to_string().contains("external crate"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.to_string().contains("unsupported"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn build_progress_uses_configured_crate() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+
+        cmd_build(
+            SdkTarget::Ios,
+            false,
+            Some(project_root),
+            None,
+            None,
+            true,
+            false,
+            true,
+        )
+        .expect("build --progress should resolve config-driven crate");
+    }
+
+    #[test]
+    fn verify_smoke_test_skips_external_crate() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+
+        cmd_verify(
+            Some(project_root),
+            None,
+            None,
+            None,
+            false,
+            true,
+            Some("zk_mobile_bench::bench_query_proof_generation".to_string()),
+            None,
+        )
+        .expect("verify should clearly skip unsupported external smoke tests");
+    }
+
+    #[test]
+    fn run_dry_run_prepares_ios_artifacts_inside_custom_project() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+
+        let spec = resolve_run_spec(
+            MobileTarget::Ios,
+            "zk_mobile_bench::bench_query_proof_generation".into(),
+            1,
+            0,
+            vec!["iPhone 15".into()],
+            Some(project_root.as_path()),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+            false,
+            false,
+            true,
+        )
+        .expect("resolve dry-run spec");
+
+        let ios_xcuitest = spec
+            .ios_xcuitest
+            .expect("dry-run should prepare placeholder iOS artifacts");
+        assert!(
+            ios_xcuitest.app.starts_with(&project_root),
+            "app path should stay inside project root: {}",
+            ios_xcuitest.app.display()
+        );
+        assert!(
+            ios_xcuitest.test_suite.starts_with(&project_root),
+            "test suite path should stay inside project root: {}",
+            ios_xcuitest.test_suite.display()
+        );
+        assert!(
+            ios_xcuitest
+                .app
+                .ends_with(Path::new("target/mobench/ios/BenchRunner.ipa"))
+        );
+        assert!(
+            ios_xcuitest
+                .test_suite
+                .ends_with(Path::new("target/mobench/ios/BenchRunnerUITests.zip"))
+        );
     }
 
     #[test]
@@ -7195,11 +7834,14 @@ project = "proj"
             vec!["iphone".into()],
             None,
             None,
+            None,
+            None,
             Vec::new(),
             None,
             None,
             false,
             false, // release
+            false,
         )
         .expect("should auto-package iOS artifacts when missing");
         let ios_artifacts = spec
