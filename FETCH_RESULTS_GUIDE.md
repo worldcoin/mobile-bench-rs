@@ -343,8 +343,10 @@ Supports multiple report formats:
 Validate setup before running benchmarks:
 
 ```bash
-cargo mobench verify --target android --check-artifacts --smoke-test
+cargo mobench verify --target android --check-artifacts --function sample_fns::fibonacci
 ```
+
+For external crates configured via `mobench.toml`, use `cargo mobench list` and `cargo mobench verify --check-artifacts`; `verify --smoke-test` is only supported for benchmark crates linked into the `mobench` CLI binary.
 
 ## See Also
 

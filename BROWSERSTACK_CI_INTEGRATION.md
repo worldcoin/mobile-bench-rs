@@ -74,8 +74,11 @@ Invalid devices (1):
 # Verify registry, spec, and artifacts
 cargo mobench verify --target android --check-artifacts
 
-# Include smoke test
-cargo mobench verify --target android --smoke-test --function my_benchmark
+# Verify a configured external crate from repo root
+cargo mobench verify --target android --check-artifacts --function my_benchmark
+
+# Smoke tests are only supported for benchmark crates linked into the mobench CLI binary
+# (for example repository sample crates), not arbitrary external crates.
 
 # Render markdown summary from standardized CI output
 cargo mobench report summarize --summary target/mobench/ci/summary.json
@@ -421,7 +424,7 @@ Invalid devices (1):
 1. Check device logs manually in BrowserStack dashboard
 2. Verify your app logs benchmark results as JSON to stdout/logcat
 3. Use `client.get_device_logs()` to inspect raw logs
-4. Run `cargo mobench verify --smoke-test` to test locally first
+4. Run `cargo mobench list` plus `cargo mobench verify --check-artifacts` to validate the local setup first
 
 ### Build stuck in "running" state
 
@@ -484,7 +487,6 @@ Validate benchmark setup:
 cargo mobench verify \
   --target android \
   --check-artifacts \
-  --smoke-test \
   --function my_benchmark
 ```
 

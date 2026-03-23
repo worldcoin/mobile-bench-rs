@@ -1,6 +1,6 @@
 # mobench
 
-Mobile benchmarking SDK for Rust. Build and run Rust benchmarks on Android and iOS, locally or on BrowserStack, with a library-first workflow.
+Mobile benchmarking SDK for Rust. Build and run Rust benchmarks on Android and iOS, locally or on BrowserStack, with a library-first workflow and config-first project resolution for custom repository layouts.
 
 ## What it is
 
@@ -91,8 +91,8 @@ mobench supports a `mobench.toml` configuration file for project settings:
 
 ```toml
 [project]
-crate = "bench-mobile"
-library_name = "bench_mobile"
+crate = "zk-mobile-bench"
+library_name = "zk_mobile_bench"
 
 [android]
 package = "com.example.bench"
@@ -108,9 +108,12 @@ default_iterations = 100
 default_warmup = 10
 ```
 
+Resolution precedence in `0.1.17` is: explicit CLI flags (`--project-root`, `--crate-path`) → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
+
 CLI flags override config file values when provided.
 - In `cargo mobench run --config <FILE>` mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
 - For regression comparisons, `--baseline` should point to a previous run summary; if it resolves to the same output path, mobench snapshots the prior file before writing the candidate summary.
+- `cargo mobench verify --smoke-test` is only supported for benchmark crates linked into the `mobench` CLI binary. External crates discovered through `mobench.toml`, `--project-root`, or `--crate-path` should use `cargo mobench list` and `cargo mobench verify --check-artifacts`.
 
 ## Project docs
 
@@ -198,6 +201,15 @@ fn db_query(db: &Database) {
 | `#[benchmark(setup = fn, teardown = fn)]` | Resources requiring cleanup (connections, files, etc.) |
 
 ## Release Notes
+
+### v0.1.17
+
+- Added a shared config-first project resolver across `build`, `run`, packaging, `list`, and `verify`.
+- Added `--project-root` and `--crate-path` parity across the main CLI commands for custom repository layouts.
+- `build --progress` now respects `mobench.toml` instead of assuming `bench-mobile`.
+- Dotenv loading now follows the resolved project root and config path.
+- `list` now discovers benchmarks from configured external crates instead of only legacy sample layouts.
+- `verify --smoke-test` now reports external-crate smoke tests as unsupported instead of failing with an empty benchmark list.
 
 ### v0.1.14
 

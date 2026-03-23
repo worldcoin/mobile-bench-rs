@@ -15,6 +15,7 @@ Transform your Rust project into a mobile benchmarking suite. This SDK provides 
 - **BrowserStack integration**: Test on real devices in the cloud
 - **UniFFI bindings**: Automatic FFI generation for mobile platforms
 - **Configuration file support**: `mobench.toml` for project settings
+- **Config-first CLI integration**: `mobench 0.1.17` resolves project root, crate name, and library name from flags, `mobench.toml`, workspace metadata, or git root
 
 ## Quick Start
 
@@ -22,7 +23,7 @@ Add mobench-sdk to your project:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1"
+mobench-sdk = "0.1.17"
 ```
 
 Mark functions to benchmark:
@@ -62,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Mean: {} ns", report.mean_ns());
     println!("Median: {} ns", report.median_ns());
-    println!("Std dev: {} ns", report.stddev_ns());
+    println!("Std dev: {} ns", report.std_dev_ns());
 
     Ok(())
 }
@@ -85,6 +86,8 @@ This creates:
 - `android/` or `ios/` - Mobile app projects
 - `bench-config.toml` - Configuration file
 
+The generated `bench-mobile/` crate is still the default scaffold, but the `mobench` CLI in `0.1.17` can also target existing custom crate layouts through `mobench.toml`, `--project-root`, and `--crate-path`.
+
 ### 2. Add Benchmarks
 
 ```rust
@@ -101,6 +104,9 @@ fn my_benchmark() {
 ```bash
 # Build to default output directory (target/mobench/)
 cargo mobench build --target android
+
+# Build a custom crate from repo root
+cargo mobench build --target ios --project-root . --crate-path ./crates/zk-mobile-bench
 
 # Or with verbose output
 cargo mobench build --target android --verbose
@@ -191,7 +197,7 @@ impl RunnerReport {
     pub fn median_ns(&self) -> u64;
     pub fn min_ns(&self) -> u64;
     pub fn max_ns(&self) -> u64;
-    pub fn stddev_ns(&self) -> f64;
+    pub fn std_dev_ns(&self) -> f64;
     pub fn percentile(&self, p: f64) -> u64;
 }
 ```
@@ -366,8 +372,8 @@ mobench automatically loads `mobench.toml` from the current directory or parent 
 
 ```toml
 [project]
-crate = "bench-mobile"
-library_name = "bench_mobile"
+crate = "zk-mobile-bench"
+library_name = "zk_mobile_bench"
 # output_dir = "target/mobench"  # default
 
 [android]
@@ -384,6 +390,8 @@ default_function = "my_crate::my_benchmark"
 default_iterations = 100
 default_warmup = 10
 ```
+
+Resolution precedence in `0.1.17` is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 ### `bench-config.toml` (Run Configuration)
 
