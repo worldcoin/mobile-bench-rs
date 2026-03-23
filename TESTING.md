@@ -8,6 +8,8 @@ This document provides comprehensive testing instructions for mobile-bench-rs.
 > - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide
 > **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
 
+In `mobench 0.1.17`, build/run/list/verify/package commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`. `build --progress` uses that same config-first resolver.
+
 ## Table of Contents
 - [Prerequisites](#prerequisites)
 - [Host Testing](#host-testing)
@@ -216,20 +218,20 @@ cargo mobench verify --target ios --check-artifacts
 # This build step:
 # - Compiles Rust for aarch64-apple-ios (device), aarch64-apple-ios-sim (Apple Silicon simulators), and x86_64-apple-ios (Intel simulators)
 # - Creates xcframework with proper structure:
-#   target/mobench/ios/sample_fns.xcframework/
+#   target/mobench/ios/<library_name>.xcframework/
 #     ├── Info.plist
 #     ├── ios-arm64/
-#     │   └── sample_fns.framework/
-#     │       ├── sample_fns (binary)
+#     │   └── <library_name>.framework/
+#     │       ├── <library_name> (binary)
 #     │       ├── Headers/
-#     │       │   ├── sample_fnsFFI.h
+#     │       │   ├── <library_name>FFI.h
 #     │       │   └── module.modulemap
 #     │       └── Info.plist
 #     └── ios-simulator-arm64/
-#         └── sample_fns.framework/
-#             ├── sample_fns (binary)
+#         └── <library_name>.framework/
+#             ├── <library_name> (binary)
 #             ├── Headers/
-#             │   ├── sample_fnsFFI.h
+#             │   ├── <library_name>FFI.h
 #             │   └── module.modulemap
 #             └── Info.plist
 # - Copies UniFFI-generated C headers into framework
@@ -349,7 +351,7 @@ The `verify` command validates:
 - **Registry**: Benchmark functions are properly registered
 - **Spec**: `bench_spec.json` exists and is valid (if `--spec-path` provided)
 - **Artifacts**: Build outputs exist and are consistent (if `--check-artifacts`)
-- **Smoke test**: Runs a local test with minimal iterations (if `--smoke-test`)
+- **Smoke test**: Runs a local test with minimal iterations when the benchmark crate is linked into the CLI binary; external crates report unsupported for `--smoke-test`
 
 ### Android
 
@@ -395,10 +397,10 @@ cd target/mobench/android && ./gradlew clean assembleDebug
 brew install xcodegen
 ```
 
-**Problem**: "The Framework 'sample_fns.xcframework' is unsigned"
+**Problem**: "The Framework '<library_name>.xcframework' is unsigned"
 ```bash
 # Solution: Code-sign the xcframework
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 
 # The build step includes signing, but if you built manually:
 cargo mobench build --target ios
@@ -440,24 +442,24 @@ xcodegen generate
 **Problem**: Build fails with "library not found for -lsample_fns" or "framework 'ios-simulator-arm64' not found"
 ```bash
 # Solution: Ensure xcframework was built correctly with proper structure
-rm -rf target/mobench/ios/sample_fns.xcframework
+rm -rf target/mobench/ios/<library_name>.xcframework
 cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 
 # Verify structure:
-ls -la target/mobench/ios/sample_fns.xcframework/
+ls -la target/mobench/ios/<library_name>.xcframework/
 # Should show:
-#   ios-arm64/sample_fns.framework/
-#   ios-simulator-arm64/sample_fns.framework/
+#   ios-arm64/<library_name>.framework/
+#   ios-simulator-arm64/<library_name>.framework/
 #   Info.plist
 ```
 
 **Problem**: "While building for iOS Simulator, no library for this platform was found"
 ```bash
 # Solution: Rebuild the xcframework - the structure may be incorrect
-rm -rf target/mobench/ios/sample_fns.xcframework
+rm -rf target/mobench/ios/<library_name>.xcframework
 cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 
 # Clean Xcode build folder
 cd target/mobench/ios/BenchRunner
@@ -471,7 +473,7 @@ xcodebuild clean -project BenchRunner.xcodeproj -scheme BenchRunner
 # Check the iOS builder uses `dev.world.sample-fns` for the framework
 # Rebuild:
 cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 ```
 
 **Problem**: Simulator crashes with "Symbol not found"
@@ -479,7 +481,7 @@ codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 # Solution: Clean and rebuild for simulator architecture
 cargo clean
 cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 
 # In Xcode, clean (⌘+Shift+K) then build (⌘+B)
 ```
@@ -488,7 +490,7 @@ codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
 - Ensure proper code signing is configured in Xcode
 - Select your development team in Xcode → Project Settings → Signing & Capabilities
 - Trust developer certificate on device: Settings → General → VPN & Device Management
-- The xcframework must be signed: `codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework`
+- The xcframework must be signed: `codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework`
 
 ### UniFFI Bindings (Proc Macros)
 

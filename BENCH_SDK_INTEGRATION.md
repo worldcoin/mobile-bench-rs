@@ -14,7 +14,7 @@ Before diving into the full guide, ensure your project meets these requirements:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1"
+mobench-sdk = "0.1.17"
 inventory = "0.3"  # Required for benchmark registration
 
 [lib]
@@ -79,12 +79,14 @@ cargo mobench check --target android
 # List discovered benchmarks
 cargo mobench list
 
-# Verify registry, spec, and artifacts
-cargo mobench verify --smoke-test --function my_crate::my_benchmark
+# Verify registry, spec, and artifacts for the resolved crate
+cargo mobench verify --check-artifacts --function my_crate::my_benchmark
 
 # (Optional) Validate BrowserStack device specs before running
 cargo mobench devices --validate "Google Pixel 7-13.0"
 ```
+
+`verify --smoke-test` is only supported for benchmark crates linked into the `mobench` CLI binary. For external crates discovered via `mobench.toml`, `--project-root`, or `--crate-path`, use `cargo mobench list` and `cargo mobench verify --check-artifacts`.
 
 ## 1) Prerequisites
 
@@ -110,7 +112,7 @@ In your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1"
+mobench-sdk = "0.1.17"
 ```
 
 ## 3) Annotate benchmark functions
@@ -641,8 +643,8 @@ cargo mobench check --target android --format json
 Use the `verify` command to validate your setup:
 
 ```bash
-# Full verification with smoke test
-cargo mobench verify --target android --check-artifacts --smoke-test --function my_crate::my_benchmark
+# Full verification for a configured external crate
+cargo mobench verify --target android --check-artifacts --function my_crate::my_benchmark
 
 # Check specific spec file
 cargo mobench verify --spec-path target/mobench/android/app/src/main/assets/bench_spec.json
@@ -652,7 +654,7 @@ The verify command checks:
 1. Benchmark registry has functions registered
 2. Spec file exists and is valid
 3. Build artifacts are present
-4. Optional smoke test passes
+4. Optional smoke test passes for benchmark crates linked into the CLI binary
 
 ### View Result Summaries
 

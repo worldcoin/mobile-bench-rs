@@ -2,6 +2,8 @@
 
 Complete build instructions for Android and iOS targets.
 
+In `mobench 0.1.17`, build commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to the legacy `bench-mobile/` layout. `build --progress` uses the same config-first resolution.
+
 > **For SDK Integrators**: Use the CLI commands:
 > - `cargo mobench check --target android` (validate prerequisites first)
 > - `cargo mobench check --target ios` (validate prerequisites first)
@@ -234,6 +236,12 @@ Then in Xcode:
 cargo mobench build --target ios
 ```
 
+For a custom repository layout:
+
+```bash
+cargo mobench build --target ios --project-root . --crate-path ./crates/zk-mobile-bench --progress
+```
+
 This build step:
 1. Compiles Rust for iOS targets:
    - `aarch64-apple-ios` (physical devices)
@@ -242,23 +250,25 @@ This build step:
 
 2. Creates xcframework with structure:
    ```
-   target/mobench/ios/sample_fns.xcframework/
+   target/mobench/ios/<library_name>.xcframework/
    ├── Info.plist
    ├── ios-arm64/
-   │   └── sample_fns.framework/
-   │       ├── sample_fns (static library)
+   │   └── <library_name>.framework/
+   │       ├── <library_name> (static library)
    │       ├── Headers/
-   │       │   ├── sample_fnsFFI.h
+   │       │   ├── <library_name>FFI.h
    │       │   └── module.modulemap
    │       └── Info.plist
    └── ios-simulator-arm64/
-       └── sample_fns.framework/
-           ├── sample_fns (static library)
+       └── <library_name>.framework/
+           ├── <library_name> (static library)
            ├── Headers/
-           │   ├── sample_fnsFFI.h
+           │   ├── <library_name>FFI.h
            │   └── module.modulemap
            └── Info.plist
    ```
+
+   The output name comes from `[project].library_name` or the resolved crate name. The sample project still produces `sample_fns.xcframework`.
 
 3. Copies UniFFI-generated C headers into each framework slice
 
@@ -266,14 +276,14 @@ This build step:
 
 5. **Automatically code-signs the xcframework** (required for Xcode)
 
-Output: `target/mobench/ios/sample_fns.xcframework` (signed)
+Output: `target/mobench/ios/<library_name>.xcframework` (signed)
 
 **Note**: The build step includes automatic code signing. If signing fails for any reason, you can sign manually:
 ```bash
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 ```
 
-Code signing is **required** for Xcode to accept and link the framework. Without signing, you'll see "The Framework 'sample_fns.xcframework' is unsigned" errors.
+Code signing is **required** for Xcode to accept and link the framework. Without signing, you'll see "The Framework '<library_name>.xcframework' is unsigned" errors.
 
 #### Step 2: Generate Xcode Project
 ```bash
@@ -285,7 +295,7 @@ This generates `BenchRunner.xcodeproj` from `project.yml` specification. The gen
 - Source files from `BenchRunner/` directory
 - Generated Swift bindings (`BenchRunner/Generated/sample_fns.swift`)
 - Bridging header (`BenchRunner/BenchRunner-Bridging-Header.h`)
-- Framework dependency on `../sample_fns.xcframework`
+- Framework dependency on `../<library_name>.xcframework` (the sample project uses `../sample_fns.xcframework`)
 
 #### Step 3: Build and Run in Xcode
 ```bash
@@ -362,7 +372,7 @@ This makes C types (`RustBuffer`, `RustCallStatus`, etc.) available to Swift wit
 
 **Code Signing**: The build step automatically signs the xcframework. If signing fails, sign with:
 ```bash
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 ```
 
 ## Common Issues
@@ -431,17 +441,17 @@ rustls = { workspace = true }
 brew install xcodegen
 ```
 
-**Issue**: "The Framework 'sample_fns.xcframework' is unsigned"
+**Issue**: "The Framework '<library_name>.xcframework' is unsigned"
 ```bash
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 ```
 
 **Issue**: "While building for iOS Simulator, no library for this platform was found"
 ```bash
 # Rebuild with correct structure
-rm -rf target/mobench/ios/sample_fns.xcframework
+rm -rf target/mobench/ios/<library_name>.xcframework
 cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 
 # Clean Xcode build
 cd target/mobench/ios/BenchRunner
