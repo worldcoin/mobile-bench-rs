@@ -139,7 +139,7 @@ use browserstack::{BrowserStackAuth, BrowserStackClient};
 mod browserstack;
 pub mod config;
 mod github;
-pub mod summarize;
+pub(crate) mod summarize;
 
 /// CLI orchestrator for building, packaging, and executing Rust benchmarks on mobile.
 #[derive(Parser, Debug)]
@@ -764,8 +764,8 @@ struct CiCheckRunArgs {
     #[arg(long)]
     sha: String,
 
-    /// GitHub App token (from actions/create-github-app-token).
-    #[arg(long, env = "GITHUB_TOKEN")]
+    /// GitHub App token (from GITHUB_TOKEN env var or actions/create-github-app-token).
+    #[arg(long, env = "GITHUB_TOKEN", hide = true)]
     token: String,
 
     /// Check Run name displayed in the PR.
@@ -1055,6 +1055,9 @@ enum RemoteRun {
 }
 
 pub fn run() -> Result<()> {
+    // Load dotenv globally as a baseline for commands that don't resolve a layout
+    // (e.g. fetch, doctor, ci run). Layout-aware commands reload from the resolved root.
+    load_dotenv_global();
     let cli = Cli::parse();
     match cli.command {
         Command::Run {
@@ -1097,8 +1100,7 @@ pub fn run() -> Result<()> {
                 iterations,
                 warmup,
                 devices,
-                project_root.as_deref(),
-                crate_path.as_deref(),
+                &layout,
                 config.as_deref(),
                 device_matrix.as_deref(),
                 device_tags,
@@ -3179,8 +3181,7 @@ fn resolve_run_spec(
     iterations: u32,
     warmup: u32,
     devices: Vec<String>,
-    project_root: Option<&Path>,
-    crate_path: Option<&Path>,
+    layout: &ResolvedProjectLayout,
     config: Option<&Path>,
     device_matrix: Option<&Path>,
     device_tags: Vec<String>,
@@ -3253,12 +3254,6 @@ fn resolve_run_spec(
         && !resolved_devices.is_empty()
         && ios_xcuitest.is_none()
     {
-        let layout = resolve_project_layout(ProjectLayoutOptions {
-            start_dir: None,
-            project_root,
-            crate_path,
-            config_path: config,
-        })?;
         let artifacts = if dry_run {
             println!("📦 [dry-run] Would auto-package iOS artifacts for BrowserStack...");
             IosXcuitestArtifacts {
@@ -3267,7 +3262,7 @@ fn resolve_run_spec(
             }
         } else {
             println!("📦 Auto-packaging iOS artifacts for BrowserStack...");
-            let artifacts = package_ios_xcuitest_artifacts(&layout, release)?;
+            let artifacts = package_ios_xcuitest_artifacts(layout, release)?;
             println!("  ✓ IPA: {}", artifacts.app.display());
             println!("  ✓ XCUITest: {}", artifacts.test_suite.display());
             artifacts
@@ -4966,6 +4961,14 @@ fn run_android_build(
     Ok(result)
 }
 
+/// Load .env/.env.local from the repo root (best-effort, for commands that don't resolve a layout).
+fn load_dotenv_global() {
+    if let Ok(root) = repo_root() {
+        let _ = dotenvy::from_path(root.join(".env"));
+        let _ = dotenvy::from_path_override(root.join(".env.local"));
+    }
+}
+
 fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
     let mut directories = vec![layout.project_root.clone()];
     if let Some(config_path) = &layout.config_path
@@ -5288,13 +5291,13 @@ fn cmd_build(
 /// This uses source code scanning to find `#[benchmark]` functions, which works
 /// without requiring a full build. It also falls back to the inventory registry
 /// for any benchmarks that may be registered at runtime.
-fn cmd_list(_project_root: Option<PathBuf>, _crate_path: Option<PathBuf>) -> Result<()> {
+fn cmd_list(project_root: Option<PathBuf>, crate_path: Option<PathBuf>) -> Result<()> {
     println!("Discovering benchmark functions...\n");
 
     let layout = resolve_project_layout(ProjectLayoutOptions {
         start_dir: None,
-        project_root: _project_root.as_deref(),
-        crate_path: _crate_path.as_deref(),
+        project_root: project_root.as_deref(),
+        crate_path: crate_path.as_deref(),
         config_path: None,
     })?;
     let mut all_benchmarks = discover_benchmarks_for_layout(&layout)?;
@@ -7455,14 +7458,20 @@ pub fn bench_query_proof_generation() {}
 
     #[test]
     fn resolves_cli_spec() {
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: None,
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .unwrap();
         let spec = resolve_run_spec(
             MobileTarget::Android,
             "sample_fns::fibonacci".into(),
             5,
             1,
             vec!["pixel".into()],
-            None,
-            None,
+            &layout,
             None,
             None,
             Vec::new(),
@@ -7523,14 +7532,20 @@ project = "proj"
         );
         write_file(&config_path, config_toml.as_bytes()).expect("write config");
 
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: None,
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .unwrap();
         let spec = resolve_run_spec(
             MobileTarget::Android,
             "ignored::value".into(),
             1,
             0,
             Vec::new(),
-            None,
-            None,
+            &layout,
             Some(config_path.as_path()),
             Some(cli_matrix_path.as_path()),
             Vec::new(),
@@ -7734,14 +7749,20 @@ project = "proj"
         let temp_dir = TempDir::new().expect("temp dir");
         let (project_root, _) = write_custom_layout_project(&temp_dir);
 
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve layout");
         let spec = resolve_run_spec(
             MobileTarget::Ios,
             "zk_mobile_bench::bench_query_proof_generation".into(),
             1,
             0,
             vec!["iPhone 15".into()],
-            Some(project_root.as_path()),
-            None,
+            &layout,
             None,
             None,
             Vec::new(),
@@ -7813,14 +7834,20 @@ project = "proj"
 
     #[test]
     fn ios_requires_artifacts_for_browserstack() {
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: None,
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .unwrap();
         let spec = resolve_run_spec(
             MobileTarget::Ios,
             "sample_fns::fibonacci".into(),
             1,
             0,
             vec!["iphone".into()],
-            None,
-            None,
+            &layout,
             None,
             None,
             Vec::new(),

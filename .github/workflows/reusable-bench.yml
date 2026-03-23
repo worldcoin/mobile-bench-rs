@@ -66,7 +66,7 @@ on:
         description: "Mobench version to install"
         required: false
         type: string
-        default: "0.1.15"
+        default: "0.1.17"
       mobench_ref:
         description: "Git ref for mobile-bench-rs (overrides mobench_version when set)"
         required: false
@@ -578,16 +578,19 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_RUN_NAME: ${{ inputs.check_run_name }}
           REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
+          CRATE_PATH: ${{ inputs.crate_path }}
+          GH_REPO: ${{ github.repository }}
+          GH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           for dir in results/ios results/android; do
             if [ -d "$dir" ]; then
               PLATFORM=$(basename "$dir")
               cargo-mobench ci check-run \
                 --results-dir "$dir" \
-                --repo "${{ github.repository }}" \
-                --sha "${{ github.event.pull_request.head.sha || github.sha }}" \
+                --repo "$GH_REPO" \
+                --sha "$GH_SHA" \
                 --name "$CHECK_RUN_NAME — ${PLATFORM}" \
-                --annotation-path "${{ inputs.crate_path }}/src/lib.rs" \
+                --annotation-path "${CRATE_PATH}/src/lib.rs" \
                 --regression-threshold-pct "$REGRESSION_THRESHOLD" \
                 || true
             fi

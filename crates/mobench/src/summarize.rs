@@ -5,10 +5,6 @@ use comfy_table::{presets::UTF8_FULL, Attribute, Cell, ContentArrangement, Table
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-fn is_zero(v: &f64) -> bool {
-    *v == 0.0
-}
-
 /// A fully-assembled summary ready for rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummarizeReport {
@@ -55,8 +51,8 @@ pub struct TimingStats {
     pub best_ms: f64,
     pub worst_ms: f64,
     pub p95_ms: f64,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub std_dev_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub std_dev_ms: Option<f64>,
 }
 
 /// Resource usage metrics from BrowserStack session.
@@ -169,7 +165,11 @@ fn parse_benchmark_entry(value: &serde_json::Value) -> Result<BenchmarkResult> {
         best_ms: ns_to_ms("min_ns"),
         worst_ms: ns_to_ms("max_ns"),
         p95_ms: ns_to_ms("p95_ns"),
-        std_dev_ms: ns_to_ms("std_dev_ns"),
+        std_dev_ms: value
+            .get("std_dev_ns")
+            .and_then(|v| v.as_f64())
+            .filter(|&v| v > 0.0)
+            .map(|v| v / 1_000_000.0),
     };
 
     Ok(BenchmarkResult {
@@ -180,19 +180,15 @@ fn parse_benchmark_entry(value: &serde_json::Value) -> Result<BenchmarkResult> {
     })
 }
 
+/// Produce a human-friendly label from a fully-qualified benchmark name.
+///
+/// Strips leading `bench_` and converts underscores to hyphens.
+/// The raw function name is always preserved in [`BenchmarkResult::name`].
 fn humanize_benchmark_name(name: &str) -> String {
-    let s = name
-        .replace("bench_", "")
-        .replace("_generation", "")
-        .replace("_only", "");
-
-    if s.contains("nullifier") {
-        format!("\u{03C0}2 {}", s.replace('_', "-"))
-    } else if s.contains("query") {
-        format!("\u{03C0}1 {}", s.replace('_', "-"))
-    } else {
-        s.replace('_', "-")
-    }
+    // Use the last segment if qualified (e.g. "crate::bench_foo" → "bench_foo")
+    let leaf = name.rsplit("::").next().unwrap_or(name);
+    let s = leaf.strip_prefix("bench_").unwrap_or(leaf);
+    s.replace('_', "-")
 }
 
 /// Load all summary JSON files from a results directory.
@@ -513,12 +509,19 @@ mod tests {
     fn test_humanize_benchmark_name() {
         assert_eq!(
             humanize_benchmark_name("bench_nullifier_proving_only"),
-            "\u{03C0}2 nullifier-proving"
+            "nullifier-proving-only"
         );
         assert_eq!(
             humanize_benchmark_name("bench_query_proof_generation"),
-            "\u{03C0}1 query-proof"
+            "query-proof-generation"
         );
+        // Qualified names use the last segment
+        assert_eq!(
+            humanize_benchmark_name("zk_mobile_bench::bench_fibonacci"),
+            "fibonacci"
+        );
+        // No bench_ prefix is fine
+        assert_eq!(humanize_benchmark_name("my_func"), "my-func");
     }
 
     #[test]
@@ -556,14 +559,14 @@ mod tests {
                 },
                 benchmarks: vec![BenchmarkResult {
                     name: "bench_nullifier_proving_only".to_string(),
-                    label: "\u{03C0}2 nullifier-proving".to_string(),
+                    label: "nullifier-proving-only".to_string(),
                     timing: TimingStats {
                         avg_ms: 1204.5,
                         median_ms: 1198.0,
                         best_ms: 1180.2,
                         worst_ms: 1298.1,
                         p95_ms: 1290.0,
-                        std_dev_ms: 35.2,
+                        std_dev_ms: Some(35.2),
                     },
                     resource_usage: Some(ResourceUsage {
                         cpu_avg_percent: Some(94.0),
@@ -597,14 +600,14 @@ mod tests {
                 },
                 benchmarks: vec![BenchmarkResult {
                     name: "bench_nullifier_proving_only".to_string(),
-                    label: "\u{03C0}2 nullifier-proving".to_string(),
+                    label: "nullifier-proving-only".to_string(),
                     timing: TimingStats {
                         avg_ms: 1204.5,
                         median_ms: 1198.0,
                         best_ms: 1180.2,
                         worst_ms: 1298.1,
                         p95_ms: 1290.0,
-                        std_dev_ms: 35.2,
+                        std_dev_ms: Some(35.2),
                     },
                     resource_usage: None,
                 }],
