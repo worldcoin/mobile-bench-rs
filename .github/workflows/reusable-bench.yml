@@ -552,14 +552,15 @@ jobs:
 
       - name: Generate GitHub App token
         id: app-token
-        if: inputs.pr_number != '' && secrets.MOBENCH_APP_PRIVATE_KEY != ''
+        if: inputs.pr_number != ''
+        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.MOBENCH_APP_ID }}
           private-key: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
 
       - name: Create Check Run
-        if: steps.app-token.outputs.token != ''
+        if: steps.app-token.outcome == 'success'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
