@@ -112,7 +112,7 @@ default_iterations = 100
 default_warmup = 10
 ```
 
-Resolution precedence in `0.1.18` is: explicit CLI flags (`--project-root`, `--crate-path`) → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
+Resolution precedence in `0.1.19` is: explicit CLI flags (`--project-root`, `--crate-path`) → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 CLI flags override config file values when provided.
 - In `cargo mobench run --config <FILE>` mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
@@ -206,7 +206,7 @@ fn db_query(db: &Database) {
 
 ## Release Notes
 
-### v0.1.18
+### v0.1.19
 
 - Added a shared config-first project resolver across `build`, `run`, packaging, `list`, and `verify`.
 - Added `--project-root` and `--crate-path` parity across the main CLI commands for custom repository layouts.

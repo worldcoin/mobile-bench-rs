@@ -2,7 +2,7 @@
 
 Complete build instructions for Android and iOS targets.
 
-In `mobench 0.1.18`, build commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to the legacy `bench-mobile/` layout. `build --progress` uses the same config-first resolution.
+In `mobench 0.1.19`, build commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to the legacy `bench-mobile/` layout. `build --progress` uses the same config-first resolution.
 
 > **For SDK Integrators**: Use the CLI commands:
 > - `cargo mobench check --target android` (validate prerequisites first)
