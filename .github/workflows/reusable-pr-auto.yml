@@ -1,0 +1,130 @@
+name: "Reusable: bench label + compile-gate dispatch"
+
+# Dispatches benchmarks when a PR is labeled with `bench` AND a compile-gate
+# workflow has passed. Callers configure which CI workflow must pass first.
+
+on:
+  workflow_call:
+    inputs:
+      benchmark_workflow:
+        description: "Workflow file to dispatch (e.g. .github/workflows/bench.yml)"
+        required: true
+        type: string
+      compile_gate_workflow_name:
+        description: "Name of the CI workflow that must pass before dispatching (e.g. 'CI')"
+        required: true
+        type: string
+      bench_label:
+        description: "Label name that triggers benchmarks"
+        required: false
+        type: string
+        default: "bench"
+      crate_path:
+        description: "Path to the benchmark crate in the caller repo"
+        required: true
+        type: string
+      functions:
+        description: "JSON array of benchmark function names"
+        required: true
+        type: string
+      default_device_profile:
+        description: "Default device profile"
+        required: false
+        type: string
+        default: "low-spec"
+      default_iterations:
+        description: "Default iteration count"
+        required: false
+        type: string
+        default: "30"
+      default_warmup:
+        description: "Default warmup count"
+        required: false
+        type: string
+        default: "5"
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+jobs:
+  gate-and-dispatch:
+    name: Check compile gate and dispatch
+    runs-on: ubuntu-latest
+    # Trigger on: label added, or check_suite/workflow_run completed
+    if: >-
+      (github.event_name == 'pull_request' && github.event.action == 'labeled') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    steps:
+      - name: Resolve PR context
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BENCH_LABEL: ${{ inputs.bench_label }}
+          GATE_WORKFLOW: ${{ inputs.compile_gate_workflow_name }}
+        run: |
+          # For label events, use the PR directly
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            # For workflow_run events, find the associated PR
+            HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+            PR_NUMBER=$(gh api "repos/${{ github.repository }}/pulls?state=open&sort=updated&direction=desc&per_page=20" \
+              --jq ".[] | select(.head.sha == \"${HEAD_SHA}\") | .number" | head -1)
+            if [ -z "$PR_NUMBER" ]; then
+              echo "::notice::No open PR found for SHA ${HEAD_SHA}, skipping"
+              echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          # Check if bench label is present
+          HAS_LABEL=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" \
+            --jq ".[].name" | grep -qx "$BENCH_LABEL" && echo "true" || echo "false")
+          if [ "$HAS_LABEL" != "true" ]; then
+            echo "::notice::PR #${PR_NUMBER} does not have '${BENCH_LABEL}' label, skipping"
+            echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Check if compile gate passed for this SHA
+          GATE_STATUS=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/check-runs" \
+            --jq ".check_runs[] | select(.name == \"${GATE_WORKFLOW}\" or (.app.name == \"GitHub Actions\" and .name == \"${GATE_WORKFLOW}\")) | .conclusion" \
+            | head -1)
+          if [ "$GATE_STATUS" != "success" ]; then
+            echo "::notice::Compile gate '${GATE_WORKFLOW}' not yet passed for ${HEAD_SHA} (status: ${GATE_STATUS:-pending})"
+            echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "should_dispatch=true" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch benchmark workflow
+        if: steps.pr.outputs.should_dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ inputs.benchmark_workflow }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          FUNCTIONS: ${{ inputs.functions }}
+          CRATE_PATH: ${{ inputs.crate_path }}
+          DEVICE_PROFILE: ${{ inputs.default_device_profile }}
+          ITERATIONS: ${{ inputs.default_iterations }}
+          WARMUP: ${{ inputs.default_warmup }}
+        run: |
+          gh workflow run "$WORKFLOW" \
+            --ref "${{ github.event.repository.default_branch }}" \
+            -f head_sha="$HEAD_SHA" \
+            -f crate_path="$CRATE_PATH" \
+            -f functions="$FUNCTIONS" \
+            -f platform="both" \
+            -f device_profile="$DEVICE_PROFILE" \
+            -f iterations="$ITERATIONS" \
+            -f warmup="$WARMUP" \
+            -f pr_number="$PR_NUMBER" \
+            -f requested_by="auto:${GITHUB_EVENT_NAME}"
+          echo "Dispatched benchmark for PR #${PR_NUMBER} at ${HEAD_SHA}"

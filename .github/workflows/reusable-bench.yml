@@ -89,6 +89,10 @@ on:
         required: false
         type: string
         default: "5.0"
+      head_sha:
+        description: "Exact commit SHA to checkout in the caller repo (for compile-gated runs)"
+        required: false
+        type: string
     secrets:
       BROWSERSTACK_USERNAME:
         required: true
@@ -131,6 +135,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: caller
+          ref: ${{ inputs.head_sha || github.sha }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -228,28 +233,19 @@ jobs:
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
         run: |
           set -euo pipefail
-          mkdir -p target/mobench/ci/ios
-
           device_spec="${IOS_DEVICE}-${IOS_OS_VERSION}"
           echo "Running iOS benchmarks on: ${device_spec}"
 
-          for func in $(echo "$FUNCTIONS_JSON" | jq -r '.[]'); do
-            slug=$(echo "$func" | tr ':' '_' | tr '/' '-')
-            echo "::group::Benchmark: ${func}"
-            cargo-mobench run \
-              --target ios \
-              --function "${func}" \
-              --iterations "${ITERATIONS}" \
-              --warmup "${WARMUP}" \
-              --devices "${device_spec}" \
-              $RELEASE_FLAG \
-              --fetch \
-              --summary-csv \
-              --output "target/mobench/ci/ios/${slug}.json" || {
-                echo "::warning::iOS benchmark failed for function: ${func}"
-              }
-            echo "::endgroup::"
-          done
+          cargo-mobench ci run \
+            --target ios \
+            --functions "${FUNCTIONS_JSON}" \
+            --iterations "${ITERATIONS}" \
+            --warmup "${WARMUP}" \
+            --devices "${device_spec}" \
+            $RELEASE_FLAG \
+            --fetch \
+            --output-dir target/mobench/ci/ios \
+            || echo "::warning::iOS benchmark run failed"
 
       - name: Upload iOS results
         if: always()
@@ -279,6 +275,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: caller
+          ref: ${{ inputs.head_sha || github.sha }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -383,28 +380,19 @@ jobs:
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
         run: |
           set -euo pipefail
-          mkdir -p target/mobench/ci/android
-
           device_spec="${ANDROID_DEVICE}-${ANDROID_OS_VERSION}"
           echo "Running Android benchmarks on: ${device_spec}"
 
-          for func in $(echo "$FUNCTIONS_JSON" | jq -r '.[]'); do
-            slug=$(echo "$func" | tr ':' '_' | tr '/' '-')
-            echo "::group::Benchmark: ${func}"
-            cargo-mobench run \
-              --target android \
-              --function "${func}" \
-              --iterations "${ITERATIONS}" \
-              --warmup "${WARMUP}" \
-              --devices "${device_spec}" \
-              $RELEASE_FLAG \
-              --fetch \
-              --summary-csv \
-              --output "target/mobench/ci/android/${slug}.json" || {
-                echo "::warning::Android benchmark failed for function: ${func}"
-              }
-            echo "::endgroup::"
-          done
+          cargo-mobench ci run \
+            --target android \
+            --functions "${FUNCTIONS_JSON}" \
+            --iterations "${ITERATIONS}" \
+            --warmup "${WARMUP}" \
+            --devices "${device_spec}" \
+            $RELEASE_FLAG \
+            --fetch \
+            --output-dir target/mobench/ci/android \
+            || echo "::warning::Android benchmark run failed"
 
       - name: Upload Android results
         if: always()
@@ -595,3 +583,63 @@ jobs:
                 || true
             fi
           done
+
+      - name: Build history bundle
+        if: always()
+        shell: bash
+        env:
+          HEAD_SHA: ${{ inputs.head_sha || github.sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REQUESTED_BY: ${{ inputs.requested_by }}
+        run: |
+          mkdir -p history-bundle
+          TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+          # Collect all summary JSONs into the bundle
+          for dir in results/ios results/android; do
+            if [ -d "$dir" ]; then
+              PLATFORM=$(basename "$dir")
+              cp "$dir"/*.json "history-bundle/" 2>/dev/null || true
+              cp "$dir"/*.csv "history-bundle/" 2>/dev/null || true
+            fi
+          done
+
+          # Generate manifest
+          jq -n \
+            --arg ts "$TIMESTAMP" \
+            --arg sha "$HEAD_SHA" \
+            --arg pr "${PR_NUMBER:-}" \
+            --arg by "${REQUESTED_BY:-ci}" \
+            --arg ver "mobench-history-v1" \
+            '{
+              schema_version: $ver,
+              timestamp: $ts,
+              commit_sha: $sha,
+              pr_number: (if $pr != "" then ($pr | tonumber) else null end),
+              requested_by: $by,
+              platforms: [
+                (if ("results/ios" | path(.) // empty) then "ios" else empty end),
+                (if ("results/android" | path(.) // empty) then "android" else empty end)
+              ]
+            }' > history-bundle/manifest.json 2>/dev/null || \
+          jq -n \
+            --arg ts "$TIMESTAMP" \
+            --arg sha "$HEAD_SHA" \
+            --arg pr "${PR_NUMBER:-}" \
+            --arg by "${REQUESTED_BY:-ci}" \
+            --arg ver "mobench-history-v1" \
+            '{
+              schema_version: $ver,
+              timestamp: $ts,
+              commit_sha: $sha,
+              pr_number: (if $pr != "" then ($pr | tonumber) else null end),
+              requested_by: $by
+            }' > history-bundle/manifest.json
+
+      - name: Upload history bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobench-history-bundle
+          path: history-bundle/
+          if-no-files-found: warn
