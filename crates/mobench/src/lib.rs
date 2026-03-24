@@ -655,6 +655,11 @@ enum ReportCommand {
 struct CiRunArgs {
     #[arg(long, value_enum)]
     target: CiTarget,
+    #[arg(
+        long,
+        help = "Path to the benchmark crate directory containing Cargo.toml"
+    )]
+    crate_path: Option<PathBuf>,
     #[arg(long, help = "Fully-qualified Rust function to benchmark (single function)")]
     function: Option<String>,
     #[arg(
@@ -2168,6 +2173,8 @@ pub struct RunRequest {
     pub target: MobileTarget,
     /// Fully-qualified benchmark function name.
     pub function: String,
+    /// Optional path to the benchmark crate directory.
+    pub crate_path: Option<PathBuf>,
     /// Number of benchmark iterations.
     pub iterations: u32,
     /// Number of warmup iterations.
@@ -2299,6 +2306,9 @@ pub fn run_request(request: &RunRequest) -> Result<RunResult> {
     }
     if let Some(path) = &request.ios_test_suite {
         cmd.arg("--ios-test-suite").arg(path);
+    }
+    if let Some(path) = &request.crate_path {
+        cmd.arg("--crate-path").arg(path);
     }
     if request.fetch {
         cmd.arg("--fetch");
@@ -2748,6 +2758,7 @@ fn cmd_ci_run_single(
     let result = run_request(&RunRequest {
         target,
         function: args.function.clone().unwrap_or_default(),
+        crate_path: args.crate_path.clone(),
         iterations: args.iterations,
         warmup: args.warmup,
         device_selection: DeviceSelection {
