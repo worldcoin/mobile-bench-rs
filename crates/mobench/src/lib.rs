@@ -4941,6 +4941,7 @@ fn run_android_build(
     release: bool,
     dry_run: bool,
 ) -> Result<mobench_sdk::BuildResult> {
+    ensure_android_home();
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -4959,6 +4960,34 @@ fn run_android_build(
             .output_dir(&layout.output_dir);
     let result = builder.build(&cfg)?;
     Ok(result)
+}
+
+/// Ensure ANDROID_HOME is set, inferring it from ANDROID_NDK_HOME if necessary.
+///
+/// Gradle requires ANDROID_HOME to locate the SDK. Many developers only set
+/// ANDROID_NDK_HOME (which is `$ANDROID_HOME/ndk/<version>`). This function
+/// strips the `/ndk/<version>` suffix to derive ANDROID_HOME when it is missing.
+fn ensure_android_home() {
+    if std::env::var("ANDROID_HOME").is_ok() {
+        return;
+    }
+    if let Ok(ndk_home) = std::env::var("ANDROID_NDK_HOME") {
+        // ANDROID_NDK_HOME is typically $ANDROID_HOME/ndk/<version>
+        let ndk_path = std::path::Path::new(&ndk_home);
+        if let Some(ndk_dir) = ndk_path.parent() {
+            if ndk_dir.file_name().is_some_and(|n| n == "ndk") {
+                if let Some(sdk_root) = ndk_dir.parent() {
+                    eprintln!(
+                        "Inferred ANDROID_HOME={} from ANDROID_NDK_HOME",
+                        sdk_root.display()
+                    );
+                    // SAFETY: called early in single-threaded CLI init, before
+                    // any threads are spawned.
+                    unsafe { std::env::set_var("ANDROID_HOME", sdk_root) };
+                }
+            }
+        }
+    }
 }
 
 /// Load .env/.env.local from the repo root (best-effort, for commands that don't resolve a layout).
