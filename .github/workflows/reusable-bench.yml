@@ -255,6 +255,7 @@ jobs:
           IOS_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
           IOS_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+          CRATE_PATH: ${{ inputs.crate_path }}
         run: |
           set -euo pipefail
           device_spec="${IOS_DEVICE}-${IOS_OS_VERSION}"
@@ -266,6 +267,7 @@ jobs:
             --iterations "${ITERATIONS}" \
             --warmup "${WARMUP}" \
             --devices "${device_spec}" \
+            --crate-path "$CRATE_PATH" \
             $RELEASE_FLAG \
             --fetch \
             --output-dir target/mobench/ci/ios \
@@ -440,6 +442,7 @@ jobs:
           ANDROID_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
           ANDROID_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+          CRATE_PATH: ${{ inputs.crate_path }}
         run: |
           set -euo pipefail
           device_spec="${ANDROID_DEVICE}-${ANDROID_OS_VERSION}"
@@ -451,6 +454,7 @@ jobs:
             --iterations "${ITERATIONS}" \
             --warmup "${WARMUP}" \
             --devices "${device_spec}" \
+            --crate-path "$CRATE_PATH" \
             $RELEASE_FLAG \
             --fetch \
             --output-dir target/mobench/ci/android \
