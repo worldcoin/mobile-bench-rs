@@ -8,7 +8,7 @@ This document provides comprehensive testing instructions for mobile-bench-rs.
 > - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide
 > **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
 
-In `mobench 0.1.17`, build/run/list/verify/package commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`. `build --progress` uses that same config-first resolver.
+In `mobench 0.1.18`, build/run/list/verify/package commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`. `build --progress` uses that same config-first resolver.
 
 ## Table of Contents
 - [Prerequisites](#prerequisites)
