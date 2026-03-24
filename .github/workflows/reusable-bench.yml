@@ -213,11 +213,12 @@ jobs:
         shell: bash
         env:
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+          CRATE_PATH: ${{ inputs.crate_path }}
         run: |
           set -euo pipefail
-          cargo-mobench build --target ios $RELEASE_FLAG
-          cargo-mobench package-ipa --method adhoc
-          cargo-mobench package-xcuitest
+          cargo-mobench build --target ios $RELEASE_FLAG --crate-path "$CRATE_PATH"
+          cargo-mobench package-ipa --method adhoc --crate-path "$CRATE_PATH"
+          cargo-mobench package-xcuitest --crate-path "$CRATE_PATH"
           test -f target/mobench/ios/BenchRunner.ipa
           test -f target/mobench/ios/BenchRunnerUITests.zip
 
@@ -302,12 +303,16 @@ jobs:
 
       - name: Setup Android SDK/NDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-34
-            build-tools;34.0.0
-            ndk;26.1.10909125
+
+      - name: Install required SDK packages
+        shell: bash
+        run: |
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" || true
+          # Verify NDK is available
+          test -d "$ANDROID_HOME/ndk/26.1.10909125" || {
+            echo "::error::NDK 26.1.10909125 not found after install"
+            exit 1
+          }
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -363,9 +368,10 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+          CRATE_PATH: ${{ inputs.crate_path }}
         run: |
           set -euo pipefail
-          cargo-mobench build --target android $RELEASE_FLAG
+          cargo-mobench build --target android $RELEASE_FLAG --crate-path "$CRATE_PATH"
 
       - name: Run Android benchmarks
         working-directory: caller
