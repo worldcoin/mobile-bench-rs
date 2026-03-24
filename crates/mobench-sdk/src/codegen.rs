@@ -759,6 +759,32 @@ pub fn ios_project_exists(output_dir: &Path) -> bool {
     output_dir.join("ios/BenchRunner/project.yml").exists()
 }
 
+/// Checks whether an existing iOS project was generated for the given library name.
+///
+/// Returns `false` if the xcframework reference in `project.yml` doesn't match,
+/// which means the project needs to be regenerated for the new crate.
+fn ios_project_matches_library(output_dir: &Path, library_name: &str) -> bool {
+    let project_yml = output_dir.join("ios/BenchRunner/project.yml");
+    let Ok(content) = std::fs::read_to_string(&project_yml) else {
+        return false;
+    };
+    let expected = format!("../{}.xcframework", library_name);
+    content.contains(&expected)
+}
+
+/// Checks whether an existing Android project was generated for the given library name.
+///
+/// Returns `false` if the JNI library name in `build.gradle` doesn't match,
+/// which means the project needs to be regenerated for the new crate.
+fn android_project_matches_library(output_dir: &Path, library_name: &str) -> bool {
+    let build_gradle = output_dir.join("android/app/build.gradle");
+    let Ok(content) = std::fs::read_to_string(&build_gradle) else {
+        return false;
+    };
+    let expected = format!("lib{}.so", library_name);
+    content.contains(&expected)
+}
+
 /// Detects the first benchmark function in a crate by scanning src/lib.rs for `#[benchmark]`
 ///
 /// This function looks for functions marked with the `#[benchmark]` attribute and returns
@@ -985,7 +1011,10 @@ pub fn ensure_android_project_with_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
-    if android_project_exists(output_dir) {
+    let library_name = crate_name.replace('-', "_");
+    if android_project_exists(output_dir)
+        && android_project_matches_library(output_dir, &library_name)
+    {
         return Ok(());
     }
 
@@ -1036,7 +1065,8 @@ pub fn ensure_ios_project_with_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
-    if ios_project_exists(output_dir) {
+    let library_name = crate_name.replace('-', "_");
+    if ios_project_exists(output_dir) && ios_project_matches_library(output_dir, &library_name) {
         return Ok(());
     }
 
