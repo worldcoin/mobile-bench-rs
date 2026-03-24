@@ -655,8 +655,14 @@ enum ReportCommand {
 struct CiRunArgs {
     #[arg(long, value_enum)]
     target: CiTarget,
-    #[arg(long, help = "Fully-qualified Rust function to benchmark")]
-    function: String,
+    #[arg(long, help = "Fully-qualified Rust function to benchmark (single function)")]
+    function: Option<String>,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "Multiple benchmark functions (comma-separated or JSON array). Runs each in sequence."
+    )]
+    functions: Vec<String>,
     #[arg(long, default_value_t = 100)]
     iterations: u32,
     #[arg(long, default_value_t = 10)]
@@ -2354,15 +2360,46 @@ pub fn run_request(request: &RunRequest) -> Result<RunResult> {
     })
 }
 
+fn resolve_ci_functions(args: &CiRunArgs) -> Result<Vec<String>> {
+    let mut funcs = args.functions.clone();
+
+    // --function (singular) is sugar for a single-element list
+    if let Some(ref f) = args.function {
+        if !funcs.contains(f) {
+            funcs.insert(0, f.clone());
+        }
+    }
+
+    // Support JSON array passed as a single element: '["a","b"]'
+    if funcs.len() == 1 {
+        let trimmed = funcs[0].trim();
+        if trimmed.starts_with('[') {
+            if let Ok(parsed) = serde_json::from_str::<Vec<String>>(trimmed) {
+                return Ok(parsed);
+            }
+        }
+    }
+
+    if funcs.is_empty() {
+        bail!("At least one benchmark function is required. Use --function or --functions.");
+    }
+    Ok(funcs)
+}
+
 fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
+    let all_functions = resolve_ci_functions(&args)?;
+
     fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating ci output dir {}", args.output_dir.display()))?;
     let metadata = ci_metadata_from_args(&args);
     let targets = args.target.targets();
 
-    if targets.len() == 1 {
+    if targets.len() == 1 && all_functions.len() == 1 {
+        // Fast path: single target, single function — original behavior
         let target = targets[0];
-        let exit_code = cmd_ci_run_single(&args, target, &args.output_dir, &metadata)?;
+        let mut single_args = args.clone();
+        single_args.function = Some(all_functions[0].clone());
+        let exit_code = cmd_ci_run_single(&single_args, target, &args.output_dir, &metadata)?;
 
         let summary_json = args.output_dir.join("summary.json");
         let summary_md = args.output_dir.join("summary.md");
@@ -2390,10 +2427,20 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
 
     for target in targets {
         let target_value = *target;
-        let target_dir = args.output_dir.join(target_value.as_str());
+        for func in &all_functions {
+        let slug = func.replace("::", "_").replace('/', "-");
+        let target_dir = if all_functions.len() == 1 {
+            args.output_dir.join(target_value.as_str())
+        } else {
+            args.output_dir
+                .join(target_value.as_str())
+                .join(&slug)
+        };
         fs::create_dir_all(&target_dir)
             .with_context(|| format!("creating target output dir {}", target_dir.display()))?;
-        let exit_code = cmd_ci_run_single(&args, target_value, &target_dir, &metadata)?;
+        let mut func_args = args.clone();
+        func_args.function = Some(func.clone());
+        let exit_code = cmd_ci_run_single(&func_args, target_value, &target_dir, &metadata)?;
         if exit_code == EXIT_REGRESSION {
             regression_detected = true;
         } else if exit_code != 0 {
@@ -2436,7 +2483,8 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
             }
             merged_csv_rows.push(format!("{},{}", target_value.as_str(), line));
         }
-    }
+        } // end for func
+    } // end for target
 
     let root_summary_json = args.output_dir.join("summary.json");
     let root_summary_md = args.output_dir.join("summary.md");
@@ -2699,7 +2747,7 @@ fn cmd_ci_run_single(
 
     let result = run_request(&RunRequest {
         target,
-        function: args.function.clone(),
+        function: args.function.clone().unwrap_or_default(),
         iterations: args.iterations,
         warmup: args.warmup,
         device_selection: DeviceSelection {
@@ -6301,6 +6349,29 @@ struct ResolvedMatrixDevice {
     tags: Vec<String>,
 }
 
+/// Built-in device profiles so `devices resolve` works without a YAML file.
+fn builtin_device_for_profile(
+    platform: DevicePlatform,
+    profile: &str,
+) -> Option<ResolvedMatrixDevice> {
+    let (name, os, os_version) = match (platform, profile) {
+        (DevicePlatform::Ios, "low-spec") => ("iPhone 11", "ios", "13"),
+        (DevicePlatform::Ios, "mid-spec") => ("iPhone 14", "ios", "16"),
+        (DevicePlatform::Ios, "high-spec") => ("iPhone 16 Pro", "ios", "18"),
+        (DevicePlatform::Android, "low-spec") => ("Google Pixel 6", "android", "12.0"),
+        (DevicePlatform::Android, "mid-spec") => ("Google Pixel 7", "android", "13.0"),
+        (DevicePlatform::Android, "high-spec") => ("Samsung Galaxy S24", "android", "14.0"),
+        _ => return None,
+    };
+    Some(ResolvedMatrixDevice {
+        identifier: format!("{name}-{os_version}"),
+        name: name.to_string(),
+        os: os.to_string(),
+        os_version: os_version.to_string(),
+        tags: vec![profile.to_string()],
+    })
+}
+
 fn cmd_devices_resolve(
     platform: DevicePlatform,
     profile: Option<String>,
@@ -6308,25 +6379,46 @@ fn cmd_devices_resolve(
     device_matrix_path: Option<&Path>,
     format: CheckOutputFormat,
 ) -> Result<()> {
-    let (matrix_path, config_tags) = resolve_matrix_for_cli(config_path, device_matrix_path)
-        .with_context(
-            || "config_error: unable to resolve device matrix source for `devices resolve`",
-        )?;
-    let matrix = load_device_matrix(&matrix_path).with_context(|| {
-        format!(
-            "config_error: failed to parse device matrix at {}",
-            matrix_path.display()
-        )
-    })?;
+    let profile_str = profile
+        .as_deref()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .unwrap_or("default");
 
-    let selected_tags = match profile.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
-        Some(tag) => vec![tag.to_string()],
-        None => config_tags
-            .filter(|tags| !tags.is_empty())
-            .unwrap_or_else(|| vec!["default".to_string()]),
-    };
-
-    let resolved = resolve_devices_from_matrix(matrix.devices, platform, &selected_tags)?;
+    // Try loading matrix from file first; fall back to built-in profiles
+    let (resolved, source) =
+        match resolve_matrix_for_cli(config_path, device_matrix_path) {
+            Ok((matrix_path, config_tags)) => {
+                let matrix = load_device_matrix(&matrix_path).with_context(|| {
+                    format!(
+                        "config_error: failed to parse device matrix at {}",
+                        matrix_path.display()
+                    )
+                })?;
+                let selected_tags = if profile.is_some() {
+                    vec![profile_str.to_string()]
+                } else {
+                    config_tags
+                        .filter(|tags| !tags.is_empty())
+                        .unwrap_or_else(|| vec!["default".to_string()])
+                };
+                let devices =
+                    resolve_devices_from_matrix(matrix.devices, platform, &selected_tags)?;
+                (devices, format!("matrix:{}", matrix_path.display()))
+            }
+            Err(_) => {
+                // No matrix file found — use built-in profiles
+                if let Some(device) = builtin_device_for_profile(platform, profile_str) {
+                    (vec![device], "builtin".to_string())
+                } else {
+                    bail!(
+                        "No device matrix found and '{}' is not a built-in profile. \
+                         Built-in profiles: low-spec, mid-spec, high-spec",
+                        profile_str
+                    );
+                }
+            }
+        };
 
     match format {
         CheckOutputFormat::Text => {
@@ -6335,14 +6427,18 @@ fn cmd_devices_resolve(
             }
         }
         CheckOutputFormat::Json => {
+            let first: Option<&ResolvedMatrixDevice> = resolved.first();
             let output = json!({
                 "platform": match platform {
                     DevicePlatform::Android => "android",
                     DevicePlatform::Ios => "ios",
                 },
-                "profile_tags": selected_tags,
-                "device_matrix": matrix_path.display().to_string(),
+                "profile": profile_str,
+                "source": source,
                 "count": resolved.len(),
+                "device": first.map(|d| &d.name),
+                "name": first.map(|d| &d.name),
+                "os_version": first.map(|d| &d.os_version),
                 "devices": resolved,
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
@@ -7961,7 +8057,7 @@ project = "proj"
                 command: CiCommand::Run(args),
             } => {
                 assert_eq!(args.target, CiTarget::Android);
-                assert_eq!(args.function, "sample_fns::fibonacci");
+                assert_eq!(args.function.as_deref(), Some("sample_fns::fibonacci"));
                 assert_eq!(args.output_dir, PathBuf::from("target/mobench/ci"));
             }
             _ => panic!("expected ci run command"),
