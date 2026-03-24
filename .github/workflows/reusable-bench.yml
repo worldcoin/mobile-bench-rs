@@ -144,12 +144,8 @@ jobs:
 
       - name: Ensure iOS Rust targets
         shell: bash
-        env:
-          TARGETS: ${{ inputs.rust_targets_ios }}
         run: |
-          for target in ${TARGETS//,/ }; do
-            rustup target add "$target" 2>/dev/null || true
-          done
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios 2>/dev/null || true
           rustup target list --installed | grep -E "ios|apple"
 
       - name: Cache cargo registry/git
@@ -295,12 +291,8 @@ jobs:
 
       - name: Ensure Android Rust targets
         shell: bash
-        env:
-          TARGETS: ${{ inputs.rust_targets_android }}
         run: |
-          for target in ${TARGETS//,/ }; do
-            rustup target add "$target" 2>/dev/null || true
-          done
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android 2>/dev/null || true
           rustup target list --installed | grep -E "android"
 
       - name: Cache cargo registry/git
@@ -324,37 +316,41 @@ jobs:
       - name: Setup Android SDK/NDK
         uses: android-actions/setup-android@v3
 
-      - name: Install required SDK packages
+      - name: Install SDK packages and resolve NDK
         shell: bash
         run: |
           echo "ANDROID_HOME=${ANDROID_HOME}"
-          # Use the full path to sdkmanager in case it's not on PATH
+
+          # Find sdkmanager
           SDKMGR="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMGR" ]; then
             SDKMGR=$(command -v sdkmanager 2>/dev/null || echo "sdkmanager")
           fi
           echo "Using sdkmanager: $SDKMGR"
 
+          # Install packages (best-effort — runner may already have them)
           $SDKMGR --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" 2>&1 || true
 
-          # Check what NDKs are available
+          # Resolve NDK: prefer 26.1.10909125, fall back to latest available
           echo "Available NDKs:"
           ls "${ANDROID_HOME}/ndk/" 2>/dev/null || echo "  (none)"
 
-          # Use requested NDK or fall back to whatever is installed
           if [ -d "${ANDROID_HOME}/ndk/26.1.10909125" ]; then
-            echo "NDK 26.1.10909125 found"
+            NDK_DIR="${ANDROID_HOME}/ndk/26.1.10909125"
           else
-            # Fall back to the latest available NDK
-            AVAILABLE_NDK=$(ls "${ANDROID_HOME}/ndk/" 2>/dev/null | sort -V | tail -1)
-            if [ -n "$AVAILABLE_NDK" ]; then
-              echo "::warning::NDK 26.1.10909125 not found, using ${AVAILABLE_NDK} instead"
-              echo "ANDROID_NDK_FALLBACK=${AVAILABLE_NDK}" >> "$GITHUB_ENV"
+            NDK_VER=$(ls "${ANDROID_HOME}/ndk/" 2>/dev/null | sort -V | tail -1)
+            if [ -n "$NDK_VER" ]; then
+              echo "::warning::NDK 26.1.10909125 not found, using ${NDK_VER}"
+              NDK_DIR="${ANDROID_HOME}/ndk/${NDK_VER}"
             else
               echo "::error::No Android NDK found"
               exit 1
             fi
           fi
+
+          # Export for all subsequent steps
+          echo "ANDROID_NDK_HOME=${NDK_DIR}" >> "$GITHUB_ENV"
+          echo "Resolved ANDROID_NDK_HOME=${NDK_DIR}"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -408,7 +404,6 @@ jobs:
         working-directory: caller
         shell: bash
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.ANDROID_NDK_FALLBACK || '26.1.10909125' }}
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
           CRATE_PATH: ${{ inputs.crate_path }}
         run: |
@@ -424,7 +419,6 @@ jobs:
           WARMUP: ${{ inputs.warmup }}
           ANDROID_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
           ANDROID_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.ANDROID_NDK_FALLBACK || '26.1.10909125' }}
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
         run: |
           set -euo pipefail
