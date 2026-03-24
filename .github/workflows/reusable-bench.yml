@@ -66,7 +66,7 @@ on:
         description: "Mobench version to install"
         required: false
         type: string
-        default: "0.1.19"
+        default: "0.1.20"
       mobench_ref:
         description: "Git ref for mobile-bench-rs (overrides mobench_version when set)"
         required: false
@@ -215,6 +215,21 @@ jobs:
             echo "os_version=${os_version}" >> "$GITHUB_OUTPUT"
             echo "Resolved iOS device: ${device_name} (${os_version})"
           fi
+
+      - name: Debug target sysroot
+        shell: bash
+        run: |
+          echo "=== Active toolchain ==="
+          rustup show active-toolchain
+          echo "=== Sysroot ==="
+          SYSROOT=$(rustc --print sysroot)
+          echo "$SYSROOT"
+          echo "=== iOS target libs ==="
+          ls "$SYSROOT/lib/rustlib/aarch64-apple-ios/lib/" 2>&1 | head -5 || echo "MISSING"
+          echo "=== which cargo-mobench ==="
+          which cargo-mobench
+          echo "=== mobench version ==="
+          cargo-mobench --version
 
       - name: Build iOS artifacts
         working-directory: caller

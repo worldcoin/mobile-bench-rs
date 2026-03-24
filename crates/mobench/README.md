@@ -45,7 +45,7 @@ This creates:
 - `mobench.toml` - Project configuration file (when using `init`)
 - `benches/example.rs` - Example benchmarks (with `--examples`)
 
-Generated scaffolding still uses `bench-mobile/` by default, but in `0.1.19` existing repositories can point mobench at any benchmark crate through `mobench.toml`, `--project-root`, or `--crate-path`.
+Generated scaffolding still uses `bench-mobile/` by default, but in `0.1.20` existing repositories can point mobench at any benchmark crate through `mobench.toml`, `--project-root`, or `--crate-path`.
 
 ### 2. Write Benchmarks
 
@@ -514,7 +514,7 @@ default_warmup = 10
 ```
 
 CLI flags always override config file values when provided.
-Resolution precedence in `0.1.19` is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
+Resolution precedence in `0.1.20` is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 ### Run Config File Format (`bench-config.toml`)
 

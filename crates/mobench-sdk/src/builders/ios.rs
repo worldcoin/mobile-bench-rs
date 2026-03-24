@@ -616,24 +616,43 @@ impl IosBuilder {
         Ok(())
     }
 
-    /// Checks if required Rust targets are installed
+    /// Checks if required Rust targets are installed.
+    ///
+    /// Uses `rustc --print sysroot` to locate the actual sysroot (respects
+    /// RUSTUP_TOOLCHAIN and toolchain overrides) instead of `rustup target list`
+    /// which may query a different toolchain in CI.
     fn check_rust_targets(&self, targets: &[&str]) -> Result<(), BenchError> {
-        let output = Command::new("rustup")
-            .arg("target")
-            .arg("list")
-            .arg("--installed")
+        let sysroot = Command::new("rustc")
+            .args(["--print", "sysroot"])
             .output()
-            .map_err(|e| {
-                BenchError::Build(format!(
-                    "Failed to check rustup targets: {}. Ensure rustup is installed and on PATH.",
-                    e
-                ))
-            })?;
-
-        let installed = String::from_utf8_lossy(&output.stdout);
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    String::from_utf8(o.stdout).ok()
+                } else {
+                    None
+                }
+            })
+            .map(|s| s.trim().to_string());
 
         for target in targets {
-            if !installed.contains(target) {
+            let installed = if let Some(ref root) = sysroot {
+                // Check if the target's stdlib exists in the active sysroot
+                let lib_dir =
+                    std::path::Path::new(root).join(format!("lib/rustlib/{}/lib", target));
+                lib_dir.exists()
+            } else {
+                // Fallback: ask rustup (may query wrong toolchain in CI)
+                let output = Command::new("rustup")
+                    .args(["target", "list", "--installed"])
+                    .output()
+                    .ok();
+                output
+                    .map(|o| String::from_utf8_lossy(&o.stdout).contains(target))
+                    .unwrap_or(false)
+            };
+
+            if !installed {
                 return Err(BenchError::Build(format!(
                     "Rust target '{}' is not installed.\n\n\
                      This target is required to compile for iOS.\n\n\
