@@ -112,7 +112,7 @@ default_iterations = 100
 default_warmup = 10
 ```
 
-Resolution precedence in `0.1.21` is: explicit CLI flags (`--project-root`, `--crate-path`) → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
+Resolution precedence in `0.1.22` is: explicit CLI flags (`--project-root`, `--crate-path`) → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 CLI flags override config file values when provided.
 - In `cargo mobench run --config <FILE>` mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
@@ -205,6 +205,13 @@ fn db_query(db: &Database) {
 | `#[benchmark(setup = fn, teardown = fn)]` | Resources requiring cleanup (connections, files, etc.) |
 
 ## Release Notes
+
+### v0.1.22
+
+- Fixed BrowserStack result fetching so `cargo mobench ci run --fetch` falls back to downloaded session artifacts when live device logs do not expose benchmark JSON.
+- Unified benchmark extraction across live logs, `bench-report.json`, iOS marker logs, and Android `BENCH_JSON` logs so per-function CI summaries are written with populated benchmark data.
+- Fixed merged CI output generation to preserve every function under each target and emit a top-level `summary` for single-target runs.
+- Fixed `cargo-mobench ci summarize` to read merged `{targets, ci}` outputs, recurse through nested target/function result directories, and fall back to raw `bench-report.json` when needed.
 
 ### v0.1.21
 

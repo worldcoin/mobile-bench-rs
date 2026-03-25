@@ -4,7 +4,7 @@ Procedural macros for the [mobench](https://crates.io/crates/mobench) mobile ben
 
 This crate provides the `#[benchmark]` attribute macro that automatically registers functions for mobile benchmarking. It uses compile-time registration via the `inventory` crate to build a registry of benchmark functions.
 
-In `mobench 0.1.21`, benchmarks annotated with these macros are discovered through the CLI's config-first resolver, so non-legacy crate layouts work with `mobench.toml`, `--project-root`, and `--crate-path`.
+In `mobench 0.1.22`, benchmarks annotated with these macros are discovered through the CLI's config-first resolver, so non-legacy crate layouts work with `mobench.toml`, `--project-root`, and `--crate-path`.
 
 ## Features
 
@@ -19,8 +19,8 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mobench-macros = "0.1.21"
-mobench-sdk = "0.1.21"  # For the runtime
+mobench-macros = "0.1.22"
+mobench-sdk = "0.1.22"  # For the runtime
 ```
 
 ### Basic Example

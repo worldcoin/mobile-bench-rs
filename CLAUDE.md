@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.21):**
+**Published on crates.io as the mobench ecosystem (v0.1.22):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -180,7 +180,7 @@ cargo mobench verify --target android --check-artifacts
 Use `cargo mobench build --target <android|ios>` for local or CI builds. The CLI handles
 library builds, binding generation, and app packaging without extra scripts.
 
-In `mobench 0.1.21`, build/run/list/verify/package commands resolve the benchmark crate and project root from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`.
+In `mobench 0.1.22`, build/run/list/verify/package commands resolve the benchmark crate and project root from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`.
 
 **Important iOS Build Details:**
 
@@ -594,7 +594,7 @@ The workflow supports manual dispatch with platform selection:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.21"
+mobench-sdk = "0.1.22"
 inventory = "0.3"
 ```
 
