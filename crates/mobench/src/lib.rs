@@ -660,7 +660,10 @@ struct CiRunArgs {
         help = "Path to the benchmark crate directory containing Cargo.toml"
     )]
     crate_path: Option<PathBuf>,
-    #[arg(long, help = "Fully-qualified Rust function to benchmark (single function)")]
+    #[arg(
+        long,
+        help = "Fully-qualified Rust function to benchmark (single function)"
+    )]
     function: Option<String>,
     #[arg(
         long,
@@ -2396,6 +2399,107 @@ fn resolve_ci_functions(args: &CiRunArgs) -> Result<Vec<String>> {
     Ok(funcs)
 }
 
+fn ci_function_slug(function: &str) -> String {
+    function.replace("::", "_").replace('/', "-")
+}
+
+fn summary_report_from_value(value: &Value) -> Result<SummaryReport> {
+    let summary_value = value
+        .get("summary")
+        .cloned()
+        .unwrap_or_else(|| value.clone());
+    serde_json::from_value(summary_value).context("parsing summary report")
+}
+
+fn merge_summary_reports(
+    target: MobileTarget,
+    summaries: &[SummaryReport],
+) -> Result<SummaryReport> {
+    let first = summaries
+        .first()
+        .ok_or_else(|| anyhow!("cannot merge empty summary list"))?;
+
+    let latest = summaries
+        .iter()
+        .max_by_key(|summary| summary.generated_at_unix)
+        .unwrap_or(first);
+
+    let mut devices = BTreeSet::new();
+    let mut functions = BTreeSet::new();
+    let mut device_benchmarks: BTreeMap<String, BTreeMap<String, BenchmarkStats>> = BTreeMap::new();
+
+    for summary in summaries {
+        for device in &summary.devices {
+            devices.insert(device.clone());
+        }
+        functions.insert(summary.function.clone());
+
+        for device_summary in &summary.device_summaries {
+            let benchmark_map = device_benchmarks
+                .entry(device_summary.device.clone())
+                .or_default();
+            for benchmark in &device_summary.benchmarks {
+                benchmark_map.insert(benchmark.function.clone(), benchmark.clone());
+            }
+        }
+    }
+
+    let function = if functions.len() == 1 {
+        functions
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "unknown".to_string())
+    } else {
+        "multiple".to_string()
+    };
+
+    let device_summaries = device_benchmarks
+        .into_iter()
+        .map(|(device, benchmarks)| DeviceSummary {
+            device,
+            benchmarks: benchmarks.into_values().collect(),
+        })
+        .collect();
+
+    Ok(SummaryReport {
+        generated_at: latest.generated_at.clone(),
+        generated_at_unix: latest.generated_at_unix,
+        target,
+        function,
+        iterations: first.iterations,
+        warmup: first.warmup,
+        devices: devices.into_iter().collect(),
+        device_summaries,
+    })
+}
+
+fn merge_ci_target_runs(
+    target: MobileTarget,
+    function_runs: &BTreeMap<String, Value>,
+) -> Result<Value> {
+    let summaries = function_runs
+        .values()
+        .map(summary_report_from_value)
+        .collect::<Result<Vec<_>>>()?;
+    let merged_summary = merge_summary_reports(target, &summaries)?;
+
+    Ok(json!({
+        "summary": merged_summary,
+        "functions": function_runs
+    }))
+}
+
+fn root_summary_from_merged_targets(targets: &BTreeMap<String, Value>) -> Option<Value> {
+    if targets.len() != 1 {
+        return None;
+    }
+
+    targets
+        .values()
+        .next()
+        .and_then(|entry| entry.get("summary").cloned())
+}
+
 fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
     let all_functions = resolve_ci_functions(&args)?;
 
@@ -2429,58 +2533,83 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
     }
 
     let mut regression_detected = false;
-    let mut merged_summaries: BTreeMap<String, Value> = BTreeMap::new();
-    let mut merged_markdown_sections = Vec::new();
-    let mut merged_csv_rows = Vec::new();
-    let mut merged_header: Option<String> = None;
-    let mut target_outputs = BTreeMap::new();
+    let mut target_runs: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
+    let mut target_outputs: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
 
     for target in targets {
         let target_value = *target;
         for func in &all_functions {
-        let slug = func.replace("::", "_").replace('/', "-");
-        let target_dir = if all_functions.len() == 1 {
-            args.output_dir.join(target_value.as_str())
+            let slug = ci_function_slug(func);
+            let target_dir = if all_functions.len() == 1 {
+                args.output_dir.join(target_value.as_str())
+            } else {
+                args.output_dir.join(target_value.as_str()).join(&slug)
+            };
+            fs::create_dir_all(&target_dir)
+                .with_context(|| format!("creating target output dir {}", target_dir.display()))?;
+            let mut func_args = args.clone();
+            func_args.function = Some(func.clone());
+            let exit_code = cmd_ci_run_single(&func_args, target_value, &target_dir, &metadata)?;
+            if exit_code == EXIT_REGRESSION {
+                regression_detected = true;
+            } else if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+
+            let summary_json = target_dir.join("summary.json");
+            let summary_md = target_dir.join("summary.md");
+            let results_csv = target_dir.join("results.csv");
+
+            let summary_text = fs::read_to_string(&summary_json)
+                .with_context(|| format!("reading {}", summary_json.display()))?;
+            let summary_value: Value = serde_json::from_str(&summary_text)
+                .with_context(|| format!("parsing {}", summary_json.display()))?;
+            target_runs
+                .entry(target_value.as_str().to_string())
+                .or_default()
+                .insert(slug.clone(), summary_value);
+            target_outputs
+                .entry(target_value.as_str().to_string())
+                .or_default()
+                .insert(
+                    slug,
+                    json!({
+                    "summary_json": summary_json.display().to_string(),
+                    "summary_md": summary_md.display().to_string(),
+                    "results_csv": results_csv.display().to_string(),
+                    }),
+                );
+        } // end for func
+    } // end for target
+
+    let mut merged_targets = BTreeMap::new();
+    for target in targets {
+        let target_value = *target;
+        let target_key = target_value.as_str().to_string();
+        let runs = target_runs
+            .get(&target_key)
+            .ok_or_else(|| anyhow!("missing merged runs for target `{target_key}`"))?;
+        merged_targets.insert(target_key, merge_ci_target_runs(target_value, runs)?);
+    }
+
+    let root_summary_json = args.output_dir.join("summary.json");
+    let root_summary_md = args.output_dir.join("summary.md");
+    let root_results_csv = args.output_dir.join("results.csv");
+
+    let mut merged_markdown_sections = Vec::new();
+    let mut merged_csv_rows = Vec::new();
+    let mut merged_header: Option<String> = None;
+
+    for (target_name, entry) in &merged_targets {
+        let summary = summary_report_from_value(entry)?;
+        let markdown = render_markdown_summary(&summary);
+        if merged_targets.len() == 1 {
+            merged_markdown_sections.push(markdown);
         } else {
-            args.output_dir
-                .join(target_value.as_str())
-                .join(&slug)
-        };
-        fs::create_dir_all(&target_dir)
-            .with_context(|| format!("creating target output dir {}", target_dir.display()))?;
-        let mut func_args = args.clone();
-        func_args.function = Some(func.clone());
-        let exit_code = cmd_ci_run_single(&func_args, target_value, &target_dir, &metadata)?;
-        if exit_code == EXIT_REGRESSION {
-            regression_detected = true;
-        } else if exit_code != 0 {
-            std::process::exit(exit_code);
+            merged_markdown_sections.push(format!("## {}\n\n{}", target_name, markdown));
         }
 
-        let summary_json = target_dir.join("summary.json");
-        let summary_md = target_dir.join("summary.md");
-        let results_csv = target_dir.join("results.csv");
-
-        let summary_text = fs::read_to_string(&summary_json)
-            .with_context(|| format!("reading {}", summary_json.display()))?;
-        let summary_value: Value = serde_json::from_str(&summary_text)
-            .with_context(|| format!("parsing {}", summary_json.display()))?;
-        merged_summaries.insert(target_value.as_str().to_string(), summary_value);
-        target_outputs.insert(
-            target_value.as_str().to_string(),
-            json!({
-                "summary_json": summary_json.display().to_string(),
-                "summary_md": summary_md.display().to_string(),
-                "results_csv": results_csv.display().to_string(),
-            }),
-        );
-
-        let markdown = fs::read_to_string(&summary_md)
-            .with_context(|| format!("reading {}", summary_md.display()))?;
-        merged_markdown_sections.push(format!("## {}\n\n{}", target_value.as_str(), markdown));
-
-        let csv = fs::read_to_string(&results_csv)
-            .with_context(|| format!("reading {}", results_csv.display()))?;
+        let csv = render_csv_summary(&summary);
         let mut lines = csv.lines();
         if let Some(header) = lines.next()
             && merged_header.is_none()
@@ -2491,14 +2620,9 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
             if line.trim().is_empty() {
                 continue;
             }
-            merged_csv_rows.push(format!("{},{}", target_value.as_str(), line));
+            merged_csv_rows.push(format!("{target_name},{line}"));
         }
-        } // end for func
-    } // end for target
-
-    let root_summary_json = args.output_dir.join("summary.json");
-    let root_summary_md = args.output_dir.join("summary.md");
-    let root_results_csv = args.output_dir.join("results.csv");
+    }
 
     let merged_markdown = merged_markdown_sections.join("\n\n");
     write_file(&root_summary_md, merged_markdown.as_bytes())?;
@@ -2522,11 +2646,28 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
             "results_csv": root_results_csv.display().to_string(),
         },
         "targets": target_outputs
+            .into_iter()
+            .map(|(target, functions)| (target, json!({ "functions": functions })))
+            .collect::<BTreeMap<_, _>>()
     });
-    let merged_summary = json!({
-        "targets": merged_summaries,
+    let mut merged_summary = json!({
+        "targets": merged_targets,
         "ci": root_ci_value
     });
+    if let Some(summary) = merged_summary
+        .get("targets")
+        .and_then(|targets| targets.as_object())
+        .map(|targets| {
+            targets
+                .iter()
+                .map(|(target, value)| (target.clone(), value.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .and_then(|targets| root_summary_from_merged_targets(&targets))
+        && let Some(obj) = merged_summary.as_object_mut()
+    {
+        obj.insert("summary".to_string(), summary);
+    }
     write_file(
         &root_summary_json,
         serde_json::to_string_pretty(&merged_summary)?.as_bytes(),
@@ -2920,7 +3061,7 @@ fn fetch_browserstack_artifacts(
             .with_context(|| format!("creating session dir {:?}", session_dir))?;
         write_json(session_dir.join("session.json"), &session_json)?;
 
-        let mut bench_report: Option<Value> = None;
+        let mut downloaded_texts = BTreeMap::new();
         for (key, url) in extract_url_fields(&session_json) {
             let file_name = filename_for_url(&key, &url);
             let dest = session_dir.join(file_name);
@@ -2928,17 +3069,24 @@ fn fetch_browserstack_artifacts(
                 println!("Skipping download for {key}: {err}");
                 continue;
             }
-            if (key.contains("device_log")
-                || key.contains("instrumentation_log")
-                || key.contains("app_log"))
-                && let Ok(contents) = fs::read_to_string(&dest)
-                && let Some(parsed) = extract_bench_json(&contents)
-            {
-                bench_report = Some(parsed);
+            if let Ok(contents) = fs::read_to_string(&dest) {
+                downloaded_texts.insert(url, contents);
             }
         }
 
-        if let Some(report) = bench_report {
+        if let Ok((bench_results, _)) =
+            client.extract_results_from_session_artifacts(&session_json, |url| {
+                downloaded_texts
+                    .get(url)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("artifact {url} was not downloaded as text"))
+            })
+        {
+            let report = if bench_results.len() == 1 {
+                bench_results.into_iter().next().unwrap_or(Value::Null)
+            } else {
+                Value::Array(bench_results)
+            };
             write_json(session_dir.join("bench-report.json"), &report)?;
         }
     }
@@ -3072,153 +3220,6 @@ fn filename_for_url(key: &str, url: &str) -> String {
         }
     }
     format!("{}.{}", safe, ext)
-}
-
-fn extract_bench_json(contents: &str) -> Option<Value> {
-    // First, try iOS-style markers: BENCH_REPORT_JSON_START ... BENCH_REPORT_JSON_END
-    // This allows multi-line JSON and is more robust for iOS NSLog output
-    if let Some(json) = extract_bench_json_ios_markers(contents) {
-        return Some(json);
-    }
-
-    // Fall back to Android-style single-line marker: BENCH_JSON {...}
-    let marker = "BENCH_JSON ";
-    for line in contents.lines().rev() {
-        if let Some(idx) = line.find(marker) {
-            let json_part = &line[idx + marker.len()..];
-            if let Ok(value) = serde_json::from_str::<Value>(json_part) {
-                return Some(value);
-            }
-        }
-    }
-    None
-}
-
-/// Extract benchmark JSON from iOS logs using START/END markers.
-/// iOS uses NSLog which may split the JSON across multiple log lines,
-/// so we need to capture everything between the markers.
-fn extract_bench_json_ios_markers(contents: &str) -> Option<Value> {
-    let start_marker = "BENCH_REPORT_JSON_START";
-    let end_marker = "BENCH_REPORT_JSON_END";
-
-    // Find the last occurrence of start marker (in case of multiple runs)
-    let start_pos = contents.rfind(start_marker)?;
-    let after_start = &contents[start_pos + start_marker.len()..];
-
-    // Find the end marker after the start
-    let end_pos = after_start.find(end_marker)?;
-    let json_section = &after_start[..end_pos];
-
-    // The JSON might be on the next line or have log prefixes, so we need to clean it up
-    // iOS NSLog format often looks like: "2026-01-20 12:34:56.789 BenchRunner[1234:5678] {"key": "value"}"
-    // or just the raw JSON on its own line
-
-    // Try to find valid JSON in the section
-    let json_str = extract_json_from_log_section(json_section)?;
-
-    serde_json::from_str::<Value>(&json_str).ok()
-}
-
-/// Extract valid JSON from a log section that may contain log prefixes/timestamps.
-/// Handles both raw JSON and JSON embedded in log lines.
-fn extract_json_from_log_section(section: &str) -> Option<String> {
-    // First, try the whole section as-is (trimmed)
-    let trimmed = section.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        if serde_json::from_str::<Value>(trimmed).is_ok() {
-            return Some(trimmed.to_string());
-        }
-    }
-
-    // If that didn't work, look for JSON on individual lines
-    // This handles cases where NSLog adds timestamps/prefixes
-    for line in section.lines() {
-        let line = line.trim();
-
-        // Skip empty lines
-        if line.is_empty() {
-            continue;
-        }
-
-        // Look for JSON starting with {
-        if let Some(json_start) = line.find('{') {
-            let potential_json = &line[json_start..];
-
-            // Try to find the matching closing brace
-            // This handles cases like: "timestamp prefix {"key": "value"} suffix"
-            if let Some(json) = extract_balanced_json(potential_json) {
-                if serde_json::from_str::<Value>(&json).is_ok() {
-                    return Some(json);
-                }
-            }
-        }
-    }
-
-    // Try concatenating all lines and looking for JSON (for multi-line JSON)
-    let all_content: String = section
-        .lines()
-        .map(|line| {
-            // Try to strip common log prefixes (timestamps, process info)
-            // iOS format: "2026-01-20 12:34:56.789 AppName[pid:tid] content"
-            if let Some(bracket_end) = line.find("] ") {
-                &line[bracket_end + 2..]
-            } else {
-                line.trim()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
-
-    if let Some(json_start) = all_content.find('{') {
-        let potential_json = &all_content[json_start..];
-        if let Some(json) = extract_balanced_json(potential_json) {
-            if serde_json::from_str::<Value>(&json).is_ok() {
-                return Some(json);
-            }
-        }
-    }
-
-    None
-}
-
-/// Extract a balanced JSON object from a string starting with '{'.
-/// Returns the JSON substring if balanced braces are found.
-fn extract_balanced_json(s: &str) -> Option<String> {
-    if !s.starts_with('{') {
-        return None;
-    }
-
-    let mut depth = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    for (i, c) in s.char_indices() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-
-        match c {
-            '\\' if in_string => {
-                escape_next = true;
-            }
-            '"' => {
-                in_string = !in_string;
-            }
-            '{' if !in_string => {
-                depth += 1;
-            }
-            '}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(s[..=i].to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    None
 }
 
 fn write_json(path: PathBuf, value: &Value) -> Result<()> {
@@ -6397,39 +6398,37 @@ fn cmd_devices_resolve(
         .unwrap_or("default");
 
     // Try loading matrix from file first; fall back to built-in profiles
-    let (resolved, source) =
-        match resolve_matrix_for_cli(config_path, device_matrix_path) {
-            Ok((matrix_path, config_tags)) => {
-                let matrix = load_device_matrix(&matrix_path).with_context(|| {
-                    format!(
-                        "config_error: failed to parse device matrix at {}",
-                        matrix_path.display()
-                    )
-                })?;
-                let selected_tags = if profile.is_some() {
-                    vec![profile_str.to_string()]
-                } else {
-                    config_tags
-                        .filter(|tags| !tags.is_empty())
-                        .unwrap_or_else(|| vec!["default".to_string()])
-                };
-                let devices =
-                    resolve_devices_from_matrix(matrix.devices, platform, &selected_tags)?;
-                (devices, format!("matrix:{}", matrix_path.display()))
-            }
-            Err(_) => {
-                // No matrix file found — use built-in profiles
-                if let Some(device) = builtin_device_for_profile(platform, profile_str) {
-                    (vec![device], "builtin".to_string())
-                } else {
-                    bail!(
-                        "No device matrix found and '{}' is not a built-in profile. \
+    let (resolved, source) = match resolve_matrix_for_cli(config_path, device_matrix_path) {
+        Ok((matrix_path, config_tags)) => {
+            let matrix = load_device_matrix(&matrix_path).with_context(|| {
+                format!(
+                    "config_error: failed to parse device matrix at {}",
+                    matrix_path.display()
+                )
+            })?;
+            let selected_tags = if profile.is_some() {
+                vec![profile_str.to_string()]
+            } else {
+                config_tags
+                    .filter(|tags| !tags.is_empty())
+                    .unwrap_or_else(|| vec!["default".to_string()])
+            };
+            let devices = resolve_devices_from_matrix(matrix.devices, platform, &selected_tags)?;
+            (devices, format!("matrix:{}", matrix_path.display()))
+        }
+        Err(_) => {
+            // No matrix file found — use built-in profiles
+            if let Some(device) = builtin_device_for_profile(platform, profile_str) {
+                (vec![device], "builtin".to_string())
+            } else {
+                bail!(
+                    "No device matrix found and '{}' is not a built-in profile. \
                          Built-in profiles: low-spec, mid-spec, high-spec",
-                        profile_str
-                    );
-                }
+                    profile_str
+                );
             }
-        };
+        }
+    };
 
     match format {
         CheckOutputFormat::Text => {
@@ -8481,6 +8480,131 @@ mod result_extraction_tests {
         assert_eq!(result.min_ns, Some(80));
         assert_eq!(result.max_ns, Some(120));
         assert!(result.std_dev_ns.is_some());
+    }
+}
+
+#[cfg(test)]
+mod ci_merge_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_run_summary(
+        target: MobileTarget,
+        function: &str,
+        device: &str,
+        mean_ns: u64,
+    ) -> Value {
+        json!({
+            "summary": {
+                "generated_at": "2026-02-16T00:00:00Z",
+                "generated_at_unix": 1708041600,
+                "target": target.as_str(),
+                "function": function,
+                "iterations": 3,
+                "warmup": 1,
+                "devices": [device],
+                "device_summaries": [{
+                    "device": device,
+                    "benchmarks": [{
+                        "function": function,
+                        "samples": 3,
+                        "mean_ns": mean_ns,
+                        "median_ns": mean_ns,
+                        "p95_ns": mean_ns,
+                        "min_ns": mean_ns,
+                        "max_ns": mean_ns
+                    }]
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn merge_ci_target_runs_preserves_all_functions() {
+        let runs = BTreeMap::from([
+            (
+                "bench_a".to_string(),
+                sample_run_summary(MobileTarget::Ios, "bench_a", "iPhone 14-16.0", 100),
+            ),
+            (
+                "bench_b".to_string(),
+                sample_run_summary(MobileTarget::Ios, "bench_b", "iPhone 14-16.0", 200),
+            ),
+        ]);
+
+        let merged = merge_ci_target_runs(MobileTarget::Ios, &runs).unwrap();
+        let functions = merged
+            .get("functions")
+            .and_then(|v| v.as_object())
+            .expect("functions map");
+        assert_eq!(functions.len(), 2);
+
+        let benchmarks = merged["summary"]["device_summaries"][0]["benchmarks"]
+            .as_array()
+            .expect("benchmarks");
+        assert_eq!(benchmarks.len(), 2);
+        assert_eq!(benchmarks[0]["function"], "bench_a");
+        assert_eq!(benchmarks[1]["function"], "bench_b");
+    }
+
+    #[test]
+    fn root_summary_from_merged_targets_returns_summary_for_single_target() {
+        let merged_target = merge_ci_target_runs(
+            MobileTarget::Ios,
+            &BTreeMap::from([(
+                "bench_a".to_string(),
+                sample_run_summary(MobileTarget::Ios, "bench_a", "iPhone 14-16.0", 100),
+            )]),
+        )
+        .unwrap();
+        let targets = BTreeMap::from([("ios".to_string(), merged_target)]);
+
+        let root_summary = root_summary_from_merged_targets(&targets).expect("single target");
+        assert_eq!(root_summary["target"], "ios");
+        assert_eq!(
+            root_summary["device_summaries"][0]["benchmarks"][0]["function"],
+            "bench_a"
+        );
+    }
+
+    #[test]
+    fn render_summary_markdown_from_output_renders_all_functions_from_merged_targets() {
+        let ios = merge_ci_target_runs(
+            MobileTarget::Ios,
+            &BTreeMap::from([
+                (
+                    "bench_a".to_string(),
+                    sample_run_summary(MobileTarget::Ios, "bench_a", "iPhone 14-16.0", 100),
+                ),
+                (
+                    "bench_b".to_string(),
+                    sample_run_summary(MobileTarget::Ios, "bench_b", "iPhone 14-16.0", 200),
+                ),
+            ]),
+        )
+        .unwrap();
+        let android = merge_ci_target_runs(
+            MobileTarget::Android,
+            &BTreeMap::from([(
+                "bench_c".to_string(),
+                sample_run_summary(MobileTarget::Android, "bench_c", "Pixel 7-14.0", 300),
+            )]),
+        )
+        .unwrap();
+
+        let markdown = render_summary_markdown_from_output(&json!({
+            "targets": {
+                "ios": ios,
+                "android": android
+            }
+        }))
+        .unwrap();
+
+        assert!(markdown.contains("## ios"));
+        assert!(markdown.contains("## android"));
+        assert!(markdown.contains("bench_a"));
+        assert!(markdown.contains("bench_b"));
+        assert!(markdown.contains("bench_c"));
     }
 }
 

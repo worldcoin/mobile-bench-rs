@@ -15,7 +15,7 @@ Transform your Rust project into a mobile benchmarking suite. This SDK provides 
 - **BrowserStack integration**: Test on real devices in the cloud
 - **UniFFI bindings**: Automatic FFI generation for mobile platforms
 - **Configuration file support**: `mobench.toml` for project settings
-- **Config-first CLI integration**: `mobench 0.1.21` resolves project root, crate name, and library name from flags, `mobench.toml`, workspace metadata, or git root
+- **Config-first CLI integration**: `mobench 0.1.22` resolves project root, crate name, and library name from flags, `mobench.toml`, workspace metadata, or git root
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ Add mobench-sdk to your project:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.21"
+mobench-sdk = "0.1.22"
 ```
 
 Mark functions to benchmark:
@@ -86,7 +86,7 @@ This creates:
 - `android/` or `ios/` - Mobile app projects
 - `bench-config.toml` - Configuration file
 
-The generated `bench-mobile/` crate is still the default scaffold, but the `mobench` CLI in `0.1.21` can also target existing custom crate layouts through `mobench.toml`, `--project-root`, and `--crate-path`.
+The generated `bench-mobile/` crate is still the default scaffold, but the `mobench` CLI in `0.1.22` can also target existing custom crate layouts through `mobench.toml`, `--project-root`, and `--crate-path`.
 
 ### 2. Add Benchmarks
 
@@ -391,7 +391,7 @@ default_iterations = 100
 default_warmup = 10
 ```
 
-Resolution precedence in `0.1.21` is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
+Resolution precedence in `0.1.22` is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 ### `bench-config.toml` (Run Configuration)
 

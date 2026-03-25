@@ -1,9 +1,9 @@
 //! Types and logic for the `ci summarize` command.
 
 use anyhow::{Context, Result};
-use comfy_table::{presets::UTF8_FULL, Attribute, Cell, ContentArrangement, Table};
+use comfy_table::{Attribute, Cell, ContentArrangement, Table, presets::UTF8_FULL};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A fully-assembled summary ready for rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,9 +66,29 @@ pub struct ResourceUsage {
 
 /// Parse a summary.json value into a [`SummarizeReport`].
 pub fn parse_summary_value(value: &serde_json::Value) -> Result<SummarizeReport> {
-    let summary = value
-        .get("summary")
-        .context("Missing 'summary' key in JSON")?;
+    if let Some(summary) = value.get("summary") {
+        return parse_summary_object(summary);
+    }
+
+    if let Some(targets) = value.get("targets").and_then(|v| v.as_object()) {
+        let mut platforms = Vec::new();
+        for entry in targets.values() {
+            if let Ok(report) = parse_summary_value(entry) {
+                platforms.extend(report.platforms);
+            }
+        }
+        if !platforms.is_empty() {
+            return Ok(SummarizeReport { platforms });
+        }
+    }
+
+    anyhow::bail!("Missing 'summary' or 'targets' key in JSON");
+}
+
+fn parse_summary_object(summary: &serde_json::Value) -> Result<SummarizeReport> {
+    let summary = summary
+        .as_object()
+        .context("Summary payload must be a JSON object")?;
 
     let target = summary
         .get("target")
@@ -81,10 +101,7 @@ pub fn parse_summary_value(value: &serde_json::Value) -> Result<SummarizeReport>
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
 
-    let warmup = summary
-        .get("warmup")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    let warmup = summary.get("warmup").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
     let device_summaries = summary
         .get("device_summaries")
@@ -151,13 +168,8 @@ fn parse_benchmark_entry(value: &serde_json::Value) -> Result<BenchmarkResult> {
 
     let label = humanize_benchmark_name(&name);
 
-    let ns_to_ms = |key: &str| -> f64 {
-        value
-            .get(key)
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
-            / 1_000_000.0
-    };
+    let ns_to_ms =
+        |key: &str| -> f64 { value.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) / 1_000_000.0 };
 
     let timing = TimingStats {
         avg_ms: ns_to_ms("mean_ns"),
@@ -193,18 +205,40 @@ fn humanize_benchmark_name(name: &str) -> String {
 
 /// Load all summary JSON files from a results directory.
 pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
+    let root_summary_path = dir.join("summary.json");
+    if root_summary_path.exists() {
+        let content = std::fs::read_to_string(&root_summary_path)
+            .with_context(|| format!("Failed to read {}", root_summary_path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse {}", root_summary_path.display()))?;
+        if let Ok(report) = parse_summary_value(&value) {
+            return Ok(report);
+        }
+    }
+
+    let mut json_paths = Vec::new();
+    collect_json_files(dir, &mut json_paths)?;
+    json_paths.retain(|path| path != &root_summary_path);
+
     let mut all_platforms = Vec::new();
+    let mut raw_candidates = Vec::new();
 
-    for entry in std::fs::read_dir(dir).context("Failed to read results directory")? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "json") {
-            let content = std::fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read {}", path.display()))?;
-            let value: serde_json::Value = serde_json::from_str(&content)
-                .with_context(|| format!("Failed to parse {}", path.display()))?;
+    for path in json_paths {
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse {}", path.display()))?;
 
-            if let Ok(report) = parse_summary_value(&value) {
+        if let Ok(report) = parse_summary_value(&value) {
+            all_platforms.extend(report.platforms);
+        } else {
+            raw_candidates.push((path, value));
+        }
+    }
+
+    if all_platforms.is_empty() {
+        for (path, value) in raw_candidates {
+            if let Ok(report) = parse_raw_bench_report(&path, &value) {
                 all_platforms.extend(report.platforms);
             }
         }
@@ -217,6 +251,180 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
     Ok(SummarizeReport {
         platforms: all_platforms,
     })
+}
+
+fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let mut entries = std::fs::read_dir(dir)
+        .with_context(|| format!("Failed to read results directory {}", dir.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("Failed to iterate results directory {}", dir.display()))?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_json_files(&path, out)?;
+        } else if path.extension().is_some_and(|ext| ext == "json") {
+            out.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_raw_bench_report(path: &Path, value: &serde_json::Value) -> Result<SummarizeReport> {
+    let entries = match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(normalize_raw_benchmark_entry)
+            .collect::<Vec<_>>(),
+        _ => normalize_raw_benchmark_entry(value).into_iter().collect(),
+    };
+
+    if entries.is_empty() {
+        anyhow::bail!("Not a raw bench report");
+    }
+
+    let first = entries
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing bench report entries"))?;
+    let platform = infer_platform(path, first.get("device").and_then(|v| v.as_str()));
+    let device = first
+        .get("device")
+        .and_then(|v| v.as_str())
+        .map(parse_device_string)
+        .unwrap_or_else(|| default_device_info(&platform));
+    let iterations = first
+        .get("spec")
+        .and_then(|spec| spec.get("iterations"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let warmup = first
+        .get("spec")
+        .and_then(|spec| spec.get("warmup"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let benchmarks = entries
+        .iter()
+        .map(parse_benchmark_entry)
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(SummarizeReport {
+        platforms: vec![PlatformReport {
+            platform,
+            device,
+            benchmarks,
+            iterations,
+            warmup,
+        }],
+    })
+}
+
+fn normalize_raw_benchmark_entry(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let mut value = value.clone();
+    let samples = extract_raw_samples(&value);
+    let stats = crate::compute_sample_stats(&samples);
+    let object = value.as_object_mut()?;
+
+    if !object.contains_key("function")
+        && let Some(function) = object
+            .get("spec")
+            .and_then(|spec| spec.get("name"))
+            .and_then(|name| name.as_str())
+    {
+        object.insert(
+            "function".to_string(),
+            serde_json::Value::String(function.to_string()),
+        );
+    }
+
+    if !object.contains_key("samples")
+        && let Some(samples_ns) = object.get("samples_ns").and_then(|v| v.as_array())
+    {
+        object.insert(
+            "samples".to_string(),
+            serde_json::Value::Array(samples_ns.clone()),
+        );
+    }
+
+    if let Some(stats) = stats {
+        if !object.contains_key("mean_ns") {
+            object.insert(
+                "mean_ns".to_string(),
+                serde_json::Value::from(stats.mean_ns),
+            );
+        }
+        if !object.contains_key("median_ns") {
+            object.insert(
+                "median_ns".to_string(),
+                serde_json::Value::from(stats.median_ns),
+            );
+        }
+        if !object.contains_key("min_ns") {
+            object.insert("min_ns".to_string(), serde_json::Value::from(stats.min_ns));
+        }
+        if !object.contains_key("max_ns") {
+            object.insert("max_ns".to_string(), serde_json::Value::from(stats.max_ns));
+        }
+        if !object.contains_key("p95_ns") {
+            object.insert("p95_ns".to_string(), serde_json::Value::from(stats.p95_ns));
+        }
+    }
+
+    let has_function = object.get("function").and_then(|v| v.as_str()).is_some();
+    let has_samples = object.get("samples").and_then(|v| v.as_array()).is_some();
+    if has_function && has_samples {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn extract_raw_samples(value: &serde_json::Value) -> Vec<u64> {
+    let mut samples = crate::extract_samples(value);
+    if samples.is_empty()
+        && let Some(samples_ns) = value.get("samples_ns").and_then(|v| v.as_array())
+    {
+        samples.extend(samples_ns.iter().filter_map(|sample| sample.as_u64()));
+    }
+    samples
+}
+
+fn infer_platform(path: &Path, device: Option<&str>) -> String {
+    if let Some(device) = device {
+        let lower = device.to_ascii_lowercase();
+        if lower.contains("iphone") || lower.contains("ipad") || lower.contains("ios") {
+            return "ios".to_string();
+        }
+        if lower.contains("pixel") || lower.contains("android") {
+            return "android".to_string();
+        }
+    }
+
+    let lower_path = path.to_string_lossy().to_ascii_lowercase();
+    if lower_path.contains("/ios/") || lower_path.contains("\\ios\\") {
+        "ios".to_string()
+    } else if lower_path.contains("/android/") || lower_path.contains("\\android\\") {
+        "android".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+fn default_device_info(platform: &str) -> DeviceInfo {
+    let os = match platform {
+        "ios" => "iOS",
+        "android" => "Android",
+        _ => "unknown",
+    };
+
+    DeviceInfo {
+        name: "unknown".to_string(),
+        os: os.to_string(),
+        os_version: "unknown".to_string(),
+        chipset: None,
+        ram_gb: None,
+    }
 }
 
 /// Render the full report as terminal tables.
@@ -447,9 +655,10 @@ pub fn render_json(report: &SummarizeReport) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn sample_summary_json() -> serde_json::Value {
-        serde_json::json!({
+        json!({
             "summary": {
                 "generated_at": "2026-02-26T12:00:00Z",
                 "target": "ios",
@@ -470,6 +679,21 @@ mod tests {
                     }]
                 }]
             }
+        })
+    }
+
+    fn sample_bench_report_json() -> serde_json::Value {
+        json!({
+            "spec": {
+                "name": "bench_nullifier_proving_only",
+                "iterations": 3,
+                "warmup": 1
+            },
+            "samples": [
+                { "duration_ns": 1000_u64 },
+                { "duration_ns": 2000_u64 },
+                { "duration_ns": 3000_u64 }
+            ]
         })
     }
 
@@ -543,6 +767,75 @@ mod tests {
     fn test_load_results_dir_empty() {
         let dir = tempfile::tempdir().unwrap();
         assert!(load_results_dir(dir.path()).is_err());
+    }
+
+    #[test]
+    fn test_parse_summary_value_handles_merged_ci_root() {
+        let report = parse_summary_value(&json!({
+            "targets": {
+                "ios": {
+                    "summary": sample_summary_json()["summary"].clone(),
+                    "functions": {
+                        "bench_nullifier_proving_only": sample_summary_json()
+                    }
+                }
+            },
+            "ci": {
+                "metadata": {
+                    "requested_by": "codex",
+                    "request_command": "cargo mobench ci run",
+                    "mobench_version": "0.1.0"
+                },
+                "outputs": {
+                    "summary_json": "summary.json",
+                    "summary_md": "summary.md",
+                    "results_csv": "results.csv"
+                }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(report.platforms.len(), 1);
+        assert_eq!(report.platforms[0].platform, "ios");
+        assert_eq!(report.platforms[0].benchmarks.len(), 1);
+    }
+
+    #[test]
+    fn test_load_results_dir_recurses_into_target_function_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ios_dir = dir.path().join("ios").join("bench_nullifier_proving_only");
+        std::fs::create_dir_all(&ios_dir).unwrap();
+        std::fs::write(
+            ios_dir.join("summary.json"),
+            serde_json::to_string(&sample_summary_json()).unwrap(),
+        )
+        .unwrap();
+
+        let report = load_results_dir(dir.path()).unwrap();
+        assert_eq!(report.platforms.len(), 1);
+        assert_eq!(report.platforms[0].platform, "ios");
+        assert_eq!(
+            report.platforms[0].benchmarks[0].name,
+            "bench_nullifier_proving_only"
+        );
+    }
+
+    #[test]
+    fn test_load_results_dir_falls_back_to_raw_bench_report() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("bench-report.json"),
+            serde_json::to_string(&sample_bench_report_json()).unwrap(),
+        )
+        .unwrap();
+
+        let report = load_results_dir(dir.path()).unwrap();
+        assert_eq!(report.platforms.len(), 1);
+        assert_eq!(report.platforms[0].benchmarks.len(), 1);
+        assert_eq!(
+            report.platforms[0].benchmarks[0].name,
+            "bench_nullifier_proving_only"
+        );
     }
 
     #[test]
