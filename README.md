@@ -82,6 +82,10 @@ cargo mobench ci run --target android --function sample_fns::fibonacci --local-o
 # Reporting helpers from standardized outputs
 cargo mobench report summarize --summary target/mobench/ci/summary.json --plots auto
 cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
+
+# Experimental profiling session contract
+cargo mobench profile run --target android --function sample_fns::fibonacci --backend android-native
+cargo mobench profile summarize --profile target/mobench/profile/profile.json
 ```
 
 CI contract outputs are written to `target/mobench/ci/`:
@@ -91,6 +95,17 @@ CI contract outputs are written to `target/mobench/ci/`:
 - `plots/*.svg` when local plot rendering is enabled
 
 Local summary renderers (`ci run --plots ...` and `report summarize --plots ...`) append a `Device Comparison Plots` section with one Sina-style SVG per benchmark function. Summary resource fields use `cpu_total_ms` and `peak_memory_kb`; Android raw resource stats are preserved and iOS peak memory is enriched from BrowserStack app profiling when available.
+
+Experimental profiling commands write each planned session under
+`target/mobench/profile/<run-id>/` and also refresh top-level
+`target/mobench/profile/profile.json` and `summary.md` as convenience copies of
+the latest run. Backend-specific raw and processed artifact directories are
+created under each run-scoped `artifacts/` tree, and the normalized manifest
+records the selected provider and requested output format. The current
+implementation captures the profile-session contract and platform-specific
+artifact layout; it does not yet execute native capture tools automatically.
+BrowserStack-backed native profiling backends fail explicitly rather than
+silently degrading.
 
 ## Configuration
 
@@ -209,6 +224,14 @@ fn db_query(db: &Database) {
 | `#[benchmark(setup = fn, teardown = fn)]` | Resources requiring cleanup (connections, files, etc.) |
 
 ## Release Notes
+
+### v0.1.25
+
+- Added experimental `cargo mobench profile run|summarize` commands for a normalized local profiling session contract across Android and iOS.
+- Profile sessions now write run-scoped artifacts under `target/mobench/profile/<run-id>/` and refresh top-level latest-session `profile.json` and `summary.md` convenience files.
+- Profile manifests now preserve the selected provider and requested output format, and the CLI rejects unsupported format/backend combinations explicitly instead of silently planning the wrong artifacts.
+- Updated the profiling smoke-test docs to use working `cargo run -p mobench --bin mobench -- ...` invocations from the repo root.
+- Stabilized the SDK timing test suite by removing a timer-resolution assumption from the noop benchmark test.
 
 ### v0.1.24
 

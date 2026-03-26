@@ -45,7 +45,7 @@ This creates:
 - `mobench.toml` - Project configuration file (when using `init`)
 - `benches/example.rs` - Example benchmarks (with `--examples`)
 
-Generated scaffolding still uses `bench-mobile/` by default, but in `0.1.22` existing repositories can point mobench at any benchmark crate through `mobench.toml`, `--project-root`, or `--crate-path`.
+Generated scaffolding still uses `bench-mobile/` by default, but existing repositories can point mobench at any benchmark crate through `mobench.toml`, `--project-root`, or `--crate-path`.
 
 ### 2. Write Benchmarks
 
@@ -100,6 +100,25 @@ cargo mobench run \
 ```
 
 **Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
+
+### 5. Plan a Local Profiling Session
+
+```bash
+# Write a run-scoped experimental profile session contract
+cargo mobench profile run \
+  --target android \
+  --function fibonacci_30 \
+  --backend android-native
+
+# Render the latest-session manifest as markdown
+cargo mobench profile summarize \
+  --profile target/mobench/profile/profile.json
+```
+
+The current profiling MVP writes a normalized manifest plus planned artifact
+paths under `target/mobench/profile/<run-id>/` and refreshes top-level latest
+copies at `target/mobench/profile/profile.json` and `summary.md`. It does not
+yet drive native profiler tools automatically.
 
 ## Commands
 
@@ -514,7 +533,7 @@ default_warmup = 10
 ```
 
 CLI flags always override config file values when provided.
-Resolution precedence in `0.1.22` is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
+Resolution precedence is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 ### Run Config File Format (`bench-config.toml`)
 

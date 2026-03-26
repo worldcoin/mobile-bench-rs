@@ -648,6 +648,33 @@ cargo mobench compare \
 
 **Note**: The `--release` flag is recommended for BrowserStack runs to reduce APK size (debug: ~544MB, release: ~133MB) and prevent upload timeouts.
 
+### Profiling Command Smoke Checks
+
+The profiling subsystem currently focuses on the normalized session contract and
+backend-specific artifact planning. Use these commands as the first validation
+layer:
+
+```bash
+# Profile parser + contract + backend planning tests
+cargo test -p mobench profile_
+
+# Android planned session
+cargo run -p mobench --bin mobench -- profile run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --backend android-native
+
+# Render markdown summary from the generated manifest
+cargo run -p mobench --bin mobench -- profile summarize \
+  --profile target/mobench/profile/profile.json
+```
+
+The current MVP should write a run-scoped session under
+`target/mobench/profile/<run-id>/` plus top-level latest-session copies at
+`target/mobench/profile/profile.json` and `target/mobench/profile/summary.md`.
+Backend-specific planned artifact paths should live under the run-scoped
+`artifacts/` tree.
+
 ### Adding New Test Functions
 
 1. Add function to `crates/sample-fns/src/lib.rs`
