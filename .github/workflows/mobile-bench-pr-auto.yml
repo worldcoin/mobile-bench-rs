@@ -1,0 +1,23 @@
+name: Mobile Bench PR Auto
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_run:
+    workflows: ["Compile Gate"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+  checks: read
+
+jobs:
+  dispatch:
+    uses: ./.github/workflows/reusable-pr-auto.yml
+    with:
+      benchmark_workflow: .github/workflows/mobile-bench.yml
+      compile_gate_workflow_name: "Compile Gate"
+      crate_path: examples/ffi-benchmark
+      functions: ffi_benchmark::bench_fibonacci,ffi_benchmark::bench_checksum
