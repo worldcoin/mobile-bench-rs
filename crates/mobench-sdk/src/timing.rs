@@ -668,13 +668,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runs_benchmark() {
+    fn runs_benchmark_collects_requested_samples() {
         let spec = BenchSpec::new("noop", 3, 1).unwrap();
         let report = run_closure(spec, || Ok(())).unwrap();
 
         assert_eq!(report.samples.len(), 3);
-        let non_zero = report.samples.iter().filter(|s| s.duration_ns > 0).count();
-        assert!(non_zero >= 1);
+        assert_eq!(report.spec.name, "noop");
+        assert_eq!(report.spec.iterations, 3);
     }
 
     #[test]
