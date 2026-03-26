@@ -346,6 +346,7 @@ printf '<svg>ok</svg>' > "$output"
     );
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn extract_function_plot_inputs_from_results_dir(dir: &Path) -> Result<Vec<PlotFunctionInput>> {
     let mut builders = BTreeMap::new();
     let mut nested_source_keys = BTreeSet::new();
@@ -381,6 +382,7 @@ pub enum PlotMode {
 pub struct RendererAssets {
     _tempdir: ManagedTempDir,
     pub script_path: PathBuf,
+    #[allow(dead_code)]
     pub style_path: PathBuf,
 }
 
@@ -758,6 +760,7 @@ impl PlotFunctionInputBuilder {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn collect_from_results_dir(
     dir: &Path,
     builders: &mut BTreeMap<(String, String), PlotFunctionInputBuilder>,
@@ -1011,6 +1014,7 @@ fn humanize_benchmark_name(name: &str) -> String {
     s.replace('_', "-")
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     let mut entries = fs::read_dir(dir)
         .with_context(|| format!("Failed to read results directory {}", dir.display()))?
@@ -1030,6 +1034,7 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn read_json(path: &Path) -> Result<Value> {
     let content =
         fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
