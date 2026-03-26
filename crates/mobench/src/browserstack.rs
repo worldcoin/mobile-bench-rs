@@ -1911,11 +1911,7 @@ mod tests {
 
     fn spawn_browserstack_json_server(
         payload: Value,
-    ) -> (
-        String,
-        Arc<Mutex<Vec<String>>>,
-        thread::JoinHandle<()>,
-    ) {
+    ) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         listener
             .set_nonblocking(true)
