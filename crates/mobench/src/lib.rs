@@ -140,6 +140,7 @@ mod browserstack;
 pub mod config;
 mod github;
 mod plots;
+mod profile;
 pub(crate) mod summarize;
 
 /// CLI orchestrator for building, packaging, and executing Rust benchmarks on mobile.
@@ -494,6 +495,11 @@ enum Command {
         #[command(subcommand)]
         command: ReportCommand,
     },
+    /// Profiling helpers for native profile capture and summary rendering.
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
+    },
     /// Check prerequisites for building mobile artifacts.
     ///
     /// Validates that all required tools and configurations are in place
@@ -652,6 +658,14 @@ enum ReportCommand {
         #[arg(long, help = "Write generated comment body to file")]
         output: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum ProfileCommand {
+    /// Run a native profiling session and write profile artifacts.
+    Run(profile::ProfileRunArgs),
+    /// Render markdown or JSON from a normalized profile manifest.
+    Summarize(profile::ProfileSummarizeArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1848,6 +1862,14 @@ pub fn run() -> Result<()> {
                 output,
             } => {
                 cmd_report_github(pr, &summary, &marker, publish, output.as_deref())?;
+            }
+        },
+        Command::Profile { command } => match command {
+            ProfileCommand::Run(args) => {
+                profile::cmd_profile_run(&args)?;
+            }
+            ProfileCommand::Summarize(args) => {
+                profile::cmd_profile_summarize(&args)?;
             }
         },
         Command::Check { target, format } => {
@@ -8539,6 +8561,50 @@ project = "proj"
                 assert_eq!(format, CheckOutputFormat::Text);
             }
             _ => panic!("expected fixture cache-key command"),
+        }
+    }
+
+    #[test]
+    fn profile_run_parses_with_android_backend() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "profile",
+            "run",
+            "--target",
+            "android",
+            "--function",
+            "sample_fns::fibonacci",
+            "--backend",
+            "android-native",
+        ]);
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Run(args),
+            } => {
+                assert_eq!(args.target, MobileTarget::Android);
+                assert_eq!(args.function, "sample_fns::fibonacci");
+                assert_eq!(args.backend, profile::ProfileBackend::AndroidNative);
+            }
+            _ => panic!("expected profile run command"),
+        }
+    }
+
+    #[test]
+    fn profile_summarize_parses_with_default_profile_path() {
+        let cli = Cli::parse_from(["mobench", "profile", "summarize"]);
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Summarize(args),
+            } => {
+                assert_eq!(
+                    args.profile,
+                    PathBuf::from("target/mobench/profile/profile.json")
+                );
+                assert_eq!(args.output_format, profile::ProfileSummaryFormat::Markdown);
+            }
+            _ => panic!("expected profile summarize command"),
         }
     }
 

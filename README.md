@@ -82,6 +82,10 @@ cargo mobench ci run --target android --function sample_fns::fibonacci --local-o
 # Reporting helpers from standardized outputs
 cargo mobench report summarize --summary target/mobench/ci/summary.json --plots auto
 cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
+
+# Experimental profiling session contract
+cargo mobench profile run --target android --function sample_fns::fibonacci --backend android-native
+cargo mobench profile summarize --profile target/mobench/profile/profile.json
 ```
 
 CI contract outputs are written to `target/mobench/ci/`:
@@ -91,6 +95,13 @@ CI contract outputs are written to `target/mobench/ci/`:
 - `plots/*.svg` when local plot rendering is enabled
 
 Local summary renderers (`ci run --plots ...` and `report summarize --plots ...`) append a `Device Comparison Plots` section with one Sina-style SVG per benchmark function. Summary resource fields use `cpu_total_ms` and `peak_memory_kb`; Android raw resource stats are preserved and iOS peak memory is enriched from BrowserStack app profiling when available.
+
+Experimental profiling commands write a normalized `profile.json` plus
+`summary.md` under `target/mobench/profile/` and reserve backend-specific raw
+and processed artifact paths under `artifacts/`. The current implementation
+captures the profile-session contract and platform-specific artifact layout; it
+does not yet execute native capture tools automatically. BrowserStack-backed
+native profiling backends fail explicitly rather than silently degrading.
 
 ## Configuration
 
