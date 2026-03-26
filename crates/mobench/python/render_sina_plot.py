@@ -39,9 +39,12 @@ def _find_offset_for_point(
     step: float,
     max_width: float,
 ) -> float:
+    if step <= 0:
+        raise ValueError("step must be positive")
+    if max_width < 0:
+        raise ValueError("max_width must be non-negative")
+
     max_ring = max(1, math.ceil(max_width / step))
-    best_dx = 0.0
-    best_score = float("-inf")
 
     ring = 0
     while ring <= max_ring:
@@ -52,18 +55,17 @@ def _find_offset_for_point(
             if not placed:
                 return dx
 
-            score = min((dx - ox) ** 2 + (y - oy) ** 2 for ox, oy in placed)
-            if score >= epsilon**2:
+            if all((dx - ox) ** 2 + (y - oy) ** 2 >= epsilon**2 for ox, oy in placed):
                 return dx
-            if score > best_score:
-                best_score = score
-                best_dx = dx
         ring += 1
 
-    return best_dx
+    raise ValueError("unable to place point within max_width while preserving epsilon")
 
 
 def render_plot(spec: dict[str, object], output_path: Path) -> None:
+    plot = _normalize_plot_spec(spec)
+    _validate_plot_spec(plot)
+
     matplotlib = _import_matplotlib()
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -71,11 +73,7 @@ def render_plot(spec: dict[str, object], output_path: Path) -> None:
     style_path = Path(__file__).with_name("mobench_light.mplstyle")
     plt.style.use(str(style_path))
 
-    plot = _normalize_plot_spec(spec)
     devices = plot["devices"]
-    if not devices:
-        raise ValueError("plot spec must contain at least one device")
-
     all_samples_ms = [
         sample / 1_000_000.0
         for device in devices
@@ -160,6 +158,17 @@ def _normalize_plot_spec(spec: dict[str, object]) -> dict[str, object]:
     raise ValueError("expected a single plot specification")
 
 
+def _validate_plot_spec(plot: dict[str, object]) -> None:
+    devices = plot.get("devices")
+    if not isinstance(devices, list) or not devices:
+        raise ValueError("plot spec must contain at least one device")
+
+    for device in devices:
+        samples_ns = device.get("samples_ns") if isinstance(device, dict) else None
+        if not isinstance(samples_ns, list) or not samples_ns:
+            raise ValueError("each device must contain at least one sample")
+
+
 def _format_device_label(device_name: str, os_version: str) -> str:
     return device_name if not os_version else f"{device_name} {os_version}"
 
@@ -188,7 +197,7 @@ def _load_json(path: Path) -> dict[str, object]:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Render a sine-style device comparison plot")
+    parser = argparse.ArgumentParser(description="Render a sina-style device comparison plot")
     parser.add_argument("--input", required=True, help="Path to normalized plot JSON")
     parser.add_argument("--output", required=True, help="Path to write the SVG plot")
     args = parser.parse_args(list(argv) if argv is not None else None)

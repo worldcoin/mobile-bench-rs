@@ -1,7 +1,10 @@
 import importlib.util
+import json
 import math
 import pathlib
+import tempfile
 import unittest
+from unittest import mock
 
 
 def load_module():
@@ -31,3 +34,69 @@ class PackStripTests(unittest.TestCase):
             for x2, y2 in zip(xs[i + 1 :], ys[i + 1 :]):
                 self.assertGreaterEqual(math.hypot(x2 - x1, y2 - y1), 0.10 - 1e-9)
 
+    def test_pack_strip_raises_when_strip_is_saturated(self):
+        mod = load_module()
+        with self.assertRaises(ValueError):
+            mod.pack_strip([0.0, 0.0], epsilon=0.20, step=0.05, max_width=0.10)
+
+
+class CliTests(unittest.TestCase):
+    def test_main_dispatches_input_json_to_renderer(self):
+        mod = load_module()
+        payload = {
+            "function_name": "nullifier-proof-generation",
+            "function_label": "Nullifier proof generation",
+            "target": "benchmark-1",
+            "devices": [
+                {
+                    "device_name": "iPhone 15",
+                    "os_version": "iOS 17.4",
+                    "samples_ns": [10_000_000, 11_000_000],
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = pathlib.Path(tmpdir)
+            input_path = tmpdir_path / "input.json"
+            output_path = tmpdir_path / "output.svg"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with mock.patch.object(mod, "render_plot") as render_plot:
+                exit_code = mod.main([
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                ])
+
+        self.assertEqual(exit_code, 0)
+        render_plot.assert_called_once()
+        called_spec, called_output = render_plot.call_args.args
+        self.assertEqual(called_spec, payload)
+        self.assertEqual(called_output, output_path)
+
+
+class ValidationTests(unittest.TestCase):
+    def test_render_plot_rejects_device_with_empty_samples(self):
+        mod = load_module()
+        spec = {
+            "function_name": "nullifier-proof-generation",
+            "function_label": "Nullifier proof generation",
+            "target": "benchmark-1",
+            "devices": [
+                {
+                    "device_name": "iPhone 15",
+                    "os_version": "iOS 17.4",
+                    "samples_ns": [10_000_000, 11_000_000],
+                },
+                {
+                    "device_name": "Pixel 8",
+                    "os_version": "Android 15",
+                    "samples_ns": [],
+                },
+            ],
+        }
+
+        with self.assertRaises(ValueError):
+            mod.render_plot(spec, pathlib.Path("/tmp/out.svg"))
