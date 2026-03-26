@@ -225,6 +225,14 @@ fn db_query(db: &Database) {
 
 ## Release Notes
 
+### v0.1.24
+
+- Added experimental `cargo mobench profile run|summarize` commands for a normalized local profiling session contract across Android and iOS.
+- Profile sessions now write run-scoped artifacts under `target/mobench/profile/<run-id>/` and refresh top-level latest-session `profile.json` and `summary.md` convenience files.
+- Profile manifests now preserve the selected provider and requested output format, and the CLI rejects unsupported format/backend combinations explicitly instead of silently planning the wrong artifacts.
+- Updated the profiling smoke-test docs to use working `cargo run -p mobench --bin mobench -- ...` invocations from the repo root.
+- Stabilized the SDK timing test suite by removing a timer-resolution assumption from the noop benchmark test.
+
 ### v0.1.23
 
 - Added Sina-style per-function device comparison plots to local summaries:
