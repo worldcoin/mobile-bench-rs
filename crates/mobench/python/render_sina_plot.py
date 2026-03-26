@@ -6,6 +6,11 @@ import math
 from pathlib import Path
 from typing import Iterable, Sequence
 
+_PACK_EPSILON = 0.08
+_PACK_STEP = 0.02
+_BASE_HALF_WIDTH = 0.28
+_DEVICE_GAP = 0.45
+
 
 def pack_strip(
     ys: Sequence[float],
@@ -86,20 +91,36 @@ def render_plot(spec: dict[str, object], output_path: Path) -> None:
     y_max = max(all_samples_ms)
     y_span = max(y_max - y_min, 1e-9)
 
-    fig_width = max(6.0, 1.2 * len(devices) + 1.6)
+    packed_devices = []
+    for device in devices:
+        samples_ms = [sample / 1_000_000.0 for sample in device["samples_ns"]]
+        normalized = [(sample - y_min) / y_span for sample in samples_ms]
+        offsets = _pack_device_offsets(normalized)
+        half_width = max((abs(dx) for dx in offsets), default=0.0)
+        packed_devices.append(
+            {
+                "device": device,
+                "samples_ms": samples_ms,
+                "offsets": offsets,
+                "half_width": half_width,
+            }
+        )
+
+    half_widths = [entry["half_width"] for entry in packed_devices]
+    centers = _compute_device_centers(half_widths)
+    leftmost = min(center - half_width for center, half_width in zip(centers, half_widths))
+    rightmost = max(center + half_width for center, half_width in zip(centers, half_widths))
+    total_span = max(rightmost - leftmost, 1.0)
+
+    fig_width = max(6.0, total_span * 1.8)
     fig, ax = plt.subplots(figsize=(fig_width, 4.8))
     colors = plt.get_cmap("tab10")
 
-    for idx, device in enumerate(devices):
-        samples_ms = [sample / 1_000_000.0 for sample in device["samples_ns"]]
-        normalized = [(sample - y_min) / y_span for sample in samples_ms]
-        offsets = pack_strip(
-            normalized,
-            epsilon=0.08,
-            step=0.02,
-            max_width=0.28,
-        )
-        x_positions = [idx + dx for dx in offsets]
+    for idx, (center, packed) in enumerate(zip(centers, packed_devices)):
+        device = packed["device"]
+        samples_ms = packed["samples_ms"]
+        offsets = packed["offsets"]
+        x_positions = [center + dx for dx in offsets]
         color = colors(idx % 10)
 
         ax.scatter(
@@ -129,7 +150,7 @@ def render_plot(spec: dict[str, object], output_path: Path) -> None:
     ax.set_title(title)
     ax.set_xlabel("Device")
     ax.set_ylabel("Runtime (ms)")
-    ax.set_xticks(range(len(devices)))
+    ax.set_xticks(centers)
     ax.set_xticklabels(
         [
             _format_device_label(device["device_name"], device["os_version"])
@@ -138,7 +159,8 @@ def render_plot(spec: dict[str, object], output_path: Path) -> None:
         rotation=20,
         ha="right",
     )
-    ax.set_xlim(-0.6, len(devices) - 0.4)
+    span_margin = max(total_span * 0.03, 0.18)
+    ax.set_xlim(leftmost - span_margin, rightmost + span_margin)
     ax.margins(x=0.02, y=0.08)
 
     # Keep the y-axis tight to the data while leaving room for the points.
@@ -167,6 +189,37 @@ def _validate_plot_spec(plot: dict[str, object]) -> None:
         samples_ns = device.get("samples_ns") if isinstance(device, dict) else None
         if not isinstance(samples_ns, list) or not samples_ns:
             raise ValueError("each device must contain at least one sample")
+
+
+def _pack_device_offsets(normalized_samples: Sequence[float]) -> list[float]:
+    max_width = _BASE_HALF_WIDTH
+    while True:
+        try:
+            return pack_strip(
+                normalized_samples,
+                epsilon=_PACK_EPSILON,
+                step=_PACK_STEP,
+                max_width=max_width,
+            )
+        except ValueError:
+            max_width *= 2
+
+
+def _compute_device_centers(half_widths: Sequence[float]) -> list[float]:
+    if not half_widths:
+        return []
+
+    centers: list[float] = []
+    cursor = 0.0
+    for half_width in half_widths:
+        if centers:
+            cursor += _DEVICE_GAP
+        center = cursor + half_width
+        centers.append(center)
+        cursor = center + half_width
+
+    shift = (centers[0] - half_widths[0] + centers[-1] + half_widths[-1]) / 2.0
+    return [center - shift for center in centers]
 
 
 def _format_device_label(device_name: str, os_version: str) -> str:
