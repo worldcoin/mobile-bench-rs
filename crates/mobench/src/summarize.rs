@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use comfy_table::{Attribute, Cell, ContentArrangement, Table, presets::UTF8_FULL};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 /// A fully-assembled summary ready for rendering.
@@ -58,10 +59,18 @@ pub struct TimingStats {
 /// Resource usage metrics from BrowserStack session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceUsage {
-    pub cpu_avg_percent: Option<f64>,
-    pub cpu_peak_percent: Option<f64>,
-    pub ram_avg_mb: Option<f64>,
-    pub ram_peak_mb: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_total_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_memory_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_pss_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_dirty_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_heap_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub java_heap_kb: Option<u64>,
 }
 
 /// Parse a summary.json value into a [`SummarizeReport`].
@@ -188,7 +197,7 @@ fn parse_benchmark_entry(value: &serde_json::Value) -> Result<BenchmarkResult> {
         name,
         label,
         timing,
-        resource_usage: None,
+        resource_usage: parse_resource_usage(value),
     })
 }
 
@@ -206,22 +215,33 @@ fn humanize_benchmark_name(name: &str) -> String {
 /// Load all summary JSON files from a results directory.
 pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
     let root_summary_path = dir.join("summary.json");
+    let mut enrichment_values = Vec::new();
+    let mut root_report = None;
     if root_summary_path.exists() {
         let content = std::fs::read_to_string(&root_summary_path)
             .with_context(|| format!("Failed to read {}", root_summary_path.display()))?;
         let value: serde_json::Value = serde_json::from_str(&content)
             .with_context(|| format!("Failed to parse {}", root_summary_path.display()))?;
         if let Ok(report) = parse_summary_value(&value) {
-            return Ok(report);
+            root_report = Some(report);
+            enrichment_values.push(value);
         }
     }
 
     let mut json_paths = Vec::new();
     collect_json_files(dir, &mut json_paths)?;
     json_paths.retain(|path| path != &root_summary_path);
+    json_paths.sort_by(compare_summary_candidates);
 
-    let mut all_platforms = Vec::new();
+    let mut all_platforms = root_report
+        .map(|report| report.platforms)
+        .unwrap_or_default();
     let mut raw_candidates = Vec::new();
+    let mut covered_summary_dirs = if all_platforms.is_empty() {
+        Vec::new()
+    } else {
+        vec![dir.to_path_buf()]
+    };
 
     for path in json_paths {
         let content = std::fs::read_to_string(&path)
@@ -230,6 +250,12 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
             .with_context(|| format!("Failed to parse {}", path.display()))?;
 
         if let Ok(report) = parse_summary_value(&value) {
+            enrichment_values.push(value.clone());
+            let summary_dir = path.parent().unwrap_or(dir);
+            if is_covered_by_canonical_summary(summary_dir, &covered_summary_dirs) {
+                continue;
+            }
+            covered_summary_dirs.push(summary_dir.to_path_buf());
             all_platforms.extend(report.platforms);
         } else {
             raw_candidates.push((path, value));
@@ -248,9 +274,15 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
         anyhow::bail!("No valid summary JSON files found in {}", dir.display());
     }
 
-    Ok(SummarizeReport {
+    let mut report = SummarizeReport {
         platforms: all_platforms,
-    })
+    };
+
+    for value in &enrichment_values {
+        enrich_report_with_summary_value(&mut report, value);
+    }
+
+    Ok(report)
 }
 
 fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
@@ -270,6 +302,139 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn compare_summary_candidates(left: &PathBuf, right: &PathBuf) -> Ordering {
+    left.components()
+        .count()
+        .cmp(&right.components().count())
+        .then_with(|| {
+            let left_is_summary =
+                left.file_name().and_then(|name| name.to_str()) == Some("summary.json");
+            let right_is_summary =
+                right.file_name().and_then(|name| name.to_str()) == Some("summary.json");
+            right_is_summary.cmp(&left_is_summary)
+        })
+        .then_with(|| left.cmp(right))
+}
+
+fn is_covered_by_canonical_summary(path: &Path, canonical_dirs: &[PathBuf]) -> bool {
+    canonical_dirs
+        .iter()
+        .any(|dir| path == dir.as_path() || path.starts_with(dir))
+}
+
+fn enrich_report_with_summary_value(report: &mut SummarizeReport, value: &serde_json::Value) {
+    if let Ok(nested_report) = parse_summary_value(value) {
+        merge_resource_usage_from_report(report, &nested_report);
+    }
+
+    let target = value
+        .get("summary")
+        .and_then(|summary| summary.get("target"))
+        .or_else(|| value.get("target"))
+        .and_then(|target| target.as_str());
+    let benchmark_results = value
+        .get("benchmark_results")
+        .and_then(|results| results.as_object());
+
+    let (Some(target), Some(benchmark_results)) = (target, benchmark_results) else {
+        return;
+    };
+
+    for (device_name, entries) in benchmark_results {
+        let Some(entries) = entries.as_array() else {
+            continue;
+        };
+        for entry in entries {
+            let Some(function) = entry.get("function").and_then(|function| function.as_str())
+            else {
+                continue;
+            };
+            let Some(resource_usage) = parse_resource_usage(entry) else {
+                continue;
+            };
+            set_benchmark_resource_usage(report, target, device_name, function, resource_usage);
+        }
+    }
+}
+
+fn merge_resource_usage_from_report(report: &mut SummarizeReport, nested_report: &SummarizeReport) {
+    for nested_platform in &nested_report.platforms {
+        for nested_benchmark in &nested_platform.benchmarks {
+            let Some(resource_usage) = nested_benchmark.resource_usage.clone() else {
+                continue;
+            };
+            set_benchmark_resource_usage(
+                report,
+                &nested_platform.platform,
+                &nested_platform.device.name,
+                &nested_benchmark.name,
+                resource_usage,
+            );
+        }
+    }
+}
+
+fn set_benchmark_resource_usage(
+    report: &mut SummarizeReport,
+    target: &str,
+    device_name: &str,
+    function: &str,
+    resource_usage: ResourceUsage,
+) {
+    for platform in &mut report.platforms {
+        if platform.platform != target || !device_names_match(&platform.device.name, device_name) {
+            continue;
+        }
+        if let Some(benchmark) = platform
+            .benchmarks
+            .iter_mut()
+            .find(|benchmark| benchmark.name == function)
+        {
+            if let Some(existing) = &mut benchmark.resource_usage {
+                existing.merge_missing(&resource_usage);
+            } else {
+                benchmark.resource_usage = Some(resource_usage.clone());
+            }
+        }
+    }
+}
+
+pub(crate) fn device_names_match(left: &str, right: &str) -> bool {
+    let left_name = parse_device_string(left).name;
+    let right_name = parse_device_string(right).name;
+    left_name == right_name
+}
+
+fn session_matches_platform_row(
+    platform: &PlatformReport,
+    session: &crate::browserstack::SessionSummary,
+) -> bool {
+    let session_is_ios = session.os.eq_ignore_ascii_case("ios")
+        || session.os.eq_ignore_ascii_case("iPhone")
+        || session.os.eq_ignore_ascii_case("iPad");
+    let platform_is_ios = platform.platform == "ios";
+
+    if session_is_ios != platform_is_ios {
+        return false;
+    }
+
+    if platform.device.name != "unknown"
+        && !device_names_match(&platform.device.name, &session.device)
+    {
+        return false;
+    }
+
+    if platform.device.os_version != "unknown"
+        && !platform.device.os_version.is_empty()
+        && !session.os_version.is_empty()
+        && platform.device.os_version != session.os_version
+    {
+        return false;
+    }
+
+    true
 }
 
 fn parse_raw_bench_report(path: &Path, value: &serde_json::Value) -> Result<SummarizeReport> {
@@ -427,6 +592,122 @@ fn default_device_info(platform: &str) -> DeviceInfo {
     }
 }
 
+impl ResourceUsage {
+    fn is_empty(&self) -> bool {
+        self.cpu_total_ms.is_none()
+            && self.peak_memory_kb.is_none()
+            && self.total_pss_kb.is_none()
+            && self.private_dirty_kb.is_none()
+            && self.native_heap_kb.is_none()
+            && self.java_heap_kb.is_none()
+    }
+
+    fn merge_missing(&mut self, other: &Self) {
+        if self.cpu_total_ms.is_none() {
+            self.cpu_total_ms = other.cpu_total_ms;
+        }
+        if self.peak_memory_kb.is_none() {
+            self.peak_memory_kb = other.peak_memory_kb;
+        }
+        if self.total_pss_kb.is_none() {
+            self.total_pss_kb = other.total_pss_kb;
+        }
+        if self.private_dirty_kb.is_none() {
+            self.private_dirty_kb = other.private_dirty_kb;
+        }
+        if self.native_heap_kb.is_none() {
+            self.native_heap_kb = other.native_heap_kb;
+        }
+        if self.java_heap_kb.is_none() {
+            self.java_heap_kb = other.java_heap_kb;
+        }
+    }
+}
+
+fn parse_resource_usage(value: &serde_json::Value) -> Option<ResourceUsage> {
+    value
+        .get("resource_usage")
+        .and_then(parse_resource_usage_object)
+        .or_else(|| value.get("resources").and_then(parse_resource_usage_object))
+}
+
+fn parse_resource_usage_object(value: &serde_json::Value) -> Option<ResourceUsage> {
+    let object = value.as_object()?;
+
+    let cpu_total_ms = object
+        .get("cpu_total_ms")
+        .or_else(|| object.get("elapsed_cpu_ms"))
+        .and_then(json_value_to_u64);
+    let total_pss_kb = object.get("total_pss_kb").and_then(json_value_to_u64);
+    let private_dirty_kb = object.get("private_dirty_kb").and_then(json_value_to_u64);
+    let native_heap_kb = object.get("native_heap_kb").and_then(json_value_to_u64);
+    let java_heap_kb = object.get("java_heap_kb").and_then(json_value_to_u64);
+
+    let peak_memory_kb = object
+        .get("peak_memory_kb")
+        .and_then(json_value_to_u64)
+        .or_else(|| {
+            object
+                .get("ram_peak_mb")
+                .and_then(|value| value.as_f64())
+                .map(|value| (value * 1024.0).round() as u64)
+        })
+        .or_else(|| {
+            raw_peak_memory_kb(total_pss_kb, private_dirty_kb, native_heap_kb, java_heap_kb)
+        });
+
+    let resource_usage = ResourceUsage {
+        cpu_total_ms,
+        peak_memory_kb,
+        total_pss_kb,
+        private_dirty_kb,
+        native_heap_kb,
+        java_heap_kb,
+    };
+
+    (!resource_usage.is_empty()).then_some(resource_usage)
+}
+
+fn json_value_to_u64(value: &serde_json::Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+        .or_else(|| {
+            value
+                .as_f64()
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map(|value| value.round() as u64)
+        })
+}
+
+fn raw_peak_memory_kb(
+    total_pss_kb: Option<u64>,
+    private_dirty_kb: Option<u64>,
+    native_heap_kb: Option<u64>,
+    java_heap_kb: Option<u64>,
+) -> Option<u64> {
+    total_pss_kb
+        .or(private_dirty_kb)
+        .or_else(|| match (native_heap_kb, java_heap_kb) {
+            (Some(native), Some(java)) => Some(native + java),
+            (Some(native), None) => Some(native),
+            (None, Some(java)) => Some(java),
+            (None, None) => None,
+        })
+}
+
+fn format_cpu_total_ms(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn format_peak_memory(value_kb: Option<u64>) -> String {
+    value_kb
+        .map(|value| format!("{:.2} MB", value as f64 / 1024.0))
+        .unwrap_or_else(|| "—".to_string())
+}
+
 /// Render the full report as terminal tables.
 pub fn render_table(report: &SummarizeReport) -> String {
     let mut output = String::new();
@@ -473,7 +754,7 @@ fn render_platform_table(platform: &PlatformReport) -> String {
 
     let mut headers = vec!["Benchmark", "Avg ms", "Best", "Worst", "Median", "P95"];
     if has_resource_usage {
-        headers.extend(["CPU %", "RAM MB"]);
+        headers.extend(["CPU total (ms)", "Peak memory"]);
     }
     table.set_header(
         headers
@@ -493,16 +774,8 @@ fn render_platform_table(platform: &PlatformReport) -> String {
 
         if has_resource_usage {
             if let Some(ru) = &bench.resource_usage {
-                row.push(Cell::new(
-                    ru.cpu_avg_percent
-                        .map(|v| format!("{v:.0}%"))
-                        .unwrap_or_else(|| "—".to_string()),
-                ));
-                row.push(Cell::new(
-                    ru.ram_avg_mb
-                        .map(|v| format!("{v:.0}"))
-                        .unwrap_or_else(|| "—".to_string()),
-                ));
+                row.push(Cell::new(format_cpu_total_ms(ru.cpu_total_ms)));
+                row.push(Cell::new(format_peak_memory(ru.peak_memory_kb)));
             } else {
                 row.push(Cell::new("—"));
                 row.push(Cell::new("—"));
@@ -553,10 +826,10 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
 
         if has_ru {
             output.push_str(
-                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU % | RAM MB |\n",
+                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU total (ms) | Peak memory |\n",
             );
             output.push_str(
-                "|-----------|--------|------|-------|--------|-----|-------|--------|\n",
+                "|-----------|--------|------|-------|--------|-----|----------------|-------------|\n",
             );
         } else {
             output.push_str("| Benchmark | Avg ms | Best | Worst | Median | P95 |\n");
@@ -578,12 +851,8 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
                 if let Some(ru) = &bench.resource_usage {
                     row.push_str(&format!(
                         " {} | {} |",
-                        ru.cpu_avg_percent
-                            .map(|v| format!("{v:.0}%"))
-                            .unwrap_or_else(|| "—".into()),
-                        ru.ram_avg_mb
-                            .map(|v| format!("{v:.0}"))
-                            .unwrap_or_else(|| "—".into()),
+                        format_cpu_total_ms(ru.cpu_total_ms),
+                        format_peak_memory(ru.peak_memory_kb),
                     ));
                 } else {
                     row.push_str(" — | — |");
@@ -609,19 +878,11 @@ pub fn enrich_with_browserstack(
     build_summary: &crate::browserstack::BuildSummary,
 ) {
     for platform in &mut report.platforms {
-        // Find sessions that match this platform
         for session in &build_summary.sessions {
-            let session_is_ios = session.os.eq_ignore_ascii_case("ios")
-                || session.os.eq_ignore_ascii_case("iPhone")
-                || session.os.eq_ignore_ascii_case("iPad");
-            let platform_is_ios = platform.platform == "ios";
-
-            // Skip if platform doesn't match
-            if session_is_ios != platform_is_ios {
+            if !session_matches_platform_row(platform, session) {
                 continue;
             }
 
-            // Update device info from session details
             if !session.os.is_empty() {
                 platform.device.os = session.os.clone();
                 platform.device.os_version = session.os_version.clone();
@@ -633,14 +894,22 @@ pub fn enrich_with_browserstack(
             // Enrich benchmarks with performance metrics
             if let Some(perf) = &session.performance {
                 for bench in &mut platform.benchmarks {
-                    if bench.resource_usage.is_none() {
-                        bench.resource_usage = Some(ResourceUsage {
-                            cpu_avg_percent: perf.cpu.as_ref().map(|c| c.average_percent),
-                            cpu_peak_percent: perf.cpu.as_ref().map(|c| c.peak_percent),
-                            ram_avg_mb: perf.memory.as_ref().map(|m| m.average_mb),
-                            ram_peak_mb: perf.memory.as_ref().map(|m| m.peak_mb),
-                        });
+                    let peak_memory_kb = perf
+                        .memory
+                        .as_ref()
+                        .map(|memory| (memory.peak_mb * 1024.0).round() as u64);
+                    if peak_memory_kb.is_none() {
+                        continue;
                     }
+                    let resource_usage = bench.resource_usage.get_or_insert(ResourceUsage {
+                        cpu_total_ms: None,
+                        peak_memory_kb: None,
+                        total_pss_kb: None,
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    });
+                    resource_usage.peak_memory_kb = peak_memory_kb;
                 }
             }
         }
@@ -656,6 +925,7 @@ pub fn render_json(report: &SummarizeReport) -> Result<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::path::PathBuf;
 
     fn sample_summary_json() -> serde_json::Value {
         json!({
@@ -821,6 +1091,139 @@ mod tests {
     }
 
     #[test]
+    fn test_load_results_dir_prefers_canonical_target_summary_fixture() {
+        let fixture_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-artifact-root");
+
+        let report = load_results_dir(&fixture_dir).unwrap();
+
+        assert_eq!(report.platforms.len(), 1);
+        assert_eq!(report.platforms[0].platform, "android");
+        assert_eq!(report.platforms[0].device.name, "Google Pixel 8");
+        assert_eq!(report.platforms[0].benchmarks.len(), 2);
+        assert_eq!(
+            report.platforms[0]
+                .benchmarks
+                .iter()
+                .map(|bench| bench.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bench_alpha", "bench_beta"]
+        );
+    }
+
+    #[test]
+    fn test_load_results_dir_backfills_resource_usage_from_nested_summaries() {
+        let fixture_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-artifact-root");
+
+        let report = load_results_dir(&fixture_dir).unwrap();
+        let alpha = report.platforms[0]
+            .benchmarks
+            .iter()
+            .find(|bench| bench.name == "bench_alpha")
+            .expect("alpha benchmark");
+        let beta = report.platforms[0]
+            .benchmarks
+            .iter()
+            .find(|bench| bench.name == "bench_beta")
+            .expect("beta benchmark");
+
+        assert_eq!(
+            alpha
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.cpu_total_ms),
+            Some(111)
+        );
+        assert_eq!(
+            alpha
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.peak_memory_kb),
+            Some(222222)
+        );
+        assert_eq!(
+            beta.resource_usage
+                .as_ref()
+                .and_then(|usage| usage.cpu_total_ms),
+            Some(333)
+        );
+        assert_eq!(
+            beta.resource_usage
+                .as_ref()
+                .and_then(|usage| usage.peak_memory_kb),
+            Some(444444)
+        );
+    }
+
+    #[test]
+    fn test_load_results_dir_preserves_summary_peak_memory_when_raw_results_add_cpu() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("summary.json"),
+            serde_json::to_string(&json!({
+                "summary": {
+                    "generated_at": "2026-03-25T12:00:00Z",
+                    "generated_at_unix": 1742904000,
+                    "target": "ios",
+                    "function": "bench_nullifier_proving_only",
+                    "iterations": 3,
+                    "warmup": 1,
+                    "devices": ["iPhone 15-17.0"],
+                    "device_summaries": [{
+                        "device": "iPhone 15-17.0",
+                        "benchmarks": [{
+                            "function": "bench_nullifier_proving_only",
+                            "samples": 3,
+                            "mean_ns": 125000000_u64,
+                            "median_ns": 125000000_u64,
+                            "p95_ns": 130000000_u64,
+                            "min_ns": 120000000_u64,
+                            "max_ns": 130000000_u64,
+                            "resource_usage": {
+                                "peak_memory_kb": 249416
+                            }
+                        }]
+                    }]
+                },
+                "benchmark_results": {
+                    "iPhone 15-17.0": [{
+                        "function": "bench_nullifier_proving_only",
+                        "mean_ns": 125000000_u64,
+                        "samples": [
+                            120000000_u64,
+                            130000000_u64
+                        ],
+                        "resources": {
+                            "elapsed_cpu_ms": 482
+                        }
+                    }]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let report = load_results_dir(dir.path()).unwrap();
+        let benchmark = &report.platforms[0].benchmarks[0];
+
+        assert_eq!(
+            benchmark
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.cpu_total_ms),
+            Some(482)
+        );
+        assert_eq!(
+            benchmark
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.peak_memory_kb),
+            Some(249416)
+        );
+    }
+
+    #[test]
     fn test_load_results_dir_falls_back_to_raw_bench_report() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -862,10 +1265,12 @@ mod tests {
                         std_dev_ms: Some(35.2),
                     },
                     resource_usage: Some(ResourceUsage {
-                        cpu_avg_percent: Some(94.0),
-                        cpu_peak_percent: Some(98.0),
-                        ram_avg_mb: Some(623.0),
-                        ram_peak_mb: Some(650.0),
+                        cpu_total_ms: Some(482),
+                        peak_memory_kb: Some(654321),
+                        total_pss_kb: Some(654321),
+                        private_dirty_kb: Some(321000),
+                        native_heap_kb: Some(120000),
+                        java_heap_kb: Some(45000),
                     }),
                 }],
                 iterations: 30,
@@ -915,6 +1320,88 @@ mod tests {
     }
 
     #[test]
+    fn test_render_markdown_uses_cpu_total_and_peak_memory_columns() {
+        let report = parse_summary_value(&json!({
+            "summary": {
+                "generated_at": "2026-02-26T12:00:00Z",
+                "target": "android",
+                "function": "bench_nullifier_proving_only",
+                "iterations": 30,
+                "warmup": 5,
+                "devices": ["Google Pixel 8-14.0"],
+                "device_summaries": [{
+                    "device": "Google Pixel 8-14.0",
+                    "benchmarks": [{
+                        "function": "bench_nullifier_proving_only",
+                        "samples": 30,
+                        "mean_ns": 1204500000_u64,
+                        "median_ns": 1198000000_u64,
+                        "p95_ns": 1290000000_u64,
+                        "min_ns": 1180200000_u64,
+                        "max_ns": 1298100000_u64,
+                        "resource_usage": {
+                            "cpu_total_ms": 482,
+                            "peak_memory_kb": 654321,
+                            "total_pss_kb": 654321
+                        }
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        let output = render_markdown(&report);
+
+        assert!(output.contains("CPU total (ms)"));
+        assert!(output.contains("Peak memory"));
+        assert!(output.contains("| 482 |"));
+        assert!(output.contains("638.99 MB"));
+        assert!(!output.contains("CPU %"));
+        assert!(!output.contains("RAM MB"));
+    }
+
+    #[test]
+    fn test_render_table_uses_cpu_total_and_peak_memory_columns() {
+        let report = parse_summary_value(&json!({
+            "summary": {
+                "generated_at": "2026-02-26T12:00:00Z",
+                "target": "android",
+                "function": "bench_nullifier_proving_only",
+                "iterations": 30,
+                "warmup": 5,
+                "devices": ["Google Pixel 8-14.0"],
+                "device_summaries": [{
+                    "device": "Google Pixel 8-14.0",
+                    "benchmarks": [{
+                        "function": "bench_nullifier_proving_only",
+                        "samples": 30,
+                        "mean_ns": 1204500000_u64,
+                        "median_ns": 1198000000_u64,
+                        "p95_ns": 1290000000_u64,
+                        "min_ns": 1180200000_u64,
+                        "max_ns": 1298100000_u64,
+                        "resource_usage": {
+                            "cpu_total_ms": 482,
+                            "peak_memory_kb": 654321,
+                            "total_pss_kb": 654321
+                        }
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        let output = render_table(&report);
+
+        assert!(output.contains("CPU total (ms)"));
+        assert!(output.contains("Peak memory"));
+        assert!(output.contains("482"));
+        assert!(output.contains("638.99 MB"));
+        assert!(!output.contains("CPU %"));
+        assert!(!output.contains("RAM MB"));
+    }
+
+    #[test]
     fn test_render_json_output() {
         let report = SummarizeReport {
             platforms: vec![PlatformReport {
@@ -934,5 +1421,118 @@ mod tests {
         let json_str = render_json(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["platforms"][0]["platform"], "ios");
+    }
+
+    #[test]
+    fn test_enrich_with_browserstack_matches_session_to_same_device_row() {
+        let mut report = SummarizeReport {
+            platforms: vec![
+                PlatformReport {
+                    platform: "android".to_string(),
+                    device: DeviceInfo {
+                        name: "Google Pixel 6".to_string(),
+                        os: "Android".to_string(),
+                        os_version: "14".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![BenchmarkResult {
+                        name: "bench_alpha".to_string(),
+                        label: "alpha".to_string(),
+                        timing: TimingStats {
+                            avg_ms: 10.0,
+                            median_ms: 10.0,
+                            best_ms: 10.0,
+                            worst_ms: 10.0,
+                            p95_ms: 10.0,
+                            std_dev_ms: None,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 5,
+                    warmup: 1,
+                },
+                PlatformReport {
+                    platform: "android".to_string(),
+                    device: DeviceInfo {
+                        name: "Samsung Galaxy S24".to_string(),
+                        os: "Android".to_string(),
+                        os_version: "14".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![BenchmarkResult {
+                        name: "bench_alpha".to_string(),
+                        label: "alpha".to_string(),
+                        timing: TimingStats {
+                            avg_ms: 10.0,
+                            median_ms: 10.0,
+                            best_ms: 10.0,
+                            worst_ms: 10.0,
+                            p95_ms: 10.0,
+                            std_dev_ms: None,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 5,
+                    warmup: 1,
+                },
+            ],
+        };
+
+        let build_summary = crate::browserstack::BuildSummary {
+            build_id: "build-123".to_string(),
+            status: "done".to_string(),
+            sessions: vec![
+                crate::browserstack::SessionSummary {
+                    session_id: "session-pixel".to_string(),
+                    device: "Google Pixel 6".to_string(),
+                    os: "android".to_string(),
+                    os_version: "14".to_string(),
+                    duration_secs: Some(10),
+                    performance: Some(crate::browserstack::PerformanceMetrics {
+                        memory: Some(crate::browserstack::AggregateMemoryMetrics {
+                            peak_mb: 100.0,
+                            average_mb: 90.0,
+                            min_mb: 80.0,
+                        }),
+                        cpu: None,
+                        sample_count: 1,
+                        snapshots: vec![],
+                    }),
+                },
+                crate::browserstack::SessionSummary {
+                    session_id: "session-samsung".to_string(),
+                    device: "Samsung Galaxy S24".to_string(),
+                    os: "android".to_string(),
+                    os_version: "14".to_string(),
+                    duration_secs: Some(10),
+                    performance: Some(crate::browserstack::PerformanceMetrics {
+                        memory: Some(crate::browserstack::AggregateMemoryMetrics {
+                            peak_mb: 200.0,
+                            average_mb: 190.0,
+                            min_mb: 180.0,
+                        }),
+                        cpu: None,
+                        sample_count: 1,
+                        snapshots: vec![],
+                    }),
+                },
+            ],
+        };
+
+        enrich_with_browserstack(&mut report, &build_summary);
+
+        let pixel_memory = report.platforms[0].benchmarks[0]
+            .resource_usage
+            .as_ref()
+            .and_then(|usage| usage.peak_memory_kb);
+        let samsung_memory = report.platforms[1].benchmarks[0]
+            .resource_usage
+            .as_ref()
+            .and_then(|usage| usage.peak_memory_kb);
+
+        assert_eq!(pixel_memory, Some(102_400));
+        assert_eq!(samsung_memory, Some(204_800));
     }
 }

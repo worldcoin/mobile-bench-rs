@@ -104,6 +104,7 @@ on:
         required: false
 
 permissions:
+  actions: read
   contents: read
   pull-requests: write
 
@@ -270,8 +271,7 @@ jobs:
             --crate-path "$CRATE_PATH" \
             $RELEASE_FLAG \
             --fetch \
-            --output-dir target/mobench/ci/ios \
-            || echo "::warning::iOS benchmark run failed"
+            --output-dir target/mobench/ci/ios
 
       - name: Upload iOS results
         if: always()
@@ -457,8 +457,7 @@ jobs:
             --crate-path "$CRATE_PATH" \
             $RELEASE_FLAG \
             --fetch \
-            --output-dir target/mobench/ci/android \
-            || echo "::warning::Android benchmark run failed"
+            --output-dir target/mobench/ci/android
 
       - name: Upload Android results
         if: always()
@@ -625,6 +624,47 @@ jobs:
           app-id: ${{ secrets.MOBENCH_APP_ID }}
           private-key: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
 
+      - name: Download baseline artifacts
+        if: steps.app-token.outcome == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          default_branch="${DEFAULT_BRANCH:-main}"
+          mkdir -p baseline
+
+          workflow_id=$(gh api "repos/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}" --jq '.workflow_id')
+          baseline_run_id=$(gh api "repos/${GH_REPO}/actions/workflows/${workflow_id}/runs?branch=${default_branch}&status=completed&per_page=20" \
+            --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID} and .conclusion == \"success\") | .id" | head -1)
+
+          if [ -z "${baseline_run_id}" ]; then
+            echo "::notice::No successful baseline run found on ${default_branch}; check runs will be descriptive only."
+            exit 0
+          fi
+
+          echo "Using baseline run ${baseline_run_id} from ${default_branch}"
+          for platform in ios android; do
+            artifact_name="mobench-results-${platform}"
+            destination="baseline/${platform}"
+            mkdir -p "${destination}"
+
+            if gh run download "${baseline_run_id}" \
+              --repo "${GH_REPO}" \
+              --name "${artifact_name}" \
+              --dir "${destination}" >/dev/null 2>&1; then
+              if [ -f "${destination}/summary.json" ]; then
+                echo "Downloaded baseline ${artifact_name}"
+              else
+                echo "::warning::Downloaded ${artifact_name} from run ${baseline_run_id}, but summary.json was missing."
+              fi
+            else
+              echo "::notice::Baseline artifact ${artifact_name} not found in run ${baseline_run_id}."
+            fi
+          done
+
       - name: Create Check Run
         if: steps.app-token.outcome == 'success'
         shell: bash
@@ -640,6 +680,11 @@ jobs:
           for dir in results/ios results/android; do
             if [ -d "$dir" ]; then
               PLATFORM=$(basename "$dir")
+              baseline_args=()
+              baseline_path="baseline/${PLATFORM}/summary.json"
+              if [ -f "$baseline_path" ]; then
+                baseline_args=(--baseline "$baseline_path")
+              fi
               cargo-mobench ci check-run \
                 --results-dir "$dir" \
                 --repo "$GH_REPO" \
@@ -647,6 +692,7 @@ jobs:
                 --name "$CHECK_RUN_NAME — ${PLATFORM}" \
                 --annotation-path "${CRATE_PATH}/src/lib.rs" \
                 --regression-threshold-pct "$REGRESSION_THRESHOLD" \
+                "${baseline_args[@]}" \
                 || true
             fi
           done
