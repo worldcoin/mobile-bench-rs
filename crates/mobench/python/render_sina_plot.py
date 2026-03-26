@@ -136,8 +136,8 @@ def render_plot(spec: dict[str, object], output_path: Path) -> None:
         median_ms = _median(samples_ms)
         ax.hlines(
             median_ms,
-            idx - 0.22,
-            idx + 0.22,
+            center - 0.22,
+            center + 0.22,
             color=color,
             linewidth=1.4,
             alpha=0.85,
