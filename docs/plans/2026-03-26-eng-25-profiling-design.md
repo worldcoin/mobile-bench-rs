@@ -41,6 +41,7 @@ The new workflow should add a dedicated profile command family:
 
 ```bash
 cargo mobench profile run --target android --function sample_fns::fibonacci
+cargo mobench profile summarize --profile target/mobench/profile/profile.json
 cargo mobench profile summarize --profile target/mobench/profile/<run-id>/profile.json
 ```
 
@@ -144,20 +145,22 @@ Profiling should not modify the existing CI v1 contract. Instead it should add a
 parallel additive artifact tree:
 
 ```text
-target/mobench/profile/<run-id>/
-  profile.json
-  summary.md
-  artifacts/
-    raw/
-    processed/
-    symbols/
+target/mobench/profile/
+  profile.json          # latest session convenience copy
+  summary.md            # latest session convenience copy
+  <run-id>/
+    profile.json
+    summary.md
+    artifacts/
+      raw/
+      processed/
 ```
 
 `profile.json` is the normalized metadata file. It should record:
 
 - benchmark identity and run parameters
 - target/platform/device/provider
-- backend and capture mode
+- backend, capture mode, and requested output format
 - raw artifact paths
 - processed artifact paths
 - symbolization state

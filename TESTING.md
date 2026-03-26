@@ -659,18 +659,21 @@ layer:
 cargo test -p mobench profile_
 
 # Android planned session
-cargo run -p mobench -- profile run \
+cargo run -p mobench --bin mobench -- profile run \
   --target android \
   --function sample_fns::fibonacci \
   --backend android-native
 
 # Render markdown summary from the generated manifest
-cargo run -p mobench -- profile summarize \
+cargo run -p mobench --bin mobench -- profile summarize \
   --profile target/mobench/profile/profile.json
 ```
 
-The current MVP should write `profile.json` and `summary.md` plus backend-
-specific planned artifact paths under `target/mobench/profile/artifacts/`.
+The current MVP should write a run-scoped session under
+`target/mobench/profile/<run-id>/` plus top-level latest-session copies at
+`target/mobench/profile/profile.json` and `target/mobench/profile/summary.md`.
+Backend-specific planned artifact paths should live under the run-scoped
+`artifacts/` tree.
 
 ### Adding New Test Functions
 

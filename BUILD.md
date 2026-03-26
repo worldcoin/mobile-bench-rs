@@ -533,8 +533,11 @@ cargo test --all
 ## Experimental Profiling Prerequisites
 
 The experimental `cargo mobench profile ...` commands currently write planned
-profile-session artifacts and backend-specific output layouts. They do not yet
-invoke native profiling tools automatically, but the expected local toolchain is:
+profile-session artifacts and backend-specific output layouts. Each run is
+written under `target/mobench/profile/<run-id>/`, while
+`target/mobench/profile/profile.json` and `summary.md` track the latest session.
+The commands do not yet invoke native profiling tools automatically, but the
+expected local toolchain is:
 
 - Android: `adb` plus `simpleperf`
 - iOS: `xcrun` plus `xctrace`

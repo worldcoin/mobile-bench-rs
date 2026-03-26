@@ -96,12 +96,16 @@ CI contract outputs are written to `target/mobench/ci/`:
 
 Local summary renderers (`ci run --plots ...` and `report summarize --plots ...`) append a `Device Comparison Plots` section with one Sina-style SVG per benchmark function. Summary resource fields use `cpu_total_ms` and `peak_memory_kb`; Android raw resource stats are preserved and iOS peak memory is enriched from BrowserStack app profiling when available.
 
-Experimental profiling commands write a normalized `profile.json` plus
-`summary.md` under `target/mobench/profile/` and reserve backend-specific raw
-and processed artifact paths under `artifacts/`. The current implementation
-captures the profile-session contract and platform-specific artifact layout; it
-does not yet execute native capture tools automatically. BrowserStack-backed
-native profiling backends fail explicitly rather than silently degrading.
+Experimental profiling commands write each planned session under
+`target/mobench/profile/<run-id>/` and also refresh top-level
+`target/mobench/profile/profile.json` and `summary.md` as convenience copies of
+the latest run. Backend-specific raw and processed artifact directories are
+created under each run-scoped `artifacts/` tree, and the normalized manifest
+records the selected provider and requested output format. The current
+implementation captures the profile-session contract and platform-specific
+artifact layout; it does not yet execute native capture tools automatically.
+BrowserStack-backed native profiling backends fail explicitly rather than
+silently degrading.
 
 ## Configuration
 

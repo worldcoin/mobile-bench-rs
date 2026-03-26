@@ -90,6 +90,8 @@ pub struct ProfileManifest {
     pub run_id: String,
     pub target: MobileTarget,
     pub function: String,
+    #[serde(default = "default_profile_provider")]
+    pub provider: ProfileProvider,
     pub backend: ProfileBackend,
     pub format: ProfileFormat,
     pub capture_status: CaptureStatus,
@@ -99,6 +101,10 @@ pub struct ProfileManifest {
     pub viewer_hint: Option<String>,
 }
 
+fn default_profile_provider() -> ProfileProvider {
+    ProfileProvider::Local
+}
+
 pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     let mut markdown = String::new();
     let _ = writeln!(markdown, "# Profile Summary");
@@ -106,6 +112,11 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     let _ = writeln!(markdown, "- Run ID: `{}`", manifest.run_id);
     let _ = writeln!(markdown, "- Target: `{}`", manifest.target.as_str());
     let _ = writeln!(markdown, "- Function: `{}`", manifest.function);
+    let _ = writeln!(
+        markdown,
+        "- Provider: `{}`",
+        manifest.provider.to_possible_value().unwrap().get_name()
+    );
     let _ = writeln!(
         markdown,
         "- Backend: `{}`",
@@ -167,13 +178,33 @@ pub fn write_profile_manifest(path: &Path, manifest: &ProfileManifest) -> Result
 
 pub fn cmd_profile_run(args: &ProfileRunArgs) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)?;
-    let manifest = build_capture_plan(args, &args.output_dir)?;
-    let profile_path = args.output_dir.join("profile.json");
-    let summary_path = args.output_dir.join("summary.md");
-    write_profile_manifest(&profile_path, &manifest)?;
-    std::fs::write(&summary_path, render_profile_markdown(&manifest).as_bytes())?;
-    println!("Profile session written to {}", profile_path.display());
-    println!("Profile summary written to {}", summary_path.display());
+    let run_id = build_run_id(args.target, &args.function);
+    let run_output_dir = args.output_dir.join(&run_id);
+    std::fs::create_dir_all(&run_output_dir)?;
+
+    let manifest = build_capture_plan(args, &run_output_dir)?;
+    let rendered_summary = render_profile_markdown(&manifest);
+
+    let run_profile_path = run_output_dir.join("profile.json");
+    let run_summary_path = run_output_dir.join("summary.md");
+    write_profile_manifest(&run_profile_path, &manifest)?;
+    std::fs::write(&run_summary_path, rendered_summary.as_bytes())?;
+
+    let latest_profile_path = args.output_dir.join("profile.json");
+    let latest_summary_path = args.output_dir.join("summary.md");
+    write_profile_manifest(&latest_profile_path, &manifest)?;
+    std::fs::write(&latest_summary_path, rendered_summary.as_bytes())?;
+
+    println!("Profile session written to {}", run_profile_path.display());
+    println!("Profile summary written to {}", run_summary_path.display());
+    println!(
+        "Latest profile manifest refreshed at {}",
+        latest_profile_path.display()
+    );
+    println!(
+        "Latest profile summary refreshed at {}",
+        latest_summary_path.display()
+    );
     Ok(())
 }
 
@@ -215,11 +246,12 @@ pub fn cmd_profile_summarize_for_test(args: &ProfileSummarizeArgs) -> Result<Str
 fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<ProfileManifest> {
     let backend = resolve_backend(args.target, args.backend);
     validate_profile_capabilities(args.provider, backend)?;
+    validate_format_capabilities(backend, args.format)?;
 
     let raw_root = output_root.join("artifacts/raw");
     let processed_root = output_root.join("artifacts/processed");
 
-    let (raw_artifacts, processed_artifacts, viewer_hint) = match backend {
+    let (raw_artifacts, processed_artifacts) = match backend {
         ProfileBackend::AndroidNative => (
             vec![ArtifactRecord {
                 label: "simpleperf".into(),
@@ -229,7 +261,6 @@ fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<Profi
                 label: "flamegraph".into(),
                 path: processed_root.join("flamegraph.html"),
             }],
-            Some("Open artifacts/processed/flamegraph.html in a browser".into()),
         ),
         ProfileBackend::IosInstruments => (
             vec![ArtifactRecord {
@@ -240,7 +271,6 @@ fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<Profi
                 label: "xctrace-export".into(),
                 path: processed_root.join("time-profiler.xml"),
             }],
-            Some("Open artifacts/raw/time-profiler.trace in Instruments".into()),
         ),
         ProfileBackend::RustTracing => (
             vec![ArtifactRecord {
@@ -248,19 +278,22 @@ fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<Profi
                 path: raw_root.join("trace-events.json"),
             }],
             Vec::new(),
-            Some("Open artifacts/raw/trace-events.json in a trace viewer".into()),
         ),
         ProfileBackend::Auto => unreachable!("auto backend should resolve before planning"),
     };
 
+    let raw_artifacts = select_artifacts(raw_artifacts, args.format, ArtifactKind::Raw);
+    let processed_artifacts =
+        select_artifacts(processed_artifacts, args.format, ArtifactKind::Processed);
+    ensure_selected_artifact_roots(&raw_artifacts, &processed_artifacts)?;
+    let viewer_hint =
+        select_viewer_hint(backend, args.format, &raw_artifacts, &processed_artifacts);
+
     Ok(ProfileManifest {
-        run_id: format!(
-            "{}-{}",
-            args.target.as_str(),
-            slugify_function_name(&args.function)
-        ),
+        run_id: build_run_id(args.target, &args.function),
         target: args.target,
         function: args.function.clone(),
+        provider: args.provider,
         backend,
         format: args.format,
         capture_status: CaptureStatus::Planned,
@@ -272,6 +305,10 @@ fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<Profi
         ],
         viewer_hint,
     })
+}
+
+fn build_run_id(target: MobileTarget, function: &str) -> String {
+    format!("{}-{}", target.as_str(), slugify_function_name(function))
 }
 
 fn resolve_backend(target: MobileTarget, backend: ProfileBackend) -> ProfileBackend {
@@ -297,6 +334,87 @@ fn validate_profile_capabilities(provider: ProfileProvider, backend: ProfileBack
         );
     }
     Ok(())
+}
+
+fn validate_format_capabilities(backend: ProfileBackend, format: ProfileFormat) -> Result<()> {
+    if backend == ProfileBackend::RustTracing && format == ProfileFormat::Processed {
+        bail!(
+            "processed output is unsupported for rust-tracing backend; use --format native or both"
+        );
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtifactKind {
+    Raw,
+    Processed,
+}
+
+fn select_artifacts(
+    artifacts: Vec<ArtifactRecord>,
+    format: ProfileFormat,
+    kind: ArtifactKind,
+) -> Vec<ArtifactRecord> {
+    match format {
+        ProfileFormat::Both => artifacts,
+        ProfileFormat::Native if kind == ArtifactKind::Raw => artifacts,
+        ProfileFormat::Processed if kind == ArtifactKind::Processed => artifacts,
+        _ => Vec::new(),
+    }
+}
+
+fn ensure_selected_artifact_roots(
+    raw_artifacts: &[ArtifactRecord],
+    processed_artifacts: &[ArtifactRecord],
+) -> Result<()> {
+    for artifact in raw_artifacts.iter().chain(processed_artifacts.iter()) {
+        if let Some(parent) = artifact.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    Ok(())
+}
+
+fn select_viewer_hint(
+    backend: ProfileBackend,
+    format: ProfileFormat,
+    raw_artifacts: &[ArtifactRecord],
+    processed_artifacts: &[ArtifactRecord],
+) -> Option<String> {
+    match backend {
+        ProfileBackend::AndroidNative => {
+            if format != ProfileFormat::Native && !processed_artifacts.is_empty() {
+                Some("Open artifacts/processed/flamegraph.html in a browser".into())
+            } else if !raw_artifacts.is_empty() {
+                Some(
+                    "Inspect artifacts/raw/sample.perf with the Android profiling toolchain".into(),
+                )
+            } else {
+                None
+            }
+        }
+        ProfileBackend::IosInstruments => {
+            if !raw_artifacts.is_empty() {
+                Some("Open artifacts/raw/time-profiler.trace in Instruments".into())
+            } else if !processed_artifacts.is_empty() {
+                Some(
+                    "Inspect artifacts/processed/time-profiler.xml or rerun with --format both to keep the .trace bundle"
+                        .into(),
+                )
+            } else {
+                None
+            }
+        }
+        ProfileBackend::RustTracing => {
+            if !raw_artifacts.is_empty() {
+                Some("Open artifacts/raw/trace-events.json in a trace viewer".into())
+            } else {
+                None
+            }
+        }
+        ProfileBackend::Auto => None,
+    }
 }
 
 fn slugify_function_name(function: &str) -> String {
@@ -382,6 +500,31 @@ mod tests {
     }
 
     #[test]
+    fn profile_native_format_excludes_processed_artifacts_from_plan() {
+        let plan = build_capture_plan(
+            &ProfileRunArgs {
+                target: MobileTarget::Android,
+                function: "sample_fns::fibonacci".into(),
+                crate_path: None,
+                config: None,
+                output_dir: PathBuf::from("target/mobench/profile"),
+                provider: ProfileProvider::Local,
+                backend: ProfileBackend::AndroidNative,
+                format: ProfileFormat::Native,
+            },
+            &PathBuf::from("target/mobench/profile"),
+        )
+        .expect("native-only capture plan");
+
+        assert_eq!(plan.raw_artifacts.len(), 1);
+        assert!(plan.processed_artifacts.is_empty());
+        assert_eq!(
+            plan.viewer_hint.as_deref(),
+            Some("Inspect artifacts/raw/sample.perf with the Android profiling toolchain")
+        );
+    }
+
+    #[test]
     fn ios_backend_allocates_trace_bundle_and_export_paths() {
         let plan = build_capture_plan(
             &ProfileRunArgs {
@@ -432,9 +575,30 @@ mod tests {
     }
 
     #[test]
-    fn profile_run_writes_manifest_and_summary_files() {
+    fn profile_rust_tracing_processed_only_is_rejected() {
+        let error = build_capture_plan(
+            &ProfileRunArgs {
+                target: MobileTarget::Android,
+                function: "sample_fns::fibonacci".into(),
+                crate_path: None,
+                config: None,
+                output_dir: PathBuf::from("target/mobench/profile"),
+                provider: ProfileProvider::Local,
+                backend: ProfileBackend::RustTracing,
+                format: ProfileFormat::Processed,
+            },
+            &PathBuf::from("target/mobench/profile"),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("processed"));
+        assert!(error.to_string().contains("rust-tracing"));
+    }
+
+    #[test]
+    fn profile_run_writes_run_scoped_and_latest_manifest_files() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let args = ProfileRunArgs {
+        let android_args = ProfileRunArgs {
             target: MobileTarget::Android,
             function: "sample_fns::fibonacci".into(),
             crate_path: None,
@@ -444,11 +608,55 @@ mod tests {
             backend: ProfileBackend::AndroidNative,
             format: ProfileFormat::Both,
         };
+        let ios_args = ProfileRunArgs {
+            target: MobileTarget::Ios,
+            function: "sample_fns::checksum".into(),
+            crate_path: None,
+            config: None,
+            output_dir: dir.path().to_path_buf(),
+            provider: ProfileProvider::Local,
+            backend: ProfileBackend::IosInstruments,
+            format: ProfileFormat::Both,
+        };
 
-        cmd_profile_run(&args).expect("write planned profile session");
+        cmd_profile_run(&android_args).expect("write first planned profile session");
+        cmd_profile_run(&ios_args).expect("write second planned profile session");
 
+        let android_run_dir = dir.path().join("android-sample_fns--fibonacci");
+        let ios_run_dir = dir.path().join("ios-sample_fns--checksum");
+
+        assert!(android_run_dir.join("profile.json").exists());
+        assert!(android_run_dir.join("summary.md").exists());
+        assert!(ios_run_dir.join("profile.json").exists());
+        assert!(ios_run_dir.join("summary.md").exists());
         assert!(dir.path().join("profile.json").exists());
         assert!(dir.path().join("summary.md").exists());
+
+        let latest_manifest =
+            load_profile_manifest(&dir.path().join("profile.json")).expect("load latest manifest");
+        assert_eq!(latest_manifest.target, MobileTarget::Ios);
+        assert_eq!(latest_manifest.function, "sample_fns::checksum");
+    }
+
+    #[test]
+    fn profile_manifest_serializes_provider() {
+        let manifest = build_capture_plan(
+            &ProfileRunArgs {
+                target: MobileTarget::Android,
+                function: "sample_fns::fibonacci".into(),
+                crate_path: None,
+                config: None,
+                output_dir: PathBuf::from("target/mobench/profile"),
+                provider: ProfileProvider::Browserstack,
+                backend: ProfileBackend::RustTracing,
+                format: ProfileFormat::Both,
+            },
+            &PathBuf::from("target/mobench/profile"),
+        )
+        .expect("build manifest");
+
+        let json = serde_json::to_value(&manifest).expect("serialize manifest");
+        assert_eq!(json["provider"], "browserstack");
     }
 
     fn sample_manifest() -> ProfileManifest {
@@ -456,6 +664,7 @@ mod tests {
             run_id: "run-123".into(),
             target: MobileTarget::Android,
             function: "sample_fns::fibonacci".into(),
+            provider: ProfileProvider::Local,
             backend: ProfileBackend::AndroidNative,
             format: ProfileFormat::Both,
             capture_status: CaptureStatus::Partial,

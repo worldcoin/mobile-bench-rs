@@ -4,7 +4,7 @@
 
 **Goal:** Add a new `mobench profile` subsystem that standardizes profiling orchestration and artifacts across platforms, provides native-tool backends for Android and iOS local runs, and reports explicit capability limits for BrowserStack-backed execution.
 
-**Architecture:** Keep the `mobench` CLI as the orchestrator. Introduce a dedicated `profile` Rust module tree for command parsing, artifact contracts, backend dispatch, and summary rendering. Android and iOS backends build native command lines for external tools, write a normalized `profile.json`, and preserve raw platform-specific artifacts without changing the existing CI v1 benchmark contract.
+**Architecture:** Keep the `mobench` CLI as the orchestrator. Introduce a dedicated `profile` Rust module tree for command parsing, artifact contracts, backend dispatch, and summary rendering. Android and iOS backends build native command lines for external tools, write run-scoped `target/mobench/profile/<run-id>/profile.json` manifests plus top-level latest-session convenience files, and preserve raw platform-specific artifacts without changing the existing CI v1 benchmark contract.
 
 **Tech Stack:** Rust (`clap`, `serde`, `serde_json`, `anyhow`, `std::process`, `std::fs`), existing `mobench-sdk` builders, external platform tools (`adb`, `simpleperf`, `xcrun`, `xctrace`), existing summary/report patterns under `crates/mobench/src`.
 
@@ -506,14 +506,15 @@ Expected: PASS
 Run:
 
 ```bash
-cargo run -p mobench -- profile run \
+cargo run -p mobench --bin mobench -- profile run \
   --target android \
   --function sample_fns::fibonacci \
-  --backend android-native \
-  --dry-run
+  --backend android-native
 ```
 
-Expected: PASS with planned artifact paths and backend/tool summary.
+Expected: PASS with a run-scoped profile session under
+`target/mobench/profile/<run-id>/` and refreshed latest-session files at
+`target/mobench/profile/profile.json` and `target/mobench/profile/summary.md`.
 
 **Step 5: Commit**
 
