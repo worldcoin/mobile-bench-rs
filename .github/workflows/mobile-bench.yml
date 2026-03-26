@@ -12,6 +12,11 @@ on:
           - android
           - ios
           - both
+      device_profile:
+        description: "BrowserStack device profile"
+        required: false
+        type: string
+        default: "low-spec"
       crate_path:
         description: "Benchmark crate fixture path"
         required: false
@@ -64,96 +69,21 @@ env:
 jobs:
   benchmark:
     name: Example fixture benchmark
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout caller repo
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.head_sha || github.sha }}
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build local mobench binaries
-        run: cargo build -p mobench --bins --locked
-
-      - name: Add local mobench binaries to PATH
-        run: echo "${GITHUB_WORKSPACE}/target/debug" >> "$GITHUB_PATH"
-
-      - name: Resolve fixture metadata
-        id: fixture
-        env:
-          CRATE_PATH: ${{ inputs.crate_path }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          slug=$(basename "${CRATE_PATH}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
-          if [ -z "${slug}" ]; then
-            slug="example-fixture"
-          fi
-          echo "slug=${slug}" >> "$GITHUB_OUTPUT"
-          echo "comment_marker=<!-- mobench-${slug}-summary -->" >> "$GITHUB_OUTPUT"
-
-      - name: Build mobench run args
-        id: args
-        env:
-          PLATFORM: ${{ inputs.platform }}
-          CRATE_PATH: ${{ inputs.crate_path }}
-          FUNCTIONS: ${{ inputs.functions }}
-          ITERATIONS: ${{ inputs.iterations }}
-          WARMUP: ${{ inputs.warmup }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          REQUESTED_BY_INPUT: ${{ inputs.requested_by }}
-          MOBENCH_REF_INPUT: ${{ inputs.head_sha || github.sha }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          requested_by="${REQUESTED_BY_INPUT:-}"
-          if [ -z "${requested_by}" ]; then
-            requested_by="${GITHUB_EVENT_NAME}:${GITHUB_ACTOR}"
-          fi
-
-          {
-            echo "run_args<<EOF"
-            printf '%s\n' "--target ${PLATFORM}"
-            printf '%s\n' "--crate-path ${CRATE_PATH}"
-            printf '%s\n' "--functions ${FUNCTIONS}"
-            printf '%s\n' "--iterations ${ITERATIONS}"
-            printf '%s\n' "--warmup ${WARMUP}"
-            printf '%s\n' "--local-only"
-            printf '%s\n' "--plots off"
-            printf '%s\n' "--requested-by ${requested_by}"
-            printf '%s\n' "--mobench-ref ${MOBENCH_REF_INPUT}"
-            if [ -n "${PR_NUMBER}" ]; then
-              printf '%s\n' "--pr-number ${PR_NUMBER}"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Run mobench fixture CI
-        uses: ./.github/actions/mobench
-        with:
-          command: mobench ci run
-          run-args: ${{ steps.args.outputs.run_args }}
-          install-mobench: "false"
-          install-cargo-ndk: "false"
-          setup-android: "false"
-          cache-gradle: "false"
-          cache-android: "false"
-          artifact-name: mobench-${{ steps.fixture.outputs.slug }}-results
-          pr-comment: ${{ inputs.pr_number != '' && 'true' || 'false' }}
-          pr-number: ${{ inputs.pr_number }}
-          pr-comment-marker: ${{ steps.fixture.outputs.comment_marker }}
-          github-token: ${{ github.token }}
-
-      - name: Publish job summary
-        if: always()
-        shell: bash
-        run: |
-          if [ -f target/mobench/ci/summary.md ]; then
-            cat target/mobench/ci/summary.md >> "$GITHUB_STEP_SUMMARY"
-          fi
+    uses: ./.github/workflows/reusable-bench.yml
+    with:
+      crate_path: ${{ inputs.crate_path }}
+      functions: ${{ inputs.functions }}
+      platform: ${{ inputs.platform }}
+      device_profile: ${{ inputs.device_profile }}
+      iterations: ${{ inputs.iterations }}
+      warmup: ${{ inputs.warmup }}
+      build_release: true
+      pr_number: ${{ inputs.pr_number }}
+      requested_by: ${{ inputs.requested_by }}
+      head_sha: ${{ inputs.head_sha }}
+      check_run_name: "Mobench Fixtures"
+    secrets:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+      MOBENCH_APP_PRIVATE_KEY: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
+      MOBENCH_APP_ID: ${{ secrets.MOBENCH_APP_ID }}

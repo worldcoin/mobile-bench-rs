@@ -1,8 +1,9 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::MobileTarget;
 
@@ -177,12 +178,13 @@ pub fn write_profile_manifest(path: &Path, manifest: &ProfileManifest) -> Result
 }
 
 pub fn cmd_profile_run(args: &ProfileRunArgs) -> Result<()> {
+    validate_profile_request(args)?;
     std::fs::create_dir_all(&args.output_dir)?;
-    let run_id = build_run_id(args.target, &args.function);
+    let run_id = allocate_run_id(&args.output_dir, args.target, &args.function)?;
     let run_output_dir = args.output_dir.join(&run_id);
     std::fs::create_dir_all(&run_output_dir)?;
 
-    let manifest = build_capture_plan(args, &run_output_dir)?;
+    let manifest = build_capture_plan(args, &run_output_dir, &run_id)?;
     let rendered_summary = render_profile_markdown(&manifest);
 
     let run_profile_path = run_output_dir.join("profile.json");
@@ -243,7 +245,44 @@ pub fn cmd_profile_summarize_for_test(args: &ProfileSummarizeArgs) -> Result<Str
     }
 }
 
-fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<ProfileManifest> {
+fn validate_profile_request(args: &ProfileRunArgs) -> Result<()> {
+    let layout = crate::resolve_project_layout(crate::ProjectLayoutOptions {
+        start_dir: None,
+        project_root: None,
+        crate_path: args.crate_path.as_deref(),
+        config_path: args.config.as_deref(),
+    })
+    .context("failed to resolve benchmark layout for profile run")?;
+    let benchmarks = crate::discover_benchmarks_for_layout(&layout)
+        .context("failed to discover benchmarks for profile run")?;
+
+    if benchmarks.is_empty() {
+        bail!(
+            "no benchmark functions found in {}; add #[benchmark] functions before profiling",
+            layout.crate_dir.display()
+        );
+    }
+
+    if !benchmarks
+        .iter()
+        .any(|candidate| candidate == &args.function)
+    {
+        bail!(
+            "benchmark `{}` was not found in {}. Available benchmarks: {}",
+            args.function,
+            layout.crate_dir.display(),
+            benchmarks.join(", ")
+        );
+    }
+
+    Ok(())
+}
+
+fn build_capture_plan(
+    args: &ProfileRunArgs,
+    output_root: &Path,
+    run_id: &str,
+) -> Result<ProfileManifest> {
     let backend = resolve_backend(args.target, args.backend);
     validate_profile_capabilities(args.provider, backend)?;
     validate_format_capabilities(backend, args.format)?;
@@ -290,7 +329,7 @@ fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<Profi
         select_viewer_hint(backend, args.format, &raw_artifacts, &processed_artifacts);
 
     Ok(ProfileManifest {
-        run_id: build_run_id(args.target, &args.function),
+        run_id: run_id.to_string(),
         target: args.target,
         function: args.function.clone(),
         provider: args.provider,
@@ -305,6 +344,31 @@ fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<Profi
         ],
         viewer_hint,
     })
+}
+
+fn allocate_run_id(output_dir: &Path, target: MobileTarget, function: &str) -> Result<String> {
+    let prefix = build_run_id(target, function);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    for suffix in 0..1000 {
+        let candidate = if suffix == 0 {
+            format!("{prefix}-{timestamp}")
+        } else {
+            format!("{prefix}-{timestamp}-{suffix}")
+        };
+
+        if !output_dir.join(&candidate).exists() {
+            return Ok(candidate);
+        }
+    }
+
+    bail!(
+        "failed to allocate a unique profile run id for `{}` after 1000 attempts",
+        function
+    )
 }
 
 fn build_run_id(target: MobileTarget, function: &str) -> String {
@@ -484,6 +548,7 @@ mod tests {
                 format: ProfileFormat::Both,
             },
             &PathBuf::from("target/mobench/profile"),
+            "android-sample_fns--fibonacci",
         )
         .expect("android capture plan");
 
@@ -513,6 +578,7 @@ mod tests {
                 format: ProfileFormat::Native,
             },
             &PathBuf::from("target/mobench/profile"),
+            "android-sample_fns--fibonacci",
         )
         .expect("native-only capture plan");
 
@@ -538,6 +604,7 @@ mod tests {
                 format: ProfileFormat::Both,
             },
             &PathBuf::from("target/mobench/profile"),
+            "ios-sample_fns--fibonacci",
         )
         .expect("ios capture plan");
 
@@ -567,6 +634,7 @@ mod tests {
                 format: ProfileFormat::Both,
             },
             &PathBuf::from("target/mobench/profile"),
+            "android-sample_fns--fibonacci",
         )
         .unwrap_err();
 
@@ -588,6 +656,7 @@ mod tests {
                 format: ProfileFormat::Processed,
             },
             &PathBuf::from("target/mobench/profile"),
+            "android-sample_fns--fibonacci",
         )
         .unwrap_err();
 
@@ -598,10 +667,11 @@ mod tests {
     #[test]
     fn profile_run_writes_run_scoped_and_latest_manifest_files() {
         let dir = tempfile::tempdir().expect("temp dir");
+        let crate_path = workspace_root().join("examples/ffi-benchmark");
         let android_args = ProfileRunArgs {
             target: MobileTarget::Android,
-            function: "sample_fns::fibonacci".into(),
-            crate_path: None,
+            function: "ffi_benchmark::bench_fibonacci".into(),
+            crate_path: Some(crate_path.clone()),
             config: None,
             output_dir: dir.path().to_path_buf(),
             provider: ProfileProvider::Local,
@@ -610,8 +680,8 @@ mod tests {
         };
         let ios_args = ProfileRunArgs {
             target: MobileTarget::Ios,
-            function: "sample_fns::checksum".into(),
-            crate_path: None,
+            function: "ffi_benchmark::bench_checksum".into(),
+            crate_path: Some(crate_path),
             config: None,
             output_dir: dir.path().to_path_buf(),
             provider: ProfileProvider::Local,
@@ -622,8 +692,14 @@ mod tests {
         cmd_profile_run(&android_args).expect("write first planned profile session");
         cmd_profile_run(&ios_args).expect("write second planned profile session");
 
-        let android_run_dir = dir.path().join("android-sample_fns--fibonacci");
-        let ios_run_dir = dir.path().join("ios-sample_fns--checksum");
+        let android_run_dir = find_single_run_dir(
+            &dir.path().to_path_buf(),
+            "android-ffi_benchmark--bench_fibonacci",
+        );
+        let ios_run_dir = find_single_run_dir(
+            &dir.path().to_path_buf(),
+            "ios-ffi_benchmark--bench_checksum",
+        );
 
         assert!(android_run_dir.join("profile.json").exists());
         assert!(android_run_dir.join("summary.md").exists());
@@ -635,7 +711,74 @@ mod tests {
         let latest_manifest =
             load_profile_manifest(&dir.path().join("profile.json")).expect("load latest manifest");
         assert_eq!(latest_manifest.target, MobileTarget::Ios);
-        assert_eq!(latest_manifest.function, "sample_fns::checksum");
+        assert_eq!(latest_manifest.function, "ffi_benchmark::bench_checksum");
+        assert_eq!(
+            latest_manifest.run_id,
+            ios_run_dir
+                .file_name()
+                .expect("ios run dir name")
+                .to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn profile_run_rejects_unknown_benchmark_function() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let error = cmd_profile_run(&ProfileRunArgs {
+            target: MobileTarget::Android,
+            function: "does_not_exist::bench".into(),
+            crate_path: Some(workspace_root().join("examples/ffi-benchmark")),
+            config: None,
+            output_dir: dir.path().join("profile"),
+            provider: ProfileProvider::Local,
+            backend: ProfileBackend::AndroidNative,
+            format: ProfileFormat::Both,
+        })
+        .expect_err("invalid benchmark selector should fail");
+
+        assert!(error.to_string().contains("does_not_exist::bench"));
+        assert!(error.to_string().contains("Available benchmarks"));
+        assert!(!dir.path().join("profile").exists());
+    }
+
+    #[test]
+    fn profile_run_preserves_history_for_repeated_runs() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let args = ProfileRunArgs {
+            target: MobileTarget::Android,
+            function: "ffi_benchmark::bench_fibonacci".into(),
+            crate_path: Some(workspace_root().join("examples/ffi-benchmark")),
+            config: None,
+            output_dir: dir.path().to_path_buf(),
+            provider: ProfileProvider::Local,
+            backend: ProfileBackend::AndroidNative,
+            format: ProfileFormat::Both,
+        };
+
+        cmd_profile_run(&args).expect("write first profile session");
+        cmd_profile_run(&args).expect("write second profile session");
+
+        let run_dirs = collect_run_dirs(
+            &dir.path().to_path_buf(),
+            "android-ffi_benchmark--bench_fibonacci",
+        );
+        assert_eq!(run_dirs.len(), 2);
+        assert_ne!(run_dirs[0], run_dirs[1]);
+        for run_dir in &run_dirs {
+            assert!(run_dir.join("profile.json").exists());
+            assert!(run_dir.join("summary.md").exists());
+        }
+
+        let latest_manifest =
+            load_profile_manifest(&dir.path().join("profile.json")).expect("load latest manifest");
+        let latest_run_dir = run_dirs
+            .iter()
+            .find(|dir| {
+                dir.file_name()
+                    .is_some_and(|name| name == latest_manifest.run_id.as_str())
+            })
+            .expect("latest manifest should point at a run-scoped directory");
+        assert!(latest_run_dir.join("profile.json").exists());
     }
 
     #[test]
@@ -652,11 +795,36 @@ mod tests {
                 format: ProfileFormat::Both,
             },
             &PathBuf::from("target/mobench/profile"),
+            "android-sample_fns--fibonacci",
         )
         .expect("build manifest");
 
         let json = serde_json::to_value(&manifest).expect("serialize manifest");
         assert_eq!(json["provider"], "browserstack");
+    }
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn collect_run_dirs(root: &PathBuf, prefix: &str) -> Vec<PathBuf> {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(root)
+            .expect("read run dir")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.is_dir())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
+            })
+            .collect();
+        entries.sort();
+        entries
+    }
+
+    fn find_single_run_dir(root: &PathBuf, prefix: &str) -> PathBuf {
+        let matches = collect_run_dirs(root, prefix);
+        assert_eq!(matches.len(), 1, "expected one run dir for prefix {prefix}");
+        matches.into_iter().next().expect("single run dir")
     }
 
     fn sample_manifest() -> ProfileManifest {
