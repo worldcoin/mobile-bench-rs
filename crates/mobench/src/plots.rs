@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -42,24 +42,104 @@ fn extract_function_plot_inputs_reads_fixture_samples() {
     );
 }
 
+#[test]
+fn extract_function_plot_inputs_walks_nested_files_without_duplicates() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let root_summary = root.path().join("summary.json");
+    let nested_dir = root.path().join("android").join("bench_beta");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+
+    write_json(
+        &root_summary,
+        serde_json::json!({
+            "summary": {
+                "generated_at": "2026-03-25T00:00:00Z",
+                "generated_at_unix": 1_000_000_000_u64,
+                "target": "android",
+                "function": "bench_alpha",
+                "iterations": 3,
+                "warmup": 1,
+                "devices": ["Google Pixel 8-14.0"],
+                "device_summaries": [{
+                    "device": "Google Pixel 8-14.0",
+                    "benchmarks": [{
+                        "function": "bench_alpha",
+                        "samples": 3,
+                        "mean_ns": 100_u64,
+                        "median_ns": 100_u64,
+                        "p95_ns": 100_u64,
+                        "min_ns": 100_u64,
+                        "max_ns": 100_u64
+                    }]
+                }]
+            },
+            "benchmark_results": {
+                "Google Pixel 8-14.0": [{
+                    "function": "bench_alpha",
+                    "samples": [100_u64, 200_u64, 300_u64]
+                }]
+            }
+        }),
+    );
+
+    write_json(
+        &nested_dir.join("summary.json"),
+        serde_json::json!({
+            "summary": {
+                "generated_at": "2026-03-25T00:00:00Z",
+                "generated_at_unix": 1_000_000_001_u64,
+                "target": "android",
+                "function": "bench_beta",
+                "iterations": 3,
+                "warmup": 1,
+                "devices": ["Google Pixel 8-14.0"],
+                "device_summaries": [{
+                    "device": "Google Pixel 8-14.0",
+                    "benchmarks": [{
+                        "function": "bench_beta",
+                        "samples": 3,
+                        "mean_ns": 400_u64,
+                        "median_ns": 400_u64,
+                        "p95_ns": 400_u64,
+                        "min_ns": 400_u64,
+                        "max_ns": 400_u64
+                    }]
+                }]
+            },
+            "benchmark_results": {
+                "Google Pixel 8-14.0": [{
+                    "function": "bench_alpha",
+                    "samples": [100_u64, 200_u64, 300_u64]
+                }, {
+                    "function": "bench_beta",
+                    "samples": [400_u64, 500_u64, 600_u64]
+                }]
+            }
+        }),
+    );
+
+    let plots = extract_function_plot_inputs_from_results_dir(root.path())
+        .expect("extract plot inputs");
+
+    let alpha = plots
+        .iter()
+        .find(|plot| plot.function_name == "bench_alpha")
+        .expect("bench_alpha plot");
+    let beta = plots
+        .iter()
+        .find(|plot| plot.function_name == "bench_beta")
+        .expect("bench_beta plot");
+
+    assert_eq!(alpha.devices.len(), 1);
+    assert_eq!(alpha.devices[0].samples_ns, vec![100, 200, 300]);
+    assert_eq!(beta.devices.len(), 1);
+    assert_eq!(beta.devices[0].samples_ns, vec![400, 500, 600]);
+}
+
 pub fn extract_function_plot_inputs_from_results_dir(dir: &Path) -> Result<Vec<PlotFunctionInput>> {
-    let root_summary_path = dir.join("summary.json");
     let mut builders = BTreeMap::new();
 
-    if root_summary_path.exists() {
-        let root_value = read_json(&root_summary_path)?;
-        if root_value
-            .get("benchmark_results")
-            .and_then(|value| value.as_object())
-            .is_some()
-        {
-            collect_from_value(&root_value, &root_summary_path, &mut builders)?;
-        } else {
-            collect_from_results_dir(dir, &mut builders)?;
-        }
-    } else {
-        collect_from_results_dir(dir, &mut builders)?;
-    }
+    collect_from_results_dir(dir, &mut builders)?;
 
     let mut plots = builders
         .into_values()
@@ -87,7 +167,7 @@ struct PlotFunctionInputBuilder {
 struct PlotDeviceSamplesBuilder {
     device_name: String,
     os_version: String,
-    samples_ns: Vec<u64>,
+    samples_ns: BTreeSet<u64>,
 }
 
 impl PlotFunctionInputBuilder {
@@ -115,22 +195,19 @@ impl PlotFunctionInputBuilder {
         &mut self,
         device_name: String,
         os_version: String,
-        mut samples_ns: Vec<u64>,
+        samples_ns: Vec<u64>,
     ) {
         if samples_ns.is_empty() {
             return;
         }
 
-        samples_ns.sort_unstable();
-
         let key = (device_name.clone(), os_version.clone());
         let device = self.devices.entry(key).or_insert_with(|| PlotDeviceSamplesBuilder {
             device_name,
             os_version,
-            samples_ns: Vec::new(),
+            samples_ns: BTreeSet::new(),
         });
         device.samples_ns.extend(samples_ns);
-        device.samples_ns.sort_unstable();
     }
 
     fn finish(self) -> PlotFunctionInput {
@@ -146,7 +223,7 @@ impl PlotFunctionInputBuilder {
                 .map(|device| PlotDeviceSamples {
                     device_name: device.device_name,
                     os_version: device.os_version,
-                    samples_ns: device.samples_ns,
+                    samples_ns: device.samples_ns.into_iter().collect(),
                 })
                 .collect(),
         }
@@ -337,4 +414,9 @@ fn read_json(path: &Path) -> Result<Value> {
         .with_context(|| format!("Failed to read {}", path.display()))?;
     serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse {}", path.display()))
+}
+
+fn write_json(path: &Path, value: Value) {
+    fs::write(path, serde_json::to_vec_pretty(&value).expect("serialize json"))
+        .expect("write json");
 }
