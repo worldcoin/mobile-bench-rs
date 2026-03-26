@@ -6,6 +6,7 @@ This guide migrates custom BrowserStack benchmark CI flows to the standardized `
 
 - One-command orchestration via `cargo mobench ci run`
 - Stable contract outputs: `summary.json`, `summary.md`, `results.csv`
+- Optional local plot artifacts under `plots/*.svg`
 - Optional sticky PR comments and deterministic matrix resolution
 
 ## Old -> New Mapping
@@ -30,8 +31,8 @@ This guide migrates custom BrowserStack benchmark CI flows to the standardized `
 | Fixture setup | `cargo mobench fixture init` |
 | Fixture verify | `cargo mobench fixture verify --config bench-config.toml` |
 | Fixture cache key | `cargo mobench fixture cache-key --config bench-config.toml --format json` |
-| CI orchestration | `cargo mobench ci run --target both --function sample_fns::fibonacci --local-only` |
-| Summary markdown | `cargo mobench report summarize --summary target/mobench/ci/summary.json` |
+| CI orchestration | `cargo mobench ci run --target both --function sample_fns::fibonacci --local-only --plots auto` |
+| Summary markdown | `cargo mobench report summarize --summary target/mobench/ci/summary.json --plots auto` |
 | Sticky PR comment | `cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json --publish` |
 
 ## Minimal Reference Workflow
@@ -74,6 +75,14 @@ jobs:
 - `command` is allow-listed to `cargo mobench ci run` and `cargo mobench run`.
 - `ci` only appends `--ci` when `command: cargo mobench run`.
 - Prefer multiline `run-args` with explicit quoting for values containing spaces.
+- If you call `.github/workflows/reusable-bench.yml` directly, the caller workflow should grant `actions: read` in addition to any PR-comment permissions so baseline artifact lookup can read prior workflow runs.
+
+### Summary output notes
+
+- `summary.json`, `summary.md`, and `results.csv` remain the stable required outputs.
+- `plots/*.svg` is additive and only appears when local plot rendering is enabled and a Python + Matplotlib runtime is available, or when `--plots require` is used successfully.
+- Local markdown summaries now include `cpu_total_ms` and `peak_memory_kb` instead of percentage/average-RAM columns.
+- The reusable workflow attempts to compare against the latest successful default-branch run by downloading its per-platform `summary.json` artifacts before calling `ci check-run`.
 
 ## Compatibility Notes
 

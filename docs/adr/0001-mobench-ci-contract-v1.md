@@ -20,6 +20,7 @@ Included:
 - error taxonomy categories for CI-oriented validation
 - deterministic device-matrix override semantics (`--device-matrix` over config value when both are provided)
 - baseline comparison safety when baseline and candidate paths overlap
+- additive local summary plot artifacts and resource-usage fields that do not modify the required v1 output set
 
 Excluded (non-goals):
 - provider-specific API payloads
@@ -47,9 +48,10 @@ Excluded (non-goals):
 - v1 default reporting mode is descriptive-only.
 - Threshold gating remains explicit and opt-in.
 
-### Baseline default (v1.1 planning)
+### Baseline default
 
-- Default baseline source is previous successful run, with pinned artifacts supported explicitly.
+- The reusable workflow resolves the baseline from the latest successful default-branch run when matching artifacts are available.
+- Pinned baseline artifacts remain supported explicitly through `--baseline`.
 
 ### Minimum supported CI environments/toolchains
 
