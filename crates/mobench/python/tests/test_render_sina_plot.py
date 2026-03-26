@@ -227,6 +227,50 @@ class LayoutTests(unittest.TestCase):
         second_xs = fake_pyplot.axes.scatter_calls[1][0]
         self.assertLess(max(first_xs), min(second_xs))
 
+    def test_render_plot_centers_median_marker_on_adaptive_device_center(self):
+        mod = load_module()
+        dense_samples = [10_000_000] * 30
+        spec = {
+            "function_name": "nullifier-proof-generation",
+            "function_label": "Nullifier proof generation",
+            "target": "benchmark-1",
+            "devices": [
+                {
+                    "device_name": "iPhone 15",
+                    "os_version": "iOS 17.4",
+                    "samples_ns": dense_samples,
+                },
+                {
+                    "device_name": "Pixel 8",
+                    "os_version": "Android 15",
+                    "samples_ns": dense_samples,
+                },
+            ],
+        }
+
+        fake_pyplot = FakePyplot()
+        fake_matplotlib = types.ModuleType("matplotlib")
+        fake_matplotlib.__path__ = []
+        fake_matplotlib.use = lambda backend: None
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "matplotlib": fake_matplotlib,
+                "matplotlib.pyplot": fake_pyplot,
+            },
+        ):
+            mod.render_plot(spec, pathlib.Path("/tmp/out.svg"))
+
+        self.assertEqual(len(fake_pyplot.axes.scatter_calls), 2)
+        self.assertEqual(len(fake_pyplot.axes.hline_calls), 2)
+        for scatter_call, hline_call in zip(
+            fake_pyplot.axes.scatter_calls, fake_pyplot.axes.hline_calls
+        ):
+            xs, _, _ = scatter_call
+            _, xmin, xmax, _ = hline_call
+            expected_center = sum(xs) / len(xs)
+            self.assertAlmostEqual((xmin + xmax) / 2.0, expected_center, places=6)
+
 
 @unittest.skipIf(importlib.util.find_spec("matplotlib") is None, "matplotlib not installed")
 class MatplotlibSmokeTests(unittest.TestCase):
