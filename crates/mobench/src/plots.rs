@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -352,19 +352,25 @@ pub fn extract_function_plot_inputs_from_results_dir(dir: &Path) -> Result<Vec<P
 
     collect_from_results_dir(dir, &mut builders, &mut nested_source_keys)?;
 
-    let mut plots = builders
-        .into_values()
-        .map(PlotFunctionInputBuilder::finish)
-        .collect::<Vec<_>>();
-    plots.sort_by(|left, right| {
-        left.function_name
-            .cmp(&right.function_name)
-            .then(left.target.cmp(&right.target))
-    });
-    Ok(plots)
+    Ok(finish_plot_inputs(builders))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub fn extract_function_plot_inputs_from_output_value(
+    value: &Value,
+) -> Result<Vec<PlotFunctionInput>> {
+    let mut builders = BTreeMap::new();
+    let mut nested_source_keys = BTreeSet::new();
+    collect_from_output_value(
+        value,
+        Path::new("summary.json"),
+        &mut builders,
+        &mut nested_source_keys,
+    )?;
+    Ok(finish_plot_inputs(builders))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PlotMode {
     Auto,
     Off,
@@ -382,6 +388,7 @@ pub struct RendererAssets {
 pub struct RenderedPlot {
     pub function_name: String,
     pub function_label: String,
+    pub target: String,
     pub output_path: PathBuf,
     pub relative_path: PathBuf,
 }
@@ -511,6 +518,7 @@ fn render_single_plot(
                 return Ok(RenderedPlot {
                     function_name: input.function_name.clone(),
                     function_label: input.function_label.clone(),
+                    target: input.target.clone(),
                     output_path,
                     relative_path,
                 });
@@ -781,6 +789,47 @@ fn collect_from_results_dir(
     }
 
     Ok(())
+}
+
+fn collect_from_output_value(
+    value: &Value,
+    path: &Path,
+    builders: &mut BTreeMap<(String, String), PlotFunctionInputBuilder>,
+    nested_source_keys: &mut BTreeSet<PlotEntryKey>,
+) -> Result<()> {
+    collect_from_value(value, path, false, builders, nested_source_keys)?;
+
+    if let Some(functions) = value
+        .get("functions")
+        .and_then(|functions| functions.as_object())
+    {
+        for entry in functions.values() {
+            collect_from_output_value(entry, path, builders, nested_source_keys)?;
+        }
+    }
+
+    if let Some(targets) = value.get("targets").and_then(|targets| targets.as_object()) {
+        for entry in targets.values() {
+            collect_from_output_value(entry, path, builders, nested_source_keys)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn finish_plot_inputs(
+    builders: BTreeMap<(String, String), PlotFunctionInputBuilder>,
+) -> Vec<PlotFunctionInput> {
+    let mut plots = builders
+        .into_values()
+        .map(PlotFunctionInputBuilder::finish)
+        .collect::<Vec<_>>();
+    plots.sort_by(|left, right| {
+        left.target
+            .cmp(&right.target)
+            .then(left.function_name.cmp(&right.function_name))
+    });
+    plots
 }
 
 fn collect_from_value(

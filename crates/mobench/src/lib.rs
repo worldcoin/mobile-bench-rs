@@ -633,6 +633,8 @@ enum ReportCommand {
         summary: PathBuf,
         #[arg(long, help = "Write markdown output to file")]
         output: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = plots::PlotMode::Auto)]
+        plots: plots::PlotMode,
     },
     /// Generate/publish sticky GitHub PR comment from summary output.
     Github {
@@ -736,6 +738,8 @@ struct CiRunArgs {
     request_command: Option<String>,
     #[arg(long, help = "Metadata: git ref/sha for this mobench invocation")]
     mobench_ref: Option<String>,
+    #[arg(long, value_enum, default_value_t = plots::PlotMode::Auto)]
+    plots: plots::PlotMode,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1053,6 +1057,24 @@ struct BenchmarkStats {
     p95_ns: Option<u64>,
     min_ns: Option<u64>,
     max_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource_usage: Option<BenchmarkResourceUsage>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct BenchmarkResourceUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cpu_total_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_memory_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_pss_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    private_dirty_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_heap_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    java_heap_kb: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1317,7 +1339,7 @@ pub fn run() -> Result<()> {
                         if !progress {
                             println!("\u{2713} Built iOS xcframework at {:?}", xcframework);
                         }
-                        let ios_xcuitest = spec.ios_xcuitest.clone();
+                        let mut ios_xcuitest = spec.ios_xcuitest.clone();
 
                         if spec.devices.is_empty() {
                             if !progress {
@@ -1328,10 +1350,21 @@ pub fn run() -> Result<()> {
                                 println!("[dry-run] Skipping BrowserStack upload/run for iOS");
                             }
                         } else {
+                            if ios_xcuitest.as_ref().is_some_and(|artifacts| {
+                                uses_managed_ios_xcuitest_artifacts(&layout, artifacts)
+                            }) {
+                                println!(
+                                    "📦 Packaging iOS BrowserStack artifacts with current bench_spec..."
+                                );
+                                let packaged = package_ios_xcuitest_artifacts(&layout, release)?;
+                                println!("  ✓ IPA: {}", packaged.app.display());
+                                println!("  ✓ XCUITest: {}", packaged.test_suite.display());
+                                ios_xcuitest = Some(packaged);
+                            }
                             if progress {
                                 println!("[3/4] Uploading to BrowserStack...");
                             }
-                            let xcui = spec.ios_xcuitest.as_ref().context(
+                            let xcui = ios_xcuitest.as_ref().context(
                                 "iOS XCUITest artifacts required when targeting BrowserStack devices; provide --ios-app and --ios-test-suite or set ios_xcuitest in the config",
                             )?;
                             let run = trigger_browserstack_xcuitest(&spec, xcui)?;
@@ -1494,7 +1527,12 @@ pub fn run() -> Result<()> {
             }
 
             run_summary.summary = build_summary(&run_summary)?;
-            write_summary(&run_summary, &summary_paths, summary_csv)?;
+            write_summary(
+                &run_summary,
+                &summary_paths,
+                summary_csv,
+                plots::PlotMode::Off,
+            )?;
 
             let mut compare_report = None;
             let mut regression_findings: Vec<RegressionFinding> = Vec::new();
@@ -1795,8 +1833,12 @@ pub fn run() -> Result<()> {
             }
         },
         Command::Report { command } => match command {
-            ReportCommand::Summarize { summary, output } => {
-                cmd_report_summarize(&summary, output.as_deref())?;
+            ReportCommand::Summarize {
+                summary,
+                output,
+                plots,
+            } => {
+                cmd_report_summarize(&summary, output.as_deref(), plots)?;
             }
             ReportCommand::Github {
                 pr,
@@ -2213,6 +2255,8 @@ pub struct RunRequest {
     pub progress: bool,
     /// Output directory for CI contract files.
     pub output_dir: PathBuf,
+    /// Plot rendering mode for local markdown summaries.
+    pub plots: plots::PlotMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2401,7 +2445,49 @@ fn resolve_ci_functions(args: &CiRunArgs) -> Result<Vec<String>> {
 }
 
 fn ci_function_slug(function: &str) -> String {
-    function.replace("::", "_").replace('/', "-")
+    let mut slug = String::new();
+    let mut chars = function.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            ':' if matches!(chars.peek(), Some(':')) => {
+                chars.next();
+                slug.push('_');
+            }
+            '_' => slug.push_str("__"),
+            '/' => slug.push_str("_slash_"),
+            '-' => slug.push('-'),
+            ch if ch.is_ascii_alphanumeric() => slug.push(ch),
+            ch => slug.push_str(&format!("_x{:02x}", ch as u32)),
+        }
+    }
+
+    slug
+}
+
+fn find_baseline_benchmark<'a>(
+    baseline_report: &'a summarize::SummarizeReport,
+    platform_name: &str,
+    device_name: &str,
+    device_os_version: &str,
+    benchmark_name: &str,
+) -> Option<&'a summarize::BenchmarkResult> {
+    baseline_report
+        .platforms
+        .iter()
+        .find(|platform| {
+            platform.platform == platform_name
+                && summarize::device_names_match(&platform.device.name, device_name)
+                && (device_os_version == "unknown"
+                    || platform.device.os_version == "unknown"
+                    || platform.device.os_version == device_os_version)
+        })
+        .and_then(|platform| {
+            platform
+                .benchmarks
+                .iter()
+                .find(|benchmark| benchmark.name == benchmark_name)
+        })
 }
 
 fn summary_report_from_value(value: &Value) -> Result<SummaryReport> {
@@ -2597,19 +2683,11 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
     let root_summary_md = args.output_dir.join("summary.md");
     let root_results_csv = args.output_dir.join("results.csv");
 
-    let mut merged_markdown_sections = Vec::new();
     let mut merged_csv_rows = Vec::new();
     let mut merged_header: Option<String> = None;
 
     for (target_name, entry) in &merged_targets {
         let summary = summary_report_from_value(entry)?;
-        let markdown = render_markdown_summary(&summary);
-        if merged_targets.len() == 1 {
-            merged_markdown_sections.push(markdown);
-        } else {
-            merged_markdown_sections.push(format!("## {}\n\n{}", target_name, markdown));
-        }
-
         let csv = render_csv_summary(&summary);
         let mut lines = csv.lines();
         if let Some(header) = lines.next()
@@ -2624,9 +2702,6 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
             merged_csv_rows.push(format!("{target_name},{line}"));
         }
     }
-
-    let merged_markdown = merged_markdown_sections.join("\n\n");
-    write_file(&root_summary_md, merged_markdown.as_bytes())?;
 
     let mut merged_csv = String::new();
     if let Some(header) = merged_header {
@@ -2673,6 +2748,12 @@ fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
         &root_summary_json,
         serde_json::to_string_pretty(&merged_summary)?.as_bytes(),
     )?;
+    let merged_markdown = render_summary_markdown_from_output_with_plots(
+        &merged_summary,
+        &args.output_dir,
+        args.plots,
+    )?;
+    write_file(&root_summary_md, merged_markdown.as_bytes())?;
 
     println!("CI outputs ready:");
     println!("  - {}", root_summary_json.display());
@@ -2818,12 +2899,13 @@ fn cmd_ci_check_run(args: CiCheckRunArgs) -> Result<()> {
 
         for platform in &report.platforms {
             for bench in &platform.benchmarks {
-                let baseline_bench = baseline_report
-                    .platforms
-                    .iter()
-                    .filter(|p| p.platform == platform.platform)
-                    .flat_map(|p| &p.benchmarks)
-                    .find(|b| b.name == bench.name);
+                let baseline_bench = find_baseline_benchmark(
+                    &baseline_report,
+                    &platform.platform,
+                    &platform.device.name,
+                    &platform.device.os_version,
+                    &bench.name,
+                );
 
                 if let Some(base) = baseline_bench {
                     if base.timing.avg_ms > 0.0 {
@@ -2922,6 +3004,7 @@ fn cmd_ci_run_single(
         fetch_timeout_secs: args.fetch_timeout_secs,
         progress: args.progress,
         output_dir: output_dir.to_path_buf(),
+        plots: args.plots,
     })?;
 
     let summary_json = result.report.summary_json;
@@ -3249,7 +3332,7 @@ fn resolve_run_spec(
     ios_app: Option<PathBuf>,
     ios_test_suite: Option<PathBuf>,
     local_only: bool,
-    release: bool,
+    _release: bool,
     dry_run: bool,
 ) -> Result<RunSpec> {
     if let Some(cfg_path) = config {
@@ -3315,20 +3398,10 @@ fn resolve_run_spec(
         && !resolved_devices.is_empty()
         && ios_xcuitest.is_none()
     {
-        let artifacts = if dry_run {
+        if dry_run {
             println!("📦 [dry-run] Would auto-package iOS artifacts for BrowserStack...");
-            IosXcuitestArtifacts {
-                app: layout.output_dir.join("ios/BenchRunner.ipa"),
-                test_suite: layout.output_dir.join("ios/BenchRunnerUITests.zip"),
-            }
-        } else {
-            println!("📦 Auto-packaging iOS artifacts for BrowserStack...");
-            let artifacts = package_ios_xcuitest_artifacts(layout, release)?;
-            println!("  ✓ IPA: {}", artifacts.app.display());
-            println!("  ✓ XCUITest: {}", artifacts.test_suite.display());
-            artifacts
-        };
-        Some(artifacts)
+        }
+        Some(default_ios_xcuitest_artifacts(layout))
     } else {
         ios_xcuitest
     };
@@ -3462,6 +3535,45 @@ fn package_ios_xcuitest_artifacts(
         .package_xcuitest("BenchRunner")
         .context("Failed to package iOS XCUITest runner for BrowserStack")?;
     Ok(IosXcuitestArtifacts { app, test_suite })
+}
+
+fn default_ios_xcuitest_artifacts(layout: &ResolvedProjectLayout) -> IosXcuitestArtifacts {
+    IosXcuitestArtifacts {
+        app: layout.output_dir.join("ios/BenchRunner.ipa"),
+        test_suite: layout.output_dir.join("ios/BenchRunnerUITests.zip"),
+    }
+}
+
+fn legacy_ios_xcuitest_artifacts(layout: &ResolvedProjectLayout) -> IosXcuitestArtifacts {
+    IosXcuitestArtifacts {
+        app: layout.project_root.join("target/ios/BenchRunner.ipa"),
+        test_suite: layout
+            .project_root
+            .join("target/ios/BenchRunnerUITests.zip"),
+    }
+}
+
+fn resolve_project_relative_path(project_root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project_root.join(path)
+    }
+}
+
+fn uses_managed_ios_xcuitest_artifacts(
+    layout: &ResolvedProjectLayout,
+    artifacts: &IosXcuitestArtifacts,
+) -> bool {
+    let app = resolve_project_relative_path(&layout.project_root, &artifacts.app);
+    let test_suite = resolve_project_relative_path(&layout.project_root, &artifacts.test_suite);
+
+    [
+        default_ios_xcuitest_artifacts(layout),
+        legacy_ios_xcuitest_artifacts(layout),
+    ]
+    .into_iter()
+    .any(|managed| app == managed.app && test_suite == managed.test_suite)
 }
 
 #[derive(Debug, Clone)]
@@ -4001,6 +4113,10 @@ fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
     if let Some(results) = &run_summary.benchmark_results {
         for (device, entries) in results {
             let mut benchmarks = Vec::new();
+            let perf_metrics = run_summary
+                .performance_metrics
+                .as_ref()
+                .and_then(|metrics| metrics.get(device));
             for entry in entries {
                 let function = entry
                     .get("function")
@@ -4022,6 +4138,7 @@ fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
                     p95_ns: stats.as_ref().map(|s| s.p95_ns),
                     min_ns: stats.as_ref().map(|s| s.min_ns),
                     max_ns: stats.as_ref().map(|s| s.max_ns),
+                    resource_usage: extract_benchmark_resource_usage(entry, perf_metrics),
                 });
             }
 
@@ -4051,13 +4168,21 @@ fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
     })
 }
 
-fn write_summary(summary: &RunSummary, paths: &SummaryPaths, summary_csv: bool) -> Result<()> {
+fn write_summary(
+    summary: &RunSummary,
+    paths: &SummaryPaths,
+    summary_csv: bool,
+    plot_mode: plots::PlotMode,
+) -> Result<()> {
     let json = serde_json::to_string_pretty(summary)?;
     ensure_parent_dir(&paths.json)?;
     write_file(&paths.json, json.as_bytes())?;
     println!("Wrote run summary to {:?}", paths.json);
 
-    let markdown = render_markdown_summary(&summary.summary);
+    let summary_value = serde_json::to_value(summary).context("serializing run summary")?;
+    let markdown_dir = paths.markdown.parent().unwrap_or_else(|| Path::new("."));
+    let markdown =
+        render_summary_markdown_from_output_with_plots(&summary_value, markdown_dir, plot_mode)?;
     ensure_parent_dir(&paths.markdown)?;
     write_file(&paths.markdown, markdown.as_bytes())?;
     println!("Wrote markdown summary to {:?}", paths.markdown);
@@ -4646,12 +4771,20 @@ struct GitHubIssueComment {
     body: String,
 }
 
-fn cmd_report_summarize(summary_path: &Path, output: Option<&Path>) -> Result<String> {
+fn cmd_report_summarize(
+    summary_path: &Path,
+    output: Option<&Path>,
+    plot_mode: plots::PlotMode,
+) -> Result<String> {
     let contents = fs::read_to_string(summary_path)
         .with_context(|| format!("reading summary file {}", summary_path.display()))?;
     let value: Value = serde_json::from_str(&contents)
         .with_context(|| format!("parsing summary file {}", summary_path.display()))?;
-    let markdown = render_summary_markdown_from_output(&value)?;
+    let markdown = render_summary_markdown_from_output_with_plots(
+        &value,
+        &summary_markdown_output_dir(summary_path, output),
+        plot_mode,
+    )?;
 
     if let Some(path) = output {
         ensure_parent_dir(path)?;
@@ -4732,6 +4865,116 @@ fn render_summary_markdown_from_output(value: &Value) -> Result<String> {
     let parsed: SummaryReport =
         serde_json::from_value(value.clone()).context("parsing summary report")?;
     Ok(render_markdown_summary(&parsed))
+}
+
+fn render_summary_markdown_from_output_with_plots(
+    value: &Value,
+    output_dir: &Path,
+    plot_mode: plots::PlotMode,
+) -> Result<String> {
+    render_summary_markdown_from_output_with_plots_using_python(value, output_dir, plot_mode, None)
+}
+
+fn render_summary_markdown_from_output_with_plots_using_python(
+    value: &Value,
+    output_dir: &Path,
+    plot_mode: plots::PlotMode,
+    python_override: Option<&Path>,
+) -> Result<String> {
+    let plot_inputs = plots::extract_function_plot_inputs_from_output_value(value)?;
+    let rendered_plots =
+        plots::render_plot_artifacts(&plot_inputs, output_dir, plot_mode, python_override)?;
+
+    if let Some(summary) = value.get("summary") {
+        let parsed: SummaryReport =
+            serde_json::from_value(summary.clone()).context("parsing summary report")?;
+        let rendered_refs = rendered_plots.iter().collect::<Vec<_>>();
+        return Ok(append_plot_links_to_markdown(
+            render_markdown_summary(&parsed),
+            &rendered_refs,
+        ));
+    }
+
+    if let Some(targets) = value.get("targets").and_then(|v| v.as_object()) {
+        let mut target_names: Vec<String> = targets.keys().cloned().collect();
+        target_names.sort();
+
+        let mut sections = Vec::new();
+        for name in target_names {
+            let Some(entry) = targets.get(&name) else {
+                continue;
+            };
+            let summary_value = entry
+                .get("summary")
+                .cloned()
+                .unwrap_or_else(|| entry.clone());
+            let parsed: SummaryReport =
+                serde_json::from_value(summary_value).with_context(|| {
+                    format!("parsing summary report for target `{name}` in merged output")
+                })?;
+            let rendered_refs = rendered_plots
+                .iter()
+                .filter(|plot| plot.target == name)
+                .collect::<Vec<_>>();
+            sections.push(format!(
+                "## {name}\n\n{}",
+                append_plot_links_to_markdown(render_markdown_summary(&parsed), &rendered_refs)
+            ));
+        }
+        if !sections.is_empty() {
+            return Ok(sections.join("\n\n"));
+        }
+    }
+
+    let parsed: SummaryReport =
+        serde_json::from_value(value.clone()).context("parsing summary report")?;
+    let rendered_refs = rendered_plots.iter().collect::<Vec<_>>();
+    Ok(append_plot_links_to_markdown(
+        render_markdown_summary(&parsed),
+        &rendered_refs,
+    ))
+}
+
+fn append_plot_links_to_markdown(
+    mut markdown: String,
+    rendered_plots: &[&plots::RenderedPlot],
+) -> String {
+    if rendered_plots.is_empty() {
+        return markdown;
+    }
+
+    if !markdown.ends_with('\n') {
+        markdown.push('\n');
+    }
+    markdown.push('\n');
+    markdown.push_str("## Device Comparison Plots\n\n");
+
+    for plot in rendered_plots {
+        let _ = writeln!(markdown, "### {}", plot.function_label);
+        let _ = writeln!(
+            markdown,
+            "![{}]({})",
+            plot.function_label,
+            plot.relative_path.display()
+        );
+        let _ = writeln!(markdown);
+    }
+
+    markdown
+}
+
+fn summary_markdown_output_dir(summary_path: &Path, output: Option<&Path>) -> PathBuf {
+    output
+        .and_then(|path| path.parent())
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            summary_path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+        })
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn upsert_github_pr_comment(pr_number: &str, marker: &str, body: &str) -> Result<()> {
@@ -4820,8 +5063,88 @@ fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
             p95_ns: Some(stats.p95_ns),
             min_ns: Some(stats.min_ns),
             max_ns: Some(stats.max_ns),
+            resource_usage: None,
         }],
     })
+}
+
+impl BenchmarkResourceUsage {
+    fn is_empty(&self) -> bool {
+        self.cpu_total_ms.is_none()
+            && self.peak_memory_kb.is_none()
+            && self.total_pss_kb.is_none()
+            && self.private_dirty_kb.is_none()
+            && self.native_heap_kb.is_none()
+            && self.java_heap_kb.is_none()
+    }
+}
+
+fn json_value_to_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|v| u64::try_from(v).ok()))
+        .or_else(|| {
+            value
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(|v| v.round() as u64)
+        })
+}
+
+fn raw_peak_memory_kb(
+    total_pss_kb: Option<u64>,
+    private_dirty_kb: Option<u64>,
+    native_heap_kb: Option<u64>,
+    java_heap_kb: Option<u64>,
+) -> Option<u64> {
+    total_pss_kb
+        .or(private_dirty_kb)
+        .or_else(|| match (native_heap_kb, java_heap_kb) {
+            (Some(native), Some(java)) => Some(native + java),
+            (Some(native), None) => Some(native),
+            (None, Some(java)) => Some(java),
+            (None, None) => None,
+        })
+}
+
+fn extract_benchmark_resource_usage(
+    entry: &Value,
+    perf_metrics: Option<&browserstack::PerformanceMetrics>,
+) -> Option<BenchmarkResourceUsage> {
+    let resources = entry.get("resources");
+    let cpu_total_ms = resources
+        .and_then(|res| res.get("elapsed_cpu_ms"))
+        .and_then(json_value_to_u64);
+    let total_pss_kb = resources
+        .and_then(|res| res.get("total_pss_kb"))
+        .and_then(json_value_to_u64);
+    let private_dirty_kb = resources
+        .and_then(|res| res.get("private_dirty_kb"))
+        .and_then(json_value_to_u64);
+    let native_heap_kb = resources
+        .and_then(|res| res.get("native_heap_kb"))
+        .and_then(json_value_to_u64);
+    let java_heap_kb = resources
+        .and_then(|res| res.get("java_heap_kb"))
+        .and_then(json_value_to_u64);
+
+    let peak_memory_kb = perf_metrics
+        .and_then(|metrics| metrics.memory.as_ref())
+        .map(|memory| (memory.peak_mb * 1024.0).round() as u64)
+        .or_else(|| {
+            raw_peak_memory_kb(total_pss_kb, private_dirty_kb, native_heap_kb, java_heap_kb)
+        });
+
+    let resource_usage = BenchmarkResourceUsage {
+        cpu_total_ms,
+        peak_memory_kb,
+        total_pss_kb,
+        private_dirty_kb,
+        native_heap_kb,
+        java_heap_kb,
+    };
+
+    (!resource_usage.is_empty()).then_some(resource_usage)
 }
 
 #[derive(Clone, Debug)]
@@ -7535,7 +7858,43 @@ fn check_xcodegen() -> PrereqCheck {
 mod tests {
     use super::*;
     use jsonschema::JSONSchema;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    pub(crate) fn write_fake_plot_python(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("fake-python");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  exit 0
+fi
+
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+
+mkdir -p "$(dirname "$output")"
+printf '<svg>ok</svg>' > "$output"
+"#,
+        )
+        .expect("write fake python");
+
+        let mut permissions = std::fs::metadata(&path)
+            .expect("fake python metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).expect("set fake python perms");
+        path
+    }
 
     fn write_custom_layout_project(temp_dir: &TempDir) -> (PathBuf, PathBuf) {
         let project_root = temp_dir.path().to_path_buf();
@@ -7969,20 +8328,22 @@ project = "proj"
     }
 
     #[test]
-    fn ios_requires_artifacts_for_browserstack() {
+    fn ios_defers_packaging_browserstack_artifacts_until_run_time() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
         let layout = resolve_project_layout(ProjectLayoutOptions {
-            start_dir: None,
+            start_dir: Some(project_root.as_path()),
             project_root: None,
             crate_path: None,
             config_path: None,
         })
-        .unwrap();
+        .expect("resolve layout");
         let spec = resolve_run_spec(
             MobileTarget::Ios,
-            "sample_fns::fibonacci".into(),
+            "zk_mobile_bench::bench_query_proof_generation".into(),
             1,
             0,
-            vec!["iphone".into()],
+            vec!["iPhone 15".into()],
             &layout,
             None,
             None,
@@ -7993,14 +8354,49 @@ project = "proj"
             false, // release
             false,
         )
-        .expect("should auto-package iOS artifacts when missing");
+        .expect("should prepare iOS BrowserStack artifact paths");
         let ios_artifacts = spec
             .ios_xcuitest
-            .expect("iOS artifacts should be populated");
-        assert!(ios_artifacts.app.exists(), "iOS app artifact missing");
+            .expect("iOS artifact paths should be populated");
+        assert_eq!(
+            ios_artifacts.app,
+            layout.output_dir.join("ios/BenchRunner.ipa")
+        );
         assert!(
-            ios_artifacts.test_suite.exists(),
-            "iOS test suite artifact missing"
+            ios_artifacts
+                .test_suite
+                .ends_with(Path::new("target/mobench/ios/BenchRunnerUITests.zip"))
+        );
+        assert!(
+            !ios_artifacts.app.exists(),
+            "iOS app artifact should not be packaged before the current bench_spec is persisted"
+        );
+        assert!(
+            !ios_artifacts.test_suite.exists(),
+            "iOS test suite should not be packaged before the current bench_spec is persisted"
+        );
+    }
+
+    #[test]
+    fn ios_managed_artifact_detection_accepts_config_template_paths() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve layout");
+
+        let config_template_artifacts = IosXcuitestArtifacts {
+            app: PathBuf::from("target/ios/BenchRunner.ipa"),
+            test_suite: PathBuf::from("target/ios/BenchRunnerUITests.zip"),
+        };
+
+        assert!(
+            uses_managed_ios_xcuitest_artifacts(&layout, &config_template_artifacts),
+            "legacy config template paths should still be treated as mobench-managed artifacts"
         );
     }
 
@@ -8421,6 +8817,80 @@ project = "proj"
             panic!("ci schema validation failed: {}", messages.join(" | "));
         }
     }
+
+    #[test]
+    fn ci_function_slug_distinguishes_ambiguous_paths() {
+        assert_ne!(ci_function_slug("a::b_c"), ci_function_slug("a_b::c"));
+    }
+
+    #[test]
+    fn baseline_lookup_matches_device_row() {
+        let baseline_report = summarize::SummarizeReport {
+            platforms: vec![
+                summarize::PlatformReport {
+                    platform: "android".to_string(),
+                    device: summarize::DeviceInfo {
+                        name: "Google Pixel 6".to_string(),
+                        os: "Android".to_string(),
+                        os_version: "14".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![summarize::BenchmarkResult {
+                        name: "bench_alpha".to_string(),
+                        label: "alpha".to_string(),
+                        timing: summarize::TimingStats {
+                            avg_ms: 100.0,
+                            median_ms: 100.0,
+                            best_ms: 100.0,
+                            worst_ms: 100.0,
+                            p95_ms: 100.0,
+                            std_dev_ms: None,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 5,
+                    warmup: 1,
+                },
+                summarize::PlatformReport {
+                    platform: "android".to_string(),
+                    device: summarize::DeviceInfo {
+                        name: "Samsung Galaxy S24".to_string(),
+                        os: "Android".to_string(),
+                        os_version: "14".to_string(),
+                        chipset: None,
+                        ram_gb: None,
+                    },
+                    benchmarks: vec![summarize::BenchmarkResult {
+                        name: "bench_alpha".to_string(),
+                        label: "alpha".to_string(),
+                        timing: summarize::TimingStats {
+                            avg_ms: 200.0,
+                            median_ms: 200.0,
+                            best_ms: 200.0,
+                            worst_ms: 200.0,
+                            p95_ms: 200.0,
+                            std_dev_ms: None,
+                        },
+                        resource_usage: None,
+                    }],
+                    iterations: 5,
+                    warmup: 1,
+                },
+            ],
+        };
+
+        let baseline = find_baseline_benchmark(
+            &baseline_report,
+            "android",
+            "Samsung Galaxy S24",
+            "14",
+            "bench_alpha",
+        )
+        .expect("matching baseline benchmark");
+
+        assert_eq!(baseline.timing.avg_ms, 200.0);
+    }
 }
 
 #[cfg(test)]
@@ -8569,6 +9039,59 @@ mod ci_merge_tests {
     }
 
     #[test]
+    fn merge_ci_target_runs_preserves_resource_usage() {
+        let runs = BTreeMap::from([
+            (
+                "bench_a".to_string(),
+                json!({
+                    "summary": {
+                        "generated_at": "2026-02-16T00:00:00Z",
+                        "generated_at_unix": 1708041600,
+                        "target": "android",
+                        "function": "bench_a",
+                        "iterations": 3,
+                        "warmup": 1,
+                        "devices": ["Pixel 8-14.0"],
+                        "device_summaries": [{
+                            "device": "Pixel 8-14.0",
+                            "benchmarks": [{
+                                "function": "bench_a",
+                                "samples": 3,
+                                "mean_ns": 100,
+                                "median_ns": 100,
+                                "p95_ns": 100,
+                                "min_ns": 100,
+                                "max_ns": 100,
+                                "resource_usage": {
+                                    "cpu_total_ms": 482,
+                                    "peak_memory_kb": 654321,
+                                    "total_pss_kb": 654321
+                                }
+                            }]
+                        }]
+                    }
+                }),
+            ),
+            (
+                "bench_b".to_string(),
+                sample_run_summary(MobileTarget::Android, "bench_b", "Pixel 8-14.0", 200),
+            ),
+        ]);
+
+        let merged = merge_ci_target_runs(MobileTarget::Android, &runs).expect("merge targets");
+        let benchmarks = merged["summary"]["device_summaries"][0]["benchmarks"]
+            .as_array()
+            .expect("benchmarks");
+        let bench_a = benchmarks
+            .iter()
+            .find(|benchmark| benchmark["function"] == "bench_a")
+            .expect("bench_a");
+
+        assert_eq!(bench_a["resource_usage"]["cpu_total_ms"], 482);
+        assert_eq!(bench_a["resource_usage"]["peak_memory_kb"], 654321);
+    }
+
+    #[test]
     fn render_summary_markdown_from_output_renders_all_functions_from_merged_targets() {
         let ios = merge_ci_target_runs(
             MobileTarget::Ios,
@@ -8606,6 +9129,315 @@ mod ci_merge_tests {
         assert!(markdown.contains("bench_a"));
         assert!(markdown.contains("bench_b"));
         assert!(markdown.contains("bench_c"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn render_summary_markdown_from_output_with_plots_embeds_image_links() {
+        let output = json!({
+            "summary": {
+                "generated_at": "2026-03-25T00:00:00Z",
+                "generated_at_unix": 1_742_862_400_u64,
+                "target": "android",
+                "function": "bench_alpha",
+                "iterations": 3,
+                "warmup": 1,
+                "devices": ["Google Pixel 8-14.0", "iPhone 15-17.4"],
+                "device_summaries": [
+                    {
+                        "device": "Google Pixel 8-14.0",
+                        "benchmarks": [{
+                            "function": "bench_alpha",
+                            "samples": 3,
+                            "mean_ns": 97_u64,
+                            "median_ns": 98_u64,
+                            "p95_ns": 100_u64,
+                            "min_ns": 95_u64,
+                            "max_ns": 100_u64
+                        }]
+                    },
+                    {
+                        "device": "iPhone 15-17.4",
+                        "benchmarks": [{
+                            "function": "bench_alpha",
+                            "samples": 3,
+                            "mean_ns": 82_u64,
+                            "median_ns": 82_u64,
+                            "p95_ns": 84_u64,
+                            "min_ns": 80_u64,
+                            "max_ns": 84_u64
+                        }]
+                    }
+                ]
+            },
+            "benchmark_results": {
+                "Google Pixel 8-14.0": [{
+                    "function": "bench_alpha",
+                    "samples": [95_u64, 98_u64, 100_u64]
+                }],
+                "iPhone 15-17.4": [{
+                    "function": "bench_alpha",
+                    "samples": [80_u64, 82_u64, 84_u64]
+                }]
+            }
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_python = crate::tests::write_fake_plot_python(dir.path());
+
+        let markdown = render_summary_markdown_from_output_with_plots_using_python(
+            &output,
+            dir.path(),
+            plots::PlotMode::Require,
+            Some(&fake_python),
+        )
+        .expect("render markdown with plots");
+
+        assert!(markdown.contains("## Device Comparison Plots"));
+        assert!(markdown.contains("![alpha](plots/alpha.svg)"));
+        assert!(dir.path().join("plots/alpha.svg").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn render_summary_markdown_from_output_with_plots_deduplicates_across_targets() {
+        let merged = json!({
+            "targets": {
+                "android": {
+                    "summary": {
+                        "generated_at": "2026-03-25T00:00:00Z",
+                        "generated_at_unix": 1_742_862_400_u64,
+                        "target": "android",
+                        "function": "bench_alpha",
+                        "iterations": 3,
+                        "warmup": 1,
+                        "devices": ["Google Pixel 8-14.0"],
+                        "device_summaries": [{
+                            "device": "Google Pixel 8-14.0",
+                            "benchmarks": [{
+                                "function": "bench_alpha",
+                                "samples": 3,
+                                "mean_ns": 97_u64,
+                                "median_ns": 98_u64,
+                                "p95_ns": 100_u64,
+                                "min_ns": 95_u64,
+                                "max_ns": 100_u64
+                            }]
+                        }]
+                    },
+                    "functions": {
+                        "bench_alpha": {
+                            "summary": {
+                                "generated_at": "2026-03-25T00:00:00Z",
+                                "generated_at_unix": 1_742_862_400_u64,
+                                "target": "android",
+                                "function": "bench_alpha",
+                                "iterations": 3,
+                                "warmup": 1,
+                                "devices": ["Google Pixel 8-14.0"],
+                                "device_summaries": [{
+                                    "device": "Google Pixel 8-14.0",
+                                    "benchmarks": [{
+                                        "function": "bench_alpha",
+                                        "samples": 3,
+                                        "mean_ns": 97_u64,
+                                        "median_ns": 98_u64,
+                                        "p95_ns": 100_u64,
+                                        "min_ns": 95_u64,
+                                        "max_ns": 100_u64
+                                    }]
+                                }]
+                            },
+                            "benchmark_results": {
+                                "Google Pixel 8-14.0": [{
+                                    "function": "bench_alpha",
+                                    "samples": [95_u64, 98_u64, 100_u64]
+                                }]
+                            }
+                        }
+                    }
+                },
+                "ios": {
+                    "summary": {
+                        "generated_at": "2026-03-25T00:00:00Z",
+                        "generated_at_unix": 1_742_862_400_u64,
+                        "target": "ios",
+                        "function": "bench_alpha",
+                        "iterations": 3,
+                        "warmup": 1,
+                        "devices": ["iPhone 15-17.4"],
+                        "device_summaries": [{
+                            "device": "iPhone 15-17.4",
+                            "benchmarks": [{
+                                "function": "bench_alpha",
+                                "samples": 3,
+                                "mean_ns": 82_u64,
+                                "median_ns": 82_u64,
+                                "p95_ns": 84_u64,
+                                "min_ns": 80_u64,
+                                "max_ns": 84_u64
+                            }]
+                        }]
+                    },
+                    "functions": {
+                        "bench_alpha": {
+                            "summary": {
+                                "generated_at": "2026-03-25T00:00:00Z",
+                                "generated_at_unix": 1_742_862_400_u64,
+                                "target": "ios",
+                                "function": "bench_alpha",
+                                "iterations": 3,
+                                "warmup": 1,
+                                "devices": ["iPhone 15-17.4"],
+                                "device_summaries": [{
+                                    "device": "iPhone 15-17.4",
+                                    "benchmarks": [{
+                                        "function": "bench_alpha",
+                                        "samples": 3,
+                                        "mean_ns": 82_u64,
+                                        "median_ns": 82_u64,
+                                        "p95_ns": 84_u64,
+                                        "min_ns": 80_u64,
+                                        "max_ns": 84_u64
+                                    }]
+                                }]
+                            },
+                            "benchmark_results": {
+                                "iPhone 15-17.4": [{
+                                    "function": "bench_alpha",
+                                    "samples": [80_u64, 82_u64, 84_u64]
+                                }]
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_python = crate::tests::write_fake_plot_python(dir.path());
+
+        let markdown = render_summary_markdown_from_output_with_plots_using_python(
+            &merged,
+            dir.path(),
+            plots::PlotMode::Require,
+            Some(&fake_python),
+        )
+        .expect("render merged markdown with plots");
+
+        assert!(markdown.contains("## android"));
+        assert!(markdown.contains("## ios"));
+        assert!(markdown.contains("![alpha](plots/alpha.svg)"));
+        assert!(markdown.contains("![alpha](plots/alpha-ios.svg)"));
+        assert!(dir.path().join("plots/alpha.svg").exists());
+        assert!(dir.path().join("plots/alpha-ios.svg").exists());
+    }
+
+    #[test]
+    fn build_summary_preserves_resource_usage_from_benchmark_results() {
+        let spec = RunSpec {
+            target: MobileTarget::Android,
+            function: "bench_nullifier_proving_only".into(),
+            iterations: 3,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".into()],
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let local_report = json!({});
+        let run_summary = RunSummary {
+            spec: spec.clone(),
+            artifacts: None,
+            local_report,
+            remote_run: None,
+            summary: empty_summary(&spec),
+            benchmark_results: Some(BTreeMap::from([(
+                "Google Pixel 8-14.0".to_string(),
+                vec![json!({
+                    "function": "bench_nullifier_proving_only",
+                    "mean_ns": 125000000_u64,
+                    "samples": [
+                        { "duration_ns": 120000000_u64 },
+                        { "duration_ns": 130000000_u64 }
+                    ],
+                    "resources": {
+                        "elapsed_cpu_ms": 482,
+                        "total_pss_kb": 654321,
+                        "private_dirty_kb": 321000,
+                        "native_heap_kb": 120000,
+                        "java_heap_kb": 45000
+                    }
+                })],
+            )])),
+            performance_metrics: None,
+        };
+
+        let summary = build_summary(&run_summary).expect("build summary");
+        let value = serde_json::to_value(summary).expect("serialize summary");
+        let resource_usage = &value["device_summaries"][0]["benchmarks"][0]["resource_usage"];
+
+        assert_eq!(resource_usage["cpu_total_ms"], 482);
+        assert_eq!(resource_usage["peak_memory_kb"], 654321);
+        assert_eq!(resource_usage["total_pss_kb"], 654321);
+        assert_eq!(resource_usage["private_dirty_kb"], 321000);
+        assert_eq!(resource_usage["native_heap_kb"], 120000);
+        assert_eq!(resource_usage["java_heap_kb"], 45000);
+    }
+
+    #[test]
+    fn build_summary_prefers_browserstack_peak_memory_for_ci_summary() {
+        let spec = RunSpec {
+            target: MobileTarget::Ios,
+            function: "bench_nullifier_proving_only".into(),
+            iterations: 3,
+            warmup: 1,
+            devices: vec!["iPhone 15-17.0".into()],
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let run_summary = RunSummary {
+            spec: spec.clone(),
+            artifacts: None,
+            local_report: json!({}),
+            remote_run: None,
+            summary: empty_summary(&spec),
+            benchmark_results: Some(BTreeMap::from([(
+                "iPhone 15-17.0".to_string(),
+                vec![json!({
+                    "function": "bench_nullifier_proving_only",
+                    "mean_ns": 125000000_u64,
+                    "samples": [
+                        { "duration_ns": 120000000_u64 },
+                        { "duration_ns": 130000000_u64 }
+                    ],
+                    "resources": {
+                        "platform": "ios"
+                    }
+                })],
+            )])),
+            performance_metrics: Some(BTreeMap::from([(
+                "iPhone 15-17.0".to_string(),
+                browserstack::PerformanceMetrics {
+                    sample_count: 1,
+                    memory: Some(browserstack::AggregateMemoryMetrics {
+                        peak_mb: 243.57,
+                        average_mb: 169.45,
+                        min_mb: 169.45,
+                    }),
+                    cpu: Some(browserstack::AggregateCpuMetrics {
+                        peak_percent: 12.52,
+                        average_percent: 5.06,
+                        min_percent: 5.06,
+                    }),
+                    snapshots: Vec::new(),
+                },
+            )])),
+        };
+
+        let summary = build_summary(&run_summary).expect("build summary");
+        let value = serde_json::to_value(summary).expect("serialize summary");
+        let resource_usage = &value["device_summaries"][0]["benchmarks"][0]["resource_usage"];
+
+        assert_eq!(resource_usage["peak_memory_kb"], 249416);
+        assert_eq!(resource_usage["cpu_total_ms"], Value::Null);
     }
 }
 
