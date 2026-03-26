@@ -210,6 +210,12 @@ fn db_query(db: &Database) {
 
 ## Release Notes
 
+### v0.1.24
+
+- Switched BrowserStack device discovery to the unified `app-automate/devices.json` inventory for Android, iOS, and combined device listing.
+- Filtered unified BrowserStack inventory results locally by OS so Espresso resolution stays Android-only and XCUITest resolution stays iOS-only.
+- Added regression coverage for mixed Android+iOS BrowserStack inventories used by device-resolution commands.
+
 ### v0.1.23
 
 - Added Sina-style per-function device comparison plots to local summaries:
