@@ -7,7 +7,7 @@ Run `mobench ci run` in GitHub Actions with caching, Android SDK setup, and arti
 ```yaml
 - uses: ./.github/actions/mobench
   with:
-    command: cargo mobench ci run
+    command: mobench ci run
     run-args: |
       --target android
       --function sample_fns::fibonacci
@@ -25,9 +25,9 @@ Run `mobench ci run` in GitHub Actions with caching, Android SDK setup, and arti
 
 ## Inputs
 
-- `command`: command to invoke. Supported values are `cargo mobench ci run` (default) and `cargo mobench run`.
+- `command`: command to invoke. Supported values are `mobench ci run` (default), `mobench run`, `cargo mobench ci run`, and `cargo mobench run`.
 - `run-args`: arguments passed to `command`. Use quoted values for arguments containing spaces (for example device names).
-- `ci`: append `--ci` only when `command` is exactly `cargo mobench run`; ignored for `cargo mobench ci run`.
+- `ci`: append `--ci` only when `command` is `mobench run` or `cargo mobench run`; ignored for `ci run`.
 - `install-mobench`: install `mobench` with cargo-binstall/cargo install.
 - `mobench-version`: optional version to install.
 - `install-cargo-ndk`: install `cargo-ndk` for Android builds.

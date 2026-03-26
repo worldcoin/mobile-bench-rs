@@ -2,14 +2,14 @@ name: "mobench"
 description: "Run mobile benchmarks with mobench"
 inputs:
   command:
-    description: "Command to invoke (supported: cargo mobench ci run | cargo mobench run)"
+    description: "Command to invoke (supported: mobench ci run | mobench run | cargo mobench ci run | cargo mobench run)"
     required: false
-    default: "cargo mobench ci run"
+    default: "mobench ci run"
   run-args:
     description: "Arguments passed to command (quote values containing spaces)"
     required: true
   ci:
-    description: "Append --ci only when command is cargo mobench run (ignored for ci run)"
+    description: "Append --ci only when command is mobench run or cargo mobench run (ignored for ci run)"
     required: false
     default: "false"
   install-mobench:
@@ -182,11 +182,11 @@ runs:
         export ANDROID_HOME="$ANDROID_SDK_ROOT_INPUT"
         export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT_INPUT/ndk/$NDK_VERSION_INPUT"
         extra_args=()
-        if [ "$MOBENCH_CI" = "true" ] && [ "$MOBENCH_COMMAND" = "cargo mobench run" ]; then
+        if [ "$MOBENCH_CI" = "true" ] && { [ "$MOBENCH_COMMAND" = "cargo mobench run" ] || [ "$MOBENCH_COMMAND" = "mobench run" ]; }; then
           extra_args=(--ci)
         fi
         case "$MOBENCH_COMMAND" in
-          "cargo mobench run"|"cargo mobench ci run")
+          "cargo mobench run"|"cargo mobench ci run"|"mobench run"|"mobench ci run")
             ;;
           *)
             echo "Unsupported command input: $MOBENCH_COMMAND"
@@ -230,7 +230,7 @@ runs:
           echo "GITHUB_TOKEN is empty; skipping sticky comment publish."
           exit 0
         fi
-        cargo mobench report github \
+        mobench report github \
           --pr "$pr_number" \
           --summary target/mobench/ci/summary.json \
           --marker "$PR_COMMENT_MARKER" \
