@@ -241,6 +241,7 @@ impl BrowserStackClient {
             devices: devices.to_vec(),
             device_logs: true,
             disable_animations: true,
+            app_profiling: true,
             build_name: self.project.clone(),
         };
 
@@ -279,6 +280,7 @@ impl BrowserStackClient {
             test_suite: test_suite_url.to_string(),
             devices: devices.to_vec(),
             device_logs: true,
+            app_profiling: true,
             build_name: self.project.clone(),
             // Specify the test method to run (required by BrowserStack for XCUITest)
             only_testing: Some(vec![
@@ -906,6 +908,17 @@ impl BrowserStackClient {
                 }
             }
 
+            if let Ok(app_profiling_v2) = self.get_app_profiling_v2(build_id, &device.session_id) {
+                if app_profiling_v2.sample_count > 0 {
+                    println!("    Found App Profiling v2 metrics");
+                    device_performance_metrics = merge_performance_metrics(
+                        Some(device_performance_metrics),
+                        Some(app_profiling_v2),
+                    )
+                    .unwrap_or_default();
+                }
+            }
+
             if let Some(results) = device_benchmark_results {
                 benchmark_results.insert(device.device.clone(), results);
             }
@@ -950,6 +963,18 @@ impl BrowserStackClient {
         })
     }
 
+    /// Fetch App Profiling v2 metrics for a BrowserStack session.
+    pub fn get_app_profiling_v2(
+        &self,
+        build_id: &str,
+        session_id: &str,
+    ) -> Result<PerformanceMetrics> {
+        let path = format!("/app-automate/builds/{build_id}/sessions/{session_id}/appprofiling/v2");
+        let value = self.get_json(&path)?;
+        parse_app_profiling_v2_response(&value)
+            .with_context(|| format!("parsing App Profiling v2 for session {session_id}"))
+    }
+
     /// Fetch build details with all sessions and performance data.
     pub fn get_build_summary(&self, build_id: &str, platform: &str) -> Result<BuildSummary> {
         let status = match platform {
@@ -967,6 +992,9 @@ impl BrowserStackClient {
                 .device_logs
                 .as_ref()
                 .and_then(|logs| self.extract_performance_metrics(logs).ok());
+            let app_profiling_v2 = self
+                .get_app_profiling_v2(build_id, &device_session.session_id)
+                .ok();
 
             sessions.push(SessionSummary {
                 session_id: device_session.session_id.clone(),
@@ -980,7 +1008,7 @@ impl BrowserStackClient {
                     .map(|d| d.os_version.clone())
                     .unwrap_or_default(),
                 duration_secs: details.as_ref().and_then(|d| d.duration),
-                performance: perf,
+                performance: merge_performance_metrics(perf, app_profiling_v2),
             });
         }
 
@@ -1444,6 +1472,112 @@ impl From<BuildStatusResponse> for BuildStatus {
     }
 }
 
+fn merge_performance_metrics(
+    base: Option<PerformanceMetrics>,
+    preferred: Option<PerformanceMetrics>,
+) -> Option<PerformanceMetrics> {
+    match (base, preferred) {
+        (None, None) => None,
+        (Some(base), None) => Some(base),
+        (None, Some(preferred)) => Some(preferred),
+        (Some(mut base), Some(preferred)) => {
+            if preferred.memory.is_some() {
+                base.memory = preferred.memory;
+            }
+            if preferred.cpu.is_some() {
+                base.cpu = preferred.cpu;
+            }
+            if !preferred.snapshots.is_empty() {
+                base.snapshots = preferred.snapshots;
+            }
+            base.sample_count = base.sample_count.max(preferred.sample_count);
+            Some(base)
+        }
+    }
+}
+
+fn parse_app_profiling_v2_response(value: &Value) -> Result<PerformanceMetrics> {
+    let data = value
+        .get("data")
+        .and_then(|data| data.as_object())
+        .context("App Profiling v2 response missing data object")?;
+
+    let mut selected_metrics = None;
+
+    for (app_id, app_data) in data {
+        if app_id == "units" {
+            continue;
+        }
+
+        let status = app_data.get("status").and_then(|status| status.as_str());
+        let metrics = app_data.get("metrics");
+        if status == Some("success") && metrics.is_some() {
+            selected_metrics = metrics;
+            break;
+        }
+
+        if selected_metrics.is_none() && metrics.is_some() {
+            selected_metrics = metrics;
+        }
+    }
+
+    let metrics = selected_metrics
+        .and_then(|metrics| metrics.as_object())
+        .context("App Profiling v2 response missing metrics payload")?;
+
+    let cpu_avg = metrics
+        .get("cpu")
+        .and_then(|cpu| cpu.get("avg"))
+        .and_then(|value| value.as_f64());
+    let cpu_max = metrics
+        .get("cpu")
+        .and_then(|cpu| cpu.get("max"))
+        .and_then(|value| value.as_f64());
+    let mem_avg = metrics
+        .get("mem")
+        .and_then(|mem| mem.get("avg"))
+        .and_then(|value| value.as_f64());
+    let mem_max = metrics
+        .get("mem")
+        .and_then(|mem| mem.get("max"))
+        .and_then(|value| value.as_f64());
+
+    let cpu = match (cpu_avg, cpu_max) {
+        (None, None) => None,
+        (avg, max) => {
+            let average_percent = avg.or(max).unwrap_or_default();
+            let peak_percent = max.or(avg).unwrap_or_default();
+            Some(AggregateCpuMetrics {
+                peak_percent,
+                average_percent,
+                min_percent: average_percent.min(peak_percent),
+            })
+        }
+    };
+
+    let memory = match (mem_avg, mem_max) {
+        (None, None) => None,
+        (avg, max) => {
+            let average_mb = avg.or(max).unwrap_or_default();
+            let peak_mb = max.or(avg).unwrap_or_default();
+            Some(AggregateMemoryMetrics {
+                peak_mb,
+                average_mb,
+                min_mb: average_mb.min(peak_mb),
+            })
+        }
+    };
+
+    let sample_count = usize::from(cpu.is_some() || memory.is_some());
+
+    Ok(PerformanceMetrics {
+        sample_count,
+        memory,
+        cpu,
+        snapshots: Vec::new(),
+    })
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BuildRequest {
@@ -1452,6 +1586,7 @@ struct BuildRequest {
     devices: Vec<String>,
     device_logs: bool,
     disable_animations: bool,
+    app_profiling: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
 }
@@ -1463,6 +1598,7 @@ struct XcuitestBuildRequest {
     test_suite: String,
     devices: Vec<String>,
     device_logs: bool,
+    app_profiling: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
     #[serde(rename = "only-testing", skip_serializing_if = "Option::is_none")]
@@ -2325,6 +2461,77 @@ Test completed
         assert_eq!(cpu.peak_percent, 50.0);
         assert_eq!(cpu.min_percent, 30.0);
         assert_eq!(cpu.average_percent, 40.0); // (30 + 50) / 2
+    }
+
+    #[test]
+    fn parse_app_profiling_v2_response_extracts_memory_and_cpu() {
+        let metrics = parse_app_profiling_v2_response(&json!({
+            "metadata": {
+                "device": "iPhone 15",
+                "os_version": "17"
+            },
+            "data": {
+                "units": {
+                    "cpu": "%",
+                    "mem": "MB"
+                },
+                "org.world.app": {
+                    "status": "success",
+                    "metrics": {
+                        "cpu": {
+                            "avg": 5.06,
+                            "max": 12.52
+                        },
+                        "mem": {
+                            "avg": 169.45,
+                            "max": 243.57
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("parse v2");
+
+        assert_eq!(metrics.sample_count, 1);
+        let cpu = metrics.cpu.expect("cpu");
+        assert!((cpu.average_percent - 5.06).abs() < 0.001);
+        assert!((cpu.peak_percent - 12.52).abs() < 0.001);
+
+        let memory = metrics.memory.expect("memory");
+        assert!((memory.average_mb - 169.45).abs() < 0.001);
+        assert!((memory.peak_mb - 243.57).abs() < 0.001);
+    }
+
+    #[test]
+    fn build_request_serializes_with_app_profiling_enabled() {
+        let request = BuildRequest {
+            app: "bs://app".into(),
+            test_suite: "bs://suite".into(),
+            devices: vec!["Google Pixel 8-14.0".into()],
+            device_logs: true,
+            disable_animations: true,
+            build_name: Some("mobench".into()),
+            app_profiling: true,
+        };
+
+        let value = serde_json::to_value(&request).expect("serialize build request");
+        assert_eq!(value["appProfiling"], true);
+    }
+
+    #[test]
+    fn xcuitest_build_request_serializes_with_app_profiling_enabled() {
+        let request = XcuitestBuildRequest {
+            app: "bs://app".into(),
+            test_suite: "bs://suite".into(),
+            devices: vec!["iPhone 15-17".into()],
+            device_logs: true,
+            build_name: Some("mobench".into()),
+            only_testing: Some(vec!["BenchRunnerUITests/test".into()]),
+            app_profiling: true,
+        };
+
+        let value = serde_json::to_value(&request).expect("serialize xcuitest build request");
+        assert_eq!(value["appProfiling"], true);
     }
 
     #[test]

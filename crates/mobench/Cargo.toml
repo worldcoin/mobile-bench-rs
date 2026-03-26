@@ -36,7 +36,7 @@ path = "src/bin/cargo-mobench.rs"
 
 [dependencies]
 anyhow.workspace = true
-mobench-sdk = { version = "0.1.22", path = "../mobench-sdk" }
+mobench-sdk = { version = "0.1.23", path = "../mobench-sdk" }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -47,9 +47,9 @@ dotenvy = "0.15"
 time.workspace = true
 sha2 = "0.10"
 comfy-table = "7"
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 inventory = "0.3"
 sample-fns = { path = "../sample-fns" }
 jsonschema = "0.18"

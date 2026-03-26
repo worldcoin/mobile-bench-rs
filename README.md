@@ -206,6 +206,16 @@ fn db_query(db: &Database) {
 
 ## Release Notes
 
+### v0.1.23
+
+- Added Sina-style per-function device comparison plots to local summaries:
+  - `cargo mobench ci run --plots <auto|off|require>`
+  - `cargo mobench report summarize --plots <auto|off|require>`
+- Rendered one SVG plot per benchmark function in the `Device Comparison Plots` section of local markdown summaries.
+- Switched summary resource reporting to `cpu_total_ms` and `peak_memory_kb`, and preserved BrowserStack-derived peak memory while backfilling CPU from raw benchmark results.
+- Enabled BrowserStack app profiling on Android and iOS runs, including App Profiling v2 parsing for iOS peak-memory enrichment.
+- Added baseline artifact download in the reusable CI workflow so `ci check-run` can compare PR results against the latest successful default-branch run.
+
 ### v0.1.22
 
 - Fixed BrowserStack result fetching so `cargo mobench ci run --fetch` falls back to downloaded session artifacts when live device logs do not expose benchmark JSON.
