@@ -662,7 +662,7 @@ enum ReportCommand {
 
 #[derive(Subcommand, Debug)]
 enum ProfileCommand {
-    /// Run a native profiling session and write profile artifacts.
+    /// Plan or execute a native profiling session depending on backend/provider support.
     Run(profile::ProfileRunArgs),
     /// Render markdown or JSON from a normalized profile manifest.
     Summarize(profile::ProfileSummarizeArgs),
@@ -846,7 +846,7 @@ impl CiTarget {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 #[clap(rename_all = "lowercase")]
-enum DevicePlatform {
+pub(crate) enum DevicePlatform {
     Android,
     Ios,
 }
@@ -1866,7 +1866,7 @@ pub fn run() -> Result<()> {
         },
         Command::Profile { command } => match command {
             ProfileCommand::Run(args) => {
-                profile::cmd_profile_run(&args)?;
+                profile::cmd_profile_run(&args, cli.dry_run)?;
             }
             ProfileCommand::Summarize(args) => {
                 profile::cmd_profile_summarize(&args)?;
@@ -6697,14 +6697,21 @@ fn cmd_devices(
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ResolvedMatrixDevice {
-    name: String,
-    os: String,
-    os_version: String,
-    identifier: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ResolvedMatrixDevice {
+    pub(crate) name: String,
+    pub(crate) os: String,
+    pub(crate) os_version: String,
+    pub(crate) identifier: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    tags: Vec<String>,
+    pub(crate) tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedDeviceProfile {
+    pub(crate) profile: String,
+    pub(crate) source: String,
+    pub(crate) devices: Vec<ResolvedMatrixDevice>,
 }
 
 /// Built-in device profiles so `devices resolve` works without a YAML file.
@@ -6730,21 +6737,18 @@ fn builtin_device_for_profile(
     })
 }
 
-fn cmd_devices_resolve(
+pub(crate) fn resolve_devices_for_profile(
     platform: DevicePlatform,
-    profile: Option<String>,
+    profile: Option<&str>,
     config_path: Option<&Path>,
     device_matrix_path: Option<&Path>,
-    format: CheckOutputFormat,
-) -> Result<()> {
+) -> Result<ResolvedDeviceProfile> {
     let profile_str = profile
-        .as_deref()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .unwrap_or("default");
 
-    // Try loading matrix from file first; fall back to built-in profiles
-    let (resolved, source) = match resolve_matrix_for_cli(config_path, device_matrix_path) {
+    let (devices, source) = match resolve_matrix_for_cli(config_path, device_matrix_path) {
         Ok((matrix_path, config_tags)) => {
             let matrix = load_device_matrix(&matrix_path).with_context(|| {
                 format!(
@@ -6763,7 +6767,6 @@ fn cmd_devices_resolve(
             (devices, format!("matrix:{}", matrix_path.display()))
         }
         Err(_) => {
-            // No matrix file found — use built-in profiles
             if let Some(device) = builtin_device_for_profile(platform, profile_str) {
                 (vec![device], "builtin".to_string())
             } else {
@@ -6776,9 +6779,33 @@ fn cmd_devices_resolve(
         }
     };
 
+    Ok(ResolvedDeviceProfile {
+        profile: profile_str.to_string(),
+        source,
+        devices,
+    })
+}
+
+fn cmd_devices_resolve(
+    platform: DevicePlatform,
+    profile: Option<String>,
+    config_path: Option<&Path>,
+    device_matrix_path: Option<&Path>,
+    format: CheckOutputFormat,
+) -> Result<()> {
+    let resolved_profile = resolve_devices_for_profile(
+        platform,
+        profile.as_deref(),
+        config_path,
+        device_matrix_path,
+    )?;
+    let profile_str = resolved_profile.profile.as_str();
+    let resolved = &resolved_profile.devices;
+    let source = resolved_profile.source.as_str();
+
     match format {
         CheckOutputFormat::Text => {
-            for device in &resolved {
+            for device in resolved {
                 println!("{}", device.identifier);
             }
         }
@@ -7879,9 +7906,24 @@ fn check_xcodegen() -> PrereqCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
     use jsonschema::JSONSchema;
     use std::path::Path;
     use tempfile::TempDir;
+
+    fn render_profile_run_help() -> String {
+        let mut root = Cli::command();
+        let profile = root
+            .find_subcommand_mut("profile")
+            .expect("profile subcommand");
+        let run = profile
+            .find_subcommand_mut("run")
+            .expect("profile run subcommand");
+        let mut buffer = Vec::new();
+        run.write_long_help(&mut buffer)
+            .expect("render profile run help");
+        String::from_utf8(buffer).expect("help is utf-8")
+    }
 
     #[cfg(unix)]
     pub(crate) fn write_fake_plot_python(dir: &Path) -> PathBuf {
@@ -8588,6 +8630,101 @@ project = "proj"
             }
             _ => panic!("expected profile run command"),
         }
+    }
+
+    #[test]
+    fn profile_run_parses_direct_device_selection() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "profile",
+            "run",
+            "--target",
+            "ios",
+            "--function",
+            "sample_fns::fibonacci",
+            "--provider",
+            "browserstack",
+            "--backend",
+            "ios-instruments",
+            "--device",
+            "iPhone 14",
+            "--os-version",
+            "16",
+        ]);
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Run(args),
+            } => {
+                assert_eq!(args.target, MobileTarget::Ios);
+                assert_eq!(args.device.as_deref(), Some("iPhone 14"));
+                assert_eq!(args.os_version.as_deref(), Some("16"));
+            }
+            _ => panic!("expected profile run command"),
+        }
+    }
+
+    #[test]
+    fn profile_run_parses_profile_device_resolution_inputs() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "profile",
+            "run",
+            "--target",
+            "ios",
+            "--function",
+            "sample_fns::fibonacci",
+            "--provider",
+            "browserstack",
+            "--backend",
+            "ios-instruments",
+            "--profile",
+            "high-spec",
+            "--device-matrix",
+            "device-matrix.yaml",
+        ]);
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Run(args),
+            } => {
+                assert_eq!(args.profile.as_deref(), Some("high-spec"));
+                assert_eq!(
+                    args.device_matrix,
+                    Some(PathBuf::from("device-matrix.yaml"))
+                );
+            }
+            _ => panic!("expected profile run command"),
+        }
+    }
+
+    #[test]
+    fn profile_run_help_mentions_planned_only_or_execution_scope() {
+        let help = render_profile_run_help();
+
+        assert!(
+            help.contains("plan")
+                || help.contains("Plan")
+                || help.contains("depending on backend/provider support"),
+            "expected profile run help to explain whether it plans or executes capture, got:\n{help}"
+        );
+        assert!(
+            help.contains("BrowserStack") || help.contains("browserstack"),
+            "expected profile run help to mention BrowserStack capability scope, got:\n{help}"
+        );
+    }
+
+    #[test]
+    fn profile_run_cli_surface_exposes_or_explicitly_omits_device_selection() {
+        let help = render_profile_run_help();
+
+        assert!(
+            help.contains("--device")
+                || help.contains("--profile")
+                || help.contains("--device-matrix")
+                || help.contains("device selection is unavailable"),
+            "expected profile run help to either expose device selection or explicitly document that it is unavailable, got:\n{help}"
+        );
     }
 
     #[test]
