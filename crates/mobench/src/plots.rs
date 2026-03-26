@@ -136,6 +136,93 @@ fn extract_function_plot_inputs_walks_nested_files_without_duplicates() {
     assert_eq!(beta.devices[0].samples_ns, vec![400, 500, 600]);
 }
 
+#[test]
+fn extract_function_plot_inputs_preserves_duplicate_samples_from_a_single_payload() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let root_summary = root.path().join("summary.json");
+    let nested_dir = root.path().join("android").join("bench_alpha");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+
+    let payload = serde_json::json!({
+        "function": "bench_alpha",
+        "samples": [100_u64, 100_u64, 200_u64]
+    });
+
+    write_json(
+        &root_summary,
+        serde_json::json!({
+            "summary": {
+                "generated_at": "2026-03-25T00:00:00Z",
+                "generated_at_unix": 1_000_000_002_u64,
+                "target": "android",
+                "function": "bench_alpha",
+                "iterations": 3,
+                "warmup": 1,
+                "devices": ["Google Pixel 8-14.0"],
+                "device_summaries": [{
+                    "device": "Google Pixel 8-14.0",
+                    "benchmarks": [{
+                        "function": "bench_alpha",
+                        "samples": 3,
+                        "mean_ns": 133_u64,
+                        "median_ns": 100_u64,
+                        "p95_ns": 200_u64,
+                        "min_ns": 100_u64,
+                        "max_ns": 200_u64
+                    }]
+                }]
+            },
+            "benchmark_results": {
+                "Google Pixel 8-14.0": [payload]
+            }
+        }),
+    );
+
+    write_json(
+        &nested_dir.join("summary.json"),
+        serde_json::json!({
+            "summary": {
+                "generated_at": "2026-03-25T00:00:00Z",
+                "generated_at_unix": 1_000_000_003_u64,
+                "target": "android",
+                "function": "bench_alpha",
+                "iterations": 3,
+                "warmup": 1,
+                "devices": ["Google Pixel 8-14.0"],
+                "device_summaries": [{
+                    "device": "Google Pixel 8-14.0",
+                    "benchmarks": [{
+                        "function": "bench_alpha",
+                        "samples": 3,
+                        "mean_ns": 133_u64,
+                        "median_ns": 100_u64,
+                        "p95_ns": 200_u64,
+                        "min_ns": 100_u64,
+                        "max_ns": 200_u64
+                    }]
+                }]
+            },
+            "benchmark_results": {
+                "Google Pixel 8-14.0": [payload]
+            }
+        }),
+    );
+
+    let plots = extract_function_plot_inputs_from_results_dir(root.path())
+        .expect("extract plot inputs");
+
+    let alpha = plots
+        .iter()
+        .find(|plot| plot.function_name == "bench_alpha")
+        .expect("bench_alpha plot");
+
+    assert_eq!(alpha.devices.len(), 1);
+    assert_eq!(
+        alpha.devices[0].samples_ns,
+        vec![100, 100, 200]
+    );
+}
+
 pub fn extract_function_plot_inputs_from_results_dir(dir: &Path) -> Result<Vec<PlotFunctionInput>> {
     let mut builders = BTreeMap::new();
 
@@ -167,7 +254,8 @@ struct PlotFunctionInputBuilder {
 struct PlotDeviceSamplesBuilder {
     device_name: String,
     os_version: String,
-    samples_ns: BTreeSet<u64>,
+    samples_ns: Vec<u64>,
+    seen_payloads: BTreeSet<String>,
 }
 
 impl PlotFunctionInputBuilder {
@@ -195,6 +283,7 @@ impl PlotFunctionInputBuilder {
         &mut self,
         device_name: String,
         os_version: String,
+        source_signature: String,
         samples_ns: Vec<u64>,
     ) {
         if samples_ns.is_empty() {
@@ -205,8 +294,12 @@ impl PlotFunctionInputBuilder {
         let device = self.devices.entry(key).or_insert_with(|| PlotDeviceSamplesBuilder {
             device_name,
             os_version,
-            samples_ns: BTreeSet::new(),
+            samples_ns: Vec::new(),
+            seen_payloads: BTreeSet::new(),
         });
+        if !device.seen_payloads.insert(source_signature) {
+            return;
+        }
         device.samples_ns.extend(samples_ns);
     }
 
@@ -220,10 +313,13 @@ impl PlotFunctionInputBuilder {
             devices: self
                 .devices
                 .into_values()
-                .map(|device| PlotDeviceSamples {
-                    device_name: device.device_name,
-                    os_version: device.os_version,
-                    samples_ns: device.samples_ns.into_iter().collect(),
+                .map(|mut device| {
+                    device.samples_ns.sort_unstable();
+                    PlotDeviceSamples {
+                        device_name: device.device_name,
+                        os_version: device.os_version,
+                        samples_ns: device.samples_ns,
+                    }
                 })
                 .collect(),
         }
@@ -268,13 +364,19 @@ fn collect_from_value(
                 if samples_ns.is_empty() {
                     continue;
                 }
+                let source_signature = source_payload_signature(entry);
 
                 let key = (target.clone(), function_name.clone());
                 let builder = builders
                     .entry(key)
                     .or_insert_with(|| PlotFunctionInputBuilder::new(function_name, target.clone()));
                 builder.set_run_metadata(iterations, warmup);
-                builder.add_device_samples(device_name.clone(), os_version.clone(), samples_ns);
+                builder.add_device_samples(
+                    device_name.clone(),
+                    os_version.clone(),
+                    source_signature,
+                    samples_ns,
+                );
             }
         }
 
@@ -290,6 +392,7 @@ fn collect_from_value(
         if samples_ns.is_empty() {
             return Ok(());
         }
+        let source_signature = source_payload_signature(value);
         let (device_name, os_version) = value
             .get("device")
             .and_then(|value| value.as_str())
@@ -301,7 +404,7 @@ fn collect_from_value(
             .entry(key)
             .or_insert_with(|| PlotFunctionInputBuilder::new(function_name, target));
         builder.set_run_metadata(iterations, warmup);
-        builder.add_device_samples(device_name, os_version, samples_ns);
+        builder.add_device_samples(device_name, os_version, source_signature, samples_ns);
     }
 
     Ok(())
@@ -419,4 +522,8 @@ fn read_json(path: &Path) -> Result<Value> {
 fn write_json(path: &Path, value: Value) {
     fs::write(path, serde_json::to_vec_pretty(&value).expect("serialize json"))
         .expect("write json");
+}
+
+fn source_payload_signature(value: &Value) -> String {
+    serde_json::to_string(value).expect("serialize source payload")
 }
