@@ -267,19 +267,82 @@ fn materialize_renderer_writes_script_and_style() {
 
     assert!(bundle.script_path.exists());
     assert!(bundle.style_path.exists());
+    assert_eq!(
+        fs::read_to_string(&bundle.script_path).expect("read script"),
+        PLOT_SCRIPT
+    );
+    assert_eq!(
+        fs::read_to_string(&bundle.style_path).expect("read style"),
+        PLOT_STYLE
+    );
 }
 
 #[test]
-fn plot_output_file_name_uses_target_to_avoid_collisions() {
-    let mut ios = sample_plot_input();
-    ios.target = "ios".to_string();
-    let mut android = sample_plot_input();
-    android.target = "android".to_string();
+fn allocate_plot_file_names_deduplicates_function_labels() {
+    let first = sample_plot_input();
+    let mut second = sample_plot_input();
+    second.target = "ios".to_string();
 
-    assert_eq!(plot_output_file_name(&ios), "ios-nullifier-proof-generation.svg");
     assert_eq!(
-        plot_output_file_name(&android),
-        "android-nullifier-proof-generation.svg"
+        allocate_plot_file_names(&[first, second]),
+        vec![
+            "nullifier-proof-generation.svg".to_string(),
+            "nullifier-proof-generation-ios.svg".to_string()
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn render_plot_artifacts_invokes_renderer_with_fake_python() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let out = tempfile::tempdir().expect("tempdir");
+    let fake_python = out.path().join("fake-python");
+    fs::write(
+        &fake_python,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  exit 0
+fi
+
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+
+mkdir -p "$(dirname "$output")"
+printf '<svg>ok</svg>' > "$output"
+"#,
+    )
+    .expect("write fake python");
+
+    let mut permissions = fs::metadata(&fake_python)
+        .expect("fake python metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_python, permissions).expect("set fake python perms");
+
+    let rendered = render_plot_artifacts(
+        &[sample_plot_input()],
+        out.path(),
+        PlotMode::Require,
+        Some(&fake_python),
+    )
+    .expect("render plots");
+
+    assert_eq!(rendered.len(), 1);
+    assert_eq!(
+        rendered[0].relative_path,
+        PathBuf::from("plots/nullifier-proof-generation.svg")
+    );
+    assert_eq!(
+        fs::read_to_string(&rendered[0].output_path).expect("read svg"),
+        "<svg>ok</svg>"
     );
 }
 
@@ -320,6 +383,7 @@ pub struct RenderedPlot {
     pub function_name: String,
     pub function_label: String,
     pub output_path: PathBuf,
+    pub relative_path: PathBuf,
 }
 
 const PLOT_SCRIPT_NAME: &str = "render_sina_plot.py";
@@ -401,10 +465,11 @@ pub fn render_plot_artifacts(
             let plots_dir = output_dir.join("plots");
             fs::create_dir_all(&plots_dir)
                 .with_context(|| format!("creating directory {}", plots_dir.display()))?;
+            let file_names = allocate_plot_file_names(inputs);
 
             let mut rendered = Vec::new();
-            for input in inputs {
-                match render_single_plot(input, &plots_dir, &assets, python_override) {
+            for (input, file_name) in inputs.iter().zip(file_names.iter()) {
+                match render_single_plot(input, &plots_dir, &assets, python_override, file_name) {
                     Ok(plot) => rendered.push(plot),
                     Err(err) if mode == PlotMode::Auto => {
                         eprintln!("Skipping plot {}: {err}", input.function_name);
@@ -423,8 +488,10 @@ fn render_single_plot(
     plots_dir: &Path,
     assets: &RendererAssets,
     python_override: Option<&Path>,
+    file_name: &str,
 ) -> Result<RenderedPlot> {
-    let output_path = plots_dir.join(plot_output_file_name(input));
+    let output_path = plots_dir.join(file_name);
+    let relative_path = PathBuf::from("plots").join(file_name);
     let input_path = assets
         .script_path
         .parent()
@@ -445,6 +512,7 @@ fn render_single_plot(
                     function_name: input.function_name.clone(),
                     function_label: input.function_label.clone(),
                     output_path,
+                    relative_path,
                 });
             }
             Err(RenderAttemptError::NotFound(err)) => last_not_found = Some(err),
@@ -521,11 +589,38 @@ fn python_candidates(python_override: Option<&Path>) -> Vec<PathBuf> {
     candidates
 }
 
-fn plot_output_file_name(input: &PlotFunctionInput) -> String {
-    format!(
-        "{}.svg",
-        slugify_for_filename(&format!("{}-{}", input.target, input.function_name))
-    )
+fn allocate_plot_file_names(inputs: &[PlotFunctionInput]) -> Vec<String> {
+    let mut used = BTreeSet::new();
+    inputs
+        .iter()
+        .map(|input| {
+            let base = slugify_for_filename(&input.function_label);
+            let target = slugify_for_filename(&input.target);
+            let function = slugify_for_filename(&input.function_name);
+
+            for candidate in [
+                Some(base.clone()),
+                (!target.is_empty()).then(|| format!("{base}-{target}")),
+                (function != base && !function.is_empty()).then(|| format!("{base}-{function}")),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if used.insert(candidate.clone()) {
+                    return format!("{candidate}.svg");
+                }
+            }
+
+            let mut index = 2usize;
+            loop {
+                let candidate = format!("{base}-{index}");
+                if used.insert(candidate.clone()) {
+                    return format!("{candidate}.svg");
+                }
+                index += 1;
+            }
+        })
+        .collect()
 }
 
 fn slugify_for_filename(value: &str) -> String {
@@ -559,9 +654,9 @@ fn slugify_for_filename(value: &str) -> String {
 #[cfg(test)]
 fn sample_plot_input() -> PlotFunctionInput {
     PlotFunctionInput {
-        function_name: "nullifier-proof-generation".to_string(),
-        function_label: "Nullifier proof generation".to_string(),
-        target: "benchmark-1".to_string(),
+        function_name: "bench_nullifier_proof_generation".to_string(),
+        function_label: "nullifier-proof-generation".to_string(),
+        target: "android".to_string(),
         iterations: 20,
         warmup: 5,
         devices: vec![PlotDeviceSamples {
