@@ -139,6 +139,7 @@ use browserstack::{BrowserStackAuth, BrowserStackClient};
 mod browserstack;
 pub mod config;
 mod github;
+mod plots;
 pub(crate) mod summarize;
 
 /// CLI orchestrator for building, packaging, and executing Rust benchmarks on mobile.
