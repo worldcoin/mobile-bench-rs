@@ -225,7 +225,7 @@ fn db_query(db: &Database) {
 
 ## Release Notes
 
-### v0.1.24
+### v0.1.25
 
 - Added experimental `cargo mobench profile run|summarize` commands for a normalized local profiling session contract across Android and iOS.
 - Profile sessions now write run-scoped artifacts under `target/mobench/profile/<run-id>/` and refresh top-level latest-session `profile.json` and `summary.md` convenience files.
