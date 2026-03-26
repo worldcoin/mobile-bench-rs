@@ -137,16 +137,11 @@ fn extract_function_plot_inputs_walks_nested_files_without_duplicates() {
 }
 
 #[test]
-fn extract_function_plot_inputs_preserves_duplicate_samples_from_a_single_payload() {
+fn extract_function_plot_inputs_preserves_duplicate_runs_from_non_root_files() {
     let root = tempfile::tempdir().expect("tempdir");
     let root_summary = root.path().join("summary.json");
     let nested_dir = root.path().join("android").join("bench_alpha");
     fs::create_dir_all(&nested_dir).expect("create nested dir");
-
-    let payload = serde_json::json!({
-        "function": "bench_alpha",
-        "samples": [100_u64, 100_u64, 200_u64]
-    });
 
     write_json(
         &root_summary,
@@ -155,25 +150,28 @@ fn extract_function_plot_inputs_preserves_duplicate_samples_from_a_single_payloa
                 "generated_at": "2026-03-25T00:00:00Z",
                 "generated_at_unix": 1_000_000_002_u64,
                 "target": "android",
-                "function": "bench_alpha",
+                "function": "bench_beta",
                 "iterations": 3,
                 "warmup": 1,
                 "devices": ["Google Pixel 8-14.0"],
                 "device_summaries": [{
                     "device": "Google Pixel 8-14.0",
                     "benchmarks": [{
-                        "function": "bench_alpha",
+                        "function": "bench_beta",
                         "samples": 3,
-                        "mean_ns": 133_u64,
-                        "median_ns": 100_u64,
-                        "p95_ns": 200_u64,
-                        "min_ns": 100_u64,
-                        "max_ns": 200_u64
+                        "mean_ns": 333_u64,
+                        "median_ns": 300_u64,
+                        "p95_ns": 400_u64,
+                        "min_ns": 300_u64,
+                        "max_ns": 400_u64
                     }]
                 }]
             },
             "benchmark_results": {
-                "Google Pixel 8-14.0": [payload]
+                "Google Pixel 8-14.0": [{
+                    "function": "bench_beta",
+                    "samples": [300_u64, 300_u64, 400_u64]
+                }]
             }
         }),
     );
@@ -203,7 +201,16 @@ fn extract_function_plot_inputs_preserves_duplicate_samples_from_a_single_payloa
                 }]
             },
             "benchmark_results": {
-                "Google Pixel 8-14.0": [payload]
+                "Google Pixel 8-14.0": [
+                    {
+                        "function": "bench_alpha",
+                        "samples": [100_u64, 100_u64, 200_u64]
+                    },
+                    {
+                        "function": "bench_alpha",
+                        "samples": [100_u64, 100_u64, 200_u64]
+                    }
+                ]
             }
         }),
     );
@@ -215,18 +222,24 @@ fn extract_function_plot_inputs_preserves_duplicate_samples_from_a_single_payloa
         .iter()
         .find(|plot| plot.function_name == "bench_alpha")
         .expect("bench_alpha plot");
+    let beta = plots
+        .iter()
+        .find(|plot| plot.function_name == "bench_beta")
+        .expect("bench_beta plot");
 
     assert_eq!(alpha.devices.len(), 1);
     assert_eq!(
         alpha.devices[0].samples_ns,
-        vec![100, 100, 200]
+        vec![100, 100, 100, 100, 200, 200]
     );
+    assert_eq!(beta.devices[0].samples_ns, vec![300, 300, 400]);
 }
 
 pub fn extract_function_plot_inputs_from_results_dir(dir: &Path) -> Result<Vec<PlotFunctionInput>> {
     let mut builders = BTreeMap::new();
+    let mut nested_source_keys = BTreeSet::new();
 
-    collect_from_results_dir(dir, &mut builders)?;
+    collect_from_results_dir(dir, &mut builders, &mut nested_source_keys)?;
 
     let mut plots = builders
         .into_values()
@@ -255,7 +268,6 @@ struct PlotDeviceSamplesBuilder {
     device_name: String,
     os_version: String,
     samples_ns: Vec<u64>,
-    seen_payloads: BTreeSet<String>,
 }
 
 impl PlotFunctionInputBuilder {
@@ -283,7 +295,6 @@ impl PlotFunctionInputBuilder {
         &mut self,
         device_name: String,
         os_version: String,
-        source_signature: String,
         samples_ns: Vec<u64>,
     ) {
         if samples_ns.is_empty() {
@@ -295,11 +306,7 @@ impl PlotFunctionInputBuilder {
             device_name,
             os_version,
             samples_ns: Vec::new(),
-            seen_payloads: BTreeSet::new(),
         });
-        if !device.seen_payloads.insert(source_signature) {
-            return;
-        }
         device.samples_ns.extend(samples_ns);
     }
 
@@ -329,14 +336,31 @@ impl PlotFunctionInputBuilder {
 fn collect_from_results_dir(
     dir: &Path,
     builders: &mut BTreeMap<(String, String), PlotFunctionInputBuilder>,
+    nested_source_keys: &mut BTreeSet<PlotEntryKey>,
 ) -> Result<()> {
     let mut json_paths = Vec::new();
     collect_json_files(dir, &mut json_paths)?;
     json_paths.sort();
 
+    let root_summary_path = dir.join("summary.json");
+    let mut nested_paths = Vec::new();
+    let mut root_paths = Vec::new();
     for path in json_paths {
+        if path == root_summary_path {
+            root_paths.push(path);
+        } else {
+            nested_paths.push(path);
+        }
+    }
+
+    for path in nested_paths {
         let value = read_json(&path)?;
-        collect_from_value(&value, &path, builders)?;
+        collect_from_value(&value, &path, false, builders, nested_source_keys)?;
+    }
+
+    for path in root_paths {
+        let value = read_json(&path)?;
+        collect_from_value(&value, &path, true, builders, nested_source_keys)?;
     }
 
     Ok(())
@@ -345,7 +369,9 @@ fn collect_from_results_dir(
 fn collect_from_value(
     value: &Value,
     path: &Path,
+    is_root_summary: bool,
     builders: &mut BTreeMap<(String, String), PlotFunctionInputBuilder>,
+    nested_source_keys: &mut BTreeSet<PlotEntryKey>,
 ) -> Result<()> {
     if let Some(benchmark_results) = value.get("benchmark_results").and_then(|value| value.as_object()) {
         let (target, iterations, warmup) = extract_run_metadata(value, path);
@@ -354,7 +380,6 @@ fn collect_from_value(
             let Some(entries) = entries.as_array() else {
                 continue;
             };
-            let (device_name, os_version) = parse_device_string(device_label);
 
             for entry in entries {
                 let Some(function_name) = extract_function_name(entry) else {
@@ -364,19 +389,29 @@ fn collect_from_value(
                 if samples_ns.is_empty() {
                     continue;
                 }
-                let source_signature = source_payload_signature(entry);
+                let (device_name, os_version) = parse_device_string(device_label);
+                let entry_key = PlotEntryKey::new(
+                    &target,
+                    &function_name,
+                    &device_name,
+                    &os_version,
+                    iterations,
+                    warmup,
+                    &samples_ns,
+                );
+                if is_root_summary && nested_source_keys.contains(&entry_key) {
+                    continue;
+                }
+                if !is_root_summary {
+                    nested_source_keys.insert(entry_key);
+                }
 
                 let key = (target.clone(), function_name.clone());
                 let builder = builders
                     .entry(key)
                     .or_insert_with(|| PlotFunctionInputBuilder::new(function_name, target.clone()));
                 builder.set_run_metadata(iterations, warmup);
-                builder.add_device_samples(
-                    device_name.clone(),
-                    os_version.clone(),
-                    source_signature,
-                    samples_ns,
-                );
+                builder.add_device_samples(device_name, os_version, samples_ns);
             }
         }
 
@@ -392,19 +427,33 @@ fn collect_from_value(
         if samples_ns.is_empty() {
             return Ok(());
         }
-        let source_signature = source_payload_signature(value);
         let (device_name, os_version) = value
             .get("device")
             .and_then(|value| value.as_str())
             .map(parse_device_string)
             .unwrap_or_else(|| infer_device_from_path(path));
+        let entry_key = PlotEntryKey::new(
+            &target,
+            &function_name,
+            &device_name,
+            &os_version,
+            iterations,
+            warmup,
+            &samples_ns,
+        );
+        if is_root_summary && nested_source_keys.contains(&entry_key) {
+            return Ok(());
+        }
+        if !is_root_summary {
+            nested_source_keys.insert(entry_key);
+        }
 
         let key = (target.clone(), function_name.clone());
         let builder = builders
             .entry(key)
             .or_insert_with(|| PlotFunctionInputBuilder::new(function_name, target));
         builder.set_run_metadata(iterations, warmup);
-        builder.add_device_samples(device_name, os_version, source_signature, samples_ns);
+        builder.add_device_samples(device_name, os_version, samples_ns);
     }
 
     Ok(())
@@ -519,11 +568,41 @@ fn read_json(path: &Path) -> Result<Value> {
         .with_context(|| format!("Failed to parse {}", path.display()))
 }
 
+#[cfg(test)]
 fn write_json(path: &Path, value: Value) {
     fs::write(path, serde_json::to_vec_pretty(&value).expect("serialize json"))
         .expect("write json");
 }
 
-fn source_payload_signature(value: &Value) -> String {
-    serde_json::to_string(value).expect("serialize source payload")
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PlotEntryKey {
+    target: String,
+    function_name: String,
+    device_name: String,
+    os_version: String,
+    iterations: u32,
+    warmup: u32,
+    samples_ns: Vec<u64>,
+}
+
+impl PlotEntryKey {
+    fn new(
+        target: &str,
+        function_name: &str,
+        device_name: &str,
+        os_version: &str,
+        iterations: u32,
+        warmup: u32,
+        samples_ns: &[u64],
+    ) -> Self {
+        Self {
+            target: target.to_string(),
+            function_name: function_name.to_string(),
+            device_name: device_name.to_string(),
+            os_version: os_version.to_string(),
+            iterations,
+            warmup,
+            samples_ns: samples_ns.to_vec(),
+        }
+    }
 }
