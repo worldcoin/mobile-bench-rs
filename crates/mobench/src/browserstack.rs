@@ -345,37 +345,32 @@ impl BrowserStackClient {
         Ok(())
     }
 
+    fn fetch_devices_inventory(&self) -> Result<Vec<BrowserStackDevice>> {
+        let json = self.get_json("app-automate/devices.json")?;
+        parse_device_list(json, "devices")
+    }
+
     /// List available Android devices for Espresso testing.
     pub fn list_espresso_devices(&self) -> Result<Vec<BrowserStackDevice>> {
-        let json = self.get_json("app-automate/espresso/v2/devices")?;
-        parse_device_list(json, "espresso")
+        Ok(self
+            .fetch_devices_inventory()?
+            .into_iter()
+            .filter(|device| device.os.eq_ignore_ascii_case("android"))
+            .collect())
     }
 
     /// List available iOS devices for XCUITest testing.
     pub fn list_xcuitest_devices(&self) -> Result<Vec<BrowserStackDevice>> {
-        let json = self.get_json("app-automate/xcuitest/v2/devices")?;
-        parse_device_list(json, "xcuitest")
+        Ok(self
+            .fetch_devices_inventory()?
+            .into_iter()
+            .filter(|device| device.os.eq_ignore_ascii_case("ios"))
+            .collect())
     }
 
     /// List all available devices (both Android and iOS).
     pub fn list_all_devices(&self) -> Result<Vec<BrowserStackDevice>> {
-        let mut devices = Vec::new();
-
-        match self.list_espresso_devices() {
-            Ok(android_devices) => devices.extend(android_devices),
-            Err(e) => {
-                eprintln!("Warning: Failed to fetch Android devices: {}", e);
-            }
-        }
-
-        match self.list_xcuitest_devices() {
-            Ok(ios_devices) => devices.extend(ios_devices),
-            Err(e) => {
-                eprintln!("Warning: Failed to fetch iOS devices: {}", e);
-            }
-        }
-
-        Ok(devices)
+        self.fetch_devices_inventory()
     }
 
     /// Validate device specifications against available devices.
@@ -1896,6 +1891,90 @@ mod tests {
     use super::*;
     use anyhow::anyhow;
     use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn test_client_with_base_url(base_url: impl Into<String>) -> BrowserStackClient {
+        BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap()
+        .with_base_url(base_url)
+    }
+
+    fn spawn_browserstack_json_server(
+        payload: Value,
+    ) -> (
+        String,
+        Arc<Mutex<Vec<String>>>,
+        thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        listener
+            .set_nonblocking(true)
+            .expect("configure nonblocking listener");
+        let addr = listener.local_addr().expect("read test server address");
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let recorded_paths = Arc::clone(&paths);
+        let body = payload.to_string();
+
+        let handle = thread::spawn(move || {
+            let mut last_activity = Instant::now();
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _peer)) => {
+                        last_activity = Instant::now();
+
+                        let mut buf = [0_u8; 4096];
+                        let bytes_read = stream.read(&mut buf).expect("read request");
+                        let request = String::from_utf8_lossy(&buf[..bytes_read]);
+                        let path = request
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or("/")
+                            .to_string();
+
+                        recorded_paths.lock().unwrap().push(path.clone());
+
+                        let (status, response_body) = if path == "/app-automate/devices.json" {
+                            ("200 OK", body.clone())
+                        } else {
+                            (
+                                "404 Not Found",
+                                format!("{{\"error\":\"unexpected path: {path}\"}}"),
+                            )
+                        };
+
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response_body.len(),
+                            response_body
+                        );
+                        stream
+                            .write_all(response.as_bytes())
+                            .expect("write response");
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if last_activity.elapsed() >= Duration::from_millis(250) {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept request: {error}"),
+                }
+            }
+        });
+
+        (format!("http://{addr}"), paths, handle)
+    }
 
     #[test]
     fn rejects_missing_artifact() {
@@ -2871,6 +2950,70 @@ BENCH_REPORT_JSON_END
         assert_eq!(devices.len(), 2);
         assert_eq!(devices[0].device, "Google Pixel 7");
         assert_eq!(devices[1].device, "iPhone 14");
+    }
+
+    #[test]
+    fn device_discovery_uses_unified_inventory_and_filters_by_os() {
+        let payload = json!([
+            {
+                "device": "Google Pixel 8",
+                "os": "ANDROID",
+                "os_version": "14.0",
+                "available": true
+            },
+            {
+                "device": "iPhone 15",
+                "os": "iOS",
+                "os_version": "17",
+                "available": true
+            }
+        ]);
+        let (base_url, paths, handle) = spawn_browserstack_json_server(payload);
+        let client = test_client_with_base_url(base_url);
+
+        let espresso = client.list_espresso_devices();
+        let xcuitest = client.list_xcuitest_devices();
+        let all = client.list_all_devices();
+
+        handle.join().expect("join test server");
+
+        let espresso = espresso.expect("fetch Android devices from unified inventory");
+        let xcuitest = xcuitest.expect("fetch iOS devices from unified inventory");
+        let all = all.expect("fetch all devices from unified inventory");
+
+        assert_eq!(
+            espresso
+                .iter()
+                .map(BrowserStackDevice::identifier)
+                .collect::<Vec<_>>(),
+            vec!["Google Pixel 8-14.0".to_string()]
+        );
+        assert_eq!(
+            xcuitest
+                .iter()
+                .map(BrowserStackDevice::identifier)
+                .collect::<Vec<_>>(),
+            vec!["iPhone 15-17".to_string()]
+        );
+        assert_eq!(
+            all.iter()
+                .map(BrowserStackDevice::identifier)
+                .collect::<Vec<_>>(),
+            vec![
+                "Google Pixel 8-14.0".to_string(),
+                "iPhone 15-17".to_string()
+            ]
+        );
+
+        let paths = paths.lock().unwrap().clone();
+        assert_eq!(
+            paths,
+            vec![
+                "/app-automate/devices.json".to_string(),
+                "/app-automate/devices.json".to_string(),
+                "/app-automate/devices.json".to_string(),
+            ]
+        );
     }
 
     #[test]
