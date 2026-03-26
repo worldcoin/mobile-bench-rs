@@ -77,10 +77,10 @@ cargo mobench fixture cache-key
 cargo mobench summary target/mobench/results.json
 
 # CI one-command orchestration with stable outputs
-cargo mobench ci run --target android --function sample_fns::fibonacci --local-only
+cargo mobench ci run --target android --function sample_fns::fibonacci --local-only --plots auto
 
 # Reporting helpers from standardized outputs
-cargo mobench report summarize --summary target/mobench/ci/summary.json
+cargo mobench report summarize --summary target/mobench/ci/summary.json --plots auto
 cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
 ```
 
@@ -88,6 +88,9 @@ CI contract outputs are written to `target/mobench/ci/`:
 - `summary.json`
 - `summary.md`
 - `results.csv`
+- `plots/*.svg` when local plot rendering is enabled
+
+Local summary renderers (`ci run --plots ...` and `report summarize --plots ...`) append a `Device Comparison Plots` section with one Sina-style SVG per benchmark function. Summary resource fields use `cpu_total_ms` and `peak_memory_kb`; Android raw resource stats are preserved and iOS peak memory is enriched from BrowserStack app profiling when available.
 
 ## Configuration
 
@@ -112,11 +115,12 @@ default_iterations = 100
 default_warmup = 10
 ```
 
-Resolution precedence in `0.1.22` is: explicit CLI flags (`--project-root`, `--crate-path`) → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
+Resolution precedence is: explicit CLI flags (`--project-root`, `--crate-path`) → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 CLI flags override config file values when provided.
 - In `cargo mobench run --config <FILE>` mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
 - For regression comparisons, `--baseline` should point to a previous run summary; if it resolves to the same output path, mobench snapshots the prior file before writing the candidate summary.
+- In the reusable GitHub workflow, the default baseline source is the latest successful run on the repository default branch when matching artifacts are available.
 - `cargo mobench verify --smoke-test` is only supported for benchmark crates linked into the `mobench` CLI binary. External crates discovered through `mobench.toml`, `--project-root`, or `--crate-path` should use `cargo mobench list` and `cargo mobench verify --check-artifacts`.
 
 ## Project docs

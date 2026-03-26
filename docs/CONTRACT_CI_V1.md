@@ -27,6 +27,7 @@ It covers:
 - Iteration controls: `--iterations`, `--warmup`
 - Device selection: `--devices`, `--device-matrix`, `--device-tags`
 - Runtime mode: `--local-only`, `--release`, `--fetch`
+- Local summary rendering: `--plots <auto|off|require>`
 - iOS artifacts: `--ios-app`, `--ios-test-suite`
 - Regression mode: `--baseline`, `--regression-threshold-pct`
 - Output path: `--output-dir`
@@ -54,6 +55,9 @@ Required files:
 - `summary.md`
 - `results.csv`
 
+Optional additive artifacts:
+- `plots/*.svg` when local plot rendering is enabled for `ci run`
+
 `summary.json` MUST include:
 - run summary data
 - `ci.metadata` object with:
@@ -66,6 +70,15 @@ Required files:
   - `summary_json`
   - `summary_md`
   - `results_csv`
+
+Additive summary fields currently emitted by v1 include:
+- per-benchmark `resource_usage.cpu_total_ms`
+- per-benchmark `resource_usage.peak_memory_kb`
+- optional raw memory breakdown fields such as `total_pss_kb`, `private_dirty_kb`, `native_heap_kb`, and `java_heap_kb`
+
+Behavior notes:
+- `summary.md` may contain relative image links into `plots/` for local viewing. These links are additive and are not required for contract consumers.
+- The reusable workflow may resolve a baseline from the latest successful default-branch run and pass it explicitly to `ci check-run`; this does not change the required output set.
 
 Machine-readable schema artifacts:
 - `docs/schemas/summary-v1.schema.json`
