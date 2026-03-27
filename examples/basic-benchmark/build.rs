@@ -1,3 +1,3 @@
 fn main() {
-    // No build-time steps required for the minimal example.
+    // UniFFI proc-macro mode does not need build-time scaffolding generation.
 }

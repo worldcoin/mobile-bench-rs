@@ -15,7 +15,7 @@ jobs:
   compile:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - uses: dtolnay/rust-toolchain@stable
       - name: Compile the workspace
         run: cargo test --workspace --locked --no-run

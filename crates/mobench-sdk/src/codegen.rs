@@ -301,6 +301,7 @@ pub fn generate_android_project(
     default_function: &str,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("android");
+    reset_generated_project_dir(&target_dir)?;
     let library_name = project_slug.replace('-', "_");
     let project_pascal = to_pascal_case(project_slug);
     // Use sanitized bundle ID component (alphanumeric only) for consistency with iOS
@@ -343,6 +344,18 @@ pub fn generate_android_project(
     // The package "dev.world.{project_slug}" maps to directory "dev/world/{project_slug}/"
     move_kotlin_files_to_package_dir(&target_dir, &package_name)?;
 
+    Ok(())
+}
+
+fn reset_generated_project_dir(target_dir: &Path) -> Result<(), BenchError> {
+    if target_dir.exists() {
+        fs::remove_dir_all(target_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to clear existing generated project at {:?}: {}",
+                target_dir, e
+            ))
+        })?;
+    }
     Ok(())
 }
 
@@ -431,6 +444,7 @@ pub fn generate_ios_project(
     default_function: &str,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("ios");
+    reset_generated_project_dir(&target_dir)?;
     // Sanitize bundle ID components to ensure they only contain alphanumeric characters
     // iOS bundle identifiers should not contain hyphens or underscores
     let sanitized_bundle_prefix = {
@@ -1237,6 +1251,34 @@ mod tests {
         );
 
         // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_android_project_replaces_previous_package_tree() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-android-regenerate-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_android_project(&temp_dir, "ffi_benchmark", "ffi_benchmark::bench_fibonacci")
+            .unwrap();
+        let old_package_dir = temp_dir.join("android/app/src/main/java/dev/world/ffibenchmark");
+        assert!(old_package_dir.exists(), "expected first package tree to exist");
+
+        generate_android_project(
+            &temp_dir,
+            "basic_benchmark",
+            "basic_benchmark::bench_fibonacci",
+        )
+        .unwrap();
+
+        let new_package_dir = temp_dir.join("android/app/src/main/java/dev/world/basicbenchmark");
+        assert!(new_package_dir.exists(), "expected new package tree to exist");
+        assert!(
+            !old_package_dir.exists(),
+            "old package tree should be removed when regenerating the Android scaffold"
+        );
+
         fs::remove_dir_all(&temp_dir).ok();
     }
 
