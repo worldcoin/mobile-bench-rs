@@ -207,7 +207,7 @@ pub struct CaptureMetadataRecord {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProfileManifest {
     pub run_id: String,
     pub target: MobileTarget,
@@ -219,6 +219,76 @@ pub struct ProfileManifest {
     pub native_capture: NativeCaptureRecord,
     pub semantic_profile: SemanticProfileRecord,
     pub capture_metadata: CaptureMetadataRecord,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ProfileManifestSerde {
+    run_id: String,
+    target: MobileTarget,
+    function: String,
+    #[serde(default = "default_profile_provider")]
+    provider: ProfileProvider,
+    backend: ProfileBackend,
+    format: ProfileFormat,
+    #[serde(default)]
+    native_capture: NativeCaptureRecord,
+    #[serde(default)]
+    semantic_profile: SemanticProfileRecord,
+    #[serde(default)]
+    capture_metadata: CaptureMetadataRecord,
+    #[serde(default)]
+    capture_status: Option<CaptureStatus>,
+    #[serde(default)]
+    raw_artifacts: Vec<ArtifactRecord>,
+    #[serde(default)]
+    processed_artifacts: Vec<ArtifactRecord>,
+    #[serde(default)]
+    warnings: Vec<String>,
+    #[serde(default)]
+    viewer_hint: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ProfileManifest {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let helper = ProfileManifestSerde::deserialize(deserializer)?;
+        Ok(Self::from(helper))
+    }
+}
+
+impl From<ProfileManifestSerde> for ProfileManifest {
+    fn from(mut helper: ProfileManifestSerde) -> Self {
+        let has_legacy_native_fields = helper.capture_status.is_some()
+            || !helper.raw_artifacts.is_empty()
+            || !helper.processed_artifacts.is_empty()
+            || helper.viewer_hint.is_some();
+        if has_legacy_native_fields && helper.native_capture == NativeCaptureRecord::default() {
+            helper.native_capture = NativeCaptureRecord {
+                status: helper.capture_status.unwrap_or(CaptureStatus::Planned),
+                raw_artifacts: helper.raw_artifacts,
+                processed_artifacts: helper.processed_artifacts,
+                symbolization: SymbolizationRecord::default(),
+                viewer_hint: helper.viewer_hint,
+            };
+        }
+        if !helper.warnings.is_empty() && helper.capture_metadata.warnings.is_empty() {
+            helper.capture_metadata.warnings = helper.warnings;
+        }
+
+        Self {
+            run_id: helper.run_id,
+            target: helper.target,
+            function: helper.function,
+            provider: helper.provider,
+            backend: helper.backend,
+            format: helper.format,
+            native_capture: helper.native_capture,
+            semantic_profile: helper.semantic_profile,
+            capture_metadata: helper.capture_metadata,
+        }
+    }
 }
 
 fn default_profile_provider() -> ProfileProvider {
@@ -880,6 +950,40 @@ mod tests {
             json["semantic_profile"].get("phases").is_some(),
             "expected semantic profiling metadata to expose phase data, got: {json}"
         );
+    }
+
+    #[test]
+    fn legacy_profile_manifest_deserializes_into_nested_sections() {
+        let legacy = serde_json::json!({
+            "run_id": "run-123",
+            "target": "android",
+            "function": "sample_fns::fibonacci",
+            "provider": "local",
+            "backend": "android-native",
+            "format": "both",
+            "capture_status": "partial",
+            "raw_artifacts": [
+                {"label": "simpleperf", "path": "artifacts/raw/sample.perf"}
+            ],
+            "processed_artifacts": [
+                {"label": "flamegraph", "path": "artifacts/processed/flamegraph.html"}
+            ],
+            "warnings": ["legacy manifest"],
+            "viewer_hint": "Open flamegraph.html in a browser"
+        });
+
+        let manifest: ProfileManifest =
+            serde_json::from_value(legacy).expect("deserialize legacy manifest");
+
+        assert_eq!(manifest.native_capture.status, CaptureStatus::Partial);
+        assert_eq!(manifest.native_capture.raw_artifacts.len(), 1);
+        assert_eq!(manifest.native_capture.processed_artifacts.len(), 1);
+        assert_eq!(
+            manifest.native_capture.viewer_hint.as_deref(),
+            Some("Open flamegraph.html in a browser")
+        );
+        assert_eq!(manifest.capture_metadata.warnings, vec!["legacy manifest"]);
+        assert_eq!(manifest.semantic_profile.status, SemanticCaptureStatus::Planned);
     }
 
     #[test]
