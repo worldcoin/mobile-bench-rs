@@ -105,7 +105,7 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
   pull-requests: write
 
 env:
@@ -596,6 +596,286 @@ jobs:
           name: mobench-results-android
           path: results/android
 
+      - name: Setup Python for plot rendering
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install plot rendering dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install matplotlib
+
+      - name: Render plot-capable platform summaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rendered
+          rendered_count=0
+
+          render_platform_summary() {
+            local platform="$1"
+            local results_dir="results/${platform}"
+            if [ ! -d "${results_dir}" ]; then
+              return 0
+            fi
+
+            local summary_json
+            summary_json=$(find "${results_dir}" -type f -path "*/mobench/ci/${platform}/summary.json" | head -1)
+            if [ -z "${summary_json}" ]; then
+              echo "::warning::No ${platform} summary.json found under ${results_dir}"
+              return 0
+            fi
+
+            mkdir -p "rendered/${platform}"
+
+            cargo-mobench ci summarize \
+              --results-dir "${results_dir}" \
+              --output-format table || true
+
+            cargo-mobench report summarize \
+              --summary "${summary_json}" \
+              --output "rendered/${platform}/summary.md" \
+              --plots require
+          }
+
+          for platform in ios android; do
+            if render_platform_summary "${platform}"; then
+              if [ -f "rendered/${platform}/summary.md" ]; then
+                rendered_count=$((rendered_count + 1))
+              fi
+            fi
+          done
+
+          if [ "${rendered_count}" -eq 0 ]; then
+            echo "::error::No benchmark summaries were rendered."
+            exit 1
+          fi
+
+      - name: Build combined plot summary JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          rendered_root = Path("rendered")
+          rendered_root.mkdir(parents=True, exist_ok=True)
+          combined_dir = rendered_root / "combined"
+          combined_dir.mkdir(parents=True, exist_ok=True)
+
+          platform_summaries = []
+          for platform in ("ios", "android"):
+            results_dir = Path("results") / platform
+            if not results_dir.is_dir():
+              continue
+            matches = sorted(
+              path for path in results_dir.rglob("summary.json")
+              if path.as_posix().endswith(f"/mobench/ci/{platform}/summary.json")
+            )
+            if matches:
+              platform_summaries.append((platform, matches[0]))
+
+          if not platform_summaries:
+            raise SystemExit("No platform summary.json files found for combined plots")
+
+          def collect_benchmark_results(value, combined):
+            if isinstance(value, dict):
+              benchmark_results = value.get("benchmark_results")
+              if isinstance(benchmark_results, dict):
+                for device_label, entries in benchmark_results.items():
+                  bucket = combined.setdefault(device_label, [])
+                  if isinstance(entries, list):
+                    bucket.extend(entries)
+              for nested in value.values():
+                collect_benchmark_results(nested, combined)
+            elif isinstance(value, list):
+              for nested in value:
+                collect_benchmark_results(nested, combined)
+
+          combined_device_summaries = []
+          combined_devices = []
+          combined_benchmark_results = {}
+          primary_target = None
+          generated_at = None
+          generated_at_unix = 0
+          iterations = 0
+          warmup = 0
+
+          for platform, summary_path in platform_summaries:
+            payload = json.loads(summary_path.read_text())
+            summary = payload.get("summary")
+            if not isinstance(summary, dict):
+              raise SystemExit(f"Missing top-level summary in {summary_path}")
+
+            if primary_target is None:
+              primary_target = summary.get("target") or platform
+              iterations = int(summary.get("iterations") or 0)
+              warmup = int(summary.get("warmup") or 0)
+
+            for device in summary.get("devices") or []:
+              if device not in combined_devices:
+                combined_devices.append(device)
+            combined_device_summaries.extend(summary.get("device_summaries") or [])
+
+            ts = int(summary.get("generated_at_unix") or 0)
+            if generated_at is None or ts >= generated_at_unix:
+              generated_at_unix = ts
+              generated_at = summary.get("generated_at")
+
+            collect_benchmark_results(payload, combined_benchmark_results)
+
+          if primary_target is None:
+            raise SystemExit("Unable to infer a target for combined plots")
+
+          combined_summary = {
+            "summary": {
+              "generated_at": generated_at or "",
+              "generated_at_unix": generated_at_unix,
+              "target": primary_target,
+              "function": "combined-device-comparison",
+              "iterations": iterations,
+              "warmup": warmup,
+              "devices": combined_devices,
+              "device_summaries": combined_device_summaries,
+            },
+            "benchmark_results": combined_benchmark_results,
+          }
+
+          output_path = combined_dir / "summary.json"
+          output_path.write_text(json.dumps(combined_summary, indent=2) + "\n")
+          PY
+
+      - name: Render shared device comparison plots
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo-mobench report summarize \
+            --summary rendered/combined/summary.json \
+            --output rendered/combined/summary.md \
+            --plots require
+
+      - name: Publish plot assets
+        id: publish_plots
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ASSET_BRANCH: mobench-plots
+        run: |
+          set -euo pipefail
+
+          if ! find rendered -type f -path "*/plots/*.svg" | grep -q .; then
+            echo "::error::Expected rendered plots under rendered/**/plots, but none were found."
+            exit 1
+          fi
+
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          asset_path="runs/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          publish_once() {
+            local publish_root="$1"
+
+            if git clone --quiet --branch "${ASSET_BRANCH}" "${remote}" "${publish_root}" 2>/dev/null; then
+              :
+            else
+              git clone --quiet "${remote}" "${publish_root}"
+              git -C "${publish_root}" checkout --orphan "${ASSET_BRANCH}"
+              git -C "${publish_root}" rm -rf . >/dev/null 2>&1 || true
+            fi
+
+            git -C "${publish_root}" config user.name "github-actions[bot]"
+            git -C "${publish_root}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            mkdir -p "${publish_root}/${asset_path}"
+
+            for platform in ios android combined; do
+              if [ -d "rendered/${platform}/plots" ]; then
+                mkdir -p "${publish_root}/${asset_path}/${platform}"
+                rm -rf "${publish_root}/${asset_path}/${platform}/plots"
+                cp -R "rendered/${platform}/plots" "${publish_root}/${asset_path}/${platform}/plots"
+              fi
+            done
+
+            git -C "${publish_root}" add "${asset_path}"
+            if git -C "${publish_root}" diff --cached --quiet; then
+              echo "::error::No rendered plot asset changes were staged for publish."
+              return 1
+            fi
+
+            if git -C "${publish_root}" commit -m "mobench plots for run ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >/dev/null \
+              && git -C "${publish_root}" push origin "${ASSET_BRANCH}" >/dev/null; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          published=0
+          for attempt in 1 2 3; do
+            publish_root="$(mktemp -d)"
+            if publish_once "${publish_root}"; then
+              published=1
+              break
+            fi
+            echo "::warning::Plot asset publish attempt ${attempt} failed; retrying with the latest branch state."
+          done
+
+          if [ "${published}" -ne 1 ]; then
+            echo "::error::Unable to publish plot assets after 3 attempts."
+            exit 1
+          fi
+
+          echo "base_url=https://raw.githubusercontent.com/${REPO}/${ASSET_BRANCH}/${asset_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Rewrite rendered summaries for GitHub markdown
+        shell: bash
+        env:
+          PLOT_BASE_URL: ${{ steps.publish_plots.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          plot_base_url = os.environ.get("PLOT_BASE_URL", "").rstrip("/")
+          if not plot_base_url:
+            raise SystemExit("Missing published plot base URL")
+
+          marker = "### Device Comparison Plots\n"
+
+          def strip_plot_block(text: str) -> str:
+            index = text.find(marker)
+            if index == -1:
+              return text.rstrip() + "\n"
+            return text[:index].rstrip() + "\n"
+
+          for platform in ("ios", "android"):
+            input_path = Path(f"rendered/{platform}/summary.md")
+            output_path = Path(f"rendered/{platform}/github-summary.md")
+            if not input_path.exists():
+              continue
+            output_path.write_text(strip_plot_block(input_path.read_text()))
+
+          combined_input = Path("rendered/combined/summary.md")
+          if combined_input.exists():
+            summary_markdown = combined_input.read_text()
+            index = summary_markdown.find(marker)
+            if index == -1:
+              raise SystemExit("Combined summary markdown did not include a Device Comparison Plots section")
+            plot_section = summary_markdown[index + len(marker):].lstrip()
+            plot_section = plot_section.replace(
+              "](plots/",
+              f"]({plot_base_url}/combined/plots/",
+            )
+            combined_output = Path("rendered/combined/github-summary.md")
+            combined_output.write_text(
+              "## Device Comparison Plots\n\n" + plot_section.rstrip() + "\n"
+            )
+          PY
+
       - name: Summarize iOS results
         if: needs.ios.result == 'success'
         shell: bash
@@ -603,21 +883,10 @@ jobs:
           echo "## iOS Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ -d results/ios ]; then
-            cargo-mobench ci summarize \
-              --results-dir results/ios \
-              --output-format table || true
-
-            cargo-mobench ci summarize \
-              --results-dir results/ios \
-              --output-format markdown \
-              --output-file /tmp/ios-summary.md || true
-
-            if [ -f /tmp/ios-summary.md ]; then
-              cat /tmp/ios-summary.md >> "$GITHUB_STEP_SUMMARY"
-            fi
+          if [ -f rendered/ios/github-summary.md ]; then
+            cat rendered/ios/github-summary.md >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No iOS results found." >> "$GITHUB_STEP_SUMMARY"
+            echo "No iOS benchmark summary produced." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
@@ -628,23 +897,23 @@ jobs:
           echo "## Android Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ -d results/android ]; then
-            cargo-mobench ci summarize \
-              --results-dir results/android \
-              --output-format table || true
-
-            cargo-mobench ci summarize \
-              --results-dir results/android \
-              --output-format markdown \
-              --output-file /tmp/android-summary.md || true
-
-            if [ -f /tmp/android-summary.md ]; then
-              cat /tmp/android-summary.md >> "$GITHUB_STEP_SUMMARY"
-            fi
+          if [ -f rendered/android/github-summary.md ]; then
+            cat rendered/android/github-summary.md >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No Android results found." >> "$GITHUB_STEP_SUMMARY"
+            echo "No Android benchmark summary produced." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize shared device comparison plots
+        shell: bash
+        run: |
+          if [ -f rendered/combined/github-summary.md ]; then
+            cat rendered/combined/github-summary.md >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::No combined plot summary was produced."
+            exit 1
+          fi
 
       # NOTE: This step requires the caller workflow to have `pull-requests: write` permission
       # so that github.token can post/update PR comments.
@@ -657,40 +926,45 @@ jobs:
         run: |
           MARKER="<!-- mobench-summary -->"
 
-          # Build markdown body
           BODY="${MARKER}
           ## Mobench Benchmark Results
 
           "
-          for dir in results/ios results/android; do
-            if [ -d "$dir" ]; then
-              PLATFORM_MD=$(cargo-mobench ci summarize --results-dir "$dir" --output-format markdown 2>/dev/null || true)
-              if [ -n "$PLATFORM_MD" ]; then
-                BODY="${BODY}${PLATFORM_MD}
+          if [ -f rendered/ios/github-summary.md ]; then
+            BODY="${BODY}## iOS Benchmark Results
+
+          $(cat rendered/ios/github-summary.md)
 
           "
-              fi
-            fi
-          done
+          fi
+          if [ -f rendered/android/github-summary.md ]; then
+            BODY="${BODY}## Android Benchmark Results
+
+          $(cat rendered/android/github-summary.md)
+
+          "
+          fi
+          if [ -f rendered/combined/github-summary.md ]; then
+            BODY="${BODY}$(cat rendered/combined/github-summary.md)
+
+          "
+          fi
 
           BODY="${BODY}
           ---
           *Posted by [mobench](https://github.com/worldcoin/mobile-bench-rs) · $(date -u '+%Y-%m-%d %H:%M UTC')*"
 
-          # Find existing comment with marker
           EXISTING_COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
             --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
             2>/dev/null | head -1)
 
           if [ -n "$EXISTING_COMMENT_ID" ]; then
-            # Update existing comment
             gh api "repos/${REPO}/issues/comments/${EXISTING_COMMENT_ID}" \
               -X PATCH \
               -f body="${BODY}" \
               --silent
             echo "Updated existing PR comment #${EXISTING_COMMENT_ID}"
           else
-            # Create new comment
             gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
               -f body="${BODY}" \
               --silent
@@ -798,6 +1072,11 @@ jobs:
               cp "$dir"/*.csv "history-bundle/" 2>/dev/null || true
             fi
           done
+
+          if [ -d rendered ]; then
+            mkdir -p history-bundle/rendered
+            cp -R rendered/. history-bundle/rendered/
+          fi
 
           # Generate manifest
           jq -n \
