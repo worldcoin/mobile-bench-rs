@@ -14,7 +14,25 @@
 
 use mobench_sdk::benchmark;
 
-const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
+const CHECKSUM_INPUT_LEN: usize = 64 * 1024;
+const CHECKSUM_WINDOW_LEN: usize = 8 * 1024;
+const CHECKSUM_SWEEP_ITERATIONS: usize = 2_048;
+const FIBONACCI_START: u32 = 28;
+const FIBONACCI_SPAN: u32 = 6;
+const FIBONACCI_SWEEP_ITERATIONS: u32 = 200_000;
+const CHECKSUM_INPUT: [u8; CHECKSUM_INPUT_LEN] = build_checksum_input();
+
+const fn build_checksum_input() -> [u8; CHECKSUM_INPUT_LEN] {
+    let mut bytes = [0u8; CHECKSUM_INPUT_LEN];
+    let mut i = 0;
+    let mut state = 0x1234_5678u32;
+    while i < CHECKSUM_INPUT_LEN {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        bytes[i] = (state >> 16) as u8;
+        i += 1;
+    }
+    bytes
+}
 
 /// Specification for a benchmark run.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -150,27 +168,61 @@ pub fn checksum(bytes: &[u8]) -> u64 {
     bytes.iter().map(|&b| b as u64).sum()
 }
 
+/// Sweep across a small fibonacci range to avoid a trivially constant workload.
+pub fn fibonacci_sweep(start: u32, span: u32, iterations: u32) -> u64 {
+    let span = if span == 0 { 1 } else { span };
+    let mut result = 0u64;
+    for i in 0..iterations {
+        result = result.wrapping_add(fibonacci(start + (i % span)));
+    }
+    result
+}
+
+/// Sweep overlapping windows across the input buffer to keep the checksum work realistic.
+pub fn checksum_sweep(bytes: &[u8], window_len: usize, iterations: usize) -> u64 {
+    assert!(window_len > 0, "window_len must be greater than zero");
+    assert!(
+        bytes.len() >= window_len,
+        "window_len must fit within the input buffer"
+    );
+
+    let max_start = bytes.len() - window_len;
+    let mut sum = 0u64;
+    for i in 0..iterations {
+        let start = if max_start == 0 {
+            0
+        } else {
+            i % (max_start + 1)
+        };
+        sum = sum.wrapping_add(checksum(&bytes[start..start + window_len]));
+    }
+    sum
+}
+
 // ============================================================================
 // Benchmark Functions
 // ============================================================================
 // These functions are marked with #[benchmark] and automatically registered
 // with mobench-sdk's registry system.
 
-/// Benchmark: Fibonacci calculation (30th number, 1000 iterations)
+/// Benchmark: Fibonacci sweep with enough work to make mobile samples meaningful.
 #[benchmark]
 pub fn bench_fibonacci() {
-    let result = fibonacci_batch(30, 1000);
+    let start = std::hint::black_box(FIBONACCI_START);
+    let span = std::hint::black_box(FIBONACCI_SPAN);
+    let iterations = std::hint::black_box(FIBONACCI_SWEEP_ITERATIONS);
+    let result = fibonacci_sweep(start, span, iterations);
     std::hint::black_box(result);
 }
 
-/// Benchmark: Checksum calculation on 1KB data (10000 iterations)
+/// Benchmark: Sliding-window checksum over a larger input buffer.
 #[benchmark]
 pub fn bench_checksum() {
-    let mut sum = 0u64;
-    for _ in 0..10000 {
-        sum = sum.wrapping_add(checksum(&CHECKSUM_INPUT));
-    }
-    std::hint::black_box(sum);
+    let bytes = std::hint::black_box(&CHECKSUM_INPUT);
+    let window_len = std::hint::black_box(CHECKSUM_WINDOW_LEN);
+    let iterations = std::hint::black_box(CHECKSUM_SWEEP_ITERATIONS);
+    let result = checksum_sweep(bytes, window_len, iterations);
+    std::hint::black_box(result);
 }
 
 #[cfg(test)]
@@ -187,7 +239,30 @@ mod tests {
 
     #[test]
     fn checksum_matches() {
-        assert_eq!(checksum(&CHECKSUM_INPUT), 1024);
+        let expected = CHECKSUM_INPUT[..4].iter().map(|&b| b as u64).sum::<u64>();
+        assert_eq!(checksum(&CHECKSUM_INPUT[..4]), expected);
+    }
+
+    #[test]
+    fn checksum_input_has_entropy() {
+        assert_ne!(CHECKSUM_INPUT[0], CHECKSUM_INPUT[1]);
+        assert_ne!(CHECKSUM_INPUT[512], CHECKSUM_INPUT[513]);
+    }
+
+    #[test]
+    fn fibonacci_sweep_walks_expected_range() {
+        let expected = fibonacci(4) + fibonacci(5) + fibonacci(6) + fibonacci(4) + fibonacci(5);
+        assert_eq!(fibonacci_sweep(4, 3, 5), expected);
+    }
+
+    #[test]
+    fn checksum_sweep_wraps_windows() {
+        let bytes = [1u8, 2, 3, 4];
+        let expected = checksum(&bytes[0..2])
+            + checksum(&bytes[1..3])
+            + checksum(&bytes[2..4])
+            + checksum(&bytes[0..2]);
+        assert_eq!(checksum_sweep(&bytes, 2, 4), expected);
     }
 
     #[test]
