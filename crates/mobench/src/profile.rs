@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt::Write;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -42,6 +43,22 @@ pub enum ProfileProvider {
 pub enum ProfileSummaryFormat {
     Markdown,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptureWarmupMode {
+    Cold,
+    Warm,
+}
+
+impl CaptureWarmupMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Cold => "cold",
+            Self::Warm => "warm",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args)]
@@ -103,6 +120,12 @@ pub struct ProfileRunArgs {
     pub backend: ProfileBackend,
     #[arg(long, value_enum, default_value_t = ProfileFormat::Both)]
     pub format: ProfileFormat,
+    #[arg(
+        long,
+        value_enum,
+        help = "Warm or cold capture mode for local native profiling (defaults to warm for local Android/iOS native backends)"
+    )]
+    pub warmup_mode: Option<CaptureWarmupMode>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -209,7 +232,7 @@ impl Default for SemanticProfileRecord {
 pub struct CaptureMetadataRecord {
     pub device: Option<String>,
     pub sample_duration_secs: Option<u64>,
-    pub warmup_mode: Option<String>,
+    pub warmup_mode: Option<CaptureWarmupMode>,
     pub capture_method: Option<String>,
     pub warnings: Vec<String>,
 }
@@ -440,7 +463,7 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     }
     match &manifest.capture_metadata.warmup_mode {
         Some(warmup_mode) => {
-            let _ = writeln!(markdown, "- Warmup mode: `{warmup_mode}`");
+            let _ = writeln!(markdown, "- Warmup mode: `{}`", warmup_mode.as_str());
         }
         None => {
             let _ = writeln!(markdown, "- Warmup mode: `not recorded`");
@@ -538,6 +561,7 @@ fn write_profile_session_outputs(
 
     let run_profile_path = run_output_dir.join("profile.json");
     let run_summary_path = run_output_dir.join("summary.md");
+    write_semantic_phase_sidecar(manifest)?;
     write_profile_manifest(&run_profile_path, &manifest)?;
     std::fs::write(&run_summary_path, rendered_summary.as_bytes())?;
 
@@ -545,6 +569,23 @@ fn write_profile_session_outputs(
     let latest_summary_path = args.output_dir.join("summary.md");
     write_profile_manifest(&latest_profile_path, &manifest)?;
     std::fs::write(&latest_summary_path, rendered_summary.as_bytes())?;
+    Ok(())
+}
+
+fn write_semantic_phase_sidecar(manifest: &ProfileManifest) -> Result<()> {
+    let Some(path) = manifest.semantic_profile.spans_path.as_ref() else {
+        return Ok(());
+    };
+    if manifest.semantic_profile.phases.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&manifest.semantic_profile.phases)?,
+    )?;
     Ok(())
 }
 
@@ -748,6 +789,8 @@ fn write_android_flamegraph_html(folded_stacks: &str, output_path: &Path) -> Res
 const DEFAULT_PROFILE_ITERATIONS: u32 = 20;
 const DEFAULT_PROFILE_WARMUP: u32 = 3;
 const DEFAULT_ANDROID_CAPTURE_DURATION_SECS: u64 = 10;
+const DEFAULT_ANDROID_WARMUP_TIMEOUT_SECS: u64 = 60;
+const ANDROID_BENCH_LOG_MARKER: &str = "BENCH_JSON";
 
 #[derive(Debug, Clone)]
 struct AndroidProfilerToolchain {
@@ -993,6 +1036,10 @@ fn execute_local_android_capture(
     let build = run_android_build(&layout, "", false, false)?;
     let android_root = layout.output_dir.join("android");
     let package_name = read_android_application_id(&android_root)?;
+    let warmup_mode = manifest
+        .capture_metadata
+        .warmup_mode
+        .unwrap_or(CaptureWarmupMode::Cold);
 
     let raw_perf_path = manifest
         .native_capture
@@ -1027,6 +1074,14 @@ fn execute_local_android_capture(
             String::from_utf8_lossy(&install_output.stdout),
             String::from_utf8_lossy(&install_output.stderr)
         );
+    }
+
+    prepare_android_profile_capture(&toolchain, &package_name, warmup_mode)?;
+    manifest.capture_metadata.warmup_mode = Some(warmup_mode);
+    if let Err(error) = android_clear_logcat(&toolchain) {
+        manifest.capture_metadata.warnings.push(format!(
+            "failed to clear Android logcat before the recorded profile run: {error}"
+        ));
     }
 
     let mut profiler = Command::new(&toolchain.python_path);
@@ -1092,7 +1147,345 @@ fn execute_local_android_capture(
         "android profile run used default benchmark settings: iterations={}, warmup={}",
         DEFAULT_PROFILE_ITERATIONS, DEFAULT_PROFILE_WARMUP
     ));
+    if warmup_mode == CaptureWarmupMode::Warm {
+        manifest.capture_metadata.warnings.push(
+            "performed one preparatory warm launch before recording; startup caches are warmed, but per-process bridge initialization may still appear in the captured run".into(),
+        );
+    }
+    match android_read_logcat(&toolchain) {
+        Ok(logs) => {
+            let reports = extract_benchmark_reports_from_logs(&logs);
+            if let Some(report) = select_benchmark_value_for_function(&reports, &args.function) {
+                merge_semantic_profile_from_bench_report(manifest, report)?;
+            }
+        }
+        Err(error) => {
+            manifest.capture_metadata.warnings.push(format!(
+                "semantic phase capture was unavailable because Android logcat could not be read: {error}"
+            ));
+        }
+    }
 
+    Ok(())
+}
+
+fn prepare_android_profile_capture(
+    toolchain: &AndroidProfilerToolchain,
+    package_name: &str,
+    warmup_mode: CaptureWarmupMode,
+) -> Result<()> {
+    android_force_stop(toolchain, package_name)?;
+    if warmup_mode == CaptureWarmupMode::Cold {
+        return Ok(());
+    }
+
+    android_clear_logcat(toolchain)?;
+    android_start_activity(toolchain, package_name, ".MainActivity")?;
+    wait_for_android_bench_log_marker(
+        toolchain,
+        ANDROID_BENCH_LOG_MARKER,
+        DEFAULT_ANDROID_WARMUP_TIMEOUT_SECS,
+    )?;
+    android_force_stop(toolchain, package_name)?;
+    Ok(())
+}
+
+fn android_force_stop(toolchain: &AndroidProfilerToolchain, package_name: &str) -> Result<()> {
+    let output = Command::new(&toolchain.adb_path)
+        .args(["shell", "am", "force-stop"])
+        .arg(package_name)
+        .output()
+        .with_context(|| format!("force-stopping Android package {package_name}"))?;
+    if !output.status.success() {
+        bail!(
+            "adb force-stop failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn android_clear_logcat(toolchain: &AndroidProfilerToolchain) -> Result<()> {
+    let output = Command::new(&toolchain.adb_path)
+        .args(["logcat", "-c"])
+        .output()
+        .context("clearing Android logcat before warm profile capture")?;
+    if !output.status.success() {
+        bail!(
+            "adb logcat -c failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn android_start_activity(
+    toolchain: &AndroidProfilerToolchain,
+    package_name: &str,
+    activity_name: &str,
+) -> Result<()> {
+    let component = format!("{package_name}/{activity_name}");
+    let output = Command::new(&toolchain.adb_path)
+        .args(["shell", "am", "start", "-W", "-n"])
+        .arg(&component)
+        .output()
+        .with_context(|| format!("starting Android activity {component}"))?;
+    if !output.status.success() {
+        bail!(
+            "adb am start failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn wait_for_android_bench_log_marker(
+    toolchain: &AndroidProfilerToolchain,
+    marker: &str,
+    timeout_secs: u64,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    while std::time::Instant::now() < deadline {
+        let logcat = android_read_logcat(toolchain)?;
+        if android_log_contains_marker(&logcat, marker) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    bail!("timed out waiting for Android warmup marker `{marker}` in logcat");
+}
+
+fn android_read_logcat(toolchain: &AndroidProfilerToolchain) -> Result<String> {
+    let output = Command::new(&toolchain.adb_path)
+        .args(["logcat", "-d", "-s", "BenchRunner:I", "MainActivity:D"])
+        .output()
+        .context("reading Android logcat for warm profile capture")?;
+    if !output.status.success() {
+        bail!(
+            "adb logcat -d failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn android_log_contains_marker(logcat: &str, marker: &str) -> bool {
+    logcat.lines().any(|line| line.contains(marker))
+}
+
+fn extract_benchmark_reports_from_logs(logs: &str) -> Vec<Value> {
+    let mut results = Vec::new();
+    if let Some(json) = extract_ios_benchmark_json(logs) {
+        results.push(json);
+    }
+
+    let marker = "BENCH_JSON ";
+    for line in logs.lines() {
+        if let Some(index) = line.find(marker) {
+            let json_part = &line[index + marker.len()..];
+            if let Ok(parsed) = serde_json::from_str::<Value>(json_part) {
+                results.push(parsed);
+            }
+        }
+    }
+
+    results
+}
+
+fn extract_ios_benchmark_json(logs: &str) -> Option<Value> {
+    let start_marker = "BENCH_REPORT_JSON_START";
+    let end_marker = "BENCH_REPORT_JSON_END";
+    let start_pos = logs.rfind(start_marker)?;
+    let after_start = &logs[start_pos + start_marker.len()..];
+    let end_pos = after_start.find(end_marker)?;
+    extract_ios_json_from_log_section(&after_start[..end_pos])
+}
+
+fn extract_ios_json_from_log_section(section: &str) -> Option<Value> {
+    let trimmed = section.trim();
+    if trimmed.starts_with('{')
+        && trimmed.ends_with('}')
+        && let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
+    {
+        return Some(parsed);
+    }
+
+    for line in section.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(json_start) = line.find('{')
+            && let Some(json) = extract_balanced_json(&line[json_start..])
+            && let Ok(parsed) = serde_json::from_str::<Value>(&json)
+        {
+            return Some(parsed);
+        }
+    }
+
+    let collapsed: String = section
+        .lines()
+        .map(|line| {
+            if let Some(prefix_end) = line.find("] ") {
+                &line[prefix_end + 2..]
+            } else {
+                line.trim()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let json_start = collapsed.find('{')?;
+    let json = extract_balanced_json(&collapsed[json_start..])?;
+    serde_json::from_str(&json).ok()
+}
+
+fn extract_balanced_json(input: &str) -> Option<String> {
+    if !input.starts_with('{') {
+        return None;
+    }
+
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+    for (index, ch) in input.char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(input[..=index].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn benchmark_value_function(value: &Value) -> Option<&str> {
+    value.get("function").and_then(Value::as_str).or_else(|| {
+        value
+            .get("spec")
+            .and_then(|spec| spec.get("name"))
+            .and_then(Value::as_str)
+    })
+}
+
+fn select_benchmark_value_for_function<'a>(
+    values: &'a [Value],
+    function: &str,
+) -> Option<&'a Value> {
+    let simple_name = function.split("::").last().unwrap_or(function);
+    values
+        .iter()
+        .rev()
+        .find(|value| {
+            benchmark_value_function(value).is_some_and(|name| {
+                name == function
+                    || name == simple_name
+                    || name.ends_with(&format!("::{simple_name}"))
+                    || function.ends_with(&format!("::{name}"))
+            })
+        })
+        .or_else(|| values.last())
+}
+
+fn benchmark_value_sample_duration_total_ns(benchmark_value: &Value) -> u64 {
+    let sample_objects_total_ns: u64 = benchmark_value
+        .get("samples")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|sample| sample.get("duration_ns").and_then(Value::as_u64))
+        .sum();
+    if sample_objects_total_ns > 0 {
+        return sample_objects_total_ns;
+    }
+
+    benchmark_value
+        .get("samples_ns")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .sum()
+}
+
+fn populate_semantic_profile_from_benchmark_value(
+    manifest: &mut ProfileManifest,
+    benchmark_value: &Value,
+) {
+    let Some(phases) = benchmark_value.get("phases").and_then(Value::as_array) else {
+        return;
+    };
+
+    let phase_duration_total_ns: u64 = phases
+        .iter()
+        .filter_map(|phase| phase.get("duration_ns").and_then(Value::as_u64))
+        .sum();
+    let sample_duration_total_ns = benchmark_value_sample_duration_total_ns(benchmark_value);
+    let total_duration_ns = if sample_duration_total_ns > 0 {
+        sample_duration_total_ns
+    } else {
+        phase_duration_total_ns
+    };
+
+    let mut semantic_phases = Vec::new();
+    let mut partial = false;
+    for phase in phases {
+        let Some(name) = phase.get("name").and_then(Value::as_str) else {
+            partial = true;
+            continue;
+        };
+        let duration_ns = phase.get("duration_ns").and_then(Value::as_u64);
+        let percent_total = duration_ns.and_then(|duration_ns| {
+            (total_duration_ns > 0).then_some(
+                (duration_ns.saturating_mul(100) + (total_duration_ns / 2)) / total_duration_ns,
+            )
+        });
+        if duration_ns.is_none() {
+            partial = true;
+        }
+        semantic_phases.push(SemanticPhaseRecord {
+            name: name.to_string(),
+            duration_ns,
+            percent_total,
+        });
+    }
+
+    if semantic_phases.is_empty() {
+        return;
+    }
+
+    manifest.semantic_profile.status = if partial {
+        SemanticCaptureStatus::Partial
+    } else {
+        SemanticCaptureStatus::Captured
+    };
+    manifest.semantic_profile.phases = semantic_phases;
+}
+
+fn merge_semantic_profile_from_bench_report(
+    manifest: &mut ProfileManifest,
+    bench_report: &Value,
+) -> Result<()> {
+    populate_semantic_profile_from_benchmark_value(manifest, bench_report);
     Ok(())
 }
 
@@ -1159,7 +1552,7 @@ fn build_capture_plan(
     target: &ResolvedProfileTarget,
     output_root: &Path,
 ) -> Result<ProfileManifest> {
-    let backend = resolve_backend(args.target, args.backend);
+    let backend = target.backend;
     validate_format_capabilities(backend, args.format)?;
 
     let raw_root = output_root.join("artifacts/raw");
@@ -1226,14 +1619,17 @@ fn build_capture_plan(
             symbolization: SymbolizationRecord::default(),
             viewer_hint,
         },
-        semantic_profile: SemanticProfileRecord::default(),
+        semantic_profile: SemanticProfileRecord {
+            spans_path: Some(output_root.join("artifacts/semantic/phases.json")),
+            ..SemanticProfileRecord::default()
+        },
         capture_metadata: CaptureMetadataRecord {
             device: target
                 .device
                 .as_ref()
                 .map(|device| device.identifier.clone()),
             sample_duration_secs: None,
-            warmup_mode: None,
+            warmup_mode: resolve_capture_warmup_mode(args.provider, backend, args.warmup_mode),
             capture_method: Some(match backend {
                 ProfileBackend::AndroidNative => "simpleperf".into(),
                 ProfileBackend::IosInstruments => "instruments".into(),
@@ -1242,6 +1638,18 @@ fn build_capture_plan(
             }),
             warnings: Vec::new(),
         },
+    })
+}
+
+fn resolve_capture_warmup_mode(
+    provider: ProfileProvider,
+    backend: ProfileBackend,
+    requested: Option<CaptureWarmupMode>,
+) -> Option<CaptureWarmupMode> {
+    requested.or(match (provider, backend) {
+        (ProfileProvider::Local, ProfileBackend::AndroidNative)
+        | (ProfileProvider::Local, ProfileBackend::IosInstruments) => Some(CaptureWarmupMode::Warm),
+        _ => None,
     })
 }
 
@@ -1541,7 +1949,202 @@ mod tests {
             provider,
             backend,
             format,
+            warmup_mode: None,
         }
+    }
+
+    #[test]
+    fn local_native_profiles_default_to_warm_capture_mode() {
+        let android_target = resolve_profile_target(&sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        ))
+        .expect("resolve android target");
+        let android_plan = build_capture_plan(
+            &sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Both,
+            ),
+            &android_target,
+            &PathBuf::from("target/mobench/profile"),
+        )
+        .expect("build android plan");
+
+        assert_eq!(
+            android_plan.capture_metadata.warmup_mode,
+            Some(CaptureWarmupMode::Warm)
+        );
+    }
+
+    #[test]
+    fn explicit_capture_warmup_mode_overrides_local_default() {
+        let mut args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        args.warmup_mode = Some(CaptureWarmupMode::Cold);
+        let target = resolve_profile_target(&args).expect("resolve target");
+        let plan = build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+            .expect("build plan");
+
+        assert_eq!(
+            plan.capture_metadata.warmup_mode,
+            Some(CaptureWarmupMode::Cold)
+        );
+    }
+
+    #[test]
+    fn android_warmup_log_marker_detection_uses_bench_json_marker() {
+        assert!(android_log_contains_marker(
+            "03-26 19:00:00.000 BenchRunner I BENCH_JSON {\"samples_ns\":[1,2]}",
+            ANDROID_BENCH_LOG_MARKER
+        ));
+        assert!(!android_log_contains_marker(
+            "03-26 19:00:00.000 BenchRunner I unrelated log line",
+            ANDROID_BENCH_LOG_MARKER
+        ));
+    }
+
+    #[test]
+    fn benchmark_logs_extract_android_bench_json_reports() {
+        let reports = extract_benchmark_reports_from_logs(
+            "03-26 19:00:00.000 BenchRunner I BENCH_JSON {\"function\":\"sample_fns::fibonacci\",\"phases\":[{\"name\":\"prove\",\"duration_ns\":90},{\"name\":\"serialize\",\"duration_ns\":10}]}",
+        );
+
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            benchmark_value_function(&reports[0]),
+            Some("sample_fns::fibonacci")
+        );
+    }
+
+    #[test]
+    fn semantic_profile_populates_from_benchmark_phase_payload() {
+        let mut manifest = build_capture_plan(
+            &sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Both,
+            ),
+            &resolve_profile_target(&sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Both,
+            ))
+            .expect("resolve target"),
+            &PathBuf::from("target/mobench/profile"),
+        )
+        .expect("build plan");
+
+        populate_semantic_profile_from_benchmark_value(
+            &mut manifest,
+            &serde_json::json!({
+                "function": "sample_fns::fibonacci",
+                "phases": [
+                    {"name": "prove", "duration_ns": 90},
+                    {"name": "serialize", "duration_ns": 10}
+                ]
+            }),
+        );
+
+        assert_eq!(
+            manifest.semantic_profile.status,
+            SemanticCaptureStatus::Captured
+        );
+        assert_eq!(manifest.semantic_profile.phases.len(), 2);
+        assert_eq!(manifest.semantic_profile.phases[0].name, "prove");
+        assert_eq!(manifest.semantic_profile.phases[0].duration_ns, Some(90));
+        assert_eq!(manifest.semantic_profile.phases[0].percent_total, Some(90));
+        assert_eq!(manifest.semantic_profile.phases[1].percent_total, Some(10));
+    }
+
+    #[test]
+    fn semantic_profile_uses_samples_ns_totals_for_android_log_payloads() {
+        let mut manifest = build_capture_plan(
+            &sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Both,
+            ),
+            &resolve_profile_target(&sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Both,
+            ))
+            .expect("resolve target"),
+            &PathBuf::from("target/mobench/profile"),
+        )
+        .expect("build plan");
+
+        merge_semantic_profile_from_bench_report(
+            &mut manifest,
+            &serde_json::json!({
+                "function": "sample_fns::fibonacci",
+                "samples_ns": [100, 300],
+                "phases": [
+                    {"name": "prove", "duration_ns": 320},
+                    {"name": "serialize", "duration_ns": 40}
+                ]
+            }),
+        )
+        .expect("merge semantic profile");
+
+        assert_eq!(
+            manifest.semantic_profile.status,
+            SemanticCaptureStatus::Captured
+        );
+        assert_eq!(manifest.semantic_profile.phases[0].percent_total, Some(80));
+        assert_eq!(manifest.semantic_profile.phases[1].percent_total, Some(10));
+    }
+
+    #[test]
+    fn write_profile_session_outputs_persists_semantic_phase_sidecar() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut manifest = sample_manifest();
+        manifest.semantic_profile.spans_path = Some(
+            dir.path()
+                .join("android-sample/artifacts/semantic/phases.json"),
+        );
+        let args = ProfileRunArgs {
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".into(),
+            provider: ProfileProvider::Local,
+            backend: ProfileBackend::AndroidNative,
+            format: ProfileFormat::Both,
+            output_dir: dir.path().to_path_buf(),
+            crate_path: None,
+            device: None,
+            os_version: None,
+            profile: None,
+            device_matrix: None,
+            config: None,
+            warmup_mode: Some(CaptureWarmupMode::Warm),
+        };
+        let run_output_dir = dir.path().join("android-sample");
+
+        write_profile_session_outputs(&args, &run_output_dir, &manifest)
+            .expect("write profile outputs");
+
+        let sidecar = std::fs::read_to_string(
+            manifest
+                .semantic_profile
+                .spans_path
+                .as_ref()
+                .expect("semantic spans path"),
+        )
+        .expect("read semantic sidecar");
+        assert!(sidecar.contains("\"prove\""));
+        assert!(sidecar.contains("\"serialize\""));
     }
 
     #[test]
@@ -1684,6 +2287,68 @@ mod tests {
 
         assert!(rendered.contains("sample_fns::fibonacci"));
         assert!(rendered.contains("Profile Summary"));
+    }
+
+    #[test]
+    fn build_capture_plan_reserves_semantic_phase_sidecar_path() {
+        let args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        let target = resolve_profile_target(&args).expect("resolve target");
+        let manifest = build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+            .expect("build capture plan");
+
+        assert_eq!(
+            manifest.semantic_profile.spans_path,
+            Some(PathBuf::from(
+                "target/mobench/profile/artifacts/semantic/phases.json"
+            ))
+        );
+    }
+
+    #[test]
+    fn semantic_profile_ingests_phase_timings_from_bench_report_json() {
+        let args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        let target = resolve_profile_target(&args).expect("resolve target");
+        let mut manifest =
+            build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+                .expect("build capture plan");
+        let bench_report = serde_json::json!({
+            "spec": {
+                "name": "sample_fns::fibonacci",
+                "iterations": 2,
+                "warmup": 1
+            },
+            "samples": [
+                {"duration_ns": 100},
+                {"duration_ns": 300}
+            ],
+            "phases": [
+                {"name": "prove", "duration_ns": 320},
+                {"name": "serialize", "duration_ns": 40}
+            ]
+        });
+
+        populate_semantic_profile_from_benchmark_value(&mut manifest, &bench_report);
+
+        assert_eq!(
+            manifest.semantic_profile.status,
+            SemanticCaptureStatus::Captured
+        );
+        assert_eq!(manifest.semantic_profile.phases.len(), 2);
+        assert_eq!(manifest.semantic_profile.phases[0].name, "prove");
+        assert_eq!(manifest.semantic_profile.phases[0].duration_ns, Some(320));
+        assert_eq!(manifest.semantic_profile.phases[0].percent_total, Some(80));
+        assert_eq!(manifest.semantic_profile.phases[1].name, "serialize");
+        assert_eq!(manifest.semantic_profile.phases[1].percent_total, Some(10));
     }
 
     #[test]
@@ -2346,7 +3011,7 @@ mod tests {
                     .as_ref()
                     .map(|device| device.identifier.clone()),
                 sample_duration_secs: Some(15),
-                warmup_mode: Some("warm".into()),
+                warmup_mode: Some(CaptureWarmupMode::Warm),
                 capture_method: Some("simpleperf".into()),
                 warnings: vec!["missing symbols".into()],
             },

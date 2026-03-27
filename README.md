@@ -113,16 +113,28 @@ The summary renderer keeps native and semantic outputs separate so the flamegrap
 view stays focused on native stacks while phase timings remain readable as
 benchmark metadata.
 
+When a benchmark uses `mobench_sdk::timing::profile_phase(...)`, local profile
+runs also persist a run-scoped semantic sidecar at
+`artifacts/semantic/phases.json`. The profile summary renders those phase totals
+separately from the flamegraph so phase timing does not get mislabeled as native
+stack data.
+
 Profiling capability matrix:
 
 | Provider | Backend | Current behavior | Notes |
 |----------|---------|------------------|-------|
-| `local` | `android-native` | Planned manifest only | Native `simpleperf` capture is not implemented yet |
+| `local` | `android-native` | Attempts real native capture | Uses `simpleperf`, symbolized `stacks.folded`, `native-report.txt`, `flamegraph.html`, and semantic phase summaries when the benchmark emits `profile_phase` data and an `adb` device is available |
 | `local` | `ios-instruments` | Planned manifest only | iOS output is an Instruments trace (`time-profiler.trace`) plus XML export (`time-profiler.xml`), not a flamegraph |
 | `local` | `rust-tracing` | Planned manifest only | Structured trace output is local-only and still not implemented |
 | `browserstack` | `android-native` | Unsupported | Use `--provider local` for planning/local capture, or a normal BrowserStack benchmark for timing/memory metrics |
 | `browserstack` | `ios-instruments` | Unsupported | BrowserStack does not provide retrievable native Instruments trace artifacts in this release |
 | `browserstack` | `rust-tracing` | Unsupported | Use `--provider local` for trace-events output |
+
+For local native profiling, `profile run` also accepts `--warmup-mode warm|cold`.
+Warm mode is the default for local Android/iOS native plans. On Android it performs
+one preparatory launch before recording to prime startup caches and reduce first-run
+noise. That improves the capture, but it does not remove all per-process bridge
+initialization from the recorded run.
 
 When you need device-specific planning inputs for profiling, `profile run`
 reuses the same resolution model as `devices resolve`:

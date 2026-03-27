@@ -106,6 +106,10 @@ fn profile_run_help_mentions_planned_only_or_execution_scope() {
         stdout.contains("BrowserStack") || stdout.contains("browserstack"),
         "expected help to mention BrowserStack capability scope, got:\n{stdout}"
     );
+    assert!(
+        stdout.contains("--warmup-mode"),
+        "expected help to expose warm/cold capture mode, got:\n{stdout}"
+    );
 }
 
 #[test]
