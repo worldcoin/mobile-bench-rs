@@ -1,16 +1,15 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt::Write;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{
+    DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
     load_dotenv_for_layout, persist_mobile_spec, resolve_devices_for_profile,
-    resolve_project_layout, run_android_build, validate_benchmark_function, DevicePlatform,
-    MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
+    resolve_project_layout, run_android_build, validate_benchmark_function,
 };
 use mobench_sdk::types::NativeLibraryArtifact;
 
@@ -47,10 +46,10 @@ pub enum ProfileSummaryFormat {
 
 #[derive(Debug, Clone, Args)]
 #[command(
-    about = "Plan or execute a native profiling session depending on backend/provider support",
+    about = "Plan or execute a native profiling session; local android-native now performs real simpleperf capture",
     after_help = concat!(
         "Capability matrix:\n",
-        "  local + android-native: planned manifest today; native simpleperf capture is not implemented yet\n",
+        "  local + android-native: attempts real simpleperf capture and symbolization\n",
         "  local + ios-instruments: planned manifest today; Instruments trace export capture is not implemented yet\n",
         "  local + rust-tracing: planned manifest today; structured trace output is local-only\n",
         "  browserstack + android-native: unsupported for native capture in this release\n",
@@ -480,7 +479,11 @@ pub fn cmd_profile_run(args: &ProfileRunArgs, dry_run: bool) -> Result<()> {
     run_profile_session_with_executor(args, dry_run, execute_capture)
 }
 
-fn run_profile_session_with_executor<E>(args: &ProfileRunArgs, dry_run: bool, execute: E) -> Result<()>
+fn run_profile_session_with_executor<E>(
+    args: &ProfileRunArgs,
+    dry_run: bool,
+    execute: E,
+) -> Result<()>
 where
     E: FnOnce(&ProfileRunArgs, &ResolvedProfileTarget, &mut ProfileManifest) -> Result<()>,
 {
@@ -501,7 +504,10 @@ where
     write_profile_session_outputs(args, &run_output_dir, &manifest)?;
     execution_result?;
 
-    println!("Profile session written to {}", run_output_dir.join("profile.json").display());
+    println!(
+        "Profile session written to {}",
+        run_output_dir.join("profile.json").display()
+    );
     println!(
         "Profile summary written to {}",
         run_output_dir.join("summary.md").display()
@@ -628,25 +634,45 @@ where
 pub(crate) fn symbolize_android_folded_stacks_with_native_libraries<F>(
     folded_stacks: &str,
     native_libraries: &[NativeLibraryArtifact],
+    runtime_abi: Option<&str>,
     mut resolve: F,
 ) -> (String, SymbolizationRecord, String)
 where
     F: FnMut(&Path, u64) -> Option<String>,
 {
-    let library_paths: HashMap<String, PathBuf> = native_libraries
-        .iter()
-        .map(|artifact| {
-            (
-                artifact.library_name.clone(),
-                artifact.unstripped_path.clone(),
-            )
-        })
-        .collect();
+    let runtime_abi = runtime_abi.map(str::to_owned);
 
     symbolize_android_folded_stacks_with_resolver(folded_stacks, |library_name, offset| {
-        let library_path = library_paths.get(library_name)?;
-        resolve(library_path.as_path(), offset)
+        let library_path = resolve_android_native_library_path(
+            native_libraries,
+            library_name,
+            runtime_abi.as_deref(),
+        )?;
+        resolve(library_path, offset)
     })
+}
+
+fn resolve_android_native_library_path<'a>(
+    native_libraries: &'a [NativeLibraryArtifact],
+    library_name: &str,
+    runtime_abi: Option<&str>,
+) -> Option<&'a Path> {
+    match runtime_abi {
+        Some(runtime_abi) => native_libraries
+            .iter()
+            .find(|artifact| artifact.library_name == library_name && artifact.abi == runtime_abi)
+            .map(|artifact| artifact.unstripped_path.as_path()),
+        None => {
+            let mut matching = native_libraries
+                .iter()
+                .filter(|artifact| artifact.library_name == library_name);
+            let artifact = matching.next()?;
+            if matching.next().is_some() {
+                return None;
+            }
+            Some(artifact.unstripped_path.as_path())
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -654,13 +680,17 @@ pub(crate) fn write_android_symbolized_outputs(
     folded_stacks: &str,
     native_libraries: &[NativeLibraryArtifact],
     processed_root: &Path,
+    runtime_abi: Option<&str>,
+    llvm_addr2line_path: &Path,
 ) -> Result<SymbolizationRecord> {
     write_android_symbolized_outputs_with_resolver(
         folded_stacks,
         native_libraries,
         processed_root,
+        runtime_abi,
         |library_path, offset| {
-            mobench_sdk::builders::android::resolve_android_native_symbol_with_addr2line(
+            mobench_sdk::builders::android::resolve_android_native_symbol_with_tool(
+                llvm_addr2line_path,
                 library_path,
                 offset,
             )
@@ -672,6 +702,7 @@ pub(crate) fn write_android_symbolized_outputs_with_resolver<F>(
     folded_stacks: &str,
     native_libraries: &[NativeLibraryArtifact],
     processed_root: &Path,
+    runtime_abi: Option<&str>,
     resolve: F,
 ) -> Result<SymbolizationRecord>
 where
@@ -679,12 +710,12 @@ where
 {
     std::fs::create_dir_all(processed_root)?;
 
-    let (symbolized_stacks, record, report) =
-        symbolize_android_folded_stacks_with_native_libraries(
-            folded_stacks,
-            native_libraries,
-            resolve,
-        );
+    let (symbolized_stacks, record, report) = symbolize_android_folded_stacks_with_native_libraries(
+        folded_stacks,
+        native_libraries,
+        runtime_abi,
+        resolve,
+    );
 
     std::fs::write(processed_root.join("stacks.folded"), &symbolized_stacks)?;
     std::fs::write(processed_root.join("native-report.txt"), &report)?;
@@ -725,6 +756,7 @@ struct AndroidProfilerToolchain {
     app_profiler_path: PathBuf,
     stackcollapse_path: PathBuf,
     python_path: PathBuf,
+    llvm_addr2line_path: PathBuf,
 }
 
 fn locate_android_profiler_toolchain() -> Result<AndroidProfilerToolchain> {
@@ -737,11 +769,9 @@ fn locate_android_profiler_toolchain() -> Result<AndroidProfilerToolchain> {
                 .and_then(|ndk_home| ndk_home.parent().and_then(Path::parent).map(PathBuf::from))
         })
         .or_else(|| {
-            std::env::var_os("HOME").map(PathBuf::from).map(|home| {
-                home.join("Library")
-                    .join("Android")
-                    .join("sdk")
-            })
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join("Library").join("Android").join("sdk"))
         })
         .filter(|path| path.exists())
         .context("Android SDK not found; set ANDROID_HOME or ANDROID_SDK_ROOT")?;
@@ -751,15 +781,13 @@ fn locate_android_profiler_toolchain() -> Result<AndroidProfilerToolchain> {
         .filter(|path| path.exists())
         .or_else(|| {
             let ndk_dir = sdk_root.join("ndk");
-            std::fs::read_dir(&ndk_dir)
-                .ok()
-                .and_then(|entries| {
-                    entries
-                        .filter_map(|entry| entry.ok())
-                        .map(|entry| entry.path())
-                        .filter(|path| path.is_dir())
-                        .max()
-                })
+            std::fs::read_dir(&ndk_dir).ok().and_then(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.path())
+                    .filter(|path| path.is_dir())
+                    .max()
+            })
         })
         .context("Android NDK not found; set ANDROID_NDK_HOME or install an NDK under the SDK")?;
 
@@ -769,10 +797,18 @@ fn locate_android_profiler_toolchain() -> Result<AndroidProfilerToolchain> {
     let python_path = std::env::var_os("PYTHON")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("python3"));
+    let llvm_addr2line_override = std::env::var_os("MOBENCH_ANDROID_LLVM_ADDR2LINE")
+        .or_else(|| std::env::var_os("LLVM_ADDR2LINE"))
+        .map(PathBuf::from);
+    let llvm_addr2line_path =
+        locate_android_llvm_addr2line(&ndk_root, llvm_addr2line_override.as_deref())?;
 
     for path in [&adb_path, &app_profiler_path, &stackcollapse_path] {
         if !path.exists() {
-            bail!("required Android profiling tool not found at {}", path.display());
+            bail!(
+                "required Android profiling tool not found at {}",
+                path.display()
+            );
         }
     }
 
@@ -782,7 +818,43 @@ fn locate_android_profiler_toolchain() -> Result<AndroidProfilerToolchain> {
         app_profiler_path,
         stackcollapse_path,
         python_path,
+        llvm_addr2line_path,
     })
+}
+
+fn locate_android_llvm_addr2line(ndk_root: &Path, override_path: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = override_path {
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
+        bail!(
+            "explicit llvm-addr2line override does not exist at {}",
+            path.display()
+        );
+    }
+
+    let prebuilt_root = ndk_root.join("toolchains").join("llvm").join("prebuilt");
+    let tool_name = if cfg!(windows) {
+        "llvm-addr2line.exe"
+    } else {
+        "llvm-addr2line"
+    };
+    let mut candidates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&prebuilt_root) {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("bin").join(tool_name);
+            if candidate.exists() {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates.sort();
+    candidates
+        .into_iter()
+        .next()
+        .context(
+            "llvm-addr2line not found under the Android NDK; set MOBENCH_ANDROID_LLVM_ADDR2LINE or LLVM_ADDR2LINE to override",
+        )
 }
 
 fn prepend_path_env(toolchain: &AndroidProfilerToolchain) -> Option<std::ffi::OsString> {
@@ -799,10 +871,7 @@ fn ensure_android_device_connected(toolchain: &AndroidProfilerToolchain) -> Resu
         .output()
         .context("failed to run `adb devices`")?;
     if !output.status.success() {
-        bail!(
-            "adb devices failed with status {}",
-            output.status
-        );
+        bail!("adb devices failed with status {}", output.status);
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     if stdout
@@ -836,7 +905,7 @@ fn sdk_root_emulator_hint(sdk_root: &Path) -> Option<String> {
         .trim()
         .to_string();
     Some(format!(
-        "start one with `{}` -avd {}`",
+        "start one with `{}` -avd `{}`",
         emulator_path.display(),
         avd
     ))
@@ -849,18 +918,11 @@ fn read_android_application_id(android_root: &Path) -> Result<String> {
     for line in contents.lines() {
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("applicationId ") {
-            return extract_quoted_value(value).with_context(|| {
-                format!(
-                    "parsing applicationId from {}",
-                    build_gradle.display()
-                )
-            });
+            return extract_quoted_value(value)
+                .with_context(|| format!("parsing applicationId from {}", build_gradle.display()));
         }
     }
-    bail!(
-        "applicationId not found in {}",
-        build_gradle.display()
-    )
+    bail!("applicationId not found in {}", build_gradle.display())
 }
 
 fn extract_quoted_value(source: &str) -> Result<String> {
@@ -906,6 +968,7 @@ fn execute_local_android_capture(
 ) -> Result<()> {
     let toolchain = locate_android_profiler_toolchain()?;
     ensure_android_device_connected(&toolchain)?;
+    let runtime_abi = resolve_android_runtime_abi(&toolchain)?;
 
     let layout = resolve_project_layout(ProjectLayoutOptions {
         start_dir: None,
@@ -1014,6 +1077,8 @@ fn execute_local_android_capture(
         &folded_stacks,
         &build.native_libraries,
         &processed_root,
+        runtime_abi.as_deref(),
+        &toolchain.llvm_addr2line_path,
     )?;
 
     manifest.native_capture.symbolization = symbolization.clone();
@@ -1029,6 +1094,43 @@ fn execute_local_android_capture(
     ));
 
     Ok(())
+}
+
+fn resolve_android_runtime_abi(toolchain: &AndroidProfilerToolchain) -> Result<Option<String>> {
+    let primary_abi = read_android_device_property(&toolchain.adb_path, "ro.product.cpu.abi")?;
+    if let Some(abi) = primary_abi {
+        return Ok(Some(abi));
+    }
+
+    let abi_list = read_android_device_property(&toolchain.adb_path, "ro.product.cpu.abilist")?;
+    Ok(abi_list.and_then(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .find(|value| !value.is_empty())
+            .map(str::to_owned)
+    }))
+}
+
+fn read_android_device_property(adb_path: &Path, property: &str) -> Result<Option<String>> {
+    let output = Command::new(adb_path)
+        .args(["shell", "getprop", property])
+        .output()
+        .with_context(|| format!("reading Android device property {property}"))?;
+    if !output.status.success() {
+        bail!(
+            "adb shell getprop {property} failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
 }
 
 fn load_profile_manifest(path: &Path) -> Result<ProfileManifest> {
@@ -1272,7 +1374,11 @@ fn execute_capture(
 
     let plan_only_warning = match (args.provider, target.backend) {
         (ProfileProvider::Local, ProfileBackend::AndroidNative) => {
-            return execute_capture_with_local_android_executor(args, manifest, execute_local_android_capture);
+            return execute_capture_with_local_android_executor(
+                args,
+                manifest,
+                execute_local_android_capture,
+            );
         }
         (ProfileProvider::Local, ProfileBackend::IosInstruments) => Some(
             "local ios-instruments capture is not implemented yet; this session records the planned Instruments trace/XML artifact contract only",
@@ -1283,7 +1389,7 @@ fn execute_capture(
         (ProfileProvider::Browserstack, ProfileBackend::AndroidNative) => {
             bail!(browserstack_native_capture_unsupported_message(
                 "android-native",
-                "local Android profiling produces simpleperf artifacts and flamegraphs when implemented",
+                "local Android profiling produces simpleperf artifacts and flamegraphs",
             ));
         }
         (ProfileProvider::Browserstack, ProfileBackend::IosInstruments) => {
@@ -1321,15 +1427,9 @@ where
     Ok(())
 }
 
-fn mark_android_capture_attempt_failed(
-    manifest: &mut ProfileManifest,
-    error: &anyhow::Error,
-) {
+fn mark_android_capture_attempt_failed(manifest: &mut ProfileManifest, error: &anyhow::Error) {
     manifest.native_capture.status = CaptureStatus::Failed;
     manifest.native_capture.symbolization.status = CaptureStatus::Failed;
-    if manifest.native_capture.symbolization.tool.is_none() {
-        manifest.native_capture.symbolization.tool = Some("llvm-addr2line".into());
-    }
 
     let failure_note = format!("local android-native capture failed: {error}");
     if !manifest
@@ -1530,7 +1630,10 @@ mod tests {
             Some("Open flamegraph.html in a browser")
         );
         assert_eq!(manifest.capture_metadata.warnings, vec!["legacy manifest"]);
-        assert_eq!(manifest.semantic_profile.status, SemanticCaptureStatus::Planned);
+        assert_eq!(
+            manifest.semantic_profile.status,
+            SemanticCaptureStatus::Planned
+        );
     }
 
     #[test]
@@ -1604,20 +1707,33 @@ mod tests {
     }
 
     #[test]
-    fn android_native_offsets_use_unstripped_library_paths() {
-        let unstripped_path = PathBuf::from("/cargo/target/aarch64-linux-android/release/libsample_fns.so");
+    fn android_native_offsets_use_runtime_abi_to_select_unstripped_library_paths() {
+        let unstripped_path =
+            PathBuf::from("/cargo/target/aarch64-linux-android/release/libsample_fns.so");
         let packaged_path = PathBuf::from("/apk/jniLibs/arm64-v8a/libsample_fns.so");
-        let native_libraries = vec![NativeLibraryArtifact {
-            abi: "arm64-v8a".into(),
-            library_name: "libsample_fns.so".into(),
-            unstripped_path: unstripped_path.clone(),
-            packaged_path,
-        }];
+        let other_unstripped_path =
+            PathBuf::from("/cargo/target/x86_64-linux-android/release/libsample_fns.so");
+        let other_packaged_path = PathBuf::from("/apk/jniLibs/x86_64/libsample_fns.so");
+        let native_libraries = vec![
+            NativeLibraryArtifact {
+                abi: "arm64-v8a".into(),
+                library_name: "libsample_fns.so".into(),
+                unstripped_path: unstripped_path.clone(),
+                packaged_path,
+            },
+            NativeLibraryArtifact {
+                abi: "x86_64".into(),
+                library_name: "libsample_fns.so".into(),
+                unstripped_path: other_unstripped_path.clone(),
+                packaged_path: other_packaged_path,
+            },
+        ];
         let mut seen_paths = Vec::new();
 
         let (symbolized, record, report) = symbolize_android_folded_stacks_with_native_libraries(
             "dev.world.samplefns;libsample_fns.so[+94138] 1",
             &native_libraries,
+            Some("x86_64"),
             |path, offset| {
                 seen_paths.push((path.to_path_buf(), offset));
                 Some("sample_fns::fibonacci".into())
@@ -1626,11 +1742,52 @@ mod tests {
 
         assert!(symbolized.contains("sample_fns::fibonacci"));
         assert_eq!(seen_paths.len(), 1);
-        assert_eq!(seen_paths[0].0, unstripped_path);
+        assert_eq!(seen_paths[0].0, other_unstripped_path);
         assert_eq!(seen_paths[0].1, 94_138);
         assert_eq!(record.status, CaptureStatus::Captured);
         assert_eq!(record.resolved_frames, 1);
         assert!(report.contains("sample_fns::fibonacci"));
+    }
+
+    #[test]
+    fn android_native_offsets_do_not_collapse_multiple_abis_without_a_runtime_selection() {
+        let native_libraries = vec![
+            NativeLibraryArtifact {
+                abi: "arm64-v8a".into(),
+                library_name: "libsample_fns.so".into(),
+                unstripped_path: PathBuf::from(
+                    "/cargo/target/aarch64-linux-android/release/libsample_fns.so",
+                ),
+                packaged_path: PathBuf::from("/apk/jniLibs/arm64-v8a/libsample_fns.so"),
+            },
+            NativeLibraryArtifact {
+                abi: "x86_64".into(),
+                library_name: "libsample_fns.so".into(),
+                unstripped_path: PathBuf::from(
+                    "/cargo/target/x86_64-linux-android/release/libsample_fns.so",
+                ),
+                packaged_path: PathBuf::from("/apk/jniLibs/x86_64/libsample_fns.so"),
+            },
+        ];
+        let mut seen_paths = Vec::new();
+
+        let (symbolized, record, report) = symbolize_android_folded_stacks_with_native_libraries(
+            "dev.world.samplefns;libsample_fns.so[+94138] 1",
+            &native_libraries,
+            None,
+            |path, offset| {
+                seen_paths.push((path.to_path_buf(), offset));
+                Some("sample_fns::fibonacci".into())
+            },
+        );
+
+        assert!(symbolized.contains("libsample_fns.so[+94138]"));
+        assert!(report.contains("libsample_fns.so[+94138]"));
+        assert!(seen_paths.is_empty());
+        assert!(!symbolized.contains("sample_fns::fibonacci"));
+        assert_eq!(record.status, CaptureStatus::Failed);
+        assert_eq!(record.resolved_frames, 0);
+        assert_eq!(record.unresolved_frames, 1);
     }
 
     #[test]
@@ -1650,6 +1807,7 @@ mod tests {
             "dev.world.samplefns;libsample_fns.so[+94138] 1",
             &native_libraries,
             &processed_root,
+            Some("arm64-v8a"),
             |_path, offset| {
                 if offset == 94_138 {
                     Some("sample_fns::fibonacci".into())
@@ -1676,6 +1834,42 @@ mod tests {
     }
 
     #[test]
+    fn android_ndk_addr2line_discovery_prefers_ndk_toolchain_bin() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let ndk_root = temp_dir.path().join("ndk/26.3.11579264");
+        let tool_path = ndk_root
+            .join("toolchains")
+            .join("llvm")
+            .join("prebuilt")
+            .join("darwin-x86_64")
+            .join("bin")
+            .join(if cfg!(windows) {
+                "llvm-addr2line.exe"
+            } else {
+                "llvm-addr2line"
+            });
+        std::fs::create_dir_all(tool_path.parent().expect("tool parent")).expect("create tool dir");
+        std::fs::write(&tool_path, "#!/bin/sh\n").expect("write tool");
+
+        let discovered = locate_android_llvm_addr2line(&ndk_root, None).expect("discover tool");
+
+        assert_eq!(discovered, tool_path);
+    }
+
+    #[test]
+    fn android_ndk_addr2line_discovery_honors_explicit_override() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let override_path = temp_dir.path().join("custom-llvm-addr2line");
+        std::fs::write(&override_path, "#!/bin/sh\n").expect("write override");
+
+        let discovered =
+            locate_android_llvm_addr2line(Path::new("/does/not/matter"), Some(&override_path))
+                .expect("discover override");
+
+        assert_eq!(discovered, override_path);
+    }
+
+    #[test]
     fn local_android_attempted_capture_marks_failed_state() {
         let args = sample_run_args(
             MobileTarget::Android,
@@ -1684,21 +1878,28 @@ mod tests {
             ProfileFormat::Both,
         );
         let target = resolve_profile_target(&args).expect("resolve target");
-        let mut manifest = build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
-            .expect("build capture plan");
+        let mut manifest =
+            build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+                .expect("build capture plan");
 
-        let error = execute_capture_with_local_android_executor(&args, &mut manifest, |_args, _manifest| {
-            anyhow::bail!("simulated android capture failure")
-        })
+        let error = execute_capture_with_local_android_executor(
+            &args,
+            &mut manifest,
+            |_args, _manifest| anyhow::bail!("simulated android capture failure"),
+        )
         .expect_err("simulated capture failure");
 
-        assert!(error.to_string().contains("simulated android capture failure"));
-        assert_eq!(manifest.native_capture.status, CaptureStatus::Failed);
-        assert_eq!(manifest.native_capture.symbolization.status, CaptureStatus::Failed);
-        assert_eq!(
-            manifest.native_capture.symbolization.tool.as_deref(),
-            Some("llvm-addr2line")
+        assert!(
+            error
+                .to_string()
+                .contains("simulated android capture failure")
         );
+        assert_eq!(manifest.native_capture.status, CaptureStatus::Failed);
+        assert_eq!(
+            manifest.native_capture.symbolization.status,
+            CaptureStatus::Failed
+        );
+        assert_eq!(manifest.native_capture.symbolization.tool, None);
         assert!(
             manifest
                 .capture_metadata
@@ -1726,16 +1927,22 @@ mod tests {
         })
         .expect_err("simulated execution failure should bubble up");
 
-        assert!(error.to_string().contains("simulated android capture failure"));
+        assert!(
+            error
+                .to_string()
+                .contains("simulated android capture failure")
+        );
 
-        let run_dir = dir
-            .path()
-            .join(build_run_id(args.target, &args.function));
+        let run_dir = dir.path().join(build_run_id(args.target, &args.function));
         let manifest = load_profile_manifest(&run_dir.join("profile.json"))
             .expect("load failed profile manifest");
 
         assert_eq!(manifest.native_capture.status, CaptureStatus::Failed);
-        assert_eq!(manifest.native_capture.symbolization.status, CaptureStatus::Failed);
+        assert_eq!(
+            manifest.native_capture.symbolization.status,
+            CaptureStatus::Failed
+        );
+        assert_eq!(manifest.native_capture.symbolization.tool, None);
         assert!(
             manifest
                 .capture_metadata
@@ -1768,26 +1975,30 @@ mod tests {
         )
         .expect("android capture plan");
 
-        assert!(plan
-            .native_capture
-            .raw_artifacts
-            .iter()
-            .any(|p| p.path.ends_with("sample.perf")));
-        assert!(plan
-            .native_capture
-            .processed_artifacts
-            .iter()
-            .any(|p| p.path.ends_with("flamegraph.html")));
-        assert!(plan
-            .native_capture
-            .processed_artifacts
-            .iter()
-            .any(|p| p.path.ends_with("stacks.folded")));
-        assert!(plan
-            .native_capture
-            .processed_artifacts
-            .iter()
-            .any(|p| p.path.ends_with("native-report.txt")));
+        assert!(
+            plan.native_capture
+                .raw_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("sample.perf"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("flamegraph.html"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("stacks.folded"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("native-report.txt"))
+        );
     }
 
     #[test]
@@ -1838,16 +2049,18 @@ mod tests {
         )
         .expect("ios capture plan");
 
-        assert!(plan
-            .native_capture
-            .raw_artifacts
-            .iter()
-            .any(|p| p.path.ends_with("time-profiler.trace")));
-        assert!(plan
-            .native_capture
-            .processed_artifacts
-            .iter()
-            .any(|p| p.path.ends_with("time-profiler.xml")));
+        assert!(
+            plan.native_capture
+                .raw_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("time-profiler.trace"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("time-profiler.xml"))
+        );
     }
 
     #[test]

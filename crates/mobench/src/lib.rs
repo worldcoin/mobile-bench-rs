@@ -662,7 +662,9 @@ enum ReportCommand {
 
 #[derive(Subcommand, Debug)]
 enum ProfileCommand {
-    /// Plan or execute a native profiling session depending on backend/provider support.
+    #[command(
+        about = "Plan or execute a native profiling session; local android-native now performs real simpleperf capture"
+    )]
     Run(profile::ProfileRunArgs),
     /// Render markdown or JSON from a normalized profile manifest.
     Summarize(profile::ProfileSummarizeArgs),
@@ -8708,14 +8710,14 @@ project = "proj"
         let help = render_profile_run_help();
 
         assert!(
-            help.contains("plan")
-                || help.contains("Plan")
-                || help.contains("depending on backend/provider support"),
-            "expected profile run help to explain whether it plans or executes capture, got:\n{help}"
+            help.contains("Plan or execute a native profiling session; local android-native now performs real simpleperf capture"),
+            "expected profile run help to describe the real local android-native execution scope, got:\n{help}"
         );
         assert!(
-            help.contains("BrowserStack") || help.contains("browserstack"),
-            "expected profile run help to mention BrowserStack capability scope, got:\n{help}"
+            help.contains(
+                "local + android-native: attempts real simpleperf capture and symbolization"
+            ),
+            "expected profile run help to mention real Android native execution, got:\n{help}"
         );
     }
 
