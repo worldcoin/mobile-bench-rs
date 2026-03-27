@@ -1,12 +1,111 @@
 //! Basic benchmark examples demonstrating mobench-sdk usage.
 //!
 //! This example keeps things minimal: register functions with #[benchmark] and
-//! let the SDK handle discovery and execution. See `examples/ffi-benchmark` for
-//! a full UniFFI-based FFI surface.
+//! let the SDK handle discovery and execution. It also exposes the minimal
+//! UniFFI/mobile entrypoint needed by the example CI so the generated Android
+//! and iOS apps can execute the benchmarks end to end.
 
 use mobench_sdk::benchmark;
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
+
+/// Specification for a benchmark run.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct BenchSpec {
+    pub name: String,
+    pub iterations: u32,
+    pub warmup: u32,
+}
+
+/// A single benchmark sample with timing information.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct BenchSample {
+    pub duration_ns: u64,
+}
+
+/// Complete benchmark report with spec and timing samples.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct BenchReport {
+    pub spec: BenchSpec,
+    pub samples: Vec<BenchSample>,
+}
+
+/// Error types for benchmark operations.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
+pub enum BenchError {
+    #[error("iterations must be greater than zero")]
+    InvalidIterations,
+
+    #[error("unknown benchmark function: {name}")]
+    UnknownFunction { name: String },
+
+    #[error("benchmark execution failed: {reason}")]
+    ExecutionFailed { reason: String },
+}
+
+uniffi::setup_scaffolding!();
+
+impl From<mobench_sdk::BenchSpec> for BenchSpec {
+    fn from(spec: mobench_sdk::BenchSpec) -> Self {
+        Self {
+            name: spec.name,
+            iterations: spec.iterations,
+            warmup: spec.warmup,
+        }
+    }
+}
+
+impl From<BenchSpec> for mobench_sdk::BenchSpec {
+    fn from(spec: BenchSpec) -> Self {
+        Self {
+            name: spec.name,
+            iterations: spec.iterations,
+            warmup: spec.warmup,
+        }
+    }
+}
+
+impl From<mobench_sdk::BenchSample> for BenchSample {
+    fn from(sample: mobench_sdk::BenchSample) -> Self {
+        Self {
+            duration_ns: sample.duration_ns,
+        }
+    }
+}
+
+impl From<mobench_sdk::RunnerReport> for BenchReport {
+    fn from(report: mobench_sdk::RunnerReport) -> Self {
+        Self {
+            spec: report.spec.into(),
+            samples: report.samples.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<mobench_sdk::BenchError> for BenchError {
+    fn from(err: mobench_sdk::BenchError) -> Self {
+        match err {
+            mobench_sdk::BenchError::Runner(runner_err) => BenchError::ExecutionFailed {
+                reason: runner_err.to_string(),
+            },
+            mobench_sdk::BenchError::UnknownFunction(name, _available) => {
+                BenchError::UnknownFunction { name }
+            }
+            _ => BenchError::ExecutionFailed {
+                reason: err.to_string(),
+            },
+        }
+    }
+}
+
+/// Run a benchmark by name with the given specification.
+#[uniffi::export]
+pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
+    let sdk_spec: mobench_sdk::BenchSpec = spec.into();
+    let report = mobench_sdk::run_benchmark(sdk_spec)?;
+    Ok(report.into())
+}
 
 /// Compute fibonacci number iteratively.
 pub fn fibonacci(n: u32) -> u64 {
@@ -95,5 +194,27 @@ mod tests {
         };
         let report = mobench_sdk::run_benchmark(spec).unwrap();
         assert_eq!(report.samples.len(), 3);
+    }
+
+    #[test]
+    fn test_run_benchmark_via_mobile_ffi() {
+        let spec = BenchSpec {
+            name: "basic_benchmark::bench_checksum".to_string(),
+            iterations: 2,
+            warmup: 0,
+        };
+        let report = run_benchmark(spec).unwrap();
+        assert_eq!(report.samples.len(), 2);
+    }
+
+    #[test]
+    fn test_unknown_function_maps_to_mobile_ffi_error() {
+        let spec = BenchSpec {
+            name: "basic_benchmark::does_not_exist".to_string(),
+            iterations: 1,
+            warmup: 0,
+        };
+        let result = run_benchmark(spec);
+        assert!(matches!(result, Err(BenchError::UnknownFunction { .. })));
     }
 }

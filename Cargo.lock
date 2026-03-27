@@ -146,6 +146,9 @@ version = "0.1.0"
 dependencies = [
  "inventory",
  "mobench-sdk",
+ "serde",
+ "thiserror 1.0.69",
+ "uniffi",
 ]
 
 [[package]]

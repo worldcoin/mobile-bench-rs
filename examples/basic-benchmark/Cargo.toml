@@ -9,6 +9,11 @@ name = "basic_benchmark"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-# Use mobench-sdk for the #[benchmark] macro and registry
 mobench-sdk = { path = "../../crates/mobench-sdk" }
 inventory.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uniffi = { workspace = true, features = ["cli"] }
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
