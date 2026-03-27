@@ -194,6 +194,25 @@ jobs:
             cargo install mobench --locked
           fi
 
+      - name: Install uniffi-bindgen
+        shell: bash
+        run: |
+          set -euo pipefail
+          uniffi_version=$(awk '
+            $0 == "[[package]]" { in_pkg=0 }
+            $0 == "name = \"uniffi_bindgen\"" { in_pkg=1; next }
+            in_pkg && /^version = / {
+              gsub(/^version = "|\"$/, "", $0)
+              print $0
+              exit
+            }
+          ' caller/Cargo.lock)
+          if [ -n "${uniffi_version}" ]; then
+            cargo install uniffi_bindgen --version "${uniffi_version}" --locked
+          else
+            cargo install uniffi_bindgen --locked
+          fi
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -408,6 +427,25 @@ jobs:
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
             cargo install mobench --locked
+          fi
+
+      - name: Install uniffi-bindgen
+        shell: bash
+        run: |
+          set -euo pipefail
+          uniffi_version=$(awk '
+            $0 == "[[package]]" { in_pkg=0 }
+            $0 == "name = \"uniffi_bindgen\"" { in_pkg=1; next }
+            in_pkg && /^version = / {
+              gsub(/^version = "|\"$/, "", $0)
+              print $0
+              exit
+            }
+          ' caller/Cargo.lock)
+          if [ -n "${uniffi_version}" ]; then
+            cargo install uniffi_bindgen --version "${uniffi_version}" --locked
+          else
+            cargo install uniffi_bindgen --locked
           fi
 
       - name: Resolve Android device

@@ -653,7 +653,7 @@ impl AndroidBuilder {
                         name = \"uniffi-bindgen\"\n\
                         path = \"src/bin/uniffi-bindgen.rs\"\n\n\
                      2. Or install uniffi-bindgen globally:\n\
-                        cargo install uniffi-bindgen\n\n\
+                        cargo install uniffi_bindgen\n\n\
                      3. Or pre-generate bindings and commit them."
                         .to_string(),
                 ));
