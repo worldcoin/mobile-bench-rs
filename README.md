@@ -83,7 +83,7 @@ cargo mobench ci run --target android --function sample_fns::fibonacci --local-o
 cargo mobench report summarize --summary target/mobench/ci/summary.json --plots auto
 cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
 
-# Experimental profiling session contract (local-first in this release)
+# Experimental profiling session capture
 cargo mobench profile run --target android --function sample_fns::fibonacci \
   --provider local --backend android-native
 cargo mobench profile summarize --profile target/mobench/profile/profile.json
@@ -97,27 +97,42 @@ CI contract outputs are written to `target/mobench/ci/`:
 
 Local summary renderers (`ci run --plots ...` and `report summarize --plots ...`) append a `Device Comparison Plots` section with one Sina-style SVG per benchmark function. Summary resource fields use `cpu_total_ms` and `peak_memory_kb`; Android raw resource stats are preserved and iOS peak memory is enriched from BrowserStack app profiling when available.
 
-Experimental profiling commands are local-first in this release. Each planned
-session is written under `target/mobench/profile/<run-id>/`, and the CLI also
-refreshes top-level `target/mobench/profile/profile.json` and `summary.md` as
-convenience copies of the latest run.
+Experimental profiling commands are local-first in this release. Supported
+local backends execute a real capture and write artifacts under
+`target/mobench/profile/<run-id>/`, and the CLI also refreshes top-level
+`target/mobench/profile/profile.json` and `summary.md` as convenience copies of
+the latest run.
+
+The manifest is split into three explicit sections:
+
+- `native_capture`: native stack artifacts, symbolization state, and viewer hints
+- `semantic_profile`: optional benchmark phase data such as `prove` and `serialize`
+- `capture_metadata`: device resolution, capture settings, and warnings
+
+The summary renderer keeps native and semantic outputs separate so the flamegraph
+view stays focused on native stacks while phase timings remain readable as
+benchmark metadata.
 
 Profiling capability matrix:
 
 | Provider | Backend | Current behavior | Notes |
 |----------|---------|------------------|-------|
-| `local` | `android-native` | Planned manifest only | Native `simpleperf` capture is not implemented yet |
-| `local` | `ios-instruments` | Planned manifest only | iOS output is an Instruments trace (`time-profiler.trace`) plus XML export (`time-profiler.xml`), not a flamegraph |
-| `local` | `rust-tracing` | Planned manifest only | Structured trace output is local-only |
+| `local` | `android-native` | Real capture | Builds the Android bench app, captures `simpleperf`, writes `sample.perf`, `stacks.folded`, and `flamegraph.html` |
+| `local` | `ios-instruments` | Real capture | Builds the iOS Simulator bench app, samples the simulator-host process, writes `sample.txt`, `stacks.folded`, and `flamegraph.html` |
+| `local` | `rust-tracing` | Planned manifest only | Structured trace output is local-only and still not implemented |
 | `browserstack` | `android-native` | Unsupported | Use `--provider local` for planning/local capture, or a normal BrowserStack benchmark for timing/memory metrics |
 | `browserstack` | `ios-instruments` | Unsupported | BrowserStack does not provide retrievable native Instruments trace artifacts in this release |
 | `browserstack` | `rust-tracing` | Unsupported | Use `--provider local` for trace-events output |
 
 `profile run --dry-run` always stops after target resolution plus planning and
-writes the planned manifest only. Non-dry-run profile runs currently do not
-execute local native capture tools automatically, and BrowserStack-backed native
-profiling fails deliberately with an explanatory error instead of silently
+writes the planned manifest only. Non-dry-run profile runs attempt local native
+capture for supported backend/provider pairs, and BrowserStack-backed native
+profiling still fails deliberately with an explanatory error instead of silently
 pretending to capture data.
+
+Real local profile runs also accept the same benchmark knobs as `mobench run`,
+including `--iterations`, `--warmup`, `--release`, and
+`--capture-duration-secs`.
 
 When you need device-specific planning inputs for profiling, `profile run`
 reuses the same resolution model as `devices resolve`:
@@ -249,7 +264,10 @@ fn db_query(db: &Database) {
 - Clarified that profiling remains local-first in this release; BrowserStack native profiling is explicitly unsupported with actionable error text and a visible capability matrix.
 - Split `profile run` into target resolution, capture planning, and capture execution seams so planned manifests no longer imply that native capture actually ran.
 - Added device-selection inputs to `profile run` (`--device`, `--os-version`, `--profile`, `--device-matrix`) by reusing the existing deterministic device-resolution flow.
-- Corrected the iOS artifact story: the planned output is an Instruments trace/XML export contract, not a flamegraph.
+- Added real local profiling outputs on both platforms:
+  - Android: `simpleperf` capture plus folded stacks and `flamegraph.html`
+  - iOS Simulator: host-process sample capture plus folded stacks and `flamegraph.html`
+- Corrected the iOS artifact story so the implemented local backend describes sample-based flamegraph generation rather than an Instruments trace/XML export contract.
 - Added regression coverage for profile help text, BrowserStack unsupported execution, dry-run planning semantics, and direct device target resolution.
 - Added experimental `cargo mobench profile run|summarize` commands for a normalized local profiling session contract across Android and iOS.
 - Profile sessions now write run-scoped artifacts under `target/mobench/profile/<run-id>/` and refresh top-level latest-session `profile.json` and `summary.md` convenience files.
