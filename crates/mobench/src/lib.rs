@@ -972,16 +972,16 @@ struct DeviceMatrix {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct RunSpec {
-    target: MobileTarget,
-    function: String,
-    iterations: u32,
-    warmup: u32,
-    devices: Vec<String>,
+pub(crate) struct RunSpec {
+    pub(crate) target: MobileTarget,
+    pub(crate) function: String,
+    pub(crate) iterations: u32,
+    pub(crate) warmup: u32,
+    pub(crate) devices: Vec<String>,
     #[serde(skip_serializing, skip_deserializing, default)]
-    browserstack: Option<BrowserStackConfig>,
+    pub(crate) browserstack: Option<BrowserStackConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    ios_xcuitest: Option<IosXcuitestArtifacts>,
+    pub(crate) ios_xcuitest: Option<IosXcuitestArtifacts>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1014,22 +1014,22 @@ struct RunSummary {
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedProjectLayout {
-    project_root: PathBuf,
-    crate_dir: PathBuf,
-    crate_name: String,
-    library_name: String,
-    config_path: Option<PathBuf>,
-    output_dir: PathBuf,
-    default_function: Option<String>,
+pub(crate) struct ResolvedProjectLayout {
+    pub(crate) project_root: PathBuf,
+    pub(crate) crate_dir: PathBuf,
+    pub(crate) crate_name: String,
+    pub(crate) library_name: String,
+    pub(crate) config_path: Option<PathBuf>,
+    pub(crate) output_dir: PathBuf,
+    pub(crate) default_function: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ProjectLayoutOptions<'a> {
-    start_dir: Option<&'a Path>,
-    project_root: Option<&'a Path>,
-    crate_path: Option<&'a Path>,
-    config_path: Option<&'a Path>,
+pub(crate) struct ProjectLayoutOptions<'a> {
+    pub(crate) start_dir: Option<&'a Path>,
+    pub(crate) project_root: Option<&'a Path>,
+    pub(crate) crate_path: Option<&'a Path>,
+    pub(crate) config_path: Option<&'a Path>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1335,7 +1335,7 @@ pub fn run() -> Result<()> {
                                 println!("[3/4] Uploading to BrowserStack...");
                             }
                             let test_apk = build.test_suite_path.as_ref().context(
-                                "Android test suite APK missing. Run `cargo mobench build --target android` or `./gradlew assembleDebugAndroidTest` in target/mobench/android",
+                                "Android test suite APK missing. Run `cargo mobench build --target android` or `./gradlew app:assembleReleaseAndroidTest` in target/mobench/android",
                             )?;
                             let run = trigger_browserstack_espresso(&spec, &apk, test_apk)?;
                             remote_run = Some(run);
@@ -2053,7 +2053,9 @@ fn resolve_legacy_crate_dir(project_root: &Path) -> Result<PathBuf> {
     )
 }
 
-fn resolve_project_layout(options: ProjectLayoutOptions<'_>) -> Result<ResolvedProjectLayout> {
+pub(crate) fn resolve_project_layout(
+    options: ProjectLayoutOptions<'_>,
+) -> Result<ResolvedProjectLayout> {
     let start_dir = match options.start_dir {
         Some(path) => canonicalize_from(Path::new("."), path)?,
         None => std::env::current_dir().context("Failed to get current directory")?,
@@ -3499,7 +3501,7 @@ fn filter_devices_by_tags(devices: Vec<DeviceEntry>, tags: &[String]) -> Result<
     Ok(matched)
 }
 
-fn run_ios_build(
+pub(crate) fn run_ios_build(
     layout: &ResolvedProjectLayout,
     release: bool,
     dry_run: bool,
@@ -3952,7 +3954,10 @@ fn run_local_smoke(spec: &RunSpec) -> Result<Value> {
 ///
 /// This provides early feedback when a function name is misspelled or doesn't exist.
 /// If validation fails, it warns but continues (the final validation happens on device).
-fn validate_benchmark_function(layout: &ResolvedProjectLayout, function_name: &str) -> Result<()> {
+pub(crate) fn validate_benchmark_function(
+    layout: &ResolvedProjectLayout,
+    function_name: &str,
+) -> Result<()> {
     let benchmarks = discover_benchmarks_for_layout(layout)?;
     let found_any_benchmarks = !benchmarks.is_empty();
     let simple_name = function_name.split("::").last().unwrap_or(function_name);
@@ -3995,7 +4000,7 @@ fn validate_benchmark_function(layout: &ResolvedProjectLayout, function_name: &s
     Ok(())
 }
 
-fn persist_mobile_spec(
+pub(crate) fn persist_mobile_spec(
     layout: &ResolvedProjectLayout,
     spec: &RunSpec,
     release: bool,
@@ -5341,7 +5346,7 @@ fn format_ms(value: Option<u64>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn run_android_build(
+pub(crate) fn run_android_build(
     layout: &ResolvedProjectLayout,
     _ndk_home: &str,
     release: bool,
@@ -5404,7 +5409,7 @@ fn load_dotenv_global() {
     }
 }
 
-fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
+pub(crate) fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
     let mut directories = vec![layout.project_root.clone()];
     if let Some(config_path) = &layout.config_path
         && let Some(config_dir) = config_path.parent()
