@@ -6713,7 +6713,7 @@ fn builtin_device_for_profile(
     profile: &str,
 ) -> Option<ResolvedMatrixDevice> {
     let (name, os, os_version) = match (platform, profile) {
-        (DevicePlatform::Ios, "low-spec") => ("iPhone 11", "ios", "13"),
+        (DevicePlatform::Ios, "low-spec") => ("iPhone 13", "ios", "15"),
         (DevicePlatform::Ios, "mid-spec") => ("iPhone 14", "ios", "16"),
         (DevicePlatform::Ios, "high-spec") => ("iPhone 16 Pro", "ios", "18"),
         (DevicePlatform::Android, "low-spec") => ("Google Pixel 6", "android", "12.0"),
@@ -8712,6 +8712,16 @@ project = "proj"
                 .expect("resolved devices");
         let ids: Vec<String> = resolved.into_iter().map(|d| d.identifier).collect();
         assert_eq!(ids, vec!["Pixel 6-12.0", "Pixel 7-13.0"]);
+    }
+
+    #[test]
+    fn builtin_ios_low_spec_profile_matches_ci_deployment_target() {
+        let resolved = builtin_device_for_profile(DevicePlatform::Ios, "low-spec")
+            .expect("built-in low-spec iOS profile");
+
+        assert_eq!(resolved.name, "iPhone 13");
+        assert_eq!(resolved.os_version, "15");
+        assert_eq!(resolved.identifier, "iPhone 13-15");
     }
 
     #[test]
