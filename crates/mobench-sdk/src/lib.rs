@@ -375,7 +375,7 @@ pub use types::{BenchError, BenchSample, BenchSpec, RunnerReport};
 // Re-export types that require full feature
 #[cfg(feature = "full")]
 #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
-pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, Target};
+pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, NativeLibraryArtifact, Target};
 
 // Re-export timing types at the crate root for convenience
 pub use timing::{BenchSummary, TimingError, run_closure};

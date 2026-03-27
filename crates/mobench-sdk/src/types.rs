@@ -287,4 +287,17 @@ pub struct BuildResult {
     /// - Android: Path to the androidTest APK (for Espresso)
     /// - iOS: Path to the XCUITest runner zip
     pub test_suite_path: Option<PathBuf>,
+    /// Native library build artifacts, including the packaged and unstripped paths.
+    pub native_libraries: Vec<NativeLibraryArtifact>,
+}
+
+/// Native library provenance for a build result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeLibraryArtifact {
+    /// Android ABI directory name, e.g. `arm64-v8a`.
+    pub abi: String,
+    /// Path to the packaged library copied into `jniLibs`.
+    pub packaged_path: PathBuf,
+    /// Path to the unstripped Cargo output used for symbolization.
+    pub unstripped_path: PathBuf,
 }
