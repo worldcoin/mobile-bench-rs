@@ -10,7 +10,7 @@ use std::process::Command;
 use crate::{
     DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
     load_dotenv_for_layout, persist_mobile_spec, resolve_devices_for_profile,
-    resolve_project_layout, run_android_build, validate_benchmark_function,
+    resolve_project_layout, run_android_build, run_ios_build, validate_benchmark_function,
 };
 use mobench_sdk::types::NativeLibraryArtifact;
 
@@ -63,11 +63,11 @@ impl CaptureWarmupMode {
 
 #[derive(Debug, Clone, Args)]
 #[command(
-    about = "Plan or execute a native profiling session; local android-native now performs real simpleperf capture",
+    about = "Plan or execute a native profiling session; local android-native and ios-instruments now attempt real native capture",
     after_help = concat!(
         "Capability matrix:\n",
         "  local + android-native: attempts real simpleperf capture and symbolization\n",
-        "  local + ios-instruments: planned manifest today; Instruments trace export capture is not implemented yet\n",
+        "  local + ios-instruments: attempts real simulator-host sample capture and flamegraph generation\n",
         "  local + rust-tracing: planned manifest today; structured trace output is local-only\n",
         "  browserstack + android-native: unsupported for native capture in this release\n",
         "  browserstack + ios-instruments: unsupported for native capture in this release\n",
@@ -766,6 +766,14 @@ where
 }
 
 fn write_android_flamegraph_html(folded_stacks: &str, output_path: &Path) -> Result<()> {
+    write_flamegraph_html(folded_stacks, output_path, "Android Native Profile")
+}
+
+fn write_ios_flamegraph_html(folded_stacks: &str, output_path: &Path) -> Result<()> {
+    write_flamegraph_html(folded_stacks, output_path, "iOS Native Profile")
+}
+
+fn write_flamegraph_html(folded_stacks: &str, output_path: &Path, title: &str) -> Result<()> {
     if folded_stacks.trim().is_empty() {
         std::fs::write(
             output_path,
@@ -775,7 +783,7 @@ fn write_android_flamegraph_html(folded_stacks: &str, output_path: &Path) -> Res
     }
 
     let mut options = inferno::flamegraph::Options::default();
-    options.title = "Android Native Profile".into();
+    options.title = title.into();
     let mut rendered = Vec::new();
     inferno::flamegraph::from_reader(
         &mut options,
@@ -790,7 +798,24 @@ const DEFAULT_PROFILE_ITERATIONS: u32 = 20;
 const DEFAULT_PROFILE_WARMUP: u32 = 3;
 const DEFAULT_ANDROID_CAPTURE_DURATION_SECS: u64 = 10;
 const DEFAULT_ANDROID_WARMUP_TIMEOUT_SECS: u64 = 60;
+const DEFAULT_IOS_CAPTURE_DURATION_SECS: u64 = 10;
+const DEFAULT_IOS_BENCH_DELAY_MS: u64 = 1_500;
+const DEFAULT_IOS_LOG_TIMEOUT_SECS: u64 = 60;
 const ANDROID_BENCH_LOG_MARKER: &str = "BENCH_JSON";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalIosSimulator {
+    udid: String,
+    name: String,
+    os_version: String,
+    state: String,
+}
+
+impl LocalIosSimulator {
+    fn identifier(&self) -> String {
+        format!("{}-{}", self.name, self.os_version)
+    }
+}
 
 #[derive(Debug, Clone)]
 struct AndroidProfilerToolchain {
@@ -1281,6 +1306,740 @@ fn android_log_contains_marker(logcat: &str, marker: &str) -> bool {
     logcat.lines().any(|line| line.contains(marker))
 }
 
+fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManifest) -> Result<()> {
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: None,
+        crate_path: args.crate_path.as_deref(),
+        config_path: args.config.as_deref(),
+    })?;
+    load_dotenv_for_layout(&layout);
+    validate_benchmark_function(&layout, &args.function)?;
+
+    let spec = RunSpec {
+        target: MobileTarget::Ios,
+        function: args.function.clone(),
+        iterations: DEFAULT_PROFILE_ITERATIONS,
+        warmup: DEFAULT_PROFILE_WARMUP,
+        devices: Vec::new(),
+        browserstack: None,
+        ios_xcuitest: None,
+    };
+    persist_mobile_spec(&layout, &spec, false)?;
+
+    let requested_device = resolve_profile_device(args)?;
+    let simulator = resolve_local_ios_simulator(requested_device.as_ref())?;
+    ensure_local_ios_simulator_booted(&simulator)?;
+    manifest.capture_metadata.device = Some(simulator.identifier());
+
+    run_ios_build(&layout, false, false)?;
+    let app_path = build_local_ios_simulator_app(&layout, &simulator)?;
+    install_local_ios_app(&simulator, &app_path)?;
+
+    let bundle_id = local_ios_bundle_identifier(&layout.crate_name);
+    let warmup_mode = manifest
+        .capture_metadata
+        .warmup_mode
+        .unwrap_or(CaptureWarmupMode::Cold);
+    manifest.capture_metadata.warmup_mode = Some(warmup_mode);
+
+    let raw_sample_path = manifest
+        .native_capture
+        .raw_artifacts
+        .iter()
+        .find(|artifact| artifact.label == "sample")
+        .map(|artifact| artifact.path.clone())
+        .context("ios profile plan missing sample artifact")?;
+    let processed_root = manifest
+        .native_capture
+        .processed_artifacts
+        .iter()
+        .find_map(|artifact| artifact.path.parent().map(Path::to_path_buf))
+        .context("ios profile plan missing processed artifact root")?;
+    if let Some(parent) = raw_sample_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir_all(&processed_root)?;
+
+    if warmup_mode == CaptureWarmupMode::Warm
+        && let Err(error) = run_local_ios_warmup_pass(&simulator, &bundle_id, &raw_sample_path)
+    {
+        manifest.capture_metadata.warnings.push(format!(
+            "failed to complete the preparatory iOS warm launch cleanly; continuing with the recorded run cold-ish: {error}"
+        ));
+    }
+
+    let log_dir = raw_sample_path
+        .parent()
+        .context("ios sample artifact missing parent directory")?;
+    let stdout_path = log_dir.join("app.stdout.log");
+    let stderr_path = log_dir.join("app.stderr.log");
+    let result_hold_ms = (DEFAULT_IOS_CAPTURE_DURATION_SECS + 2) * 1_000;
+    let env_pairs = [
+        (
+            "MOBENCH_BENCH_DELAY_MS",
+            DEFAULT_IOS_BENCH_DELAY_MS.to_string(),
+        ),
+        ("MOBENCH_PROFILE_RESULT_HOLD_MS", result_hold_ms.to_string()),
+    ];
+    let pid = launch_local_ios_app(
+        &simulator,
+        &bundle_id,
+        &stdout_path,
+        &stderr_path,
+        &env_pairs,
+    )?;
+
+    let sample_result = run_ios_sample_capture(pid, &raw_sample_path);
+    let log_wait_result = wait_for_ios_log_marker(
+        &[stdout_path.clone(), stderr_path.clone()],
+        "BENCH_REPORT_JSON_END",
+        DEFAULT_IOS_LOG_TIMEOUT_SECS,
+    );
+    let terminate_result = terminate_local_ios_app(&simulator, &bundle_id);
+
+    sample_result?;
+    if let Err(error) = log_wait_result {
+        manifest.capture_metadata.warnings.push(format!(
+            "semantic phase capture may be incomplete because the iOS benchmark log marker was not observed before timeout: {error}"
+        ));
+    }
+    if let Err(error) = terminate_result {
+        manifest.capture_metadata.warnings.push(format!(
+            "failed to terminate the profiled iOS simulator app after capture: {error}"
+        ));
+    }
+
+    let sample_output = std::fs::read_to_string(&raw_sample_path)
+        .with_context(|| format!("reading iOS sample output at {}", raw_sample_path.display()))?;
+    let symbolization = write_ios_processed_outputs(&sample_output, &processed_root)?;
+    manifest.native_capture.symbolization = symbolization.clone();
+    manifest.native_capture.status = match symbolization.status {
+        CaptureStatus::Planned | CaptureStatus::Captured => CaptureStatus::Captured,
+        CaptureStatus::Partial | CaptureStatus::Failed => CaptureStatus::Partial,
+    };
+    manifest.capture_metadata.sample_duration_secs = Some(DEFAULT_IOS_CAPTURE_DURATION_SECS);
+    manifest.capture_metadata.capture_method = Some("sample/simctl".into());
+    manifest.capture_metadata.warnings.push(format!(
+        "ios profile run used default benchmark settings: iterations={}, warmup={}",
+        DEFAULT_PROFILE_ITERATIONS, DEFAULT_PROFILE_WARMUP
+    ));
+    if warmup_mode == CaptureWarmupMode::Warm {
+        manifest.capture_metadata.warnings.push(
+            "performed one preparatory warm launch before recording so the measured sample de-emphasizes first-run bridge and UI setup costs".into(),
+        );
+    }
+
+    match read_combined_text_files(&[stdout_path, stderr_path]) {
+        Ok(logs) => {
+            if let Some(report) = extract_ios_benchmark_json(&logs) {
+                merge_semantic_profile_from_bench_report(manifest, &report)?;
+            } else {
+                manifest.capture_metadata.warnings.push(
+                    "semantic phase capture was unavailable because the iOS log output did not contain BENCH_REPORT_JSON markers".into(),
+                );
+            }
+        }
+        Err(error) => {
+            manifest.capture_metadata.warnings.push(format!(
+                "semantic phase capture was unavailable because iOS app logs could not be read: {error}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn run_local_ios_warmup_pass(
+    simulator: &LocalIosSimulator,
+    bundle_id: &str,
+    raw_sample_path: &Path,
+) -> Result<()> {
+    let log_dir = raw_sample_path
+        .parent()
+        .context("ios sample artifact missing parent directory")?;
+    let stdout_path = log_dir.join("warmup.stdout.log");
+    let stderr_path = log_dir.join("warmup.stderr.log");
+    let env_pairs = [("MOBENCH_PROFILE_WARMUP_ONLY", "1".to_string())];
+    let _pid = launch_local_ios_app(simulator, bundle_id, &stdout_path, &stderr_path, &env_pairs)?;
+
+    let wait_result = wait_for_ios_log_marker(
+        &[stdout_path, stderr_path],
+        "BENCH_REPORT_JSON_END",
+        DEFAULT_IOS_LOG_TIMEOUT_SECS,
+    );
+    let terminate_result = terminate_local_ios_app(simulator, bundle_id);
+
+    wait_result?;
+    terminate_result?;
+    Ok(())
+}
+
+fn resolve_local_ios_simulator(
+    requested: Option<&ResolvedProfileDevice>,
+) -> Result<LocalIosSimulator> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "list", "devices", "available", "--json"])
+        .output()
+        .context("listing available iOS simulators with simctl")?;
+    if !output.status.success() {
+        bail!(
+            "xcrun simctl list devices available --json failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let value: Value = serde_json::from_slice(&output.stdout)
+        .context("parsing iOS simulator list JSON from simctl")?;
+    let mut simulators = Vec::new();
+    let Some(devices) = value.get("devices").and_then(Value::as_object) else {
+        bail!("simctl JSON did not contain a `devices` object");
+    };
+
+    for (runtime_key, entries) in devices {
+        let Some(os_version) = parse_ios_runtime_version(runtime_key) else {
+            continue;
+        };
+        let Some(entries) = entries.as_array() else {
+            continue;
+        };
+        for entry in entries {
+            let Some(name) = entry.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(udid) = entry.get("udid").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(state) = entry.get("state").and_then(Value::as_str) else {
+                continue;
+            };
+            if entry
+                .get("isAvailable")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+            {
+                simulators.push(LocalIosSimulator {
+                    udid: udid.to_string(),
+                    name: name.to_string(),
+                    os_version: os_version.clone(),
+                    state: state.to_string(),
+                });
+            }
+        }
+    }
+
+    if simulators.is_empty() {
+        bail!("no available iOS simulators were returned by `xcrun simctl list devices available`");
+    }
+
+    if let Some(requested) = requested {
+        let mut matches: Vec<_> = simulators
+            .into_iter()
+            .filter(|simulator| {
+                simulator.name == requested.name
+                    && ios_versions_match(&requested.os_version, &simulator.os_version)
+            })
+            .collect();
+        matches.sort_by_key(|simulator| simulator.state != "Booted");
+        return matches.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!(
+                "requested local iOS simulator {} {} was not found; available simulators include: {}",
+                requested.name,
+                requested.os_version,
+                available_ios_simulator_summary(devices)
+            )
+        });
+    }
+
+    simulators.sort_by_key(|simulator| simulator.state != "Booted");
+    simulators
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no iOS simulators were available for local profiling"))
+}
+
+fn available_ios_simulator_summary(devices: &serde_json::Map<String, Value>) -> String {
+    let mut labels = Vec::new();
+    for (runtime_key, entries) in devices {
+        let Some(os_version) = parse_ios_runtime_version(runtime_key) else {
+            continue;
+        };
+        let Some(entries) = entries.as_array() else {
+            continue;
+        };
+        for entry in entries {
+            if entry
+                .get("isAvailable")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+                && let Some(name) = entry.get("name").and_then(Value::as_str)
+            {
+                labels.push(format!("{name} {os_version}"));
+            }
+        }
+    }
+    labels.sort();
+    labels.dedup();
+    labels.into_iter().take(6).collect::<Vec<_>>().join(", ")
+}
+
+fn parse_ios_runtime_version(runtime_key: &str) -> Option<String> {
+    runtime_key
+        .strip_prefix("com.apple.CoreSimulator.SimRuntime.iOS-")
+        .map(|value| value.replace('-', "."))
+}
+
+fn ios_versions_match(requested: &str, candidate: &str) -> bool {
+    let requested = requested.trim();
+    let candidate = candidate.trim();
+    requested == candidate
+        || candidate.starts_with(&format!("{requested}."))
+        || requested.starts_with(&format!("{candidate}."))
+}
+
+fn ensure_local_ios_simulator_booted(simulator: &LocalIosSimulator) -> Result<()> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "bootstatus", &simulator.udid, "-b"])
+        .output()
+        .with_context(|| format!("booting iOS simulator {}", simulator.identifier()))?;
+    if !output.status.success() {
+        bail!(
+            "xcrun simctl bootstatus {} -b failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            simulator.udid,
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn build_local_ios_simulator_app(
+    layout: &crate::ResolvedProjectLayout,
+    simulator: &LocalIosSimulator,
+) -> Result<PathBuf> {
+    let project_path = layout
+        .output_dir
+        .join("ios")
+        .join("BenchRunner")
+        .join("BenchRunner.xcodeproj");
+    if !project_path.exists() {
+        bail!(
+            "generated BenchRunner project was not found at {}; run `cargo mobench build --target ios` or rerun the profile build step",
+            project_path.display()
+        );
+    }
+
+    let build_root = layout
+        .output_dir
+        .join("ios")
+        .join("profile-simulator-build");
+    let mut cmd = Command::new("xcodebuild");
+    cmd.arg("-project")
+        .arg(&project_path)
+        .arg("-target")
+        .arg("BenchRunner")
+        .arg("-sdk")
+        .arg("iphonesimulator")
+        .arg("-configuration")
+        .arg("Debug")
+        .arg("build")
+        .arg(format!("SYMROOT={}", build_root.display()))
+        .arg(format!("OBJROOT={}", build_root.display()))
+        .arg("CODE_SIGNING_ALLOWED=NO")
+        .arg("CODE_SIGNING_REQUIRED=NO");
+    let output = cmd.output().with_context(|| {
+        format!(
+            "building the local iOS BenchRunner simulator app for {}",
+            simulator.identifier()
+        )
+    })?;
+    let app_path = build_root
+        .join("Debug-iphonesimulator")
+        .join("BenchRunner.app");
+    if !output.status.success() || !app_path.exists() {
+        bail!(
+            "xcodebuild simulator build failed for {}\nproject: {}\napp path: {}\nexit status: {}\nstdout:\n{}\nstderr:\n{}",
+            simulator.identifier(),
+            project_path.display(),
+            app_path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    Ok(app_path)
+}
+
+fn install_local_ios_app(simulator: &LocalIosSimulator, app_path: &Path) -> Result<()> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "install", &simulator.udid])
+        .arg(app_path)
+        .output()
+        .with_context(|| {
+            format!(
+                "installing {} on iOS simulator {}",
+                app_path.display(),
+                simulator.identifier()
+            )
+        })?;
+    if !output.status.success() {
+        bail!(
+            "xcrun simctl install failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn local_ios_bundle_identifier(crate_name: &str) -> String {
+    format!(
+        "dev.world.{}.BenchRunner",
+        mobench_sdk::codegen::sanitize_bundle_id_component(crate_name)
+    )
+}
+
+fn launch_local_ios_app(
+    simulator: &LocalIosSimulator,
+    bundle_id: &str,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    env_pairs: &[(&str, String)],
+) -> Result<u32> {
+    let stdout_path = absolutize_profile_path(stdout_path)?;
+    let stderr_path = absolutize_profile_path(stderr_path)?;
+
+    if let Some(parent) = stdout_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = stderr_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&stdout_path, "")?;
+    std::fs::write(&stderr_path, "")?;
+
+    let mut cmd = Command::new("xcrun");
+    cmd.args(["simctl", "launch"])
+        .arg(format!("--stdout={}", stdout_path.display()))
+        .arg(format!("--stderr={}", stderr_path.display()))
+        .arg("--terminate-running-process")
+        .arg(&simulator.udid)
+        .arg(bundle_id);
+    for (key, value) in env_pairs {
+        cmd.env(format!("SIMCTL_CHILD_{key}"), value);
+    }
+
+    let output = cmd.output().with_context(|| {
+        format!(
+            "launching {} on iOS simulator {}",
+            bundle_id,
+            simulator.identifier()
+        )
+    })?;
+    if !output.status.success() {
+        bail!(
+            "xcrun simctl launch failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    parse_simctl_launch_pid(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn absolutize_profile_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()
+            .context("resolving absolute path for iOS simulator logs")?
+            .join(path))
+    }
+}
+
+fn parse_simctl_launch_pid(stdout: &str) -> Result<u32> {
+    stdout
+        .split_whitespace()
+        .rev()
+        .find_map(|token| token.parse::<u32>().ok())
+        .context("simctl launch did not report an application pid")
+}
+
+fn terminate_local_ios_app(simulator: &LocalIosSimulator, bundle_id: &str) -> Result<()> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "terminate", &simulator.udid, bundle_id])
+        .output()
+        .with_context(|| {
+            format!(
+                "terminating {} on iOS simulator {}",
+                bundle_id,
+                simulator.identifier()
+            )
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("found nothing to terminate") || stderr.contains("not running") {
+        return Ok(());
+    }
+
+    bail!(
+        "xcrun simctl terminate failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        stderr
+    );
+}
+
+fn run_ios_sample_capture(pid: u32, output_path: &Path) -> Result<()> {
+    let output = Command::new("sample")
+        .arg(pid.to_string())
+        .arg(DEFAULT_IOS_CAPTURE_DURATION_SECS.to_string())
+        .arg("1")
+        .arg("-mayDie")
+        .arg("-file")
+        .arg(output_path)
+        .output()
+        .with_context(|| format!("sampling iOS simulator process {pid}"))?;
+    if !output.status.success() {
+        bail!(
+            "sample failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn wait_for_ios_log_marker(paths: &[PathBuf], marker: &str, timeout_secs: u64) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    while std::time::Instant::now() < deadline {
+        if let Ok(logs) = read_combined_text_files(paths)
+            && logs.contains(marker)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    bail!("timed out waiting for iOS log marker `{marker}`");
+}
+
+fn read_combined_text_files(paths: &[PathBuf]) -> Result<String> {
+    let mut combined = String::new();
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+        combined.push_str(
+            &std::fs::read_to_string(path)
+                .with_context(|| format!("reading text file at {}", path.display()))?,
+        );
+        if !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+    }
+    Ok(combined)
+}
+
+fn write_ios_processed_outputs(
+    sample_output: &str,
+    processed_root: &Path,
+) -> Result<SymbolizationRecord> {
+    std::fs::create_dir_all(processed_root)?;
+    std::fs::write(processed_root.join("native-report.txt"), sample_output)?;
+
+    match collapse_ios_sample_call_graph(sample_output) {
+        Ok((folded_stacks, mut record)) => {
+            std::fs::write(processed_root.join("stacks.folded"), &folded_stacks)?;
+            write_ios_flamegraph_html(&folded_stacks, &processed_root.join("flamegraph.html"))?;
+            if record.tool.is_none() {
+                record.tool = Some("sample".into());
+            }
+            Ok(record)
+        }
+        Err(error) => {
+            std::fs::write(processed_root.join("stacks.folded"), "")?;
+            write_ios_flamegraph_html("", &processed_root.join("flamegraph.html"))?;
+            Ok(SymbolizationRecord {
+                status: CaptureStatus::Failed,
+                tool: Some("sample".into()),
+                resolved_frames: 0,
+                unresolved_frames: 0,
+                notes: vec![format!("failed to collapse iOS sample call graph: {error}")],
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+fn collapse_ios_sample_call_graph_to_folded_stacks(sample_output: &str) -> Result<String> {
+    collapse_ios_sample_call_graph(sample_output).map(|(folded_stacks, _record)| folded_stacks)
+}
+
+fn collapse_ios_sample_call_graph(sample_output: &str) -> Result<(String, SymbolizationRecord)> {
+    #[derive(Clone)]
+    struct StackFrame {
+        indent: usize,
+        frame: String,
+        unresolved: bool,
+    }
+
+    #[derive(Clone)]
+    struct ParsedNode {
+        depth: usize,
+        count: u64,
+        frames: Vec<String>,
+        unresolved_frames: u64,
+    }
+
+    let mut saw_call_graph = false;
+    let mut in_call_graph = false;
+    let mut stack: Vec<StackFrame> = Vec::new();
+    let mut nodes = Vec::new();
+
+    for line in sample_output.lines() {
+        let trimmed = line.trim();
+        if !in_call_graph {
+            if trimmed == "Call graph:" {
+                saw_call_graph = true;
+                in_call_graph = true;
+            }
+            continue;
+        }
+        if trimmed.starts_with("Total number in stack")
+            || trimmed.starts_with("Sort by top of stack")
+            || trimmed.starts_with("Binary Images:")
+        {
+            break;
+        }
+        let Some(parsed) = parse_ios_sample_call_graph_line(line) else {
+            continue;
+        };
+        if parsed.is_thread_root {
+            stack.clear();
+            continue;
+        }
+
+        if !parsed.is_plus {
+            while stack
+                .last()
+                .is_some_and(|existing| existing.indent >= parsed.indent)
+            {
+                stack.pop();
+            }
+        }
+
+        stack.push(StackFrame {
+            indent: parsed.indent,
+            frame: parsed.frame.clone(),
+            unresolved: parsed.frame == "???",
+        });
+        nodes.push(ParsedNode {
+            depth: stack.len(),
+            count: parsed.count,
+            frames: stack.iter().map(|frame| frame.frame.clone()).collect(),
+            unresolved_frames: stack.iter().filter(|frame| frame.unresolved).count() as u64,
+        });
+    }
+
+    if !saw_call_graph {
+        bail!("iOS sample output did not contain a `Call graph:` section");
+    }
+    if nodes.is_empty() {
+        bail!("iOS sample output did not contain any callable frames");
+    }
+
+    let mut folded_lines = Vec::new();
+    let mut resolved_frames = 0_u64;
+    let mut unresolved_frames = 0_u64;
+    for (index, node) in nodes.iter().enumerate() {
+        let next_depth = nodes.get(index + 1).map(|next| next.depth).unwrap_or(0);
+        if next_depth > node.depth {
+            continue;
+        }
+        if node.frames.is_empty() {
+            continue;
+        }
+        folded_lines.push(format!("{} {}", node.frames.join(";"), node.count));
+        unresolved_frames += node.unresolved_frames;
+        resolved_frames += node.frames.len() as u64 - node.unresolved_frames;
+    }
+
+    let mut notes = Vec::new();
+    let status = if folded_lines.is_empty() {
+        notes.push("no leaf frames were emitted from the iOS sample call graph".into());
+        CaptureStatus::Failed
+    } else if unresolved_frames > 0 {
+        notes.push(format!(
+            "iOS sample capture retained {unresolved_frames} unresolved frame(s) as `???`"
+        ));
+        CaptureStatus::Partial
+    } else {
+        CaptureStatus::Captured
+    };
+
+    Ok((
+        folded_lines.join("\n"),
+        SymbolizationRecord {
+            status,
+            tool: Some("sample".into()),
+            resolved_frames,
+            unresolved_frames,
+            notes,
+        },
+    ))
+}
+
+struct ParsedIosSampleLine {
+    indent: usize,
+    count: u64,
+    frame: String,
+    is_plus: bool,
+    is_thread_root: bool,
+}
+
+fn parse_ios_sample_call_graph_line(line: &str) -> Option<ParsedIosSampleLine> {
+    let indent = line.chars().take_while(|ch| *ch == ' ').count();
+    let mut remainder = &line[indent..];
+    let is_plus = remainder.starts_with("+ ");
+    if is_plus {
+        remainder = &remainder[2..];
+    }
+    let remainder = remainder.trim_start();
+    let digits_end = remainder.find(|ch: char| !ch.is_ascii_digit())?;
+    let count = remainder[..digits_end].parse().ok()?;
+    let frame_part = remainder[digits_end..].trim_start();
+    let frame = frame_part
+        .split("  (in ")
+        .next()
+        .unwrap_or(frame_part)
+        .split("  [")
+        .next()
+        .unwrap_or(frame_part)
+        .trim();
+    if frame.is_empty() {
+        return None;
+    }
+    let is_thread_root = frame.starts_with("Thread_");
+
+    Some(ParsedIosSampleLine {
+        indent,
+        count,
+        frame: frame.to_string(),
+        is_plus,
+        is_thread_root,
+    })
+}
+
 fn extract_benchmark_reports_from_logs(logs: &str) -> Vec<Value> {
     let mut results = Vec::new();
     if let Some(json) = extract_ios_benchmark_json(logs) {
@@ -1581,13 +2340,23 @@ fn build_capture_plan(
         ),
         ProfileBackend::IosInstruments => (
             vec![ArtifactRecord {
-                label: "time-profiler".into(),
-                path: raw_root.join("time-profiler.trace"),
+                label: "sample".into(),
+                path: raw_root.join("sample.txt"),
             }],
-            vec![ArtifactRecord {
-                label: "xctrace-export".into(),
-                path: processed_root.join("time-profiler.xml"),
-            }],
+            vec![
+                ArtifactRecord {
+                    label: "collapsed-stacks".into(),
+                    path: processed_root.join("stacks.folded"),
+                },
+                ArtifactRecord {
+                    label: "native-report".into(),
+                    path: processed_root.join("native-report.txt"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph".into(),
+                    path: processed_root.join("flamegraph.html"),
+                },
+            ],
         ),
         ProfileBackend::RustTracing => (
             vec![ArtifactRecord {
@@ -1632,7 +2401,7 @@ fn build_capture_plan(
             warmup_mode: resolve_capture_warmup_mode(args.provider, backend, args.warmup_mode),
             capture_method: Some(match backend {
                 ProfileBackend::AndroidNative => "simpleperf".into(),
-                ProfileBackend::IosInstruments => "instruments".into(),
+                ProfileBackend::IosInstruments => "sample".into(),
                 ProfileBackend::RustTracing => "trace-events".into(),
                 ProfileBackend::Auto => unreachable!("auto backend should resolve before planning"),
             }),
@@ -1788,9 +2557,13 @@ fn execute_capture(
                 execute_local_android_capture,
             );
         }
-        (ProfileProvider::Local, ProfileBackend::IosInstruments) => Some(
-            "local ios-instruments capture is not implemented yet; this session records the planned Instruments trace/XML artifact contract only",
-        ),
+        (ProfileProvider::Local, ProfileBackend::IosInstruments) => {
+            return execute_capture_with_local_ios_executor(
+                args,
+                manifest,
+                execute_local_ios_capture,
+            );
+        }
         (ProfileProvider::Local, ProfileBackend::RustTracing) => Some(
             "local rust-tracing capture is not implemented yet; this session records the planned trace-events artifact contract only",
         ),
@@ -1803,7 +2576,7 @@ fn execute_capture(
         (ProfileProvider::Browserstack, ProfileBackend::IosInstruments) => {
             bail!(browserstack_native_capture_unsupported_message(
                 "ios-instruments",
-                "local iOS profiling produces Instruments traces (`time-profiler.trace`) and XML exports (`time-profiler.xml`), not flamegraphs",
+                "local iOS profiling produces raw sample output (`sample.txt`), collapsed stacks, and `flamegraph.html` from a simulator-hosted capture",
             ));
         }
         (ProfileProvider::Browserstack, ProfileBackend::RustTracing) => {
@@ -1835,11 +2608,54 @@ where
     Ok(())
 }
 
+fn execute_capture_with_local_ios_executor<E>(
+    args: &ProfileRunArgs,
+    manifest: &mut ProfileManifest,
+    execute: E,
+) -> Result<()>
+where
+    E: FnOnce(&ProfileRunArgs, &mut ProfileManifest) -> Result<()>,
+{
+    if let Err(error) = execute(args, manifest) {
+        mark_ios_capture_attempt_failed(manifest, &error);
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn mark_android_capture_attempt_failed(manifest: &mut ProfileManifest, error: &anyhow::Error) {
     manifest.native_capture.status = CaptureStatus::Failed;
     manifest.native_capture.symbolization.status = CaptureStatus::Failed;
 
     let failure_note = format!("local android-native capture failed: {error}");
+    if !manifest
+        .native_capture
+        .symbolization
+        .notes
+        .iter()
+        .any(|note| note == &failure_note)
+    {
+        manifest
+            .native_capture
+            .symbolization
+            .notes
+            .push(failure_note.clone());
+    }
+    if !manifest
+        .capture_metadata
+        .warnings
+        .iter()
+        .any(|warning| warning == &failure_note)
+    {
+        manifest.capture_metadata.warnings.push(failure_note);
+    }
+}
+
+fn mark_ios_capture_attempt_failed(manifest: &mut ProfileManifest, error: &anyhow::Error) {
+    manifest.native_capture.status = CaptureStatus::Failed;
+    manifest.native_capture.symbolization.status = CaptureStatus::Failed;
+
+    let failure_note = format!("local ios-instruments capture failed: {error}");
     if !manifest
         .native_capture
         .symbolization
@@ -1891,13 +2707,12 @@ fn select_viewer_hint(
             }
         }
         ProfileBackend::IosInstruments => {
-            if !raw_artifacts.is_empty() {
-                Some("Open artifacts/raw/time-profiler.trace in Instruments".into())
+            if format != ProfileFormat::Native && !processed_artifacts.is_empty() {
+                Some("Open artifacts/processed/flamegraph.html in a browser".into())
+            } else if !raw_artifacts.is_empty() {
+                Some("Inspect artifacts/raw/sample.txt for the raw iOS sample call graph".into())
             } else if !processed_artifacts.is_empty() {
-                Some(
-                    "Inspect artifacts/processed/time-profiler.xml or rerun with --format both to keep the .trace bundle"
-                        .into(),
-                )
+                Some("Open artifacts/processed/flamegraph.html in a browser".into())
             } else {
                 None
             }
@@ -2695,7 +3510,7 @@ mod tests {
     }
 
     #[test]
-    fn ios_backend_allocates_trace_bundle_and_export_paths() {
+    fn ios_backend_allocates_sample_and_flamegraph_artifacts() {
         let plan = build_capture_plan(
             &sample_run_args(
                 MobileTarget::Ios,
@@ -2718,14 +3533,48 @@ mod tests {
             plan.native_capture
                 .raw_artifacts
                 .iter()
-                .any(|p| p.path.ends_with("time-profiler.trace"))
+                .any(|p| p.path.ends_with("sample.txt"))
         );
         assert!(
             plan.native_capture
                 .processed_artifacts
                 .iter()
-                .any(|p| p.path.ends_with("time-profiler.xml"))
+                .any(|p| p.path.ends_with("stacks.folded"))
         );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("native-report.txt"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("flamegraph.html"))
+        );
+    }
+
+    #[test]
+    fn ios_sample_call_graph_collapses_into_folded_stacks() {
+        let sample = r#"Call graph:
+    778 Thread_27177597   DispatchQueue_1: com.apple.main-thread  (serial)
+      778 start  (in dyld) + 7184  [0x18ac81d54]
+        776 uniffi_sample_fns_fn_func_run_benchmark  (in sample_fns) + 88  [0x100000588]
+        + 776 sample_fns::run_benchmark  (in sample_fns) + 40  [0x100000610]
+        + 776 mobench_sdk::timing::run_closure  (in sample_fns) + 24  [0x100000650]
+        + 776 sample_fns::fibonacci_batch  (in sample_fns) + 24  [0x100000710]
+        + 776 sample_fns::fibonacci  (in sample_fns) + 24  [0x100000780]
+        2 write  (in libsystem_kernel.dylib) + 40  [0x18b00c840]
+"#;
+
+        let folded =
+            collapse_ios_sample_call_graph_to_folded_stacks(sample).expect("collapse sample");
+
+        assert!(folded.contains(
+            "start;uniffi_sample_fns_fn_func_run_benchmark;sample_fns::run_benchmark;mobench_sdk::timing::run_closure;sample_fns::fibonacci_batch;sample_fns::fibonacci 776"
+        ));
+        assert!(folded.contains("start;write 2"));
     }
 
     #[test]
@@ -2831,7 +3680,8 @@ mod tests {
         ios_args.output_dir = dir.path().to_path_buf();
 
         cmd_profile_run(&android_args, true).expect("write first planned profile session");
-        cmd_profile_run(&ios_args, false).expect("write second planned profile session");
+        run_profile_session_with_executor(&ios_args, false, |_args, _target, _manifest| Ok(()))
+            .expect("write second profile session");
 
         let android_run_dir = dir.path().join("android-sample_fns--fibonacci");
         let ios_run_dir = dir.path().join("ios-sample_fns--checksum");

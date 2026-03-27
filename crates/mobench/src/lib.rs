@@ -663,7 +663,7 @@ enum ReportCommand {
 #[derive(Subcommand, Debug)]
 enum ProfileCommand {
     #[command(
-        about = "Plan or execute a native profiling session; local android-native now performs real simpleperf capture"
+        about = "Plan or execute a native profiling session; local android-native and ios-instruments now attempt real native capture"
     )]
     Run(profile::ProfileRunArgs),
     /// Render markdown or JSON from a normalized profile manifest.
@@ -8734,14 +8734,20 @@ project = "proj"
         let help = render_profile_run_help();
 
         assert!(
-            help.contains("Plan or execute a native profiling session; local android-native now performs real simpleperf capture"),
-            "expected profile run help to describe the real local android-native execution scope, got:\n{help}"
+            help.contains("Plan or execute a native profiling session; local android-native and ios-instruments now attempt real native capture"),
+            "expected profile run help to describe the real local Android/iOS execution scope, got:\n{help}"
         );
         assert!(
             help.contains(
                 "local + android-native: attempts real simpleperf capture and symbolization"
             ),
             "expected profile run help to mention real Android native execution, got:\n{help}"
+        );
+        assert!(
+            help.contains(
+                "local + ios-instruments: attempts real simulator-host sample capture and flamegraph generation"
+            ),
+            "expected profile run help to mention real local iOS sample capture, got:\n{help}"
         );
         assert!(
             help.contains("--warmup-mode"),
