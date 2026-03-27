@@ -209,6 +209,8 @@ pub struct BenchReportTemplate {
     pub spec: BenchSpecTemplate,
     /// All collected timing samples.
     pub samples: Vec<BenchSampleTemplate>,
+    /// Optional semantic phase timings captured during measured iterations.
+    pub phases: Vec<crate::SemanticPhase>,
 }
 
 impl From<crate::RunnerReport> for BenchReportTemplate {
@@ -216,6 +218,7 @@ impl From<crate::RunnerReport> for BenchReportTemplate {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
+            phases: report.phases,
         }
     }
 }

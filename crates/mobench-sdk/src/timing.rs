@@ -63,6 +63,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -232,6 +233,9 @@ pub struct BenchReport {
     ///
     /// The length equals `spec.iterations`. Samples are in execution order.
     pub samples: Vec<BenchSample>,
+
+    /// Optional semantic phase timings captured during measured iterations.
+    pub phases: Vec<SemanticPhase>,
 }
 
 impl BenchReport {
@@ -356,6 +360,129 @@ pub struct BenchSummary {
     pub p99_ns: f64,
 }
 
+/// Flat semantic phase timing captured during a benchmark run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticPhase {
+    pub name: String,
+    pub duration_ns: u64,
+}
+
+#[derive(Default)]
+struct SemanticPhaseCollector {
+    enabled: bool,
+    depth: usize,
+    phases: Vec<SemanticPhase>,
+}
+
+impl SemanticPhaseCollector {
+    fn reset(&mut self) {
+        self.enabled = false;
+        self.depth = 0;
+        self.phases.clear();
+    }
+
+    fn begin_measurement(&mut self) {
+        self.reset();
+        self.enabled = true;
+    }
+
+    fn finish(&mut self) -> Vec<SemanticPhase> {
+        self.enabled = false;
+        self.depth = 0;
+        std::mem::take(&mut self.phases)
+    }
+
+    fn enter_phase(&mut self) -> Option<bool> {
+        if !self.enabled {
+            return None;
+        }
+        let top_level = self.depth == 0;
+        self.depth += 1;
+        Some(top_level)
+    }
+
+    fn exit_phase(&mut self, name: &str, top_level: bool, elapsed: Duration) {
+        self.depth = self.depth.saturating_sub(1);
+        if !self.enabled || !top_level {
+            return;
+        }
+
+        let duration_ns = elapsed.as_nanos().min(u128::from(u64::MAX)) as u64;
+        if let Some(phase) = self.phases.iter_mut().find(|phase| phase.name == name) {
+            phase.duration_ns = phase.duration_ns.saturating_add(duration_ns);
+        } else {
+            self.phases.push(SemanticPhase {
+                name: name.to_string(),
+                duration_ns,
+            });
+        }
+    }
+}
+
+thread_local! {
+    static SEMANTIC_PHASE_COLLECTOR: RefCell<SemanticPhaseCollector> =
+        RefCell::new(SemanticPhaseCollector::default());
+}
+
+struct SemanticPhaseGuard {
+    name: String,
+    started_at: Option<Instant>,
+    top_level: bool,
+}
+
+impl Drop for SemanticPhaseGuard {
+    fn drop(&mut self) {
+        let Some(started_at) = self.started_at else {
+            return;
+        };
+
+        let elapsed = started_at.elapsed();
+        SEMANTIC_PHASE_COLLECTOR.with(|collector| {
+            collector
+                .borrow_mut()
+                .exit_phase(&self.name, self.top_level, elapsed);
+        });
+    }
+}
+
+fn reset_semantic_phase_collection() {
+    SEMANTIC_PHASE_COLLECTOR.with(|collector| collector.borrow_mut().reset());
+}
+
+fn begin_semantic_phase_collection() {
+    SEMANTIC_PHASE_COLLECTOR.with(|collector| collector.borrow_mut().begin_measurement());
+}
+
+fn finish_semantic_phase_collection() -> Vec<SemanticPhase> {
+    SEMANTIC_PHASE_COLLECTOR.with(|collector| collector.borrow_mut().finish())
+}
+
+/// Records a flat semantic phase when called inside an active benchmark measurement loop.
+///
+/// Phases are aggregated across measured iterations and ignored during warmup/setup.
+/// Nested phases are intentionally collapsed in v1 to keep the output flat.
+pub fn profile_phase<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    let guard = SEMANTIC_PHASE_COLLECTOR.with(|collector| {
+        let mut collector = collector.borrow_mut();
+        match collector.enter_phase() {
+            Some(top_level) => SemanticPhaseGuard {
+                name: name.to_string(),
+                started_at: Some(Instant::now()),
+                top_level,
+            },
+            None => SemanticPhaseGuard {
+                name: String::new(),
+                started_at: None,
+                top_level: false,
+            },
+        }
+    });
+
+    let result = f();
+    drop(guard);
+    result
+}
+
 /// Errors that can occur during benchmark execution.
 ///
 /// # Example
@@ -457,20 +584,31 @@ where
         });
     }
 
+    reset_semantic_phase_collection();
+
     // Warmup phase - not measured
     for _ in 0..spec.warmup {
         f()?;
     }
 
     // Measurement phase
+    begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
     for _ in 0..spec.iterations {
         let start = Instant::now();
-        f()?;
+        if let Err(err) = f() {
+            let _ = finish_semantic_phase_collection();
+            return Err(err);
+        }
         samples.push(BenchSample::from_duration(start.elapsed()));
     }
+    let phases = finish_semantic_phase_collection();
 
-    Ok(BenchReport { spec, samples })
+    Ok(BenchReport {
+        spec,
+        samples,
+        phases,
+    })
 }
 
 /// Runs a benchmark with setup that executes once before all iterations.
@@ -515,6 +653,8 @@ where
         });
     }
 
+    reset_semantic_phase_collection();
+
     // Setup phase - not timed
     let input = setup();
 
@@ -524,14 +664,23 @@ where
     }
 
     // Measurement phase
+    begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
     for _ in 0..spec.iterations {
         let start = Instant::now();
-        f(&input)?;
+        if let Err(err) = f(&input) {
+            let _ = finish_semantic_phase_collection();
+            return Err(err);
+        }
         samples.push(BenchSample::from_duration(start.elapsed()));
     }
+    let phases = finish_semantic_phase_collection();
 
-    Ok(BenchReport { spec, samples })
+    Ok(BenchReport {
+        spec,
+        samples,
+        phases,
+    })
 }
 
 /// Runs a benchmark with per-iteration setup.
@@ -577,6 +726,8 @@ where
         });
     }
 
+    reset_semantic_phase_collection();
+
     // Warmup phase
     for _ in 0..spec.warmup {
         let input = setup();
@@ -584,16 +735,25 @@ where
     }
 
     // Measurement phase
+    begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
     for _ in 0..spec.iterations {
         let input = setup(); // Not timed
 
         let start = Instant::now();
-        f(input)?; // Only this is timed
+        if let Err(err) = f(input) {
+            let _ = finish_semantic_phase_collection();
+            return Err(err);
+        }
         samples.push(BenchSample::from_duration(start.elapsed()));
     }
+    let phases = finish_semantic_phase_collection();
 
-    Ok(BenchReport { spec, samples })
+    Ok(BenchReport {
+        spec,
+        samples,
+        phases,
+    })
 }
 
 /// Runs a benchmark with setup and teardown.
@@ -641,6 +801,8 @@ where
         });
     }
 
+    reset_semantic_phase_collection();
+
     // Setup phase - not timed
     let input = setup();
 
@@ -650,17 +812,26 @@ where
     }
 
     // Measurement phase
+    begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
     for _ in 0..spec.iterations {
         let start = Instant::now();
-        f(&input)?;
+        if let Err(err) = f(&input) {
+            let _ = finish_semantic_phase_collection();
+            return Err(err);
+        }
         samples.push(BenchSample::from_duration(start.elapsed()));
     }
+    let phases = finish_semantic_phase_collection();
 
     // Teardown phase - not timed
     teardown(input);
 
-    Ok(BenchReport { spec, samples })
+    Ok(BenchReport {
+        spec,
+        samples,
+        phases,
+    })
 }
 
 #[cfg(test)]
@@ -698,13 +869,67 @@ mod tests {
     #[test]
     fn serializes_to_json() {
         let spec = BenchSpec::new("test", 10, 2).unwrap();
-        let report = run_closure(spec, || Ok(())).unwrap();
+        let report = run_closure(spec, || {
+            profile_phase("prove", || std::thread::sleep(Duration::from_millis(1)));
+            Ok(())
+        })
+        .unwrap();
 
         let json = serde_json::to_string(&report).unwrap();
         let restored: BenchReport = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.spec.name, "test");
         assert_eq!(restored.samples.len(), 10);
+        assert_eq!(restored.phases.len(), 1);
+        assert_eq!(restored.phases[0].name, "prove");
+        assert!(restored.phases[0].duration_ns > 0);
+    }
+
+    #[test]
+    fn profile_phase_records_only_measured_iterations() {
+        let spec = BenchSpec::new("semantic", 2, 1).unwrap();
+        let mut call_index = 0u32;
+        let report = run_closure(spec, || {
+            let phase_name = if call_index == 0 {
+                "warmup-only"
+            } else {
+                "prove"
+            };
+            call_index += 1;
+            profile_phase(phase_name, || std::thread::sleep(Duration::from_millis(1)));
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(
+            !report.phases.iter().any(|phase| phase.name == "warmup-only"),
+            "warmup phases should not be recorded"
+        );
+        let prove = report
+            .phases
+            .iter()
+            .find(|phase| phase.name == "prove")
+            .expect("prove phase");
+        assert!(prove.duration_ns > 0);
+    }
+
+    #[test]
+    fn profile_phase_keeps_the_v1_model_flat() {
+        let spec = BenchSpec::new("semantic-flat", 1, 0).unwrap();
+        let report = run_closure(spec, || {
+            profile_phase("prove", || {
+                std::thread::sleep(Duration::from_millis(1));
+                profile_phase("inner", || std::thread::sleep(Duration::from_millis(1)));
+            });
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(report.phases.iter().any(|phase| phase.name == "prove"));
+        assert!(
+            !report.phases.iter().any(|phase| phase.name == "inner"),
+            "nested phases should not create a second flat phase entry"
+        );
     }
 
     #[test]
