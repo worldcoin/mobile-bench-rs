@@ -83,8 +83,7 @@ fn browserstack_native_profile_error_is_actionable() {
     );
     assert!(
         stderr.contains("Instruments")
-            || stderr.contains("time-profiler.trace")
-            || stderr.contains("time-profiler.xml")
+            || stderr.contains("sample.txt")
             || stderr.contains("flamegraph"),
         "expected iOS artifact clarification, got:\n{stderr}"
     );
@@ -97,8 +96,8 @@ fn profile_run_help_mentions_planned_only_or_execution_scope() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("plan")
-            || stdout.contains("Plan")
+        stdout.contains("local + android-native")
+            || stdout.contains("local + ios-instruments")
             || stdout.contains("depending on backend/provider support"),
         "expected help to explain whether capture is planned or executed, got:\n{stdout}"
     );
@@ -120,5 +119,33 @@ fn profile_run_cli_surface_exposes_or_explicitly_omits_device_selection() {
             || stdout.contains("--device-matrix")
             || stdout.contains("device selection is unavailable"),
         "expected help to expose device selection or explicitly document its absence, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--iterations"),
+        "expected help to expose benchmark iteration count for real local profiling, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--warmup"),
+        "expected help to expose benchmark warmup count for real local profiling, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--release"),
+        "expected help to expose build profile control for real local profiling, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn profile_run_help_mentions_native_symbolization_and_semantic_phases() {
+    let output = run_mobench(["profile", "run", "--help"]);
+    assert!(output.status.success(), "expected help to succeed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("symbolization") || stdout.contains("native capture"),
+        "expected help to hint at native symbolization, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Semantic phases") || stdout.contains("prove"),
+        "expected help to hint at semantic profiling output, got:\n{stdout}"
     );
 }

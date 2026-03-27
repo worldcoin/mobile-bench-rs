@@ -103,6 +103,19 @@ pub struct AndroidBuilder {
 }
 
 impl AndroidBuilder {
+    fn android_test_profile_name(&self) -> &'static str {
+        // The generated template pins instrumentation to the release app via
+        // `testBuildType "release"`, so the test APK always lands under the
+        // release androidTest output regardless of the main app profile.
+        "release"
+    }
+
+    fn android_test_gradle_task(&self) -> &'static str {
+        // Android Gradle Plugin exposes instrumentation assembly on the app
+        // module, not as a root-project shorthand task in this generated app.
+        "app:assembleReleaseAndroidTest"
+    }
+
     /// Creates a new Android builder
     ///
     /// # Arguments
@@ -247,7 +260,8 @@ impl AndroidBuilder {
                 )),
                 test_suite_path: Some(android_dir.join(format!(
                     "app/build/outputs/apk/androidTest/{}/app-{}-androidTest.apk",
-                    profile_name, profile_name
+                    self.android_test_profile_name(),
+                    self.android_test_profile_name()
                 ))),
             });
         }
@@ -1116,7 +1130,7 @@ impl AndroidBuilder {
     }
 
     /// Builds the Android test APK using Gradle
-    fn build_test_apk(&self, config: &BuildConfig) -> Result<PathBuf, BenchError> {
+    fn build_test_apk(&self, _config: &BuildConfig) -> Result<PathBuf, BenchError> {
         let android_dir = self.output_dir.join("android");
 
         if !android_dir.exists() {
@@ -1128,10 +1142,7 @@ impl AndroidBuilder {
             )));
         }
 
-        let gradle_task = match config.profile {
-            BuildProfile::Debug => "assembleDebugAndroidTest",
-            BuildProfile::Release => "assembleReleaseAndroidTest",
-        };
+        let gradle_task = self.android_test_gradle_task();
 
         let mut cmd = Command::new("./gradlew");
         cmd.arg(gradle_task).current_dir(&android_dir);
@@ -1177,10 +1188,7 @@ impl AndroidBuilder {
             )));
         }
 
-        let profile_name = match config.profile {
-            BuildProfile::Debug => "debug",
-            BuildProfile::Release => "release",
-        };
+        let profile_name = self.android_test_profile_name();
 
         let test_apk_dir = android_dir
             .join("app/build/outputs/apk/androidTest")
@@ -1247,6 +1255,11 @@ impl AndroidBuilder {
 }
 
 #[cfg(test)]
+fn symbolize_android_native_stack_line(line: &str) -> String {
+    line.to_string()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1271,6 +1284,25 @@ mod tests {
         let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile")
             .output_dir("/custom/output");
         assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
+    }
+
+    #[test]
+    fn test_android_test_task_matches_generated_app_module() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        assert_eq!(builder.android_test_gradle_task(), "app:assembleReleaseAndroidTest");
+        assert_eq!(builder.android_test_profile_name(), "release");
+    }
+
+    #[test]
+    fn android_native_offsets_are_symbolized_into_rust_frames() {
+        let input =
+            "dev.world.samplefns;uniffi.sample_fns.Sample_fnsKt.runBenchmark;libsample_fns.so[+94138] 1";
+        let output = symbolize_android_native_stack_line(input);
+
+        assert!(
+            output.contains("sample_fns::fibonacci"),
+            "expected unresolved native offsets to be rewritten into Rust symbols, got: {output}"
+        );
     }
 
     #[test]

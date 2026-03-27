@@ -1,10 +1,20 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, ValueEnum};
+use inferno::collapse::Collapse;
+use inferno::{collapse::sample as inferno_sample, flamegraph};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Cursor};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use crate::{DevicePlatform, MobileTarget, ResolvedMatrixDevice, resolve_devices_for_profile};
+use crate::{
+    DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
+    load_dotenv_for_layout, persist_mobile_spec, resolve_devices_for_profile,
+    resolve_project_layout, run_android_build, run_ios_build, validate_benchmark_function,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -39,20 +49,23 @@ pub enum ProfileSummaryFormat {
 
 #[derive(Debug, Clone, Args)]
 #[command(
-    about = "Plan or execute a native profiling session depending on backend/provider support",
+    about = "Execute a native profiling session locally, or write a profile contract when execution is unsupported",
     after_help = concat!(
         "Capability matrix:\n",
-        "  local + android-native: planned manifest today; native simpleperf capture is not implemented yet\n",
-        "  local + ios-instruments: planned manifest today; Instruments trace export capture is not implemented yet\n",
-        "  local + rust-tracing: planned manifest today; structured trace output is local-only\n",
+        "  local + android-native: builds the Android bench app, captures simpleperf, writes folded stacks, and renders flamegraph.html\n",
+        "  local + ios-instruments: builds the iOS Simulator bench app, samples the simulator-host process, writes folded stacks, and renders flamegraph.html\n",
+        "  local + rust-tracing: planned manifest today; structured trace output is local-only and still not implemented\n",
         "  browserstack + android-native: unsupported for native capture in this release\n",
         "  browserstack + ios-instruments: unsupported for native capture in this release\n",
         "  browserstack + rust-tracing: unsupported; use local provider for trace-events output\n",
         "\n",
+        "Local capture requirements:\n",
+        "  Android native capture requires one connected adb device or booted emulator plus Android SDK/NDK simpleperf tools.\n",
+        "  iOS native capture runs against a local iOS Simulator selected by --device/--os-version when provided.\n",
+        "\n",
         "Device selection:\n",
-        "  Use --device/--os-version for one explicit BrowserStack device, or --profile with\n",
-        "  optional --device-matrix/--config to reuse the same deterministic resolution model as\n",
-        "  `mobench devices resolve`.\n"
+        "  Use --device/--os-version for one explicit device request, or --profile with optional\n",
+        "  --device-matrix/--config to reuse the same deterministic resolution model as `mobench devices resolve`.\n"
     )
 )]
 pub struct ProfileRunArgs {
@@ -65,6 +78,10 @@ pub struct ProfileRunArgs {
         help = "Path to the benchmark crate directory containing Cargo.toml"
     )]
     pub crate_path: Option<PathBuf>,
+    #[arg(long, default_value_t = 100)]
+    pub iterations: u32,
+    #[arg(long, default_value_t = 10)]
+    pub warmup: u32,
     #[arg(long, help = "Optional path to config file")]
     pub config: Option<PathBuf>,
     #[arg(long, default_value = "target/mobench/profile")]
@@ -96,6 +113,14 @@ pub struct ProfileRunArgs {
     pub backend: ProfileBackend,
     #[arg(long, value_enum, default_value_t = ProfileFormat::Both)]
     pub format: ProfileFormat,
+    #[arg(long, help = "Build mobile artifacts in release mode")]
+    pub release: bool,
+    #[arg(
+        long,
+        default_value_t = 10,
+        help = "Capture duration in seconds for native profiling sessions"
+    )]
+    pub capture_duration_secs: u64,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -328,20 +353,32 @@ fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<Profi
                 label: "simpleperf".into(),
                 path: raw_root.join("sample.perf"),
             }],
-            vec![ArtifactRecord {
-                label: "flamegraph".into(),
-                path: processed_root.join("flamegraph.html"),
-            }],
+            vec![
+                ArtifactRecord {
+                    label: "collapsed-stacks".into(),
+                    path: processed_root.join("stacks.folded"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph".into(),
+                    path: processed_root.join("flamegraph.html"),
+                },
+            ],
         ),
         ProfileBackend::IosInstruments => (
             vec![ArtifactRecord {
-                label: "time-profiler".into(),
-                path: raw_root.join("time-profiler.trace"),
+                label: "sample".into(),
+                path: raw_root.join("sample.txt"),
             }],
-            vec![ArtifactRecord {
-                label: "xctrace-export".into(),
-                path: processed_root.join("time-profiler.xml"),
-            }],
+            vec![
+                ArtifactRecord {
+                    label: "collapsed-stacks".into(),
+                    path: processed_root.join("stacks.folded"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph".into(),
+                    path: processed_root.join("flamegraph.html"),
+                },
+            ],
         ),
         ProfileBackend::RustTracing => (
             vec![ArtifactRecord {
@@ -494,26 +531,34 @@ fn execute_capture(
     target: &ResolvedProfileTarget,
     manifest: &mut ProfileManifest,
 ) -> Result<()> {
-    let plan_only_warning = match (args.provider, target.backend) {
-        (ProfileProvider::Local, ProfileBackend::AndroidNative) => Some(
-            "local android-native capture is not implemented yet; this session records the planned simpleperf artifact contract only",
-        ),
-        (ProfileProvider::Local, ProfileBackend::IosInstruments) => Some(
-            "local ios-instruments capture is not implemented yet; this session records the planned Instruments trace/XML artifact contract only",
-        ),
-        (ProfileProvider::Local, ProfileBackend::RustTracing) => Some(
-            "local rust-tracing capture is not implemented yet; this session records the planned trace-events artifact contract only",
+    if let Some(device) = &target.device {
+        manifest.warnings.push(format!(
+            "resolved target device: {} ({}, source: {})",
+            device.identifier, device.os, device.source
+        ));
+    }
+
+    match (args.provider, target.backend) {
+        (ProfileProvider::Local, ProfileBackend::AndroidNative) => {
+            execute_local_android_native(args, target, manifest)?
+        }
+        (ProfileProvider::Local, ProfileBackend::IosInstruments) => {
+            execute_local_ios_instruments(args, target, manifest)?
+        }
+        (ProfileProvider::Local, ProfileBackend::RustTracing) => manifest.warnings.push(
+            "local rust-tracing capture is not implemented yet; this session records the planned trace-events artifact contract only"
+                .into(),
         ),
         (ProfileProvider::Browserstack, ProfileBackend::AndroidNative) => {
             bail!(browserstack_native_capture_unsupported_message(
                 "android-native",
-                "local Android profiling produces simpleperf artifacts and flamegraphs when implemented",
+                "local Android profiling produces simpleperf captures, folded stacks, and flamegraph.html",
             ));
         }
         (ProfileProvider::Browserstack, ProfileBackend::IosInstruments) => {
             bail!(browserstack_native_capture_unsupported_message(
                 "ios-instruments",
-                "local iOS profiling produces Instruments traces (`time-profiler.trace`) and XML exports (`time-profiler.xml`), not flamegraphs",
+                "local iOS profiling on simulator produces sample-based folded stacks and flamegraph.html",
             ));
         }
         (ProfileProvider::Browserstack, ProfileBackend::RustTracing) => {
@@ -522,16 +567,6 @@ fn execute_capture(
             );
         }
         (_, ProfileBackend::Auto) => unreachable!("auto backend should resolve before execution"),
-    };
-
-    if let Some(device) = &target.device {
-        manifest.warnings.push(format!(
-            "resolved target device: {} ({}, source: {})",
-            device.identifier, device.os, device.source
-        ));
-    }
-    if let Some(warning) = plan_only_warning {
-        manifest.warnings.push(warning.into());
     }
     Ok(())
 }
@@ -545,6 +580,865 @@ fn browserstack_native_capture_unsupported_message(
     )
 }
 
+#[derive(Debug)]
+struct PreparedLocalProfileRun {
+    layout: crate::ResolvedProjectLayout,
+}
+
+#[derive(Debug)]
+struct AndroidToolchain {
+    adb: PathBuf,
+    ndk_home: PathBuf,
+    app_profiler: PathBuf,
+    stackcollapse: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalIosSimulator {
+    name: String,
+    udid: String,
+    os_version: String,
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SimctlList {
+    devices: BTreeMap<String, Vec<SimctlDevice>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SimctlDevice {
+    name: String,
+    udid: String,
+    state: String,
+    #[serde(rename = "isAvailable", default)]
+    is_available: bool,
+}
+
+fn execute_local_android_native(
+    args: &ProfileRunArgs,
+    target: &ResolvedProfileTarget,
+    manifest: &mut ProfileManifest,
+) -> Result<()> {
+    if target.device.is_some() {
+        manifest.warnings.push(
+            "local android-native capture uses the connected adb target; BrowserStack-style device resolution is ignored locally. Set ANDROID_SERIAL if more than one device is attached."
+                .into(),
+        );
+    }
+
+    let prepared = prepare_local_profile_run(args)?;
+    mobench_sdk::codegen::ensure_android_project_with_options(
+        &prepared.layout.output_dir,
+        &prepared.layout.crate_name,
+        Some(&prepared.layout.project_root),
+        Some(&prepared.layout.crate_dir),
+    )
+    .map_err(|err| anyhow!("failed to generate Android project scaffolding: {err}"))?;
+    ensure_android_profileable_manifest(&prepared.layout.output_dir)?;
+
+    let toolchain = resolve_android_toolchain()?;
+    let selected_serial = select_android_serial(&toolchain.adb)?;
+    let build = run_android_build(
+        &prepared.layout,
+        &toolchain.ndk_home.display().to_string(),
+        args.release,
+        false,
+    )?;
+
+    install_android_apk(&toolchain.adb, &selected_serial, &build.app_path)?;
+
+    let output_root = profile_output_root(args, manifest);
+    let scratch_root = output_root.join(".capture-tmp/android");
+    let perf_path = raw_artifact_path_or_scratch(manifest, &scratch_root, "simpleperf", "sample.perf");
+    let workdir = perf_path
+        .parent()
+        .ok_or_else(|| anyhow!("invalid simpleperf output path {}", perf_path.display()))?
+        .to_path_buf();
+    fs::create_dir_all(&workdir)?;
+
+    run_android_simpleperf_capture(
+        &toolchain,
+        &selected_serial,
+        &prepared.layout,
+        &perf_path,
+        args.capture_duration_secs,
+    )?;
+
+    if matches!(args.format, ProfileFormat::Processed | ProfileFormat::Both) {
+        let folded_path = processed_artifact_path_or_scratch(
+            manifest,
+            &scratch_root,
+            "collapsed-stacks",
+            "stacks.folded",
+        );
+        let flamegraph_path = processed_artifact_path_or_scratch(
+            manifest,
+            &scratch_root,
+            "flamegraph",
+            "flamegraph.html",
+        );
+
+        match write_android_processed_outputs(
+            &toolchain,
+            &perf_path,
+            &folded_path,
+            &flamegraph_path,
+            &manifest.function,
+        ) {
+            Ok(()) => manifest.capture_status = CaptureStatus::Captured,
+            Err(err) if matches!(args.format, ProfileFormat::Both) => {
+                manifest.capture_status = CaptureStatus::Partial;
+                manifest.warnings.push(format!(
+                    "native Android capture succeeded, but folded stack or flamegraph generation failed: {err}"
+                ));
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        }
+    } else {
+        manifest.capture_status = CaptureStatus::Captured;
+    }
+
+    manifest.warnings.push(format!(
+        "captured Android simpleperf profile via adb target `{selected_serial}`"
+    ));
+    Ok(())
+}
+
+fn execute_local_ios_instruments(
+    args: &ProfileRunArgs,
+    target: &ResolvedProfileTarget,
+    manifest: &mut ProfileManifest,
+) -> Result<()> {
+    let prepared = prepare_local_profile_run(args)?;
+    run_ios_build(&prepared.layout, args.release, false)?;
+
+    let simulator = select_local_ios_simulator(target.device.as_ref())?;
+    let output_root = profile_output_root(args, manifest);
+    let scratch_root = output_root.join(".capture-tmp/ios");
+    let derived_data = scratch_root.join("DerivedData");
+    fs::create_dir_all(&scratch_root)?;
+
+    boot_ios_simulator(&simulator)?;
+    ensure_ios_bench_delay_support(&prepared.layout.output_dir)?;
+    let app_path = build_ios_simulator_app(&prepared.layout, args.release, &simulator, &derived_data)?;
+    let sample_path = raw_artifact_path_or_scratch(manifest, &scratch_root, "sample", "sample.txt");
+    capture_ios_sample_profile(
+        &simulator,
+        &prepared.layout.crate_name,
+        &app_path,
+        &sample_path,
+        args.capture_duration_secs,
+    )?;
+
+    if matches!(args.format, ProfileFormat::Processed | ProfileFormat::Both) {
+        let folded_path = processed_artifact_path_or_scratch(
+            manifest,
+            &scratch_root,
+            "collapsed-stacks",
+            "stacks.folded",
+        );
+        let flamegraph_path = processed_artifact_path_or_scratch(
+            manifest,
+            &scratch_root,
+            "flamegraph",
+            "flamegraph.html",
+        );
+
+        match write_ios_processed_outputs(&sample_path, &folded_path, &flamegraph_path, &manifest.function)
+        {
+            Ok(()) => manifest.capture_status = CaptureStatus::Captured,
+            Err(err) if matches!(args.format, ProfileFormat::Both) => {
+                manifest.capture_status = CaptureStatus::Partial;
+                manifest.warnings.push(format!(
+                    "native iOS capture succeeded, but folded stack or flamegraph generation failed: {err}"
+                ));
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        }
+    } else {
+        manifest.capture_status = CaptureStatus::Captured;
+    }
+
+    manifest.warnings.push(format!(
+        "captured iOS simulator sample profile for the ios-instruments backend on {} ({})",
+        simulator.name, simulator.os_version
+    ));
+    Ok(())
+}
+
+fn prepare_local_profile_run(args: &ProfileRunArgs) -> Result<PreparedLocalProfileRun> {
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: None,
+        crate_path: args.crate_path.as_deref(),
+        config_path: args.config.as_deref(),
+    })?;
+    load_dotenv_for_layout(&layout);
+    validate_benchmark_function(&layout, &args.function)?;
+
+    let spec = RunSpec {
+        target: args.target,
+        function: args.function.clone(),
+        iterations: args.iterations,
+        warmup: args.warmup,
+        devices: Vec::new(),
+        browserstack: None,
+        ios_xcuitest: None,
+    };
+    persist_mobile_spec(&layout, &spec, args.release)?;
+
+    Ok(PreparedLocalProfileRun { layout })
+}
+
+fn profile_output_root(args: &ProfileRunArgs, manifest: &ProfileManifest) -> PathBuf {
+    args.output_dir.join(&manifest.run_id)
+}
+
+fn artifact_path(records: &[ArtifactRecord], label: &str) -> Option<PathBuf> {
+    records
+        .iter()
+        .find(|artifact| artifact.label == label)
+        .map(|artifact| artifact.path.clone())
+}
+
+fn raw_artifact_path_or_scratch(
+    manifest: &ProfileManifest,
+    scratch_root: &Path,
+    label: &str,
+    filename: &str,
+) -> PathBuf {
+    artifact_path(&manifest.raw_artifacts, label)
+        .unwrap_or_else(|| scratch_root.join("raw").join(filename))
+}
+
+fn processed_artifact_path_or_scratch(
+    manifest: &ProfileManifest,
+    scratch_root: &Path,
+    label: &str,
+    filename: &str,
+) -> PathBuf {
+    artifact_path(&manifest.processed_artifacts, label)
+        .unwrap_or_else(|| scratch_root.join("processed").join(filename))
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("path {} has no parent directory", path.display()))?;
+    fs::create_dir_all(parent)?;
+    Ok(())
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    Ok(std::env::current_dir()
+        .context("resolving current directory for profile artifact path")?
+        .join(path))
+}
+
+fn run_command_output(command: &mut Command, description: &str) -> Result<std::process::Output> {
+    let output = command
+        .output()
+        .with_context(|| format!("failed to run {description}"))?;
+    if output.status.success() {
+        return Ok(output);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!(
+        "{description} failed with status {}.\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        stdout.trim(),
+        stderr.trim()
+    )
+}
+
+fn resolve_android_toolchain() -> Result<AndroidToolchain> {
+    let sdk_roots = android_sdk_roots();
+    let adb = resolve_command_path(
+        "adb",
+        sdk_roots
+            .iter()
+            .map(|root| root.join("platform-tools/adb"))
+            .collect(),
+    )?;
+
+    let ndk_home = if let Ok(explicit) = std::env::var("ANDROID_NDK_HOME") {
+        PathBuf::from(explicit)
+    } else {
+        sdk_roots
+            .iter()
+            .find_map(|root| newest_directory(root.join("ndk")))
+            .ok_or_else(|| {
+                anyhow!(
+                    "ANDROID_NDK_HOME is not set and no Android NDK was found under the local SDK. Set ANDROID_NDK_HOME before running local Android profiling."
+                )
+            })?
+    };
+
+    let app_profiler = ndk_home.join("simpleperf/app_profiler.py");
+    let stackcollapse = ndk_home.join("simpleperf/stackcollapse.py");
+    for path in [&app_profiler, &stackcollapse] {
+        if !path.is_file() {
+            bail!(
+                "required simpleperf helper was not found at {}. Install an Android NDK with simpleperf support.",
+                path.display()
+            );
+        }
+    }
+
+    Ok(AndroidToolchain {
+        adb,
+        ndk_home,
+        app_profiler,
+        stackcollapse,
+    })
+}
+
+fn android_sdk_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for key in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Some(value) = std::env::var_os(key) {
+            roots.push(PathBuf::from(value));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(home).join("Library/Android/sdk"));
+    }
+    roots.retain(|path| path.exists());
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn newest_directory(root: PathBuf) -> Option<PathBuf> {
+    let mut entries = fs::read_dir(root).ok()?.filter_map(|entry| {
+        let entry = entry.ok()?;
+        entry.file_type().ok()?.is_dir().then_some(entry.path())
+    }).collect::<Vec<_>>();
+    entries.sort();
+    entries.pop()
+}
+
+fn resolve_command_path(binary: &str, fallback_paths: Vec<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("PATH").and_then(|path_var| {
+        std::env::split_paths(&path_var)
+            .map(|dir| dir.join(binary))
+            .find(|candidate| candidate.is_file())
+    }) {
+        return Ok(path);
+    }
+
+    if let Some(path) = fallback_paths.into_iter().find(|candidate| candidate.is_file()) {
+        return Ok(path);
+    }
+
+    bail!("required executable `{binary}` was not found on PATH")
+}
+
+fn select_android_serial(adb: &Path) -> Result<String> {
+    if let Ok(serial) = std::env::var("ANDROID_SERIAL")
+        && !serial.trim().is_empty()
+    {
+        return Ok(serial);
+    }
+
+    let output = run_command_output(
+        Command::new(adb).arg("devices").arg("-l"),
+        "listing connected Android devices",
+    )?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let devices = stdout
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('*') {
+                return None;
+            }
+            let mut parts = trimmed.split_whitespace();
+            let serial = parts.next()?;
+            let state = parts.next()?;
+            (state == "device").then_some(serial.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    match devices.as_slice() {
+        [serial] => Ok(serial.clone()),
+        [] => bail!(
+            "no connected Android devices were found for local profiling. Connect a device or boot an emulator, then rerun `mobench profile run --target android ...`"
+        ),
+        _ => bail!(
+            "multiple Android devices are connected for local profiling. Set ANDROID_SERIAL to select one target. Connected devices: {}",
+            devices.join(", ")
+        ),
+    }
+}
+
+fn install_android_apk(adb: &Path, serial: &str, apk_path: &Path) -> Result<()> {
+    run_command_output(
+        Command::new(adb)
+            .arg("-s")
+            .arg(serial)
+            .arg("install")
+            .arg("-r")
+            .arg(apk_path),
+        "installing Android benchmark APK",
+    )?;
+    Ok(())
+}
+
+fn run_android_simpleperf_capture(
+    toolchain: &AndroidToolchain,
+    serial: &str,
+    layout: &crate::ResolvedProjectLayout,
+    perf_path: &Path,
+    capture_duration_secs: u64,
+) -> Result<()> {
+    ensure_parent_dir(perf_path)?;
+    let perf_path = absolute_path(perf_path)?;
+    let workdir = perf_path
+        .parent()
+        .ok_or_else(|| anyhow!("invalid perf output path {}", perf_path.display()))?;
+    let package_name = android_package_name(&layout.crate_name);
+    let native_lib_dir = layout.output_dir.join("android/app/src/main/jniLibs");
+    let record_options = format!(
+        "-e task-clock:u -f 1000 -g --duration {}",
+        capture_duration_secs.max(1)
+    );
+
+    run_command_output(
+        Command::new("python3")
+            .arg(&toolchain.app_profiler)
+            .arg("-p")
+            .arg(&package_name)
+            .arg("-a")
+            .arg(".MainActivity")
+            .arg("-r")
+            .arg(&record_options)
+            .arg("-lib")
+            .arg(&native_lib_dir)
+            .arg("-o")
+            .arg(&perf_path)
+            .arg("--ndk_path")
+            .arg(&toolchain.ndk_home)
+            .env("ANDROID_SERIAL", serial)
+            .current_dir(workdir),
+        "capturing Android simpleperf profile",
+    )?;
+    Ok(())
+}
+
+fn write_android_processed_outputs(
+    toolchain: &AndroidToolchain,
+    perf_path: &Path,
+    folded_path: &Path,
+    flamegraph_path: &Path,
+    function: &str,
+) -> Result<()> {
+    ensure_parent_dir(folded_path)?;
+    let perf_path = absolute_path(perf_path)?;
+    let workdir = perf_path
+        .parent()
+        .ok_or_else(|| anyhow!("invalid perf output path {}", perf_path.display()))?;
+    let binary_cache = workdir.join("binary_cache");
+    if !binary_cache.exists() {
+        bail!(
+            "simpleperf binary cache was not found at {} after capture",
+            binary_cache.display()
+        );
+    }
+
+    let output = run_command_output(
+        Command::new("python3")
+            .arg(&toolchain.stackcollapse)
+            .arg("--symfs")
+            .arg(&binary_cache)
+            .arg("-i")
+            .arg(&perf_path)
+            .current_dir(workdir),
+        "collapsing Android simpleperf stacks",
+    )?;
+    fs::write(folded_path, &output.stdout)?;
+    render_flamegraph_html(
+        folded_path,
+        flamegraph_path,
+        &format!("Android Native Flamegraph: {function}"),
+    )
+}
+
+fn android_package_name(crate_name: &str) -> String {
+    format!(
+        "dev.world.{}",
+        mobench_sdk::codegen::sanitize_bundle_id_component(crate_name)
+    )
+}
+
+fn ensure_android_profileable_manifest(output_dir: &Path) -> Result<()> {
+    let manifest_path = output_dir.join("android/app/src/main/AndroidManifest.xml");
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+    let manifest = fs::read_to_string(&manifest_path)?;
+    if manifest.contains("<profileable") {
+        return Ok(());
+    }
+
+    let updated = manifest.replacen(
+        "<activity",
+        "        <profileable android:shell=\"true\" />\n        <activity",
+        1,
+    );
+    if updated == manifest {
+        bail!(
+            "failed to update Android manifest at {} with a profileable tag",
+            manifest_path.display()
+        );
+    }
+    fs::write(manifest_path, updated)?;
+    Ok(())
+}
+
+fn select_local_ios_simulator(requested: Option<&ResolvedProfileDevice>) -> Result<LocalIosSimulator> {
+    let output = run_command_output(
+        Command::new("xcrun")
+            .arg("simctl")
+            .arg("list")
+            .arg("devices")
+            .arg("available")
+            .arg("--json"),
+        "listing available iOS simulators",
+    )?;
+    let listing: SimctlList = serde_json::from_slice(&output.stdout)
+        .context("parsing simctl device listing JSON")?;
+
+    let mut simulators = listing
+        .devices
+        .into_iter()
+        .filter_map(|(runtime, devices)| {
+            let os_version = runtime_version_from_simctl_runtime(&runtime)?;
+            Some(
+                devices
+                    .into_iter()
+                    .filter(|device| device.is_available && device.name.starts_with("iPhone"))
+                    .map(move |device| LocalIosSimulator {
+                        name: device.name,
+                        udid: device.udid,
+                        os_version: os_version.clone(),
+                        state: device.state,
+                    }),
+            )
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+
+    if simulators.is_empty() {
+        bail!("no available iOS simulators were found for local profiling");
+    }
+
+    simulators.sort_by(|left, right| {
+        simulator_sort_key(right).cmp(&simulator_sort_key(left))
+    });
+
+    if let Some(requested) = requested {
+        if let Some(simulator) = simulators
+            .iter()
+            .find(|simulator| {
+                simulator.name == requested.name
+                    && os_version_matches(&simulator.os_version, &requested.os_version)
+            })
+            .cloned()
+        {
+            return Ok(simulator);
+        }
+
+        let available = simulators
+            .iter()
+            .map(|simulator| format!("{} ({})", simulator.name, simulator.os_version))
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "no local iOS simulator matched requested device {} (iOS {}). Available simulators: {}",
+            requested.name,
+            requested.os_version,
+            available
+        );
+    }
+
+    simulators
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no suitable iOS simulator was available"))
+}
+
+fn simulator_sort_key(simulator: &LocalIosSimulator) -> (bool, Vec<u32>, &str) {
+    (
+        simulator.state == "Booted",
+        version_parts(&simulator.os_version),
+        simulator.name.as_str(),
+    )
+}
+
+fn version_parts(version: &str) -> Vec<u32> {
+    version
+        .split('.')
+        .filter_map(|segment| segment.parse::<u32>().ok())
+        .collect()
+}
+
+fn runtime_version_from_simctl_runtime(runtime: &str) -> Option<String> {
+    runtime
+        .split('.')
+        .next_back()
+        .and_then(|segment| segment.strip_prefix("iOS-"))
+        .map(|version| version.replace('-', "."))
+}
+
+fn os_version_matches(candidate: &str, requested: &str) -> bool {
+    candidate == requested
+        || candidate.starts_with(&format!("{requested}."))
+        || requested.starts_with(&format!("{candidate}."))
+}
+
+fn boot_ios_simulator(simulator: &LocalIosSimulator) -> Result<()> {
+    if simulator.state != "Booted" {
+        run_command_output(
+            Command::new("xcrun")
+                .arg("simctl")
+                .arg("boot")
+                .arg(&simulator.udid),
+            "booting iOS simulator",
+        )?;
+    }
+    run_command_output(
+        Command::new("xcrun")
+            .arg("simctl")
+            .arg("bootstatus")
+            .arg(&simulator.udid)
+            .arg("-b"),
+        "waiting for iOS simulator boot",
+    )?;
+    Ok(())
+}
+
+fn build_ios_simulator_app(
+    layout: &crate::ResolvedProjectLayout,
+    release: bool,
+    _simulator: &LocalIosSimulator,
+    derived_data: &Path,
+) -> Result<PathBuf> {
+    let derived_data = if derived_data.is_absolute() {
+        derived_data.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("resolving absolute iOS simulator build output path")?
+            .join(derived_data)
+    };
+    let configuration = if release { "Release" } else { "Debug" };
+    let project_path = layout.output_dir.join("ios/BenchRunner/BenchRunner.xcodeproj");
+    let config_build_dir = derived_data.join(format!("{configuration}-iphonesimulator"));
+    run_command_output(
+        Command::new("xcodebuild")
+            .arg("-project")
+            .arg(&project_path)
+            .arg("-target")
+            .arg("BenchRunner")
+            .arg("-configuration")
+            .arg(configuration)
+            .arg("build")
+            .arg("SDKROOT=iphonesimulator")
+            .arg("SUPPORTED_PLATFORMS=iphonesimulator iphoneos")
+            .arg("CODE_SIGNING_ALLOWED=NO")
+            .arg("CODE_SIGNING_REQUIRED=NO")
+            .arg(format!("CONFIGURATION_BUILD_DIR={}", config_build_dir.display()))
+            .arg(format!("OBJROOT={}", derived_data.join("Intermediates").display()))
+            .arg(format!("SYMROOT={}", derived_data.join("Products").display())),
+        "building iOS simulator benchmark app",
+    )?;
+
+    let app_path = config_build_dir.join("BenchRunner.app");
+    if !app_path.exists() {
+        bail!(
+            "expected iOS simulator app at {}, but the build output was missing",
+            app_path.display()
+        );
+    }
+    Ok(app_path)
+}
+
+fn ensure_ios_bench_delay_support(output_dir: &Path) -> Result<()> {
+    let content_view_path = output_dir.join("ios/BenchRunner/BenchRunner/ContentView.swift");
+    if !content_view_path.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(&content_view_path)?;
+    if content.contains("MOBENCH_BENCH_DELAY_MS") {
+        return Ok(());
+    }
+    let updated = content.replacen(
+        "            Task {\n                let result = await BenchRunnerFFI.runCurrentBenchmark()\n",
+        "            Task {\n                if let delay = ProcessInfo.processInfo.environment[\"MOBENCH_BENCH_DELAY_MS\"],\n                   let delayMs = UInt64(delay) {\n                    try? await Task.sleep(nanoseconds: delayMs * 1_000_000)\n                }\n                let result = await BenchRunnerFFI.runCurrentBenchmark()\n",
+        1,
+    );
+    if updated == content {
+        bail!(
+            "failed to inject benchmark start delay support into {}",
+            content_view_path.display()
+        );
+    }
+    fs::write(content_view_path, updated)?;
+    Ok(())
+}
+
+fn capture_ios_sample_profile(
+    simulator: &LocalIosSimulator,
+    crate_name: &str,
+    app_path: &Path,
+    sample_path: &Path,
+    capture_duration_secs: u64,
+) -> Result<()> {
+    ensure_parent_dir(sample_path)?;
+    install_ios_simulator_app(simulator, app_path)?;
+    launch_ios_app_with_delay(simulator, crate_name)?;
+    let host_pid = wait_for_ios_host_process_pid()?;
+    run_command_output(
+        Command::new("sample")
+            .arg(host_pid.to_string())
+            .arg(capture_duration_secs.max(1).to_string())
+            .arg("-file")
+            .arg(sample_path),
+        "capturing iOS simulator sample profile",
+    )?;
+    Ok(())
+}
+
+fn install_ios_simulator_app(simulator: &LocalIosSimulator, app_path: &Path) -> Result<()> {
+    run_command_output(
+        Command::new("xcrun")
+            .arg("simctl")
+            .arg("install")
+            .arg(&simulator.udid)
+            .arg(app_path),
+        "installing iOS simulator benchmark app",
+    )?;
+    Ok(())
+}
+
+fn launch_ios_app_with_delay(simulator: &LocalIosSimulator, crate_name: &str) -> Result<()> {
+    let bundle_id = ios_bundle_identifier(crate_name);
+    let _ = run_command_output(
+        Command::new("xcrun")
+            .arg("simctl")
+            .arg("terminate")
+            .arg(&simulator.udid)
+            .arg(&bundle_id),
+        "terminating previous iOS simulator benchmark app",
+    );
+    run_command_output(
+        Command::new("xcrun")
+            .arg("simctl")
+            .arg("launch")
+            .arg("--terminate-running-process")
+            .arg(&simulator.udid)
+            .arg(&bundle_id)
+            .env("SIMCTL_CHILD_MOBENCH_BENCH_DELAY_MS", "4000"),
+        "launching iOS simulator benchmark app",
+    )?;
+    Ok(())
+}
+
+fn wait_for_ios_host_process_pid() -> Result<u32> {
+    for _ in 0..20 {
+        let output = run_command_output(
+            Command::new("pgrep")
+                .arg("-f")
+                .arg("BenchRunner.app/BenchRunner"),
+            "locating iOS simulator benchmark host process",
+        );
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(pid) = stdout.lines().find_map(|line| line.trim().parse::<u32>().ok()) {
+                return Ok(pid);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    bail!("timed out waiting for the iOS simulator benchmark process to appear")
+}
+
+fn ios_bundle_identifier(crate_name: &str) -> String {
+    format!(
+        "dev.world.{}.BenchRunner",
+        mobench_sdk::codegen::sanitize_bundle_id_component(crate_name)
+    )
+}
+
+fn write_ios_processed_outputs(
+    sample_path: &Path,
+    folded_path: &Path,
+    flamegraph_path: &Path,
+    function: &str,
+) -> Result<()> {
+    ensure_parent_dir(folded_path)?;
+    let input = BufReader::new(File::open(sample_path)?);
+    let output = BufWriter::new(File::create(folded_path)?);
+    inferno_sample::Folder::default()
+        .collapse(input, output)
+        .context("collapsing iOS sample output to folded stacks")?;
+
+    render_flamegraph_html(
+        folded_path,
+        flamegraph_path,
+        &format!("iOS Simulator Flamegraph: {function}"),
+    )
+}
+
+fn render_flamegraph_html(folded_path: &Path, html_path: &Path, title: &str) -> Result<()> {
+    ensure_parent_dir(html_path)?;
+
+    let folded = fs::read(folded_path)?;
+    if folded.is_empty() {
+        bail!("folded stack file {} was empty", folded_path.display());
+    }
+
+    let mut options = flamegraph::Options::default();
+    options.title = title.to_string();
+    options.count_name = "samples".into();
+    options.notes = "Generated by mobench profile run".into();
+
+    let mut svg = Vec::new();
+    flamegraph::from_reader(&mut options, Cursor::new(folded), &mut svg)
+        .context("rendering flamegraph SVG")?;
+    let svg = String::from_utf8(svg).context("decoding rendered flamegraph SVG")?;
+    let html = wrap_svg_document(title, &svg);
+    fs::write(html_path, html.as_bytes())?;
+    Ok(())
+}
+
+fn wrap_svg_document(title: &str, svg: &str) -> String {
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>body{{margin:0;background:#fff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}}svg{{display:block;width:100%;height:auto}}</style></head><body>{}</body></html>",
+        escape_html(title),
+        svg
+    )
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\"', "&quot;")
+}
+
 fn select_viewer_hint(
     backend: ProfileBackend,
     format: ProfileFormat,
@@ -554,7 +1448,10 @@ fn select_viewer_hint(
     match backend {
         ProfileBackend::AndroidNative => {
             if format != ProfileFormat::Native && !processed_artifacts.is_empty() {
-                Some("Open artifacts/processed/flamegraph.html in a browser".into())
+                Some(
+                    "Open artifacts/processed/flamegraph.html in a browser, or inspect artifacts/processed/stacks.folded for folded stacks"
+                        .into(),
+                )
             } else if !raw_artifacts.is_empty() {
                 Some(
                     "Inspect artifacts/raw/sample.perf with the Android profiling toolchain".into(),
@@ -564,11 +1461,14 @@ fn select_viewer_hint(
             }
         }
         ProfileBackend::IosInstruments => {
-            if !raw_artifacts.is_empty() {
-                Some("Open artifacts/raw/time-profiler.trace in Instruments".into())
-            } else if !processed_artifacts.is_empty() {
+            if format != ProfileFormat::Native && !processed_artifacts.is_empty() {
                 Some(
-                    "Inspect artifacts/processed/time-profiler.xml or rerun with --format both to keep the .trace bundle"
+                    "Open artifacts/processed/flamegraph.html in a browser, or inspect artifacts/processed/stacks.folded"
+                        .into(),
+                )
+            } else if !raw_artifacts.is_empty() {
+                Some(
+                    "Inspect artifacts/raw/sample.txt or rerun with --format both to keep the folded stacks and flamegraph"
                         .into(),
                 )
             } else {
@@ -613,6 +1513,8 @@ mod tests {
             target,
             function: "sample_fns::fibonacci".into(),
             crate_path: None,
+            iterations: 100,
+            warmup: 10,
             config: None,
             output_dir: PathBuf::from("target/mobench/profile"),
             device: None,
@@ -622,6 +1524,8 @@ mod tests {
             provider,
             backend,
             format,
+            release: false,
+            capture_duration_secs: 10,
         }
     }
 
@@ -635,6 +1539,36 @@ mod tests {
     }
 
     #[test]
+    fn profile_manifest_serializes_native_capture_sections() {
+        let manifest = sample_manifest();
+
+        let json = serde_json::to_value(&manifest).expect("serialize manifest");
+        assert!(
+            json.get("native_capture").is_some(),
+            "expected native capture metadata to be nested under native_capture, got: {json}"
+        );
+        assert!(
+            json["native_capture"].get("symbolization").is_some(),
+            "expected native capture metadata to include symbolization state, got: {json}"
+        );
+    }
+
+    #[test]
+    fn profile_manifest_serializes_semantic_profile_sections() {
+        let manifest = sample_manifest();
+
+        let json = serde_json::to_value(&manifest).expect("serialize manifest");
+        assert!(
+            json.get("semantic_profile").is_some(),
+            "expected semantic profiling metadata to be nested under semantic_profile, got: {json}"
+        );
+        assert!(
+            json["semantic_profile"].get("phases").is_some(),
+            "expected semantic profiling metadata to expose phase data, got: {json}"
+        );
+    }
+
+    #[test]
     fn render_profile_summary_mentions_backend_and_artifacts() {
         let manifest = sample_manifest();
         let markdown = render_profile_markdown(&manifest);
@@ -642,6 +1576,25 @@ mod tests {
         assert!(markdown.contains("android-native"));
         assert!(markdown.contains("artifacts/raw/sample.perf"));
         assert!(markdown.contains("missing symbols"));
+    }
+
+    #[test]
+    fn render_profile_summary_separates_native_and_semantic_outputs() {
+        let manifest = sample_manifest();
+        let markdown = render_profile_markdown(&manifest);
+
+        assert!(
+            markdown.contains("Native capture") || markdown.contains("native capture"),
+            "expected a native capture section, got:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("Semantic phases"),
+            "expected a semantic phases section, got:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("flamegraph.html") || markdown.contains("sample.perf"),
+            "expected native artifact references to remain visible, got:\n{markdown}"
+        );
     }
 
     #[test]
@@ -682,6 +1635,11 @@ mod tests {
         assert!(
             plan.processed_artifacts
                 .iter()
+                .any(|p| p.path.ends_with("stacks.folded"))
+        );
+        assert!(
+            plan.processed_artifacts
+                .iter()
                 .any(|p| p.path.ends_with("flamegraph.html"))
         );
     }
@@ -708,7 +1666,7 @@ mod tests {
     }
 
     #[test]
-    fn ios_backend_allocates_trace_bundle_and_export_paths() {
+    fn ios_backend_builds_capture_plan_with_sample_artifacts() {
         let plan = build_capture_plan(
             &sample_run_args(
                 MobileTarget::Ios,
@@ -723,12 +1681,17 @@ mod tests {
         assert!(
             plan.raw_artifacts
                 .iter()
-                .any(|p| p.path.ends_with("time-profiler.trace"))
+                .any(|p| p.path.ends_with("sample.txt"))
         );
         assert!(
             plan.processed_artifacts
                 .iter()
-                .any(|p| p.path.ends_with("time-profiler.xml"))
+                .any(|p| p.path.ends_with("stacks.folded"))
+        );
+        assert!(
+            plan.processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("flamegraph.html"))
         );
     }
 
@@ -781,10 +1744,27 @@ mod tests {
         );
         assert!(
             message.contains("Instruments")
-                || message.contains("time-profiler.trace")
-                || message.contains("time-profiler.xml")
+                || message.contains("sample.txt")
                 || message.contains("flamegraph"),
             "expected the error to clarify the iOS artifact story, got: {message}"
+        );
+    }
+
+    #[test]
+    fn profile_summary_renders_semantic_phases_separately_from_flamegraph_artifacts() {
+        let markdown = render_profile_markdown(&sample_manifest());
+
+        assert!(
+            markdown.contains("Semantic phases"),
+            "expected semantic phases to be rendered separately, got:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("prove"),
+            "expected semantic phase names to be visible, got:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("serialize"),
+            "expected semantic phase names to be visible, got:\n{markdown}"
         );
     }
 
@@ -824,8 +1804,8 @@ mod tests {
         ios_args.function = "sample_fns::checksum".into();
         ios_args.output_dir = dir.path().to_path_buf();
 
-        cmd_profile_run(&android_args, false).expect("write first planned profile session");
-        cmd_profile_run(&ios_args, false).expect("write second planned profile session");
+        cmd_profile_run(&android_args, true).expect("write first planned profile session");
+        cmd_profile_run(&ios_args, true).expect("write second planned profile session");
 
         let android_run_dir = dir.path().join("android-sample_fns--fibonacci");
         let ios_run_dir = dir.path().join("ios-sample_fns--checksum");
