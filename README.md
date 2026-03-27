@@ -124,12 +124,6 @@ Profiling capability matrix:
 | `browserstack` | `ios-instruments` | Unsupported | BrowserStack does not provide retrievable native Instruments trace artifacts in this release |
 | `browserstack` | `rust-tracing` | Unsupported | Use `--provider local` for trace-events output |
 
-`profile run --dry-run` always stops after target resolution plus planning and
-writes the planned manifest only. Non-dry-run profile runs currently do not
-execute local native capture tools automatically, and BrowserStack-backed native
-profiling still fails deliberately with an explanatory error instead of silently
-pretending to capture data.
-
 When you need device-specific planning inputs for profiling, `profile run`
 reuses the same resolution model as `devices resolve`:
 
