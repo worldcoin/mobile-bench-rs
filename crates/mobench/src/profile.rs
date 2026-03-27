@@ -679,7 +679,8 @@ mod tests {
         let markdown = render_profile_markdown(&sample_manifest());
 
         assert!(
-            markdown.contains("Raw Artifacts") || markdown.contains("Processed Artifacts"),
+            markdown.contains("artifacts/raw/sample.perf")
+                || markdown.contains("artifacts/processed/flamegraph.html"),
             "expected native capture output to remain visible, got:\n{markdown}"
         );
         assert!(
