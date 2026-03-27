@@ -1,12 +1,17 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use crate::{resolve_devices_for_profile, DevicePlatform, MobileTarget, ResolvedMatrixDevice};
+use crate::{
+    load_dotenv_for_layout, persist_mobile_spec, resolve_devices_for_profile,
+    resolve_project_layout, run_android_build, validate_benchmark_function, DevicePlatform,
+    MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
+};
 use mobench_sdk::types::NativeLibraryArtifact;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -472,19 +477,51 @@ pub fn write_profile_manifest(path: &Path, manifest: &ProfileManifest) -> Result
 }
 
 pub fn cmd_profile_run(args: &ProfileRunArgs, dry_run: bool) -> Result<()> {
+    run_profile_session_with_executor(args, dry_run, execute_capture)
+}
+
+fn run_profile_session_with_executor<E>(args: &ProfileRunArgs, dry_run: bool, execute: E) -> Result<()>
+where
+    E: FnOnce(&ProfileRunArgs, &ResolvedProfileTarget, &mut ProfileManifest) -> Result<()>,
+{
     let target = resolve_profile_target(args)?;
     let run_id = build_run_id(args.target, &args.function);
     let run_output_dir = args.output_dir.join(&run_id);
     let mut manifest = build_capture_plan(args, &target, &run_output_dir)?;
-    if dry_run {
+    let execution_result = if dry_run {
         manifest.capture_metadata.warnings.push(
             "dry-run enabled; capture planning stopped before execution and recorded the planned artifact contract only"
                 .into(),
         );
+        Ok(())
     } else {
-        execute_capture(args, &target, &mut manifest)?;
-    }
+        execute(args, &target, &mut manifest)
+    };
 
+    write_profile_session_outputs(args, &run_output_dir, &manifest)?;
+    execution_result?;
+
+    println!("Profile session written to {}", run_output_dir.join("profile.json").display());
+    println!(
+        "Profile summary written to {}",
+        run_output_dir.join("summary.md").display()
+    );
+    println!(
+        "Latest profile manifest refreshed at {}",
+        args.output_dir.join("profile.json").display()
+    );
+    println!(
+        "Latest profile summary refreshed at {}",
+        args.output_dir.join("summary.md").display()
+    );
+    Ok(())
+}
+
+fn write_profile_session_outputs(
+    args: &ProfileRunArgs,
+    run_output_dir: &Path,
+    manifest: &ProfileManifest,
+) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)?;
     std::fs::create_dir_all(&run_output_dir)?;
     create_selected_artifact_roots(
@@ -502,17 +539,6 @@ pub fn cmd_profile_run(args: &ProfileRunArgs, dry_run: bool) -> Result<()> {
     let latest_summary_path = args.output_dir.join("summary.md");
     write_profile_manifest(&latest_profile_path, &manifest)?;
     std::fs::write(&latest_summary_path, rendered_summary.as_bytes())?;
-
-    println!("Profile session written to {}", run_profile_path.display());
-    println!("Profile summary written to {}", run_summary_path.display());
-    println!(
-        "Latest profile manifest refreshed at {}",
-        latest_profile_path.display()
-    );
-    println!(
-        "Latest profile summary refreshed at {}",
-        latest_summary_path.display()
-    );
     Ok(())
 }
 
@@ -685,6 +711,323 @@ fn write_android_flamegraph_html(folded_stacks: &str, output_path: &Path) -> Res
         &mut rendered,
     )?;
     std::fs::write(output_path, rendered)?;
+    Ok(())
+}
+
+const DEFAULT_PROFILE_ITERATIONS: u32 = 20;
+const DEFAULT_PROFILE_WARMUP: u32 = 3;
+const DEFAULT_ANDROID_CAPTURE_DURATION_SECS: u64 = 10;
+
+#[derive(Debug, Clone)]
+struct AndroidProfilerToolchain {
+    sdk_root: PathBuf,
+    adb_path: PathBuf,
+    app_profiler_path: PathBuf,
+    stackcollapse_path: PathBuf,
+    python_path: PathBuf,
+}
+
+fn locate_android_profiler_toolchain() -> Result<AndroidProfilerToolchain> {
+    let sdk_root = std::env::var_os("ANDROID_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("ANDROID_SDK_ROOT").map(PathBuf::from))
+        .or_else(|| {
+            std::env::var_os("ANDROID_NDK_HOME")
+                .map(PathBuf::from)
+                .and_then(|ndk_home| ndk_home.parent().and_then(Path::parent).map(PathBuf::from))
+        })
+        .or_else(|| {
+            std::env::var_os("HOME").map(PathBuf::from).map(|home| {
+                home.join("Library")
+                    .join("Android")
+                    .join("sdk")
+            })
+        })
+        .filter(|path| path.exists())
+        .context("Android SDK not found; set ANDROID_HOME or ANDROID_SDK_ROOT")?;
+
+    let ndk_root = std::env::var_os("ANDROID_NDK_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .or_else(|| {
+            let ndk_dir = sdk_root.join("ndk");
+            std::fs::read_dir(&ndk_dir)
+                .ok()
+                .and_then(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.path())
+                        .filter(|path| path.is_dir())
+                        .max()
+                })
+        })
+        .context("Android NDK not found; set ANDROID_NDK_HOME or install an NDK under the SDK")?;
+
+    let adb_path = sdk_root.join("platform-tools").join("adb");
+    let app_profiler_path = ndk_root.join("simpleperf").join("app_profiler.py");
+    let stackcollapse_path = ndk_root.join("simpleperf").join("stackcollapse.py");
+    let python_path = std::env::var_os("PYTHON")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("python3"));
+
+    for path in [&adb_path, &app_profiler_path, &stackcollapse_path] {
+        if !path.exists() {
+            bail!("required Android profiling tool not found at {}", path.display());
+        }
+    }
+
+    Ok(AndroidProfilerToolchain {
+        sdk_root,
+        adb_path,
+        app_profiler_path,
+        stackcollapse_path,
+        python_path,
+    })
+}
+
+fn prepend_path_env(toolchain: &AndroidProfilerToolchain) -> Option<std::ffi::OsString> {
+    let mut entries = vec![toolchain.sdk_root.join("platform-tools").into_os_string()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        entries.push(existing);
+    }
+    std::env::join_paths(entries).ok()
+}
+
+fn ensure_android_device_connected(toolchain: &AndroidProfilerToolchain) -> Result<()> {
+    let output = Command::new(&toolchain.adb_path)
+        .arg("devices")
+        .output()
+        .context("failed to run `adb devices`")?;
+    if !output.status.success() {
+        bail!(
+            "adb devices failed with status {}",
+            output.status
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout
+        .lines()
+        .skip(1)
+        .any(|line| line.split_whitespace().nth(1) == Some("device"))
+    {
+        return Ok(());
+    }
+
+    let avd_hint = sdk_root_emulator_hint(&toolchain.sdk_root)
+        .unwrap_or_else(|| "start an Android emulator or connect a device over adb".into());
+    bail!("no Android device is connected via adb; {avd_hint}");
+}
+
+fn sdk_root_emulator_hint(sdk_root: &Path) -> Option<String> {
+    let emulator_path = sdk_root.join("emulator").join("emulator");
+    if !emulator_path.exists() {
+        return None;
+    }
+    let output = Command::new(&emulator_path)
+        .arg("-list-avds")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let avd = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|line| !line.trim().is_empty())?
+        .trim()
+        .to_string();
+    Some(format!(
+        "start one with `{}` -avd {}`",
+        emulator_path.display(),
+        avd
+    ))
+}
+
+fn read_android_application_id(android_root: &Path) -> Result<String> {
+    let build_gradle = android_root.join("app").join("build.gradle");
+    let contents = std::fs::read_to_string(&build_gradle)
+        .with_context(|| format!("reading {}", build_gradle.display()))?;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("applicationId ") {
+            return extract_quoted_value(value).with_context(|| {
+                format!(
+                    "parsing applicationId from {}",
+                    build_gradle.display()
+                )
+            });
+        }
+    }
+    bail!(
+        "applicationId not found in {}",
+        build_gradle.display()
+    )
+}
+
+fn extract_quoted_value(source: &str) -> Result<String> {
+    let start = source.find('"').context("missing opening quote")? + 1;
+    let end = source[start..]
+        .find('"')
+        .map(|index| start + index)
+        .context("missing closing quote")?;
+    Ok(source[start..end].to_string())
+}
+
+fn run_android_stackcollapse(
+    toolchain: &AndroidProfilerToolchain,
+    perf_data_path: &Path,
+    working_dir: &Path,
+) -> Result<String> {
+    let mut command = Command::new(&toolchain.python_path);
+    command
+        .arg(&toolchain.stackcollapse_path)
+        .arg("-i")
+        .arg(perf_data_path)
+        .current_dir(working_dir);
+    if let Some(path_env) = prepend_path_env(toolchain) {
+        command.env("PATH", path_env);
+    }
+    let output = command
+        .output()
+        .with_context(|| format!("running {}", toolchain.stackcollapse_path.display()))?;
+    if !output.status.success() {
+        bail!(
+            "stackcollapse.py failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn execute_local_android_capture(
+    args: &ProfileRunArgs,
+    manifest: &mut ProfileManifest,
+) -> Result<()> {
+    let toolchain = locate_android_profiler_toolchain()?;
+    ensure_android_device_connected(&toolchain)?;
+
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: None,
+        crate_path: args.crate_path.as_deref(),
+        config_path: args.config.as_deref(),
+    })?;
+    load_dotenv_for_layout(&layout);
+    validate_benchmark_function(&layout, &args.function)?;
+
+    let spec = RunSpec {
+        target: MobileTarget::Android,
+        function: args.function.clone(),
+        iterations: DEFAULT_PROFILE_ITERATIONS,
+        warmup: DEFAULT_PROFILE_WARMUP,
+        devices: Vec::new(),
+        browserstack: None,
+        ios_xcuitest: None,
+    };
+    persist_mobile_spec(&layout, &spec, false)?;
+
+    let build = run_android_build(&layout, "", false, false)?;
+    let android_root = layout.output_dir.join("android");
+    let package_name = read_android_application_id(&android_root)?;
+
+    let raw_perf_path = manifest
+        .native_capture
+        .raw_artifacts
+        .iter()
+        .find(|artifact| artifact.label == "simpleperf")
+        .map(|artifact| artifact.path.clone())
+        .context("android profile plan missing simpleperf artifact")?;
+    let processed_root = manifest
+        .native_capture
+        .processed_artifacts
+        .iter()
+        .find_map(|artifact| artifact.path.parent().map(Path::to_path_buf))
+        .context("android profile plan missing processed artifact root")?;
+    if let Some(parent) = raw_perf_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir_all(&processed_root)?;
+
+    let mut install = Command::new(&toolchain.adb_path);
+    install.arg("install").arg("-r").arg(&build.app_path);
+    if let Some(path_env) = prepend_path_env(&toolchain) {
+        install.env("PATH", path_env.clone());
+    }
+    let install_output = install
+        .output()
+        .with_context(|| format!("installing {}", build.app_path.display()))?;
+    if !install_output.status.success() {
+        bail!(
+            "adb install failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            install_output.status,
+            String::from_utf8_lossy(&install_output.stdout),
+            String::from_utf8_lossy(&install_output.stderr)
+        );
+    }
+
+    let mut profiler = Command::new(&toolchain.python_path);
+    profiler
+        .arg(&toolchain.app_profiler_path)
+        .arg("-p")
+        .arg(&package_name)
+        .arg("-a")
+        .arg(".MainActivity")
+        .arg("-o")
+        .arg(&raw_perf_path)
+        .arg("-r")
+        .arg(format!(
+            "-e task-clock:u -f 1000 -g --duration {}",
+            DEFAULT_ANDROID_CAPTURE_DURATION_SECS
+        ))
+        .current_dir(
+            raw_perf_path
+                .parent()
+                .context("simpleperf artifact path missing parent directory")?,
+        );
+    if let Some(path_env) = prepend_path_env(&toolchain) {
+        profiler.env("PATH", path_env);
+    }
+    let profiler_output = profiler.output().with_context(|| {
+        format!(
+            "running Android profiler script {}",
+            toolchain.app_profiler_path.display()
+        )
+    })?;
+    if !profiler_output.status.success() {
+        bail!(
+            "app_profiler.py failed with status {}\nstdout:\n{}\nstderr:\n{}",
+            profiler_output.status,
+            String::from_utf8_lossy(&profiler_output.stdout),
+            String::from_utf8_lossy(&profiler_output.stderr)
+        );
+    }
+
+    let folded_stacks = run_android_stackcollapse(
+        &toolchain,
+        &raw_perf_path,
+        raw_perf_path
+            .parent()
+            .context("simpleperf artifact path missing parent directory")?,
+    )?;
+    let symbolization = write_android_symbolized_outputs(
+        &folded_stacks,
+        &build.native_libraries,
+        &processed_root,
+    )?;
+
+    manifest.native_capture.symbolization = symbolization.clone();
+    manifest.native_capture.status = match symbolization.status {
+        CaptureStatus::Planned | CaptureStatus::Captured => CaptureStatus::Captured,
+        CaptureStatus::Partial | CaptureStatus::Failed => CaptureStatus::Partial,
+    };
+    manifest.capture_metadata.sample_duration_secs = Some(DEFAULT_ANDROID_CAPTURE_DURATION_SECS);
+    manifest.capture_metadata.capture_method = Some("simpleperf/app_profiler.py".into());
+    manifest.capture_metadata.warnings.push(format!(
+        "android profile run used default benchmark settings: iterations={}, warmup={}",
+        DEFAULT_PROFILE_ITERATIONS, DEFAULT_PROFILE_WARMUP
+    ));
+
     Ok(())
 }
 
@@ -920,10 +1263,17 @@ fn execute_capture(
     target: &ResolvedProfileTarget,
     manifest: &mut ProfileManifest,
 ) -> Result<()> {
+    if let Some(device) = &target.device {
+        manifest.capture_metadata.warnings.push(format!(
+            "resolved target device: {} ({}, source: {})",
+            device.identifier, device.os, device.source
+        ));
+    }
+
     let plan_only_warning = match (args.provider, target.backend) {
-        (ProfileProvider::Local, ProfileBackend::AndroidNative) => Some(
-            "local android-native capture is not implemented yet; this session records the planned simpleperf artifact contract only",
-        ),
+        (ProfileProvider::Local, ProfileBackend::AndroidNative) => {
+            return execute_capture_with_local_android_executor(args, manifest, execute_local_android_capture);
+        }
         (ProfileProvider::Local, ProfileBackend::IosInstruments) => Some(
             "local ios-instruments capture is not implemented yet; this session records the planned Instruments trace/XML artifact contract only",
         ),
@@ -950,16 +1300,59 @@ fn execute_capture(
         (_, ProfileBackend::Auto) => unreachable!("auto backend should resolve before execution"),
     };
 
-    if let Some(device) = &target.device {
-        manifest.capture_metadata.warnings.push(format!(
-            "resolved target device: {} ({}, source: {})",
-            device.identifier, device.os, device.source
-        ));
-    }
     if let Some(warning) = plan_only_warning {
         manifest.capture_metadata.warnings.push(warning.into());
     }
     Ok(())
+}
+
+fn execute_capture_with_local_android_executor<E>(
+    args: &ProfileRunArgs,
+    manifest: &mut ProfileManifest,
+    execute: E,
+) -> Result<()>
+where
+    E: FnOnce(&ProfileRunArgs, &mut ProfileManifest) -> Result<()>,
+{
+    if let Err(error) = execute(args, manifest) {
+        mark_android_capture_attempt_failed(manifest, &error);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn mark_android_capture_attempt_failed(
+    manifest: &mut ProfileManifest,
+    error: &anyhow::Error,
+) {
+    manifest.native_capture.status = CaptureStatus::Failed;
+    manifest.native_capture.symbolization.status = CaptureStatus::Failed;
+    if manifest.native_capture.symbolization.tool.is_none() {
+        manifest.native_capture.symbolization.tool = Some("llvm-addr2line".into());
+    }
+
+    let failure_note = format!("local android-native capture failed: {error}");
+    if !manifest
+        .native_capture
+        .symbolization
+        .notes
+        .iter()
+        .any(|note| note == &failure_note)
+    {
+        manifest
+            .native_capture
+            .symbolization
+            .notes
+            .push(failure_note.clone());
+    }
+    if !manifest
+        .capture_metadata
+        .warnings
+        .iter()
+        .any(|warning| warning == &failure_note)
+    {
+        manifest.capture_metadata.warnings.push(failure_note);
+    }
 }
 
 fn browserstack_native_capture_unsupported_message(
@@ -1283,6 +1676,79 @@ mod tests {
     }
 
     #[test]
+    fn local_android_attempted_capture_marks_failed_state() {
+        let args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        let target = resolve_profile_target(&args).expect("resolve target");
+        let mut manifest = build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+            .expect("build capture plan");
+
+        let error = execute_capture_with_local_android_executor(&args, &mut manifest, |_args, _manifest| {
+            anyhow::bail!("simulated android capture failure")
+        })
+        .expect_err("simulated capture failure");
+
+        assert!(error.to_string().contains("simulated android capture failure"));
+        assert_eq!(manifest.native_capture.status, CaptureStatus::Failed);
+        assert_eq!(manifest.native_capture.symbolization.status, CaptureStatus::Failed);
+        assert_eq!(
+            manifest.native_capture.symbolization.tool.as_deref(),
+            Some("llvm-addr2line")
+        );
+        assert!(
+            manifest
+                .capture_metadata
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("simulated android capture failure"))
+        );
+    }
+
+    #[test]
+    fn profile_session_writes_failed_android_manifest_after_attempted_execution() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        args.output_dir = dir.path().to_path_buf();
+
+        let error = run_profile_session_with_executor(&args, false, |args, _target, manifest| {
+            execute_capture_with_local_android_executor(args, manifest, |_args, _manifest| {
+                anyhow::bail!("simulated android capture failure")
+            })
+        })
+        .expect_err("simulated execution failure should bubble up");
+
+        assert!(error.to_string().contains("simulated android capture failure"));
+
+        let run_dir = dir
+            .path()
+            .join(build_run_id(args.target, &args.function));
+        let manifest = load_profile_manifest(&run_dir.join("profile.json"))
+            .expect("load failed profile manifest");
+
+        assert_eq!(manifest.native_capture.status, CaptureStatus::Failed);
+        assert_eq!(manifest.native_capture.symbolization.status, CaptureStatus::Failed);
+        assert!(
+            manifest
+                .capture_metadata
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("simulated android capture failure"))
+        );
+        assert!(run_dir.join("summary.md").exists());
+        assert!(dir.path().join("profile.json").exists());
+        assert!(dir.path().join("summary.md").exists());
+    }
+
+    #[test]
     fn android_backend_builds_capture_plan_with_flamegraph_artifacts() {
         let plan = build_capture_plan(
             &sample_run_args(
@@ -1486,7 +1952,7 @@ mod tests {
         ios_args.function = "sample_fns::checksum".into();
         ios_args.output_dir = dir.path().to_path_buf();
 
-        cmd_profile_run(&android_args, false).expect("write first planned profile session");
+        cmd_profile_run(&android_args, true).expect("write first planned profile session");
         cmd_profile_run(&ios_args, false).expect("write second planned profile session");
 
         let android_run_dir = dir.path().join("android-sample_fns--fibonacci");
