@@ -56,11 +56,124 @@
 //! ```
 
 use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
-use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
+use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, NativeLibraryArtifact, Target};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AndroidStackSymbolization {
+    pub resolved: usize,
+    pub unresolved: usize,
+}
+
+pub fn symbolize_android_native_stack_line_with_resolver<E, F>(
+    line: &str,
+    mut resolve: F,
+) -> Result<(String, AndroidStackSymbolization), E>
+where
+    F: FnMut(&str, &str) -> Result<Option<String>, E>,
+{
+    let mut output = String::with_capacity(line.len());
+    let mut remaining = line;
+    let mut stats = AndroidStackSymbolization::default();
+
+    while let Some(start) = remaining.find("lib") {
+        output.push_str(&remaining[..start]);
+        let candidate = &remaining[start..];
+        if let Some((frame, library, offset)) = parse_android_native_frame(candidate) {
+            match resolve(library, offset)? {
+                Some(symbol) => {
+                    stats.resolved += 1;
+                    output.push_str(&symbol);
+                }
+                None => {
+                    stats.unresolved += 1;
+                    output.push_str(frame);
+                }
+            }
+            remaining = &candidate[frame.len()..];
+        } else {
+            output.push('l');
+            remaining = &candidate[1..];
+        }
+    }
+
+    output.push_str(remaining);
+    Ok((output, stats))
+}
+
+pub fn symbolize_android_native_stack_line(
+    line: &str,
+    addr2line_path: &Path,
+    libraries: &[NativeLibraryArtifact],
+) -> Result<(String, AndroidStackSymbolization), BenchError> {
+    symbolize_android_native_stack_line_with_resolver(line, |library_name, offset| {
+        let library = libraries.iter().find(|artifact| {
+            artifact
+                .packaged_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                == Some(library_name)
+        });
+
+        let Some(library) = library else {
+            return Ok(None);
+        };
+
+        resolve_android_native_symbol_with_tool(addr2line_path, &library.unstripped_path, offset)
+    })
+}
+
+fn parse_android_native_frame<'a>(candidate: &'a str) -> Option<(&'a str, &'a str, &'a str)> {
+    let so_index = candidate.find(".so[")?;
+    let frame_end = candidate[so_index..].find(']')? + so_index + 1;
+    let frame = &candidate[..frame_end];
+    let library = &candidate[..so_index + 3];
+    let offset = candidate[so_index + 4..frame_end - 1]
+        .strip_prefix('+')
+        .unwrap_or(&candidate[so_index + 4..frame_end - 1]);
+    Some((frame, library, offset))
+}
+
+pub fn resolve_android_native_symbol_with_tool(
+    addr2line_path: &Path,
+    library_path: &Path,
+    offset: &str,
+) -> Result<Option<String>, BenchError> {
+    let output = Command::new(addr2line_path)
+        .arg("-Cfpe")
+        .arg(library_path)
+        .arg(offset)
+        .output()
+        .map_err(|err| {
+            BenchError::Execution(format!(
+                "failed to run {} for {} at {}: {}",
+                addr2line_path.display(),
+                library_path.display(),
+                offset,
+                err
+            ))
+        })?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_android_addr2line_stdout(&stdout))
+}
+
+fn parse_android_addr2line_stdout(stdout: &str) -> Option<String> {
+    stdout.lines().map(str::trim).find_map(|line| {
+        if line.is_empty() || line == "??" || line == "??:0" {
+            None
+        } else {
+            Some(line.to_string())
+        }
+    })
+}
 
 /// Android builder that handles the complete build pipeline.
 ///
@@ -249,6 +362,7 @@ impl AndroidBuilder {
                     "app/build/outputs/apk/androidTest/{}/app-{}-androidTest.apk",
                     profile_name, profile_name
                 ))),
+                native_libraries: Vec::new(),
             });
         }
 
@@ -274,7 +388,7 @@ impl AndroidBuilder {
 
         // Step 3: Copy .so files to jniLibs
         println!("Copying native libraries to jniLibs...");
-        self.copy_native_libraries(config)?;
+        let native_libraries = self.copy_native_libraries(config)?;
 
         // Step 4: Build APK with Gradle
         println!("Building Android APK with Gradle...");
@@ -289,6 +403,7 @@ impl AndroidBuilder {
             platform: Target::Android,
             app_path: apk_path,
             test_suite_path: Some(test_suite_path),
+            native_libraries,
         };
         self.validate_build_artifacts(&result, config)?;
 
@@ -677,7 +792,7 @@ impl AndroidBuilder {
     }
 
     /// Copies .so files to Android jniLibs directories
-    fn copy_native_libraries(&self, config: &BuildConfig) -> Result<(), BenchError> {
+    fn copy_native_libraries(&self, config: &BuildConfig) -> Result<Vec<NativeLibraryArtifact>, BenchError> {
         let crate_dir = self.find_crate_dir()?;
         let profile_dir = match config.profile {
             BuildProfile::Debug => "debug",
@@ -703,6 +818,7 @@ impl AndroidBuilder {
             ("armv7-linux-androideabi", "armeabi-v7a"),
             ("x86_64-linux-android", "x86_64"),
         ];
+        let mut native_libraries = Vec::new();
 
         for (rust_target, android_abi) in abi_mappings {
             let src = target_dir
@@ -736,6 +852,11 @@ impl AndroidBuilder {
                 if self.verbose {
                     println!("  Copied {} -> {}", src.display(), dest.display());
                 }
+                native_libraries.push(NativeLibraryArtifact {
+                    abi: android_abi.to_string(),
+                    packaged_path: dest.clone(),
+                    unstripped_path: src.clone(),
+                });
             } else {
                 // Always warn about missing native libraries - this will cause runtime crashes
                 eprintln!(
@@ -748,7 +869,7 @@ impl AndroidBuilder {
             }
         }
 
-        Ok(())
+        Ok(native_libraries)
     }
 
     /// Ensures local.properties exists with sdk.dir set
@@ -1249,6 +1370,29 @@ impl AndroidBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symbolize_android_native_stack_line_rewrites_offsets_to_symbols() {
+        let line = "sample.perf: libsample_fns.so[+0x1a2b] libsample_fns.so[+0x2b3c]";
+        let (symbolized, stats) = symbolize_android_native_stack_line_with_resolver(
+            line,
+            |library, offset| -> Result<Option<String>, ()> {
+                match (library, offset) {
+                    ("libsample_fns.so", "0x1a2b") => {
+                        Ok(Some("sample_fns::fibonacci".into()))
+                    }
+                    ("libsample_fns.so", "0x2b3c") => Ok(Some("sample_fns::checksum".into())),
+                    _ => Ok(None),
+                }
+            },
+        )
+        .expect("symbolize stack line");
+
+        assert!(symbolized.contains("sample_fns::fibonacci"));
+        assert!(symbolized.contains("sample_fns::checksum"));
+        assert_eq!(stats.resolved, 2);
+        assert_eq!(stats.unresolved, 0);
+    }
 
     #[test]
     fn test_android_builder_creation() {
