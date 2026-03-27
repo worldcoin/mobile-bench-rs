@@ -1,10 +1,12 @@
 use anyhow::{bail, Result};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use crate::{resolve_devices_for_profile, DevicePlatform, MobileTarget, ResolvedMatrixDevice};
+use mobench_sdk::types::NativeLibraryArtifact;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -544,6 +546,82 @@ fn semantic_capture_status_label(status: SemanticCaptureStatus) -> &'static str 
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn symbolize_android_folded_stacks_with_resolver<F>(
+    folded_stacks: &str,
+    mut resolve: F,
+) -> (String, SymbolizationRecord, String)
+where
+    F: FnMut(&str, u64) -> Option<String>,
+{
+    let mut lines = Vec::new();
+    let mut resolved_frames = 0;
+    let mut unresolved_frames = 0;
+
+    for line in folded_stacks.lines().filter(|line| !line.trim().is_empty()) {
+        let symbolized =
+            mobench_sdk::builders::android::symbolize_android_native_stack_line_with_resolver(
+                line,
+                |library_name, offset| resolve(library_name, offset),
+            );
+        resolved_frames += symbolized.resolved_frames;
+        unresolved_frames += symbolized.unresolved_frames;
+        lines.push(symbolized.line);
+    }
+
+    let symbolized_stacks = lines.join("\n");
+    let status = match (resolved_frames, unresolved_frames) {
+        (0, 0) => CaptureStatus::Planned,
+        (_, 0) => CaptureStatus::Captured,
+        (0, _) => CaptureStatus::Failed,
+        _ => CaptureStatus::Partial,
+    };
+    let mut notes = Vec::new();
+    if unresolved_frames > 0 {
+        notes.push("some native frames could not be symbolized".into());
+    }
+
+    let record = SymbolizationRecord {
+        status,
+        tool: Some("llvm-addr2line".into()),
+        resolved_frames,
+        unresolved_frames,
+        notes,
+    };
+    let report = if symbolized_stacks.is_empty() {
+        "No native frames were symbolized.".into()
+    } else {
+        symbolized_stacks.clone()
+    };
+
+    (symbolized_stacks, record, report)
+}
+
+#[allow(dead_code)]
+pub(crate) fn symbolize_android_folded_stacks_with_native_libraries<F>(
+    folded_stacks: &str,
+    native_libraries: &[NativeLibraryArtifact],
+    mut resolve: F,
+) -> (String, SymbolizationRecord, String)
+where
+    F: FnMut(&Path, u64) -> Option<String>,
+{
+    let library_paths: HashMap<String, PathBuf> = native_libraries
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.library_name.clone(),
+                artifact.unstripped_path.clone(),
+            )
+        })
+        .collect();
+
+    symbolize_android_folded_stacks_with_resolver(folded_stacks, |library_name, offset| {
+        let library_path = library_paths.get(library_name)?;
+        resolve(library_path.as_path(), offset)
+    })
+}
+
 fn load_profile_manifest(path: &Path) -> Result<ProfileManifest> {
     let body = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&body)?)
@@ -582,10 +660,20 @@ fn build_capture_plan(
                 label: "simpleperf".into(),
                 path: raw_root.join("sample.perf"),
             }],
-            vec![ArtifactRecord {
-                label: "flamegraph".into(),
-                path: processed_root.join("flamegraph.html"),
-            }],
+            vec![
+                ArtifactRecord {
+                    label: "collapsed-stacks".into(),
+                    path: processed_root.join("stacks.folded"),
+                },
+                ArtifactRecord {
+                    label: "native-report".into(),
+                    path: processed_root.join("native-report.txt"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph".into(),
+                    path: processed_root.join("flamegraph.html"),
+                },
+            ],
         ),
         ProfileBackend::IosInstruments => (
             vec![ArtifactRecord {
@@ -1037,6 +1125,56 @@ mod tests {
     }
 
     #[test]
+    fn android_native_offsets_are_symbolized_into_rust_frames() {
+        let (symbolized, record, report) = symbolize_android_folded_stacks_with_resolver(
+            "dev.world.samplefns;uniffi.sample_fns.Sample_fnsKt.runBenchmark;libsample_fns.so[+94138] 1",
+            |library_name, offset| {
+                if library_name == "libsample_fns.so" && offset == 94_138 {
+                    Some("sample_fns::fibonacci".into())
+                } else {
+                    None
+                }
+            },
+        );
+
+        assert!(symbolized.contains("sample_fns::fibonacci"));
+        assert_eq!(record.status, CaptureStatus::Captured);
+        assert_eq!(record.resolved_frames, 1);
+        assert_eq!(record.unresolved_frames, 0);
+        assert!(report.contains("sample_fns::fibonacci"));
+    }
+
+    #[test]
+    fn android_native_offsets_use_unstripped_library_paths() {
+        let unstripped_path = PathBuf::from("/cargo/target/aarch64-linux-android/release/libsample_fns.so");
+        let packaged_path = PathBuf::from("/apk/jniLibs/arm64-v8a/libsample_fns.so");
+        let native_libraries = vec![NativeLibraryArtifact {
+            abi: "arm64-v8a".into(),
+            library_name: "libsample_fns.so".into(),
+            unstripped_path: unstripped_path.clone(),
+            packaged_path,
+        }];
+        let mut seen_paths = Vec::new();
+
+        let (symbolized, record, report) = symbolize_android_folded_stacks_with_native_libraries(
+            "dev.world.samplefns;libsample_fns.so[+94138] 1",
+            &native_libraries,
+            |path, offset| {
+                seen_paths.push((path.to_path_buf(), offset));
+                Some("sample_fns::fibonacci".into())
+            },
+        );
+
+        assert!(symbolized.contains("sample_fns::fibonacci"));
+        assert_eq!(seen_paths.len(), 1);
+        assert_eq!(seen_paths[0].0, unstripped_path);
+        assert_eq!(seen_paths[0].1, 94_138);
+        assert_eq!(record.status, CaptureStatus::Captured);
+        assert_eq!(record.resolved_frames, 1);
+        assert!(report.contains("sample_fns::fibonacci"));
+    }
+
+    #[test]
     fn android_backend_builds_capture_plan_with_flamegraph_artifacts() {
         let plan = build_capture_plan(
             &sample_run_args(
@@ -1066,6 +1204,16 @@ mod tests {
             .processed_artifacts
             .iter()
             .any(|p| p.path.ends_with("flamegraph.html")));
+        assert!(plan
+            .native_capture
+            .processed_artifacts
+            .iter()
+            .any(|p| p.path.ends_with("stacks.folded")));
+        assert!(plan
+            .native_capture
+            .processed_artifacts
+            .iter()
+            .any(|p| p.path.ends_with("native-report.txt")));
     }
 
     #[test]
