@@ -169,6 +169,14 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         let samplesArray = report.samples.map { ["duration_ns": $0.durationNs] }
         json["samples"] = samplesArray
 
+        let phases = report.phases.map { phase in
+            [
+                "name": phase.name,
+                "duration_ns": phase.durationNs
+            ] as [String: Any]
+        }
+        json["phases"] = phases
+
         // Statistics
         if !report.samples.isEmpty {
             let durations = report.samples.map { $0.durationNs }

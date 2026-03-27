@@ -8706,6 +8706,30 @@ project = "proj"
     }
 
     #[test]
+    fn profile_run_parses_capture_warmup_mode() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "profile",
+            "run",
+            "--target",
+            "android",
+            "--function",
+            "sample_fns::fibonacci",
+            "--warmup-mode",
+            "cold",
+        ]);
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Run(args),
+            } => {
+                assert_eq!(args.warmup_mode, Some(profile::CaptureWarmupMode::Cold));
+            }
+            _ => panic!("expected profile run command"),
+        }
+    }
+
+    #[test]
     fn profile_run_help_mentions_planned_only_or_execution_scope() {
         let help = render_profile_run_help();
 
@@ -8718,6 +8742,10 @@ project = "proj"
                 "local + android-native: attempts real simpleperf capture and symbolization"
             ),
             "expected profile run help to mention real Android native execution, got:\n{help}"
+        );
+        assert!(
+            help.contains("--warmup-mode"),
+            "expected profile run help to expose warm/cold profiling mode, got:\n{help}"
         );
     }
 
