@@ -31,12 +31,12 @@ on:
         description: "Number of benchmark iterations"
         required: false
         type: string
-        default: "5"
+        default: "50"
       warmup:
         description: "Number of warmup iterations"
         required: false
         type: string
-        default: "1"
+        default: "5"
       pr_number:
         description: "PR number for sticky comment publishing"
         required: false

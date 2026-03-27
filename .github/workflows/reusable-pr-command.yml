@@ -27,7 +27,7 @@ on:
         description: "Default iteration count"
         required: false
         type: string
-        default: "30"
+        default: "50"
       default_warmup:
         description: "Default warmup count"
         required: false
