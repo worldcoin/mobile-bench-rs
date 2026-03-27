@@ -302,6 +302,7 @@ jobs:
             --crate-path "$CRATE_PATH" \
             $RELEASE_FLAG \
             --fetch \
+            --plots off \
             --output-dir target/mobench/ci/ios
 
       - name: Upload iOS results
@@ -519,6 +520,7 @@ jobs:
             --crate-path "$CRATE_PATH" \
             $RELEASE_FLAG \
             --fetch \
+            --plots off \
             --output-dir target/mobench/ci/android
 
       - name: Upload Android results
