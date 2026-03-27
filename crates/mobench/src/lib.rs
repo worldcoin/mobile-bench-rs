@@ -893,6 +893,13 @@ impl MobileTarget {
             Self::Ios => "ios",
         }
     }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Android => "Android",
+            Self::Ios => "iOS",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -5244,10 +5251,10 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
         summary.devices.join(", ")
     };
 
-    let _ = writeln!(output, "# Benchmark Summary");
+    let _ = writeln!(output, "### Benchmark Summary");
     let _ = writeln!(output);
     let _ = writeln!(output, "- Generated: {}", summary.generated_at);
-    let _ = writeln!(output, "- Target: {:?}", summary.target);
+    let _ = writeln!(output, "- Target: {}", summary.target.display_name());
     let _ = writeln!(output, "- Function: {}", summary.function);
     let _ = writeln!(
         output,
@@ -9205,6 +9212,23 @@ mod ci_merge_tests {
         assert!(markdown.contains("bench_a"));
         assert!(markdown.contains("bench_b"));
         assert!(markdown.contains("bench_c"));
+    }
+
+    #[test]
+    fn render_markdown_summary_uses_h3_heading_and_ios_label() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-03-27T00:45:55.028899Z".to_string(),
+            generated_at_unix: 1_774_569_955,
+            target: MobileTarget::Ios,
+            function: "ffi_benchmark::bench_fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["iPhone 13-15".to_string()],
+            device_summaries: Vec::new(),
+        });
+
+        assert!(markdown.starts_with("### Benchmark Summary\n"));
+        assert!(markdown.contains("- Target: iOS"));
     }
 
     #[cfg(unix)]
