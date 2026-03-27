@@ -208,9 +208,13 @@ jobs:
             }
           ' caller/Cargo.lock)
           if [ -n "${uniffi_version}" ]; then
-            cargo install uniffi_bindgen --version "${uniffi_version}" --locked
+            cargo install \
+              --git https://github.com/mozilla/uniffi-rs \
+              --tag "v${uniffi_version}" \
+              uniffi-bindgen-cli \
+              --bin uniffi-bindgen
           else
-            cargo install uniffi_bindgen --locked
+            echo "No uniffi_bindgen entry in caller/Cargo.lock; skipping global uniffi-bindgen install"
           fi
 
       - name: Install XcodeGen
@@ -443,9 +447,13 @@ jobs:
             }
           ' caller/Cargo.lock)
           if [ -n "${uniffi_version}" ]; then
-            cargo install uniffi_bindgen --version "${uniffi_version}" --locked
+            cargo install \
+              --git https://github.com/mozilla/uniffi-rs \
+              --tag "v${uniffi_version}" \
+              uniffi-bindgen-cli \
+              --bin uniffi-bindgen
           else
-            cargo install uniffi_bindgen --locked
+            echo "No uniffi_bindgen entry in caller/Cargo.lock; skipping global uniffi-bindgen install"
           fi
 
       - name: Resolve Android device
