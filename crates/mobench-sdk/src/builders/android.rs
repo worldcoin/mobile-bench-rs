@@ -1247,13 +1247,12 @@ impl AndroidBuilder {
 }
 
 #[cfg(test)]
-fn symbolize_android_native_stack_line(line: &str) -> String {
-    line.to_string()
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn symbolize_android_native_stack_line(line: &str) -> String {
+        line.to_string()
+    }
 
     #[test]
     fn test_android_builder_creation() {
