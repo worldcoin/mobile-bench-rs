@@ -1,10 +1,10 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-use crate::{DevicePlatform, MobileTarget, ResolvedMatrixDevice, resolve_devices_for_profile};
+use crate::{resolve_devices_for_profile, DevicePlatform, MobileTarget, ResolvedMatrixDevice};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -117,10 +117,94 @@ pub enum CaptureStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SemanticCaptureStatus {
+    Planned,
+    Captured,
+    Partial,
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactRecord {
     pub label: String,
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolizationRecord {
+    pub status: CaptureStatus,
+    pub tool: Option<String>,
+    pub resolved_frames: u64,
+    pub unresolved_frames: u64,
+    pub notes: Vec<String>,
+}
+
+impl Default for SymbolizationRecord {
+    fn default() -> Self {
+        Self {
+            status: CaptureStatus::Planned,
+            tool: None,
+            resolved_frames: 0,
+            unresolved_frames: 0,
+            notes: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeCaptureRecord {
+    pub status: CaptureStatus,
+    pub raw_artifacts: Vec<ArtifactRecord>,
+    pub processed_artifacts: Vec<ArtifactRecord>,
+    pub symbolization: SymbolizationRecord,
+    pub viewer_hint: Option<String>,
+}
+
+impl Default for NativeCaptureRecord {
+    fn default() -> Self {
+        Self {
+            status: CaptureStatus::Planned,
+            raw_artifacts: Vec::new(),
+            processed_artifacts: Vec::new(),
+            symbolization: SymbolizationRecord::default(),
+            viewer_hint: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticPhaseRecord {
+    pub name: String,
+    pub duration_ns: Option<u64>,
+    pub percent_total: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticProfileRecord {
+    pub status: SemanticCaptureStatus,
+    pub phases: Vec<SemanticPhaseRecord>,
+    pub spans_path: Option<PathBuf>,
+}
+
+impl Default for SemanticProfileRecord {
+    fn default() -> Self {
+        Self {
+            status: SemanticCaptureStatus::Planned,
+            phases: Vec::new(),
+            spans_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CaptureMetadataRecord {
+    pub device: Option<String>,
+    pub sample_duration_secs: Option<u64>,
+    pub warmup_mode: Option<String>,
+    pub capture_method: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,11 +216,9 @@ pub struct ProfileManifest {
     pub provider: ProfileProvider,
     pub backend: ProfileBackend,
     pub format: ProfileFormat,
-    pub capture_status: CaptureStatus,
-    pub raw_artifacts: Vec<ArtifactRecord>,
-    pub processed_artifacts: Vec<ArtifactRecord>,
-    pub warnings: Vec<String>,
-    pub viewer_hint: Option<String>,
+    pub native_capture: NativeCaptureRecord,
+    pub semantic_profile: SemanticProfileRecord,
+    pub capture_metadata: CaptureMetadataRecord,
 }
 
 fn default_profile_provider() -> ProfileProvider {
@@ -176,46 +258,132 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
         "- Backend: `{}`",
         manifest.backend.to_possible_value().unwrap().get_name()
     );
+    let _ = writeln!(markdown);
+    let _ = writeln!(markdown, "## Native capture");
+    let _ = writeln!(markdown);
     let _ = writeln!(
         markdown,
         "- Status: `{}`",
-        capture_status_label(manifest.capture_status)
+        capture_status_label(manifest.native_capture.status)
     );
-    let _ = writeln!(markdown);
-    let _ = writeln!(markdown, "## Raw Artifacts");
-    let _ = writeln!(markdown);
-    for artifact in &manifest.raw_artifacts {
+    let _ = writeln!(markdown, "- Raw artifacts:");
+    for artifact in &manifest.native_capture.raw_artifacts {
         let _ = writeln!(
             markdown,
-            "- `{}`: `{}`",
+            "  - `{}`: `{}`",
             artifact.label,
             artifact.path.display()
         );
     }
-    let _ = writeln!(markdown);
-    let _ = writeln!(markdown, "## Processed Artifacts");
-    let _ = writeln!(markdown);
-    for artifact in &manifest.processed_artifacts {
+    let _ = writeln!(markdown, "- Processed artifacts:");
+    for artifact in &manifest.native_capture.processed_artifacts {
         let _ = writeln!(
             markdown,
-            "- `{}`: `{}`",
+            "  - `{}`: `{}`",
             artifact.label,
             artifact.path.display()
         );
     }
-    if !manifest.warnings.is_empty() {
-        let _ = writeln!(markdown);
-        let _ = writeln!(markdown, "## Warnings");
-        let _ = writeln!(markdown);
-        for warning in &manifest.warnings {
-            let _ = writeln!(markdown, "- {}", warning);
-        }
+    let _ = writeln!(markdown, "- Symbolization:");
+    let _ = writeln!(
+        markdown,
+        "  - Status: `{}`",
+        capture_status_label(manifest.native_capture.symbolization.status)
+    );
+    if let Some(tool) = &manifest.native_capture.symbolization.tool {
+        let _ = writeln!(markdown, "  - Tool: `{tool}`");
     }
-    if let Some(viewer_hint) = &manifest.viewer_hint {
+    let _ = writeln!(
+        markdown,
+        "  - Resolved frames: `{}`",
+        manifest.native_capture.symbolization.resolved_frames
+    );
+    let _ = writeln!(
+        markdown,
+        "  - Unresolved frames: `{}`",
+        manifest.native_capture.symbolization.unresolved_frames
+    );
+    for note in &manifest.native_capture.symbolization.notes {
+        let _ = writeln!(markdown, "  - {}", note);
+    }
+    if let Some(viewer_hint) = &manifest.native_capture.viewer_hint {
         let _ = writeln!(markdown);
         let _ = writeln!(markdown, "## Viewer");
         let _ = writeln!(markdown);
         let _ = writeln!(markdown, "{}", viewer_hint);
+    }
+    let _ = writeln!(markdown);
+    let _ = writeln!(markdown, "## Semantic phases");
+    let _ = writeln!(markdown);
+    let _ = writeln!(
+        markdown,
+        "- Status: `{}`",
+        semantic_capture_status_label(manifest.semantic_profile.status)
+    );
+    match &manifest.semantic_profile.spans_path {
+        Some(path) => {
+            let _ = writeln!(markdown, "- Spans path: `{}`", path.display());
+        }
+        None => {
+            let _ = writeln!(markdown, "- Spans path: `not recorded`");
+        }
+    }
+    if manifest.semantic_profile.phases.is_empty() {
+        let _ = writeln!(markdown, "- No semantic phases recorded");
+    } else {
+        let _ = writeln!(markdown, "- Phases:");
+        for phase in &manifest.semantic_profile.phases {
+            let _ = writeln!(markdown, "  - `{}`", phase.name);
+            if let Some(duration_ns) = phase.duration_ns {
+                let _ = writeln!(markdown, "    - Duration: `{duration_ns}` ns");
+            }
+            if let Some(percent_total) = phase.percent_total {
+                let _ = writeln!(markdown, "    - Share of total: `{percent_total}`");
+            }
+        }
+    }
+    let _ = writeln!(markdown);
+    let _ = writeln!(markdown, "## Capture metadata");
+    let _ = writeln!(markdown);
+    match &manifest.capture_metadata.device {
+        Some(device) => {
+            let _ = writeln!(markdown, "- Device: `{device}`");
+        }
+        None => {
+            let _ = writeln!(markdown, "- Device: `not recorded`");
+        }
+    }
+    match manifest.capture_metadata.sample_duration_secs {
+        Some(sample_duration_secs) => {
+            let _ = writeln!(markdown, "- Sample duration: `{sample_duration_secs}` s");
+        }
+        None => {
+            let _ = writeln!(markdown, "- Sample duration: `not recorded`");
+        }
+    }
+    match &manifest.capture_metadata.warmup_mode {
+        Some(warmup_mode) => {
+            let _ = writeln!(markdown, "- Warmup mode: `{warmup_mode}`");
+        }
+        None => {
+            let _ = writeln!(markdown, "- Warmup mode: `not recorded`");
+        }
+    }
+    match &manifest.capture_metadata.capture_method {
+        Some(capture_method) => {
+            let _ = writeln!(markdown, "- Capture method: `{capture_method}`");
+        }
+        None => {
+            let _ = writeln!(markdown, "- Capture method: `not recorded`");
+        }
+    }
+    if !manifest.capture_metadata.warnings.is_empty() {
+        let _ = writeln!(markdown);
+        let _ = writeln!(markdown, "### Warnings");
+        let _ = writeln!(markdown);
+        for warning in &manifest.capture_metadata.warnings {
+            let _ = writeln!(markdown, "- {}", warning);
+        }
     }
 
     markdown
@@ -234,9 +402,9 @@ pub fn cmd_profile_run(args: &ProfileRunArgs, dry_run: bool) -> Result<()> {
     let target = resolve_profile_target(args)?;
     let run_id = build_run_id(args.target, &args.function);
     let run_output_dir = args.output_dir.join(&run_id);
-    let mut manifest = build_capture_plan(args, &run_output_dir)?;
+    let mut manifest = build_capture_plan(args, &target, &run_output_dir)?;
     if dry_run {
-        manifest.warnings.push(
+        manifest.capture_metadata.warnings.push(
             "dry-run enabled; capture planning stopped before execution and recorded the planned artifact contract only"
                 .into(),
         );
@@ -246,7 +414,10 @@ pub fn cmd_profile_run(args: &ProfileRunArgs, dry_run: bool) -> Result<()> {
 
     std::fs::create_dir_all(&args.output_dir)?;
     std::fs::create_dir_all(&run_output_dir)?;
-    create_selected_artifact_roots(&manifest.raw_artifacts, &manifest.processed_artifacts)?;
+    create_selected_artifact_roots(
+        &manifest.native_capture.raw_artifacts,
+        &manifest.native_capture.processed_artifacts,
+    )?;
     let rendered_summary = render_profile_markdown(&manifest);
 
     let run_profile_path = run_output_dir.join("profile.json");
@@ -294,6 +465,15 @@ fn capture_status_label(status: CaptureStatus) -> &'static str {
     }
 }
 
+fn semantic_capture_status_label(status: SemanticCaptureStatus) -> &'static str {
+    match status {
+        SemanticCaptureStatus::Planned => "planned",
+        SemanticCaptureStatus::Captured => "captured",
+        SemanticCaptureStatus::Partial => "partial",
+        SemanticCaptureStatus::Failed => "failed",
+    }
+}
+
 fn load_profile_manifest(path: &Path) -> Result<ProfileManifest> {
     let body = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&body)?)
@@ -315,7 +495,11 @@ fn resolve_profile_target(args: &ProfileRunArgs) -> Result<ResolvedProfileTarget
     Ok(ResolvedProfileTarget { backend, device })
 }
 
-fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<ProfileManifest> {
+fn build_capture_plan(
+    args: &ProfileRunArgs,
+    target: &ResolvedProfileTarget,
+    output_root: &Path,
+) -> Result<ProfileManifest> {
     let backend = resolve_backend(args.target, args.backend);
     validate_format_capabilities(backend, args.format)?;
 
@@ -366,11 +550,29 @@ fn build_capture_plan(args: &ProfileRunArgs, output_root: &Path) -> Result<Profi
         provider: args.provider,
         backend,
         format: args.format,
-        capture_status: CaptureStatus::Planned,
-        raw_artifacts,
-        processed_artifacts,
-        warnings: Vec::new(),
-        viewer_hint,
+        native_capture: NativeCaptureRecord {
+            status: CaptureStatus::Planned,
+            raw_artifacts,
+            processed_artifacts,
+            symbolization: SymbolizationRecord::default(),
+            viewer_hint,
+        },
+        semantic_profile: SemanticProfileRecord::default(),
+        capture_metadata: CaptureMetadataRecord {
+            device: target
+                .device
+                .as_ref()
+                .map(|device| device.identifier.clone()),
+            sample_duration_secs: None,
+            warmup_mode: None,
+            capture_method: Some(match backend {
+                ProfileBackend::AndroidNative => "simpleperf".into(),
+                ProfileBackend::IosInstruments => "instruments".into(),
+                ProfileBackend::RustTracing => "trace-events".into(),
+                ProfileBackend::Auto => unreachable!("auto backend should resolve before planning"),
+            }),
+            warnings: Vec::new(),
+        },
     })
 }
 
@@ -525,13 +727,13 @@ fn execute_capture(
     };
 
     if let Some(device) = &target.device {
-        manifest.warnings.push(format!(
+        manifest.capture_metadata.warnings.push(format!(
             "resolved target device: {} ({}, source: {})",
             device.identifier, device.os, device.source
         ));
     }
     if let Some(warning) = plan_only_warning {
-        manifest.warnings.push(warning.into());
+        manifest.capture_metadata.warnings.push(warning.into());
     }
     Ok(())
 }
@@ -630,8 +832,8 @@ mod tests {
         let manifest = sample_manifest();
 
         let json = serde_json::to_value(&manifest).expect("serialize manifest");
-        assert_eq!(json["warnings"][0], "missing symbols");
-        assert_eq!(json["capture_status"], "partial");
+        assert_eq!(json["capture_metadata"]["warnings"][0], "missing symbols");
+        assert_eq!(json["native_capture"]["status"], "partial");
     }
 
     #[test]
@@ -640,7 +842,9 @@ mod tests {
         let markdown = render_profile_markdown(&manifest);
 
         assert!(markdown.contains("android-native"));
+        assert!(markdown.contains("## Native capture"));
         assert!(markdown.contains("artifacts/raw/sample.perf"));
+        assert!(markdown.contains("## Semantic phases"));
         assert!(markdown.contains("missing symbols"));
     }
 
@@ -656,6 +860,10 @@ mod tests {
         assert!(
             json["native_capture"].get("symbolization").is_some(),
             "expected native capture metadata to include symbolization state, got: {json}"
+        );
+        assert!(
+            json["native_capture"].get("viewer_hint").is_some(),
+            "expected native capture metadata to include viewer hints, got: {json}"
         );
     }
 
@@ -733,20 +941,27 @@ mod tests {
                 ProfileBackend::AndroidNative,
                 ProfileFormat::Both,
             ),
+            &resolve_profile_target(&sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Both,
+            ))
+            .expect("resolve target"),
             &PathBuf::from("target/mobench/profile"),
         )
         .expect("android capture plan");
 
-        assert!(
-            plan.raw_artifacts
-                .iter()
-                .any(|p| p.path.ends_with("sample.perf"))
-        );
-        assert!(
-            plan.processed_artifacts
-                .iter()
-                .any(|p| p.path.ends_with("flamegraph.html"))
-        );
+        assert!(plan
+            .native_capture
+            .raw_artifacts
+            .iter()
+            .any(|p| p.path.ends_with("sample.perf")));
+        assert!(plan
+            .native_capture
+            .processed_artifacts
+            .iter()
+            .any(|p| p.path.ends_with("flamegraph.html")));
     }
 
     #[test]
@@ -758,14 +973,21 @@ mod tests {
                 ProfileBackend::AndroidNative,
                 ProfileFormat::Native,
             ),
+            &resolve_profile_target(&sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Native,
+            ))
+            .expect("resolve target"),
             &PathBuf::from("target/mobench/profile"),
         )
         .expect("native-only capture plan");
 
-        assert_eq!(plan.raw_artifacts.len(), 1);
-        assert!(plan.processed_artifacts.is_empty());
+        assert_eq!(plan.native_capture.raw_artifacts.len(), 1);
+        assert!(plan.native_capture.processed_artifacts.is_empty());
         assert_eq!(
-            plan.viewer_hint.as_deref(),
+            plan.native_capture.viewer_hint.as_deref(),
             Some("Inspect artifacts/raw/sample.perf with the Android profiling toolchain")
         );
     }
@@ -779,20 +1001,27 @@ mod tests {
                 ProfileBackend::IosInstruments,
                 ProfileFormat::Both,
             ),
+            &resolve_profile_target(&sample_run_args(
+                MobileTarget::Ios,
+                ProfileProvider::Local,
+                ProfileBackend::IosInstruments,
+                ProfileFormat::Both,
+            ))
+            .expect("resolve target"),
             &PathBuf::from("target/mobench/profile"),
         )
         .expect("ios capture plan");
 
-        assert!(
-            plan.raw_artifacts
-                .iter()
-                .any(|p| p.path.ends_with("time-profiler.trace"))
-        );
-        assert!(
-            plan.processed_artifacts
-                .iter()
-                .any(|p| p.path.ends_with("time-profiler.xml"))
-        );
+        assert!(plan
+            .native_capture
+            .raw_artifacts
+            .iter()
+            .any(|p| p.path.ends_with("time-profiler.trace")));
+        assert!(plan
+            .native_capture
+            .processed_artifacts
+            .iter()
+            .any(|p| p.path.ends_with("time-profiler.xml")));
     }
 
     #[test]
@@ -805,7 +1034,8 @@ mod tests {
         );
         let target = resolve_profile_target(&args).expect("resolve target");
         let mut manifest =
-            build_capture_plan(&args, &PathBuf::from("target/mobench/profile")).expect("plan");
+            build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+                .expect("plan");
         let error = execute_capture(&args, &target, &mut manifest).unwrap_err();
 
         assert!(error.to_string().contains("BrowserStack"));
@@ -825,7 +1055,8 @@ mod tests {
         );
         let target = resolve_profile_target(&args).expect("resolve target");
         let mut manifest =
-            build_capture_plan(&args, &PathBuf::from("target/mobench/profile")).expect("plan");
+            build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+                .expect("plan");
         let error = execute_capture(&args, &target, &mut manifest).unwrap_err();
 
         let message = error.to_string();
@@ -853,6 +1084,13 @@ mod tests {
 
     #[test]
     fn profile_rust_tracing_processed_only_is_rejected() {
+        let target = resolve_profile_target(&sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::RustTracing,
+            ProfileFormat::Both,
+        ))
+        .expect("resolve target");
         let error = build_capture_plan(
             &sample_run_args(
                 MobileTarget::Android,
@@ -860,6 +1098,7 @@ mod tests {
                 ProfileBackend::RustTracing,
                 ProfileFormat::Processed,
             ),
+            &target,
             &PathBuf::from("target/mobench/profile"),
         )
         .unwrap_err();
@@ -915,6 +1154,13 @@ mod tests {
                 ProfileBackend::RustTracing,
                 ProfileFormat::Both,
             ),
+            &resolve_profile_target(&sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Browserstack,
+                ProfileBackend::RustTracing,
+                ProfileFormat::Both,
+            ))
+            .expect("resolve target"),
             &PathBuf::from("target/mobench/profile"),
         )
         .expect("build manifest");
@@ -964,14 +1210,15 @@ mod tests {
                 .join("profile.json"),
         )
         .expect("load planned manifest");
-        assert_eq!(manifest.capture_status, CaptureStatus::Planned);
+        assert_eq!(manifest.native_capture.status, CaptureStatus::Planned);
         assert!(
             manifest
+                .capture_metadata
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("dry-run enabled")),
             "expected dry-run warning in manifest: {:?}",
-            manifest.warnings
+            manifest.capture_metadata.warnings
         );
     }
 
@@ -1001,6 +1248,17 @@ mod tests {
     }
 
     fn sample_manifest() -> ProfileManifest {
+        let target = ResolvedProfileTarget {
+            backend: ProfileBackend::AndroidNative,
+            device: Some(ResolvedProfileDevice {
+                name: "Pixel 7".into(),
+                os: "android".into(),
+                os_version: "13".into(),
+                identifier: "Pixel 7-13.0".into(),
+                profile: Some("high-spec".into()),
+                source: "matrix".into(),
+            }),
+        };
         ProfileManifest {
             run_id: "run-123".into(),
             target: MobileTarget::Android,
@@ -1008,17 +1266,51 @@ mod tests {
             provider: ProfileProvider::Local,
             backend: ProfileBackend::AndroidNative,
             format: ProfileFormat::Both,
-            capture_status: CaptureStatus::Partial,
-            raw_artifacts: vec![ArtifactRecord {
-                label: "simpleperf".into(),
-                path: PathBuf::from("artifacts/raw/sample.perf"),
-            }],
-            processed_artifacts: vec![ArtifactRecord {
-                label: "flamegraph".into(),
-                path: PathBuf::from("artifacts/processed/flamegraph.html"),
-            }],
-            warnings: vec!["missing symbols".into()],
-            viewer_hint: Some("Open flamegraph.html in a browser".into()),
+            native_capture: NativeCaptureRecord {
+                status: CaptureStatus::Partial,
+                raw_artifacts: vec![ArtifactRecord {
+                    label: "simpleperf".into(),
+                    path: PathBuf::from("artifacts/raw/sample.perf"),
+                }],
+                processed_artifacts: vec![ArtifactRecord {
+                    label: "flamegraph".into(),
+                    path: PathBuf::from("artifacts/processed/flamegraph.html"),
+                }],
+                symbolization: SymbolizationRecord {
+                    status: CaptureStatus::Partial,
+                    tool: Some("llvm-addr2line".into()),
+                    resolved_frames: 3,
+                    unresolved_frames: 1,
+                    notes: vec!["missing symbols".into()],
+                },
+                viewer_hint: Some("Open flamegraph.html in a browser".into()),
+            },
+            semantic_profile: SemanticProfileRecord {
+                status: SemanticCaptureStatus::Captured,
+                phases: vec![
+                    SemanticPhaseRecord {
+                        name: "prove".into(),
+                        duration_ns: Some(120_000),
+                        percent_total: None,
+                    },
+                    SemanticPhaseRecord {
+                        name: "serialize".into(),
+                        duration_ns: Some(8_000),
+                        percent_total: None,
+                    },
+                ],
+                spans_path: Some(PathBuf::from("artifacts/semantic/spans.json")),
+            },
+            capture_metadata: CaptureMetadataRecord {
+                device: target
+                    .device
+                    .as_ref()
+                    .map(|device| device.identifier.clone()),
+                sample_duration_secs: Some(15),
+                warmup_mode: Some("warm".into()),
+                capture_method: Some("simpleperf".into()),
+                warnings: vec!["missing symbols".into()],
+            },
         }
     }
 }
