@@ -113,21 +113,19 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
     let timing_spec: mobench_sdk::timing::BenchSpec = spec.into();
 
     let report = match timing_spec.name.as_str() {
-        "fibonacci" | "fib" | "sample_fns::fibonacci" => {
-            run_closure(timing_spec, || {
-                let result = profile_phase("prove", || fibonacci_batch(30, 1000));
-                let serialized = profile_phase("serialize", || result.to_string());
-                profile_phase("verify", || {
-                    let checksum = serialized
-                        .bytes()
-                        .fold(0u64, |acc, byte| acc.wrapping_add(u64::from(byte)));
-                    std::hint::black_box(checksum);
-                });
-                std::hint::black_box(result);
-                Ok(())
-            })
-            .map_err(|e: TimingError| -> BenchError { e.into() })?
-        }
+        "fibonacci" | "fib" | "sample_fns::fibonacci" => run_closure(timing_spec, || {
+            let result = profile_phase("prove", || fibonacci_batch(30, 1000));
+            let serialized = profile_phase("serialize", || result.to_string());
+            profile_phase("verify", || {
+                let checksum = serialized
+                    .bytes()
+                    .fold(0u64, |acc, byte| acc.wrapping_add(u64::from(byte)));
+                std::hint::black_box(checksum);
+            });
+            std::hint::black_box(result);
+            Ok(())
+        })
+        .map_err(|e: TimingError| -> BenchError { e.into() })?,
         "checksum" | "checksum_1k" | "sample_fns::checksum" => {
             run_closure(timing_spec, || {
                 // Run checksum 10000 times to make it measurable

@@ -902,7 +902,10 @@ mod tests {
         .unwrap();
 
         assert!(
-            !report.phases.iter().any(|phase| phase.name == "warmup-only"),
+            !report
+                .phases
+                .iter()
+                .any(|phase| phase.name == "warmup-only"),
             "warmup phases should not be recorded"
         );
         let prove = report
