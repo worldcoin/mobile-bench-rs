@@ -286,6 +286,7 @@ jobs:
           WARMUP: ${{ inputs.warmup }}
           IOS_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
           IOS_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
+          REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
           CRATE_PATH: ${{ inputs.crate_path }}
         run: |
@@ -302,6 +303,7 @@ jobs:
             --crate-path "$CRATE_PATH" \
             $RELEASE_FLAG \
             --fetch \
+            --regression-threshold-pct "${REGRESSION_THRESHOLD}" \
             --plots off \
             --output-dir target/mobench/ci/ios
 
@@ -504,6 +506,7 @@ jobs:
           WARMUP: ${{ inputs.warmup }}
           ANDROID_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
           ANDROID_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
+          REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
           RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
           CRATE_PATH: ${{ inputs.crate_path }}
         run: |
@@ -520,6 +523,7 @@ jobs:
             --crate-path "$CRATE_PATH" \
             $RELEASE_FLAG \
             --fetch \
+            --regression-threshold-pct "${REGRESSION_THRESHOLD}" \
             --plots off \
             --output-dir target/mobench/ci/android
 
