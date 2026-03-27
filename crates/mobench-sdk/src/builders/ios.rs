@@ -272,6 +272,7 @@ impl IosBuilder {
                 platform: Target::Ios,
                 app_path: xcframework_path,
                 test_suite_path: None,
+                native_libraries: Vec::new(),
             });
         }
 
@@ -333,6 +334,7 @@ impl IosBuilder {
             platform: Target::Ios,
             app_path: xcframework_path,
             test_suite_path: None,
+            native_libraries: Vec::new(),
         };
         self.validate_build_artifacts(&result, config)?;
 

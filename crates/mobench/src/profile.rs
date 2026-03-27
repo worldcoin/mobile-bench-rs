@@ -3,6 +3,7 @@ use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use crate::{resolve_devices_for_profile, DevicePlatform, MobileTarget, ResolvedMatrixDevice};
@@ -622,6 +623,71 @@ where
     })
 }
 
+#[allow(dead_code)]
+pub(crate) fn write_android_symbolized_outputs(
+    folded_stacks: &str,
+    native_libraries: &[NativeLibraryArtifact],
+    processed_root: &Path,
+) -> Result<SymbolizationRecord> {
+    write_android_symbolized_outputs_with_resolver(
+        folded_stacks,
+        native_libraries,
+        processed_root,
+        |library_path, offset| {
+            mobench_sdk::builders::android::resolve_android_native_symbol_with_addr2line(
+                library_path,
+                offset,
+            )
+        },
+    )
+}
+
+pub(crate) fn write_android_symbolized_outputs_with_resolver<F>(
+    folded_stacks: &str,
+    native_libraries: &[NativeLibraryArtifact],
+    processed_root: &Path,
+    resolve: F,
+) -> Result<SymbolizationRecord>
+where
+    F: FnMut(&Path, u64) -> Option<String>,
+{
+    std::fs::create_dir_all(processed_root)?;
+
+    let (symbolized_stacks, record, report) =
+        symbolize_android_folded_stacks_with_native_libraries(
+            folded_stacks,
+            native_libraries,
+            resolve,
+        );
+
+    std::fs::write(processed_root.join("stacks.folded"), &symbolized_stacks)?;
+    std::fs::write(processed_root.join("native-report.txt"), &report)?;
+    write_android_flamegraph_html(&symbolized_stacks, &processed_root.join("flamegraph.html"))?;
+
+    Ok(record)
+}
+
+fn write_android_flamegraph_html(folded_stacks: &str, output_path: &Path) -> Result<()> {
+    if folded_stacks.trim().is_empty() {
+        std::fs::write(
+            output_path,
+            "<!DOCTYPE html><html><body><p>No native frames were symbolized.</p></body></html>",
+        )?;
+        return Ok(());
+    }
+
+    let mut options = inferno::flamegraph::Options::default();
+    options.title = "Android Native Profile".into();
+    let mut rendered = Vec::new();
+    inferno::flamegraph::from_reader(
+        &mut options,
+        Cursor::new(folded_stacks.as_bytes()),
+        &mut rendered,
+    )?;
+    std::fs::write(output_path, rendered)?;
+    Ok(())
+}
+
 fn load_profile_manifest(path: &Path) -> Result<ProfileManifest> {
     let body = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&body)?)
@@ -1172,6 +1238,48 @@ mod tests {
         assert_eq!(record.status, CaptureStatus::Captured);
         assert_eq!(record.resolved_frames, 1);
         assert!(report.contains("sample_fns::fibonacci"));
+    }
+
+    #[test]
+    fn android_post_processing_writes_symbolized_outputs_before_flamegraph_rendering() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let processed_root = temp_dir.path().join("artifacts/processed");
+        let native_libraries = vec![NativeLibraryArtifact {
+            abi: "arm64-v8a".into(),
+            library_name: "libsample_fns.so".into(),
+            unstripped_path: PathBuf::from(
+                "/cargo/target/aarch64-linux-android/release/libsample_fns.so",
+            ),
+            packaged_path: PathBuf::from("/apk/jniLibs/arm64-v8a/libsample_fns.so"),
+        }];
+
+        let record = write_android_symbolized_outputs_with_resolver(
+            "dev.world.samplefns;libsample_fns.so[+94138] 1",
+            &native_libraries,
+            &processed_root,
+            |_path, offset| {
+                if offset == 94_138 {
+                    Some("sample_fns::fibonacci".into())
+                } else {
+                    None
+                }
+            },
+        )
+        .expect("write symbolized outputs");
+
+        let folded = std::fs::read_to_string(processed_root.join("stacks.folded"))
+            .expect("read stacks.folded");
+        let report = std::fs::read_to_string(processed_root.join("native-report.txt"))
+            .expect("read native report");
+        let flamegraph = std::fs::read_to_string(processed_root.join("flamegraph.html"))
+            .expect("read flamegraph");
+
+        assert!(folded.contains("sample_fns::fibonacci"));
+        assert!(report.contains("sample_fns::fibonacci"));
+        assert!(flamegraph.contains("<svg"));
+        assert_eq!(record.status, CaptureStatus::Captured);
+        assert_eq!(record.resolved_frames, 1);
+        assert_eq!(record.unresolved_frames, 0);
     }
 
     #[test]
