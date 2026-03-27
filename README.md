@@ -124,10 +124,10 @@ Profiling capability matrix:
 | Provider | Backend | Current behavior | Notes |
 |----------|---------|------------------|-------|
 | `local` | `android-native` | Attempts real native capture | Uses `simpleperf`, symbolized `stacks.folded`, `native-report.txt`, `flamegraph.html`, and semantic phase summaries when the benchmark emits `profile_phase` data and an `adb` device is available |
-| `local` | `ios-instruments` | Planned manifest only | iOS output is an Instruments trace (`time-profiler.trace`) plus XML export (`time-profiler.xml`), not a flamegraph |
+| `local` | `ios-instruments` | Attempts real native capture | Uses a simulator-host `sample` capture to write `sample.txt`, `stacks.folded`, `native-report.txt`, and `flamegraph.html`. Semantic phase summaries are merged when the benchmark JSON includes `phases`. |
 | `local` | `rust-tracing` | Planned manifest only | Structured trace output is local-only and still not implemented |
 | `browserstack` | `android-native` | Unsupported | Use `--provider local` for planning/local capture, or a normal BrowserStack benchmark for timing/memory metrics |
-| `browserstack` | `ios-instruments` | Unsupported | BrowserStack does not provide retrievable native Instruments trace artifacts in this release |
+| `browserstack` | `ios-instruments` | Unsupported | Use `--provider local` for simulator-host `sample` capture and flamegraphs. BrowserStack does not provide retrievable native iOS profile artifacts in this release. |
 | `browserstack` | `rust-tracing` | Unsupported | Use `--provider local` for trace-events output |
 
 For local native profiling, `profile run` also accepts `--warmup-mode warm|cold`.
@@ -266,7 +266,7 @@ fn db_query(db: &Database) {
 - Clarified that profiling remains local-first in this release; BrowserStack native profiling is explicitly unsupported with actionable error text and a visible capability matrix.
 - Split `profile run` into target resolution, capture planning, and capture execution seams so planned manifests no longer imply that native capture actually ran.
 - Added device-selection inputs to `profile run` (`--device`, `--os-version`, `--profile`, `--device-matrix`) by reusing the existing deterministic device-resolution flow.
-- Corrected the iOS artifact story: the planned output remains an Instruments trace/XML export contract, not a flamegraph.
+- Added real local iOS native capture via simulator-host `sample`, with `sample.txt`, `stacks.folded`, `native-report.txt`, and `flamegraph.html` written into the normalized profile session layout.
 - Added regression coverage for profile help text, BrowserStack unsupported execution, dry-run planning semantics, and direct device target resolution.
 - Added experimental `cargo mobench profile run|summarize` commands for a normalized local profiling session contract across Android and iOS.
 - Profile sessions now write run-scoped artifacts under `target/mobench/profile/<run-id>/` and refresh top-level latest-session `profile.json` and `summary.md` convenience files.
