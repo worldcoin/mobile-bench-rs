@@ -274,7 +274,7 @@
 //! ### iOS
 //!
 //! - Xcode with command line tools
-//! - `uniffi-bindgen` (`cargo install uniffi-bindgen`)
+//! - `uniffi-bindgen` (`cargo install uniffi_bindgen`)
 //! - `xcodegen` (optional, `brew install xcodegen`)
 //! - Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`
 //!
