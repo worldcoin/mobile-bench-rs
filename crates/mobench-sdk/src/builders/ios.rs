@@ -757,8 +757,8 @@ impl IosBuilder {
                         [[bin]]\n\
                         name = \"uniffi-bindgen\"\n\
                         path = \"src/bin/uniffi-bindgen.rs\"\n\n\
-                     2. Or install uniffi-bindgen globally:\n\
-                        cargo install uniffi_bindgen\n\n\
+                     2. Or install a matching uniffi-bindgen CLI globally:\n\
+                        cargo install --git https://github.com/mozilla/uniffi-rs --tag <uniffi-tag> uniffi-bindgen-cli --bin uniffi-bindgen\n\n\
                      3. Or pre-generate bindings and commit them."
                         .to_string(),
                 ));
