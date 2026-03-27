@@ -4762,7 +4762,7 @@ fn write_compare_report(report: &CompareReport, output: Option<&Path>) -> Result
 
 fn render_compare_markdown(report: &CompareReport) -> String {
     let mut output = String::new();
-    let _ = writeln!(output, "# Benchmark Comparison");
+    let _ = writeln!(output, "### Benchmark Comparison");
     let _ = writeln!(output);
     let _ = writeln!(output, "- Baseline: {}", report.baseline.display());
     let _ = writeln!(output, "- Candidate: {}", report.candidate.display());
@@ -4976,7 +4976,7 @@ fn append_plot_links_to_markdown(
         markdown.push('\n');
     }
     markdown.push('\n');
-    markdown.push_str("## Device Comparison Plots\n\n");
+    markdown.push_str("### Device Comparison Plots\n\n");
 
     for plot in rendered_plots {
         let _ = writeln!(markdown, "### {}", plot.function_label);
@@ -5270,7 +5270,7 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
     }
 
     for device in &summary.device_summaries {
-        let _ = writeln!(output, "## Device: {}", device.device);
+        let _ = writeln!(output, "### Device: {}", device.device);
         let _ = writeln!(output);
         let _ = writeln!(
             output,
@@ -8782,6 +8782,7 @@ project = "proj"
             }],
         };
         let markdown = render_compare_markdown(&report);
+        assert!(markdown.starts_with("### Benchmark Comparison\n"));
         assert!(markdown.contains("Median Label"));
         assert!(markdown.contains("P95 Label"));
         assert!(markdown.contains("regressed"));
@@ -9224,11 +9225,24 @@ mod ci_merge_tests {
             iterations: 5,
             warmup: 1,
             devices: vec!["iPhone 13-15".to_string()],
-            device_summaries: Vec::new(),
+            device_summaries: vec![DeviceSummary {
+                device: "iPhone 13".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "ffi_benchmark::bench_fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(17_000),
+                    median_ns: Some(17_000),
+                    p95_ns: Some(18_000),
+                    min_ns: Some(16_000),
+                    max_ns: Some(19_000),
+                    resource_usage: None,
+                }],
+            }],
         });
 
         assert!(markdown.starts_with("### Benchmark Summary\n"));
         assert!(markdown.contains("- Target: iOS"));
+        assert!(markdown.contains("### Device: iPhone 13"));
     }
 
     #[cfg(unix)]
@@ -9292,7 +9306,7 @@ mod ci_merge_tests {
         )
         .expect("render markdown with plots");
 
-        assert!(markdown.contains("## Device Comparison Plots"));
+        assert!(markdown.contains("### Device Comparison Plots"));
         assert!(markdown.contains("![alpha](plots/alpha.svg)"));
         assert!(dir.path().join("plots/alpha.svg").exists());
     }
