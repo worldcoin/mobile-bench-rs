@@ -635,6 +635,16 @@ mod tests {
     }
 
     #[test]
+    fn render_profile_summary_mentions_backend_and_artifacts() {
+        let manifest = sample_manifest();
+        let markdown = render_profile_markdown(&manifest);
+
+        assert!(markdown.contains("android-native"));
+        assert!(markdown.contains("artifacts/raw/sample.perf"));
+        assert!(markdown.contains("missing symbols"));
+    }
+
+    #[test]
     fn profile_manifest_serializes_native_capture_sections() {
         let manifest = sample_manifest();
 
@@ -665,13 +675,17 @@ mod tests {
     }
 
     #[test]
-    fn render_profile_summary_mentions_backend_and_artifacts() {
-        let manifest = sample_manifest();
-        let markdown = render_profile_markdown(&manifest);
+    fn render_profile_summary_separates_native_and_semantic_outputs() {
+        let markdown = render_profile_markdown(&sample_manifest());
 
-        assert!(markdown.contains("android-native"));
-        assert!(markdown.contains("artifacts/raw/sample.perf"));
-        assert!(markdown.contains("missing symbols"));
+        assert!(
+            markdown.contains("Raw Artifacts") || markdown.contains("Processed Artifacts"),
+            "expected native capture output to remain visible, got:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("Semantic phases"),
+            "expected semantic phases to be rendered separately, got:\n{markdown}"
+        );
     }
 
     #[test]
