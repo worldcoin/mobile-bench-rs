@@ -138,6 +138,7 @@ use browserstack::{BrowserStackAuth, BrowserStackClient};
 
 mod browserstack;
 pub mod config;
+mod flamegraph_viewer;
 mod github;
 mod plots;
 mod profile;
