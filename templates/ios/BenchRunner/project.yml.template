@@ -28,7 +28,7 @@ targets:
         HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/{{PROJECT_NAME_PASCAL}}/Generated"
     dependencies:
       - framework: ../{{LIBRARY_NAME}}.xcframework
-        embed: true
+        embed: false
         link: true
   {{PROJECT_NAME_PASCAL}}UITests:
     type: bundle.ui-testing
