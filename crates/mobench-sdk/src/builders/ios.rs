@@ -1525,7 +1525,10 @@ impl IosBuilder {
 
         // Step 1: Build the app for device (simpler than archiving)
         let build_dir = self.output_dir.join("ios/build");
-        let build_configuration = "Debug";
+        // Package the same optimized device binary we ship to BrowserStack.
+        // `Release + iphoneos` has proven more stable in CI than the previous
+        // implicit Debug destination build.
+        let build_configuration = "Release";
         let mut cmd = Command::new("xcodebuild");
         cmd.arg("-project")
             .arg(&project_path)
@@ -1533,6 +1536,8 @@ impl IosBuilder {
             .arg(scheme)
             .arg("-destination")
             .arg("generic/platform=iOS")
+            .arg("-sdk")
+            .arg("iphoneos")
             .arg("-configuration")
             .arg(build_configuration)
             .arg("-derivedDataPath")
@@ -1606,6 +1611,19 @@ impl IosBuilder {
         if self.verbose {
             println!("  App bundle created successfully at {:?}", app_path);
         }
+
+        if let Ok(output) = &build_result
+            && !output.status.success()
+        {
+            println!(
+                "Warning: xcodebuild exited with {} but produced {}. Validating the bundle before continuing.",
+                output.status,
+                app_path.display()
+            );
+        }
+
+        let source_info_plist = ios_dir.join(scheme).join("Info.plist");
+        self.ensure_device_app_bundle_metadata(&app_path, &source_info_plist, scheme)?;
 
         if matches!(method, SigningMethod::AdHoc) {
             let profile = find_provisioning_profile();
@@ -1892,6 +1910,50 @@ impl IosBuilder {
         run_command(cmd, "copy app bundle with ditto")
     }
 
+    fn ensure_device_app_bundle_metadata(
+        &self,
+        app_path: &Path,
+        source_info_plist: &Path,
+        scheme: &str,
+    ) -> Result<(), BenchError> {
+        let bundled_info_plist = app_path.join("Info.plist");
+        if !bundled_info_plist.is_file() {
+            if !source_info_plist.is_file() {
+                return Err(BenchError::Build(format!(
+                    "Built app bundle at {} is missing Info.plist, and the generated source plist was not found at {}.\n\n\
+                     The device build produced an incomplete .app bundle, so packaging cannot continue.",
+                    app_path.display(),
+                    source_info_plist.display()
+                )));
+            }
+
+            fs::copy(source_info_plist, &bundled_info_plist).map_err(|e| {
+                BenchError::Build(format!(
+                    "Built app bundle at {} is missing Info.plist, and restoring it from {} failed: {}.",
+                    app_path.display(),
+                    source_info_plist.display(),
+                    e
+                ))
+            })?;
+            println!(
+                "Warning: Restored missing Info.plist into built app bundle from {}.",
+                source_info_plist.display()
+            );
+        }
+
+        let executable = app_path.join(scheme);
+        if !executable.is_file() {
+            return Err(BenchError::Build(format!(
+                "Built app bundle at {} is missing the expected executable {}.\n\n\
+                 The device build produced an incomplete .app bundle, so packaging cannot continue.",
+                app_path.display(),
+                executable.display()
+            )));
+        }
+
+        Ok(())
+    }
+
     fn validate_ipa_archive(&self, ipa_path: &Path, scheme: &str) -> Result<(), BenchError> {
         let extract_root = env::temp_dir().join(format!(
             "mobench-ipa-validate-{}-{}",
@@ -2060,6 +2122,86 @@ mod tests {
         builder
             .validate_ipa_archive(&ipa, "BenchRunner")
             .expect("IPA with Info.plist should validate");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_ensure_device_app_bundle_metadata_restores_missing_info_plist() {
+        let temp_dir = env::temp_dir().join(format!(
+            "mobench-ios-test-repair-plist-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let app_dir = temp_dir.join("Build/Products/Release-iphoneos/BenchRunner.app");
+        fs::create_dir_all(&app_dir).expect("create app dir");
+        fs::write(app_dir.join("BenchRunner"), "bin").expect("create executable");
+
+        let source_dir = temp_dir.join("BenchRunner");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::write(
+            source_dir.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"></plist>",
+        )
+        .expect("create source plist");
+
+        let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
+        builder
+            .ensure_device_app_bundle_metadata(
+                &app_dir,
+                &source_dir.join("Info.plist"),
+                "BenchRunner",
+            )
+            .expect("missing plist should be restored");
+
+        assert!(
+            app_dir.join("Info.plist").is_file(),
+            "restored app bundle should contain Info.plist"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_ensure_device_app_bundle_metadata_rejects_missing_executable() {
+        let temp_dir = env::temp_dir().join(format!(
+            "mobench-ios-test-missing-exec-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let app_dir = temp_dir.join("Build/Products/Release-iphoneos/BenchRunner.app");
+        fs::create_dir_all(&app_dir).expect("create app dir");
+        fs::write(
+            app_dir.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"></plist>",
+        )
+        .expect("create bundled plist");
+        let source_dir = temp_dir.join("BenchRunner");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::write(
+            source_dir.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"></plist>",
+        )
+        .expect("create source plist");
+
+        let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let err = builder
+            .ensure_device_app_bundle_metadata(
+                &app_dir,
+                &source_dir.join("Info.plist"),
+                "BenchRunner",
+            )
+            .expect_err("missing executable should fail validation");
+        assert!(
+            err.to_string().contains("missing the expected executable"),
+            "expected executable validation error, got: {err}"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
