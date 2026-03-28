@@ -86,8 +86,9 @@ jobs:
 
 ## Compatibility Notes
 
-- Contract docs: `docs/CONTRACT_CI_V1.md`
-- ADR: `docs/adr/0001-mobench-ci-contract-v1.md`
-- Schemas: `docs/schemas/summary-v1.schema.json`, `docs/schemas/ci-contract-v1.schema.json`
+- Versioned schemas: `docs/schemas/summary-v1.schema.json`, `docs/schemas/ci-contract-v1.schema.json`
+- Current release history and support status: `RELEASE_NOTES.md`
+- Current implementation reference: `README.md` and `docs/codebase/`
 
-Any change to required output files or metadata keys requires a contract-version bump.
+Any change to required output files or metadata keys requires updating the
+versioned schemas and documenting the compatibility impact in `RELEASE_NOTES.md`.
