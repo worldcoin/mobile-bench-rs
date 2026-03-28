@@ -100,6 +100,24 @@ pub struct BenchReportFfi {
     pub spec: BenchSpecFfi,
     /// All collected timing samples.
     pub samples: Vec<BenchSampleFfi>,
+    /// Optional semantic phase timings captured during measured iterations.
+    pub phases: Vec<SemanticPhaseFfi>,
+}
+
+/// FFI-ready semantic phase timing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticPhaseFfi {
+    pub name: String,
+    pub duration_ns: u64,
+}
+
+impl From<crate::SemanticPhase> for SemanticPhaseFfi {
+    fn from(phase: crate::SemanticPhase) -> Self {
+        Self {
+            name: phase.name,
+            duration_ns: phase.duration_ns,
+        }
+    }
 }
 
 impl From<crate::RunnerReport> for BenchReportFfi {
@@ -107,6 +125,7 @@ impl From<crate::RunnerReport> for BenchReportFfi {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
+            phases: report.phases.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -237,12 +256,18 @@ mod tests {
                 crate::BenchSample { duration_ns: 100 },
                 crate::BenchSample { duration_ns: 200 },
             ],
+            phases: vec![crate::SemanticPhase {
+                name: "prove".to_string(),
+                duration_ns: 300,
+            }],
         };
 
         let ffi: BenchReportFfi = report.into();
         assert_eq!(ffi.spec.name, "test");
         assert_eq!(ffi.samples.len(), 2);
         assert_eq!(ffi.samples[0].duration_ns, 100);
+        assert_eq!(ffi.phases.len(), 1);
+        assert_eq!(ffi.phases[0].name, "prove");
     }
 
     #[test]

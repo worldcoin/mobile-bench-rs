@@ -122,6 +122,15 @@ class MainActivity : AppCompatActivity() {
         samples.forEach { sampleArray.put(it) }
         json.put("samples_ns", sampleArray)
 
+        val phases = JSONArray()
+        report.phases.forEach { phase ->
+            val phaseJson = JSONObject()
+            phaseJson.put("name", phase.name)
+            phaseJson.put("duration_ns", phase.durationNs.toLong())
+            phases.put(phaseJson)
+        }
+        json.put("phases", phases)
+
         if (samples.isNotEmpty()) {
             val min = samples.minOrNull() ?: 0L
             val max = samples.maxOrNull() ?: 0L

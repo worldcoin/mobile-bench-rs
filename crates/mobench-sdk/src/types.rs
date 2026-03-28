@@ -18,7 +18,8 @@
 
 // Re-export timing types for convenience
 pub use crate::timing::{
-    BenchReport as RunnerReport, BenchSample, BenchSpec, BenchSummary, TimingError as RunnerError,
+    BenchReport as RunnerReport, BenchSample, BenchSpec, BenchSummary, SemanticPhase,
+    TimingError as RunnerError,
 };
 
 use std::path::PathBuf;
@@ -273,6 +274,18 @@ impl BuildProfile {
 ///     println!("Test suite at: {:?}", test_suite);
 /// }
 /// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeLibraryArtifact {
+    /// ABI name used in Android packaging, for example `arm64-v8a`.
+    pub abi: String,
+    /// Shared library filename, for example `libsample_fns.so`.
+    pub library_name: String,
+    /// Path to the unstripped library produced by Cargo.
+    pub unstripped_path: PathBuf,
+    /// Path to the packaged copy under `jniLibs/`.
+    pub packaged_path: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub struct BuildResult {
     /// Platform that was built.
@@ -287,17 +300,6 @@ pub struct BuildResult {
     /// - Android: Path to the androidTest APK (for Espresso)
     /// - iOS: Path to the XCUITest runner zip
     pub test_suite_path: Option<PathBuf>,
-    /// Native library build artifacts, including the packaged and unstripped paths.
+    /// Native libraries associated with this build, when applicable.
     pub native_libraries: Vec<NativeLibraryArtifact>,
-}
-
-/// Native library provenance for a build result.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeLibraryArtifact {
-    /// Android ABI directory name, e.g. `arm64-v8a`.
-    pub abi: String,
-    /// Path to the packaged library copied into `jniLibs`.
-    pub packaged_path: PathBuf,
-    /// Path to the unstripped Cargo output used for symbolization.
-    pub unstripped_path: PathBuf,
 }

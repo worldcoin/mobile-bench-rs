@@ -1,6 +1,6 @@
 //! Sample benchmark functions for mobile testing using UniFFI (proc macro mode).
 
-use mobench_sdk::timing::{run_closure, TimingError};
+use mobench_sdk::timing::{profile_phase, run_closure, TimingError};
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
 
@@ -18,11 +18,19 @@ pub struct BenchSample {
     pub duration_ns: u64,
 }
 
+/// Flat semantic phase timing captured during measured iterations.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct SemanticPhase {
+    pub name: String,
+    pub duration_ns: u64,
+}
+
 /// Complete benchmark report with spec and timing samples.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchReport {
     pub spec: BenchSpec,
     pub samples: Vec<BenchSample>,
+    pub phases: Vec<SemanticPhase>,
 }
 
 /// Error types for benchmark operations.
@@ -71,11 +79,21 @@ impl From<mobench_sdk::timing::BenchSample> for BenchSample {
     }
 }
 
+impl From<mobench_sdk::timing::SemanticPhase> for SemanticPhase {
+    fn from(phase: mobench_sdk::timing::SemanticPhase) -> Self {
+        Self {
+            name: phase.name,
+            duration_ns: phase.duration_ns,
+        }
+    }
+}
+
 impl From<mobench_sdk::timing::BenchReport> for BenchReport {
     fn from(report: mobench_sdk::timing::BenchReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
+            phases: report.phases.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -95,15 +113,19 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
     let timing_spec: mobench_sdk::timing::BenchSpec = spec.into();
 
     let report = match timing_spec.name.as_str() {
-        "fibonacci" | "fib" | "sample_fns::fibonacci" => {
-            run_closure(timing_spec, || {
-                let result = fibonacci_batch(30, 1000);
-                // Use the result to prevent optimization
-                std::hint::black_box(result);
-                Ok(())
-            })
-            .map_err(|e: TimingError| -> BenchError { e.into() })?
-        }
+        "fibonacci" | "fib" | "sample_fns::fibonacci" => run_closure(timing_spec, || {
+            let result = profile_phase("prove", || fibonacci_batch(30, 1000));
+            let serialized = profile_phase("serialize", || result.to_string());
+            profile_phase("verify", || {
+                let checksum = serialized
+                    .bytes()
+                    .fold(0u64, |acc, byte| acc.wrapping_add(u64::from(byte)));
+                std::hint::black_box(checksum);
+            });
+            std::hint::black_box(result);
+            Ok(())
+        })
+        .map_err(|e: TimingError| -> BenchError { e.into() })?,
         "checksum" | "checksum_1k" | "sample_fns::checksum" => {
             run_closure(timing_spec, || {
                 // Run checksum 10000 times to make it measurable
@@ -186,6 +208,10 @@ mod tests {
         let report = run_benchmark(spec).unwrap();
         assert_eq!(report.samples.len(), 3);
         assert_eq!(report.spec.name, "fibonacci");
+        assert_eq!(report.phases.len(), 3);
+        assert_eq!(report.phases[0].name, "prove");
+        assert_eq!(report.phases[1].name, "serialize");
+        assert_eq!(report.phases[2].name, "verify");
     }
 
     #[test]
