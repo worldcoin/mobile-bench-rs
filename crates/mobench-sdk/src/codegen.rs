@@ -1083,11 +1083,16 @@ pub fn ensure_ios_project_with_options(
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
     let library_name = crate_name.replace('-', "_");
-    if ios_project_exists(output_dir) && ios_project_matches_library(output_dir, &library_name) {
-        return Ok(());
+    let project_exists = ios_project_exists(output_dir);
+    let project_matches = ios_project_matches_library(output_dir, &library_name);
+    if project_exists && !project_matches {
+        println!("Existing iOS scaffolding does not match library, regenerating...");
+    } else if project_exists {
+        println!("Refreshing generated iOS scaffolding...");
+    } else {
+        println!("iOS project not found, generating scaffolding...");
     }
 
-    println!("iOS project not found, generating scaffolding...");
     // Use fixed "BenchRunner" for project/scheme name to match template directory structure
     let project_pascal = "BenchRunner";
     // Derive library name and bundle prefix from crate name
@@ -1448,6 +1453,38 @@ pub fn public_bench() {
         );
 
         // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_ios_project_refreshes_existing_content_view_template() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-refresh-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        ensure_ios_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("initial iOS project generation should succeed");
+
+        let content_view_path = temp_dir.join("ios/BenchRunner/BenchRunner/ContentView.swift");
+        assert!(content_view_path.exists(), "ContentView.swift should exist");
+
+        fs::write(&content_view_path, "stale generated content").unwrap();
+
+        ensure_ios_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("refreshing existing iOS project should succeed");
+
+        let refreshed = fs::read_to_string(&content_view_path).unwrap();
+        assert!(
+            refreshed.contains("ProfileLaunchOptions"),
+            "refreshed ContentView.swift should contain the latest profiling template, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("repeatUntilMs"),
+            "refreshed ContentView.swift should contain repeat-until profiling support, got:\n{}",
+            refreshed
+        );
+
         fs::remove_dir_all(&temp_dir).ok();
     }
 

@@ -3,12 +3,17 @@ use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::Write;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{
     DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
+    flamegraph_viewer::{
+        ArtifactLink as ViewerArtifactLink, FlamegraphMode, FlamegraphViewerDoc,
+        count_folded_stack_lines, derive_benchmark_focused_folded_stacks,
+        render_flamegraph_viewer_html, render_standalone_flamegraph_svg,
+        summarize_folded_stacks,
+    },
     load_dotenv_for_layout, persist_mobile_spec, resolve_devices_for_profile,
     resolve_project_layout, run_android_build, run_ios_build, validate_benchmark_function,
 };
@@ -751,7 +756,7 @@ where
 {
     std::fs::create_dir_all(processed_root)?;
 
-    let (symbolized_stacks, record, report) = symbolize_android_folded_stacks_with_native_libraries(
+    let (symbolized_stacks, mut record, report) = symbolize_android_folded_stacks_with_native_libraries(
         folded_stacks,
         native_libraries,
         runtime_abi,
@@ -760,38 +765,93 @@ where
 
     std::fs::write(processed_root.join("stacks.folded"), &symbolized_stacks)?;
     std::fs::write(processed_root.join("native-report.txt"), &report)?;
-    write_android_flamegraph_html(&symbolized_stacks, &processed_root.join("flamegraph.html"))?;
+    if let Some(warning) = write_dual_view_flamegraph_bundle(
+        &symbolized_stacks,
+        processed_root,
+        "Android Native Profile",
+        ANDROID_BENCHMARK_ANCHORS,
+        "../raw/sample.perf",
+        "Raw sample.perf",
+    )? {
+        record.notes.push(warning);
+    }
 
     Ok(record)
 }
 
-fn write_android_flamegraph_html(folded_stacks: &str, output_path: &Path) -> Result<()> {
-    write_flamegraph_html(folded_stacks, output_path, "Android Native Profile")
-}
+fn write_dual_view_flamegraph_bundle(
+    full_folded_stacks: &str,
+    processed_root: &Path,
+    title: &str,
+    anchors: &[&str],
+    raw_artifact_path: &str,
+    raw_artifact_label: &str,
+) -> Result<Option<String>> {
+    std::fs::create_dir_all(processed_root)?;
+    std::fs::write(processed_root.join("stacks.folded"), full_folded_stacks)?;
 
-fn write_ios_flamegraph_html(folded_stacks: &str, output_path: &Path) -> Result<()> {
-    write_flamegraph_html(folded_stacks, output_path, "iOS Native Profile")
-}
-
-fn write_flamegraph_html(folded_stacks: &str, output_path: &Path, title: &str) -> Result<()> {
-    if folded_stacks.trim().is_empty() {
-        std::fs::write(
-            output_path,
-            "<!DOCTYPE html><html><body><p>No native frames were symbolized.</p></body></html>",
-        )?;
-        return Ok(());
-    }
-
-    let mut options = inferno::flamegraph::Options::default();
-    options.title = title.into();
-    let mut rendered = Vec::new();
-    inferno::flamegraph::from_reader(
-        &mut options,
-        Cursor::new(folded_stacks.as_bytes()),
-        &mut rendered,
+    let focused = derive_benchmark_focused_folded_stacks(full_folded_stacks, anchors);
+    std::fs::write(
+        processed_root.join("benchmark.focused.folded"),
+        &focused.folded,
     )?;
-    std::fs::write(output_path, rendered)?;
-    Ok(())
+
+    let full_svg = render_standalone_flamegraph_svg(full_folded_stacks, title)?;
+    std::fs::write(processed_root.join("flamegraph.full.svg"), &full_svg)?;
+
+    let full_summary = summarize_folded_stacks(
+        full_folded_stacks,
+        count_folded_stack_lines(full_folded_stacks),
+        0,
+        None,
+    );
+
+    let focused_warning = if focused.folded.trim().is_empty() {
+        Some(
+            "No benchmark anchor frames were detected; the benchmark-only view is falling back to the full-process flamegraph."
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    let focused_svg = if focused.folded.trim().is_empty() {
+        full_svg.clone()
+    } else {
+        render_standalone_flamegraph_svg(&focused.folded, title)?
+    };
+    std::fs::write(processed_root.join("flamegraph.focused.svg"), &focused_svg)?;
+
+    let focused_summary = summarize_folded_stacks(
+        if focused.folded.trim().is_empty() {
+            full_folded_stacks
+        } else {
+            &focused.folded
+        },
+        focused.matched_stack_count,
+        focused.excluded_stack_count,
+        focused_warning.clone(),
+    );
+
+    let viewer_html = render_flamegraph_viewer_html(FlamegraphViewerDoc {
+        title: title.to_string(),
+        full_svg_document: full_svg,
+        focused_svg_document: focused_svg,
+        full_summary,
+        focused_summary,
+        default_mode: FlamegraphMode::Focused,
+        artifact_links: vec![
+            ViewerArtifactLink::new(raw_artifact_label, raw_artifact_path),
+            ViewerArtifactLink::new("Native report", "native-report.txt"),
+            ViewerArtifactLink::new("Full folded stacks", "stacks.folded"),
+            ViewerArtifactLink::new("Benchmark-focused folded stacks", "benchmark.focused.folded"),
+            ViewerArtifactLink::new("Full-process SVG", "flamegraph.full.svg"),
+            ViewerArtifactLink::new("Benchmark-only SVG", "flamegraph.focused.svg"),
+        ],
+    });
+    std::fs::write(processed_root.join("flamegraph.html"), viewer_html)?;
+
+    Ok(focused_warning)
 }
 
 const DEFAULT_PROFILE_ITERATIONS: u32 = 20;
@@ -800,8 +860,23 @@ const DEFAULT_ANDROID_CAPTURE_DURATION_SECS: u64 = 10;
 const DEFAULT_ANDROID_WARMUP_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_IOS_CAPTURE_DURATION_SECS: u64 = 10;
 const DEFAULT_IOS_BENCH_DELAY_MS: u64 = 1_500;
+const DEFAULT_IOS_PROFILE_REPEAT_UNTIL_MS: u64 = DEFAULT_IOS_CAPTURE_DURATION_SECS * 1_000;
 const DEFAULT_IOS_LOG_TIMEOUT_SECS: u64 = 60;
 const ANDROID_BENCH_LOG_MARKER: &str = "BENCH_JSON";
+const ANDROID_BENCHMARK_ANCHORS: &[&str] = &[
+    "sample_fns::run_benchmark",
+    "mobench_sdk::timing::run_closure",
+    "uniffi.",
+    "uniffi_",
+    "runBenchmark",
+];
+const IOS_BENCHMARK_ANCHORS: &[&str] = &[
+    "runBenchmark(spec:)",
+    "sample_fns::run_benchmark",
+    "mobench_sdk::timing::run_closure",
+    "uniffi_",
+    "BenchRunnerFFI.run(params:)",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalIosSimulator {
@@ -1374,20 +1449,37 @@ fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManife
         .context("ios sample artifact missing parent directory")?;
     let stdout_path = log_dir.join("app.stdout.log");
     let stderr_path = log_dir.join("app.stderr.log");
-    let result_hold_ms = (DEFAULT_IOS_CAPTURE_DURATION_SECS + 2) * 1_000;
-    let env_pairs = [
+    let app_args = [
+        format!("--mobench-profile-bench-delay-ms={DEFAULT_IOS_BENCH_DELAY_MS}"),
+        format!(
+            "--mobench-profile-repeat-until-ms={DEFAULT_IOS_PROFILE_REPEAT_UNTIL_MS}"
+        ),
+        format!(
+            "--mobench-profile-result-hold-ms={}",
+            DEFAULT_IOS_CAPTURE_DURATION_SECS * 1_000
+        ),
+    ];
+    let app_env = [
         (
             "MOBENCH_BENCH_DELAY_MS",
             DEFAULT_IOS_BENCH_DELAY_MS.to_string(),
         ),
-        ("MOBENCH_PROFILE_RESULT_HOLD_MS", result_hold_ms.to_string()),
+        (
+            "MOBENCH_PROFILE_REPEAT_UNTIL_MS",
+            DEFAULT_IOS_PROFILE_REPEAT_UNTIL_MS.to_string(),
+        ),
+        (
+            "MOBENCH_PROFILE_RESULT_HOLD_MS",
+            (DEFAULT_IOS_CAPTURE_DURATION_SECS * 1_000).to_string(),
+        ),
     ];
     let pid = launch_local_ios_app(
         &simulator,
         &bundle_id,
         &stdout_path,
         &stderr_path,
-        &env_pairs,
+        &app_args,
+        &app_env,
     )?;
 
     let sample_result = run_ios_sample_capture(pid, &raw_sample_path);
@@ -1429,6 +1521,10 @@ fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManife
             "performed one preparatory warm launch before recording so the measured sample de-emphasizes first-run bridge and UI setup costs".into(),
         );
     }
+    manifest.capture_metadata.warnings.push(format!(
+        "iOS profile capture repeated benchmark work for about {} ms so fast functions remain visible in sampled stacks",
+        DEFAULT_IOS_PROFILE_REPEAT_UNTIL_MS
+    ));
 
     match read_combined_text_files(&[stdout_path, stderr_path]) {
         Ok(logs) => {
@@ -1460,8 +1556,16 @@ fn run_local_ios_warmup_pass(
         .context("ios sample artifact missing parent directory")?;
     let stdout_path = log_dir.join("warmup.stdout.log");
     let stderr_path = log_dir.join("warmup.stderr.log");
-    let env_pairs = [("MOBENCH_PROFILE_WARMUP_ONLY", "1".to_string())];
-    let _pid = launch_local_ios_app(simulator, bundle_id, &stdout_path, &stderr_path, &env_pairs)?;
+    let app_args = [String::from("--mobench-profile-warmup-only=1")];
+    let app_env = [("MOBENCH_PROFILE_WARMUP_ONLY", String::from("1"))];
+    let _pid = launch_local_ios_app(
+        simulator,
+        bundle_id,
+        &stdout_path,
+        &stderr_path,
+        &app_args,
+        &app_env,
+    )?;
 
     let wait_result = wait_for_ios_log_marker(
         &[stdout_path, stderr_path],
@@ -1709,7 +1813,8 @@ fn launch_local_ios_app(
     bundle_id: &str,
     stdout_path: &Path,
     stderr_path: &Path,
-    env_pairs: &[(&str, String)],
+    app_args: &[String],
+    app_env: &[(&str, String)],
 ) -> Result<u32> {
     let stdout_path = absolutize_profile_path(stdout_path)?;
     let stderr_path = absolutize_profile_path(stderr_path)?;
@@ -1730,8 +1835,11 @@ fn launch_local_ios_app(
         .arg("--terminate-running-process")
         .arg(&simulator.udid)
         .arg(bundle_id);
-    for (key, value) in env_pairs {
+    for (key, value) in app_env {
         cmd.env(format!("SIMCTL_CHILD_{key}"), value);
+    }
+    for app_arg in app_args {
+        cmd.arg(app_arg);
     }
 
     let output = cmd.output().with_context(|| {
@@ -1860,7 +1968,16 @@ fn write_ios_processed_outputs(
     match collapse_ios_sample_call_graph(sample_output) {
         Ok((folded_stacks, mut record)) => {
             std::fs::write(processed_root.join("stacks.folded"), &folded_stacks)?;
-            write_ios_flamegraph_html(&folded_stacks, &processed_root.join("flamegraph.html"))?;
+            if let Some(warning) = write_dual_view_flamegraph_bundle(
+                &folded_stacks,
+                processed_root,
+                "iOS Native Profile",
+                IOS_BENCHMARK_ANCHORS,
+                "../raw/sample.txt",
+                "Raw sample.txt",
+            )? {
+                record.notes.push(warning);
+            }
             if record.tool.is_none() {
                 record.tool = Some("sample".into());
             }
@@ -1868,7 +1985,14 @@ fn write_ios_processed_outputs(
         }
         Err(error) => {
             std::fs::write(processed_root.join("stacks.folded"), "")?;
-            write_ios_flamegraph_html("", &processed_root.join("flamegraph.html"))?;
+            let _ = write_dual_view_flamegraph_bundle(
+                "",
+                processed_root,
+                "iOS Native Profile",
+                IOS_BENCHMARK_ANCHORS,
+                "../raw/sample.txt",
+                "Raw sample.txt",
+            )?;
             Ok(SymbolizationRecord {
                 status: CaptureStatus::Failed,
                 tool: Some("sample".into()),
@@ -2008,13 +2132,14 @@ struct ParsedIosSampleLine {
 }
 
 fn parse_ios_sample_call_graph_line(line: &str) -> Option<ParsedIosSampleLine> {
-    let indent = line.chars().take_while(|ch| *ch == ' ').count();
-    let mut remainder = &line[indent..];
-    let is_plus = remainder.starts_with("+ ");
-    if is_plus {
-        remainder = &remainder[2..];
-    }
-    let remainder = remainder.trim_start();
+    // `sample` encodes stack depth by the column where the sample count appears.
+    // The tree prefix can include `+`, `|`, `!`, and `:` markers, so leading
+    // spaces alone are not enough to reconstruct the stack shape.
+    let digits_start = line.find(|ch: char| ch.is_ascii_digit())?;
+    let indent = digits_start;
+    let prefix = &line[..digits_start];
+    let is_plus = prefix.trim_end().ends_with('+');
+    let remainder = &line[digits_start..];
     let digits_end = remainder.find(|ch: char| !ch.is_ascii_digit())?;
     let count = remainder[..digits_end].parse().ok()?;
     let frame_part = remainder[digits_end..].trim_start();
@@ -2333,7 +2458,19 @@ fn build_capture_plan(
                     path: processed_root.join("native-report.txt"),
                 },
                 ArtifactRecord {
-                    label: "flamegraph".into(),
+                    label: "benchmark-focused-stacks".into(),
+                    path: processed_root.join("benchmark.focused.folded"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph-full-svg".into(),
+                    path: processed_root.join("flamegraph.full.svg"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph-focused-svg".into(),
+                    path: processed_root.join("flamegraph.focused.svg"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph-viewer".into(),
                     path: processed_root.join("flamegraph.html"),
                 },
             ],
@@ -2353,7 +2490,19 @@ fn build_capture_plan(
                     path: processed_root.join("native-report.txt"),
                 },
                 ArtifactRecord {
-                    label: "flamegraph".into(),
+                    label: "benchmark-focused-stacks".into(),
+                    path: processed_root.join("benchmark.focused.folded"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph-full-svg".into(),
+                    path: processed_root.join("flamegraph.full.svg"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph-focused-svg".into(),
+                    path: processed_root.join("flamegraph.focused.svg"),
+                },
+                ArtifactRecord {
+                    label: "flamegraph-viewer".into(),
                     path: processed_root.join("flamegraph.html"),
                 },
             ],
@@ -2697,7 +2846,9 @@ fn select_viewer_hint(
     match backend {
         ProfileBackend::AndroidNative => {
             if format != ProfileFormat::Native && !processed_artifacts.is_empty() {
-                Some("Open artifacts/processed/flamegraph.html in a browser".into())
+                Some(
+                    "Open artifacts/processed/flamegraph.html for the interactive dual-view flamegraph explorer".into(),
+                )
             } else if !raw_artifacts.is_empty() {
                 Some(
                     "Inspect artifacts/raw/sample.perf with the Android profiling toolchain".into(),
@@ -2708,11 +2859,15 @@ fn select_viewer_hint(
         }
         ProfileBackend::IosInstruments => {
             if format != ProfileFormat::Native && !processed_artifacts.is_empty() {
-                Some("Open artifacts/processed/flamegraph.html in a browser".into())
+                Some(
+                    "Open artifacts/processed/flamegraph.html for the interactive dual-view flamegraph explorer".into(),
+                )
             } else if !raw_artifacts.is_empty() {
                 Some("Inspect artifacts/raw/sample.txt for the raw iOS sample call graph".into())
             } else if !processed_artifacts.is_empty() {
-                Some("Open artifacts/processed/flamegraph.html in a browser".into())
+                Some(
+                    "Open artifacts/processed/flamegraph.html for the interactive dual-view flamegraph explorer".into(),
+                )
             } else {
                 None
             }
@@ -3314,6 +3469,30 @@ mod tests {
     }
 
     #[test]
+    fn flamegraph_html_defaults_to_viewport_width_for_standalone_svg() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let output_path = temp_dir.path().join("flamegraph.svg");
+
+        let flamegraph =
+            render_standalone_flamegraph_svg("root;sample_fns::fibonacci 1", "Test Flamegraph")
+                .expect("render flamegraph");
+        std::fs::write(&output_path, flamegraph).expect("write flamegraph");
+
+        let flamegraph = std::fs::read_to_string(&output_path).expect("read flamegraph");
+
+        assert!(
+            flamegraph.contains("var fluiddrawing = false;"),
+            "expected standalone flamegraph HTML to disable inferno's fluiddrawing script for file:// rendering, got:\n{flamegraph}"
+        );
+        assert!(
+            flamegraph.contains("width:100vw")
+                || flamegraph.contains("min-width:100vw")
+                || flamegraph.contains("max-width:100vw"),
+            "expected standalone flamegraph HTML to size the SVG to the viewport width, got:\n{flamegraph}"
+        );
+    }
+
+    #[test]
     fn android_ndk_addr2line_discovery_prefers_ndk_toolchain_bin() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let ndk_root = temp_dir.path().join("ndk/26.3.11579264");
@@ -3471,6 +3650,24 @@ mod tests {
             plan.native_capture
                 .processed_artifacts
                 .iter()
+                .any(|p| p.path.ends_with("benchmark.focused.folded"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("flamegraph.full.svg"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("flamegraph.focused.svg"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
                 .any(|p| p.path.ends_with("stacks.folded"))
         );
         assert!(
@@ -3553,6 +3750,24 @@ mod tests {
                 .iter()
                 .any(|p| p.path.ends_with("flamegraph.html"))
         );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("benchmark.focused.folded"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("flamegraph.full.svg"))
+        );
+        assert!(
+            plan.native_capture
+                .processed_artifacts
+                .iter()
+                .any(|p| p.path.ends_with("flamegraph.focused.svg"))
+        );
     }
 
     #[test]
@@ -3575,6 +3790,40 @@ mod tests {
             "start;uniffi_sample_fns_fn_func_run_benchmark;sample_fns::run_benchmark;mobench_sdk::timing::run_closure;sample_fns::fibonacci_batch;sample_fns::fibonacci 776"
         ));
         assert!(folded.contains("start;write 2"));
+    }
+
+    #[test]
+    fn ios_sample_call_graph_preserves_rust_branch_with_sample_tree_markers() {
+        let sample = r#"Call graph:
+    7863 Thread_27276912: Main Thread   DispatchQueue_<multiple>
+    +           ! : 8 runBenchmark(spec:)  (in BenchRunner) + 212  [0x104c8fd04]  sample_fns.swift:883
+    +           ! :   8 rustCallWithError<A, B>(_:_:)  (in BenchRunner) + 136  [0x104c88e18]  sample_fns.swift:277
+    +           ! :     8 makeRustCall<A, B>(_:errorHandler:)  (in BenchRunner) + 272  [0x104c889d4]  sample_fns.swift:286
+    +           ! :       8 closure #1 in runBenchmark(spec:)  (in BenchRunner) + 196  [0x104c8ff74]  sample_fns.swift:884
+    +           ! :         8 uniffi_sample_fns_fn_func_run_benchmark  (in BenchRunner) + 128  [0x104ca0048]
+    +           ! :           8 uniffi_core::ffi::rustcalls::rust_call::hd7f37ba68899eb94  (in BenchRunner) + 60  [0x104c9e050]
+    +           ! :             8 uniffi_core::ffi::rustcalls::rust_call_with_out_status::hb407fdd2dbf3b59b  (in BenchRunner) + 60  [0x104c9dbc8]
+    +           ! :               8 std::panic::catch_unwind::h37b9566b8b963094  (in BenchRunner) + 96  [0x104c9aba4]
+    +           ! :                 8 __rust_try  (in BenchRunner) + 32  [0x104c9ac48]
+    +           ! :                   8 std::panicking::catch_unwind::do_call::h426d206e0216d0d8  (in BenchRunner) + 64  [0x104ca1400]
+    +           ! :                     8 sample_fns::uniffi_sample_fns_fn_func_run_benchmark::_$u7b$$u7b$closure$u7d$$u7d$::h239802906291ec5b  (in BenchRunner) + 180  [0x104c96a1c]
+    +           ! :                       8 sample_fns::run_benchmark::h9909bea304da6ad4  (in BenchRunner) + 244  [0x104c9ecf8]
+    +           ! :                         | 6 sample_fns::run_benchmark::_$u7b$$u7b$closure$u7d$$u7d$::h93f4e9319d117771  (in BenchRunner) + 40  [0x104c96648]
+    +           ! :                         |   6 mobench_sdk::timing::profile_phase::hea85f2c7c3e95291  (in BenchRunner) + 116  [0x104ca0d80]
+    +           ! :                         |     6 sample_fns::run_benchmark::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h4716261690d4fa31  (in BenchRunner) + 24  [0x104c96800]
+    +           ! :                         |       6 sample_fns::fibonacci_batch::hc8a1ee7297b9bb66  (in BenchRunner) + 80  [0x104c9f074]
+    +           ! :                         |         5 sample_fns::fibonacci::ha1ebbae54edac99d  (in BenchRunner) + 152  [0x104c9f168]
+"#;
+
+        let folded =
+            collapse_ios_sample_call_graph_to_folded_stacks(sample).expect("collapse sample");
+
+        assert!(
+            folded.contains(
+                "runBenchmark(spec:);rustCallWithError<A, B>(_:_:);makeRustCall<A, B>(_:errorHandler:);closure #1 in runBenchmark(spec:);uniffi_sample_fns_fn_func_run_benchmark;uniffi_core::ffi::rustcalls::rust_call::hd7f37ba68899eb94;uniffi_core::ffi::rustcalls::rust_call_with_out_status::hb407fdd2dbf3b59b;std::panic::catch_unwind::h37b9566b8b963094;__rust_try;std::panicking::catch_unwind::do_call::h426d206e0216d0d8;sample_fns::uniffi_sample_fns_fn_func_run_benchmark::_$u7b$$u7b$closure$u7d$$u7d$::h239802906291ec5b;sample_fns::run_benchmark::h9909bea304da6ad4;sample_fns::run_benchmark::_$u7b$$u7b$closure$u7d$$u7d$::h93f4e9319d117771;mobench_sdk::timing::profile_phase::hea85f2c7c3e95291;sample_fns::run_benchmark::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h4716261690d4fa31;sample_fns::fibonacci_batch::hc8a1ee7297b9bb66;sample_fns::fibonacci::ha1ebbae54edac99d 5"
+            ),
+            "expected folded stacks to preserve the deep Rust branch emitted by `sample`, got:\n{folded}"
+        );
     }
 
     #[test]
@@ -3826,10 +4075,32 @@ mod tests {
                     label: "simpleperf".into(),
                     path: PathBuf::from("artifacts/raw/sample.perf"),
                 }],
-                processed_artifacts: vec![ArtifactRecord {
-                    label: "flamegraph".into(),
-                    path: PathBuf::from("artifacts/processed/flamegraph.html"),
-                }],
+                processed_artifacts: vec![
+                    ArtifactRecord {
+                        label: "collapsed-stacks".into(),
+                        path: PathBuf::from("artifacts/processed/stacks.folded"),
+                    },
+                    ArtifactRecord {
+                        label: "benchmark-focused-stacks".into(),
+                        path: PathBuf::from("artifacts/processed/benchmark.focused.folded"),
+                    },
+                    ArtifactRecord {
+                        label: "native-report".into(),
+                        path: PathBuf::from("artifacts/processed/native-report.txt"),
+                    },
+                    ArtifactRecord {
+                        label: "flamegraph-full-svg".into(),
+                        path: PathBuf::from("artifacts/processed/flamegraph.full.svg"),
+                    },
+                    ArtifactRecord {
+                        label: "flamegraph-focused-svg".into(),
+                        path: PathBuf::from("artifacts/processed/flamegraph.focused.svg"),
+                    },
+                    ArtifactRecord {
+                        label: "flamegraph-viewer".into(),
+                        path: PathBuf::from("artifacts/processed/flamegraph.html"),
+                    },
+                ],
                 symbolization: SymbolizationRecord {
                     status: CaptureStatus::Partial,
                     tool: Some("llvm-addr2line".into()),
@@ -3837,7 +4108,10 @@ mod tests {
                     unresolved_frames: 1,
                     notes: vec!["missing symbols".into()],
                 },
-                viewer_hint: Some("Open flamegraph.html in a browser".into()),
+                viewer_hint: Some(
+                    "Open artifacts/processed/flamegraph.html for the interactive dual-view flamegraph explorer"
+                        .into(),
+                ),
             },
             semantic_profile: SemanticProfileRecord {
                 status: SemanticCaptureStatus::Captured,
