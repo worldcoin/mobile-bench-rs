@@ -48,11 +48,19 @@ pub struct BenchSample {
     pub duration_ns: u64,
 }
 
+/// A semantic phase emitted by the benchmark runner.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct SemanticPhase {
+    pub name: String,
+    pub duration_ns: u64,
+}
+
 /// Complete benchmark report with spec and timing samples.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchReport {
     pub spec: BenchSpec,
     pub samples: Vec<BenchSample>,
+    pub phases: Vec<SemanticPhase>,
 }
 
 /// Error types for benchmark operations.
@@ -101,11 +109,21 @@ impl From<mobench_sdk::BenchSample> for BenchSample {
     }
 }
 
+impl From<mobench_sdk::SemanticPhase> for SemanticPhase {
+    fn from(phase: mobench_sdk::SemanticPhase) -> Self {
+        Self {
+            name: phase.name,
+            duration_ns: phase.duration_ns,
+        }
+    }
+}
+
 impl From<mobench_sdk::RunnerReport> for BenchReport {
     fn from(report: mobench_sdk::RunnerReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
+            phases: report.phases.into_iter().map(Into::into).collect(),
         }
     }
 }
