@@ -124,16 +124,18 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     let _ = writeln!(markdown, "- Run ID: `{}`", manifest.run_id);
     let _ = writeln!(markdown, "- Target: `{}`", manifest.target.as_str());
     let _ = writeln!(markdown, "- Function: `{}`", manifest.function);
-    let _ = writeln!(
-        markdown,
-        "- Provider: `{}`",
-        manifest.provider.to_possible_value().unwrap().get_name()
-    );
-    let _ = writeln!(
-        markdown,
-        "- Backend: `{}`",
-        manifest.backend.to_possible_value().unwrap().get_name()
-    );
+    let provider_label = manifest
+        .provider
+        .to_possible_value()
+        .map(|v| v.get_name().to_owned())
+        .unwrap_or_else(|| format!("{:?}", manifest.provider));
+    let backend_label = manifest
+        .backend
+        .to_possible_value()
+        .map(|v| v.get_name().to_owned())
+        .unwrap_or_else(|| format!("{:?}", manifest.backend));
+    let _ = writeln!(markdown, "- Provider: `{}`", provider_label);
+    let _ = writeln!(markdown, "- Backend: `{}`", backend_label);
     let _ = writeln!(
         markdown,
         "- Status: `{}`",
@@ -499,8 +501,9 @@ where
         .map(|artifact| artifact.path.clone())
         .unwrap_or_else(|| processed_root.join("flamegraph.html"));
 
-    let package_name = "dev.world.bench";
-    let activity_name = "dev.world.bench/.MainActivity";
+    let package_name = android_profile_package_name(&layout.crate_name);
+    let activity_name = format!("{package_name}/.MainActivity");
+    let simpleperf_path = resolve_android_simpleperf_path();
 
     let install_output = run_adb_command(runner, ["install", "-r"], &build.app_path, None)?;
     if !install_output.status.success() {
@@ -517,11 +520,11 @@ where
         bail!("adb install failed for {}: {}", build.app_path.display(), stderr.trim());
     }
 
-    let mut record_command = Command::new("simpleperf");
+    let mut record_command = Command::new(&simpleperf_path);
     record_command
         .arg("record")
         .arg("--app")
-        .arg(package_name)
+        .arg(&package_name)
         .arg("--call-graph")
         .arg("fp")
         .arg("--duration")
@@ -532,7 +535,7 @@ where
         .arg("am")
         .arg("start")
         .arg("-n")
-        .arg(activity_name)
+        .arg(&activity_name)
         .arg("--es")
         .arg("bench_function")
         .arg(&args.function);
@@ -572,7 +575,7 @@ where
         bail!("failed to pull simpleperf capture: {}", stderr.trim());
     }
 
-    let mut report_command = Command::new("simpleperf");
+    let mut report_command = Command::new(&simpleperf_path);
     report_command.arg("report").arg("-i").arg(&raw_perf_path);
     let report_output = runner.output(&mut report_command)?;
     if !report_output.status.success() {
@@ -592,9 +595,7 @@ where
     }
 
     let report_text = String::from_utf8_lossy(&report_output.stdout).to_string();
-    let addr2line_path = std::env::var("LLVM_ADDR2LINE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("llvm-addr2line"));
+    let addr2line_path = resolve_android_addr2line_path();
     let (symbolized_report, symbolization) = symbolize_android_capture_report(
         &report_text,
         &addr2line_path,
@@ -687,6 +688,54 @@ fn symbolize_android_capture_report(
 struct AndroidSymbolizationTotals {
     resolved: usize,
     unresolved: usize,
+}
+
+fn android_profile_package_name(crate_name: &str) -> String {
+    format!(
+        "dev.world.{}",
+        mobench_sdk::codegen::sanitize_bundle_id_component(crate_name)
+    )
+}
+
+fn resolve_android_simpleperf_path() -> PathBuf {
+    if let Ok(path) = std::env::var("SIMPLEPERF") {
+        return PathBuf::from(path);
+    }
+
+    let candidate = std::env::var("ANDROID_NDK_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .map(|ndk_home| ndk_home.join("simpleperf/simpleperf"));
+    match candidate {
+        Some(path) if path.exists() => path,
+        _ => PathBuf::from("simpleperf"),
+    }
+}
+
+fn resolve_android_addr2line_path() -> PathBuf {
+    if let Ok(path) = std::env::var("LLVM_ADDR2LINE") {
+        return PathBuf::from(path);
+    }
+
+    let prebuilt_root = std::env::var("ANDROID_NDK_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .map(|ndk_home| ndk_home.join("toolchains/llvm/prebuilt"));
+
+    if let Some(prebuilt_root) = prebuilt_root
+        && let Ok(entries) = std::fs::read_dir(prebuilt_root)
+    {
+        let mut entries = entries.filter_map(|entry| entry.ok()).collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let candidate = entry.path().join("bin/llvm-addr2line");
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+
+    PathBuf::from("llvm-addr2line")
 }
 
 fn render_android_flamegraph_html(report_text: &str, run_id: &str) -> String {
@@ -850,7 +899,11 @@ fn slugify_function_name(function: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::process::{Command, Output};
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn profile_manifest_serializes_partial_failure_state() {
@@ -921,6 +974,7 @@ mod tests {
 
     #[test]
     fn local_android_capture_attempts_symbolization_and_updates_manifest_status() {
+        let _env_lock = env_lock();
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let output_root = temp_dir.path().join("profile");
         let run_id = "android-ffi_benchmark--bench_fibonacci-123";
@@ -963,9 +1017,7 @@ mod tests {
         .expect("write addr2line shim");
         make_executable(&addr2line_shim);
 
-        unsafe {
-            std::env::set_var("LLVM_ADDR2LINE", &addr2line_shim);
-        }
+        let _addr2line_guard = EnvVarGuard::set("LLVM_ADDR2LINE", &addr2line_shim);
 
         let build_result = mobench_sdk::BuildResult {
             platform: mobench_sdk::Target::Android,
@@ -1022,18 +1074,119 @@ mod tests {
             .join(run_id)
             .join("artifacts/processed/flamegraph.html")
             .exists());
-        assert!(runner
-            .commands
-            .iter()
-            .any(|command| command.contains("simpleperf record")));
+        assert!(runner.commands.iter().any(|command| {
+            command.contains("simpleperf record")
+                && command.contains("dev.world.ffibenchmark")
+                && command.contains("dev.world.ffibenchmark/.MainActivity")
+        }));
         assert!(runner
             .commands
             .iter()
             .any(|command| command.contains("simpleperf report")));
+    }
 
-        unsafe {
-            std::env::remove_var("LLVM_ADDR2LINE");
-        }
+    #[test]
+    fn local_android_capture_resolves_tools_from_android_ndk_home() {
+        let _env_lock = env_lock();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let output_root = temp_dir.path().join("profile");
+        let run_id = "android-ffi_benchmark--bench_fibonacci-ndk";
+        let args = ProfileRunArgs {
+            target: MobileTarget::Android,
+            function: "ffi_benchmark::bench_fibonacci".into(),
+            crate_path: Some(workspace_root().join("examples/ffi-benchmark")),
+            config: None,
+            output_dir: output_root.clone(),
+            provider: ProfileProvider::Local,
+            backend: ProfileBackend::AndroidNative,
+            format: ProfileFormat::Both,
+        };
+        let mut manifest = build_capture_plan(&args, &output_root.join(run_id), run_id)
+            .expect("build capture plan");
+
+        let layout = crate::resolve_project_layout(crate::ProjectLayoutOptions {
+            start_dir: None,
+            project_root: None,
+            crate_path: args.crate_path.as_deref(),
+            config_path: args.config.as_deref(),
+        })
+        .expect("resolve layout");
+
+        let ndk_root = temp_dir.path().join("android-ndk");
+        let simpleperf_path = ndk_root.join("simpleperf/simpleperf");
+        std::fs::create_dir_all(simpleperf_path.parent().expect("simpleperf parent"))
+            .expect("create simpleperf dir");
+        std::fs::write(&simpleperf_path, b"#!/bin/sh\nexit 0\n").expect("write simpleperf shim");
+        make_executable(&simpleperf_path);
+
+        let addr2line_path = ndk_root.join("toolchains/llvm/prebuilt/test-host/bin/llvm-addr2line");
+        std::fs::create_dir_all(addr2line_path.parent().expect("addr2line parent"))
+            .expect("create addr2line dir");
+        std::fs::write(
+            &addr2line_path,
+            b"#!/bin/sh\nprintf 'sample_fns::fibonacci\\n/opt/sample_fns.rs:123\\n'\n",
+        )
+        .expect("write addr2line shim");
+        make_executable(&addr2line_path);
+
+        let limited_path = PathBuf::from("/bin");
+        let _ndk_guard = EnvVarGuard::set("ANDROID_NDK_HOME", &ndk_root);
+        let _llvm_guard = EnvVarGuard::remove("LLVM_ADDR2LINE");
+        let _path_guard = EnvVarGuard::set("PATH", &limited_path);
+
+        let app_path = temp_dir.path().join("app.apk");
+        std::fs::write(&app_path, b"apk").expect("write app artifact");
+        let packaged_lib = temp_dir.path().join("libsample_fns.so");
+        let unstripped_lib = temp_dir.path().join("libsample_fns.so.unstripped");
+        std::fs::write(&packaged_lib, b"so").expect("write packaged lib");
+        std::fs::write(&unstripped_lib, b"so").expect("write unstripped lib");
+        let build_result = mobench_sdk::BuildResult {
+            platform: mobench_sdk::Target::Android,
+            app_path: app_path.clone(),
+            test_suite_path: Some(temp_dir.path().join("androidTest.apk")),
+            native_libraries: vec![mobench_sdk::NativeLibraryArtifact {
+                abi: "arm64-v8a".into(),
+                packaged_path: packaged_lib.clone(),
+                unstripped_path: unstripped_lib.clone(),
+            }],
+        };
+
+        let mut runner = RecordingRunner {
+            outputs: vec![
+                success_output(""),
+                success_output(""),
+                success_output(""),
+                success_output("libsample_fns.so[+0x1a2b]\n"),
+            ],
+            commands: Vec::new(),
+        };
+
+        execute_local_android_capture_with_runner(
+            &args,
+            &output_root.join(run_id),
+            &mut manifest,
+            &layout,
+            |_| Ok(build_result.clone()),
+            &mut runner,
+        )
+        .expect("android capture attempt");
+
+        assert!(runner
+            .commands
+            .iter()
+            .any(|command| command.starts_with(&format!("{} record", simpleperf_path.display()))));
+        assert!(runner
+            .commands
+            .iter()
+            .any(|command| command.starts_with(&format!("{} report", simpleperf_path.display()))));
+        assert_eq!(
+            manifest
+                .symbolization
+                .as_ref()
+                .expect("symbolization record")
+                .tool,
+            addr2line_path.display().to_string()
+        );
     }
 
     #[test]
@@ -1431,6 +1584,46 @@ mod tests {
                 .permissions();
             perms.set_mode(0o755);
             std::fs::set_permissions(path, perms).expect("set perms");
+        }
+    }
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => unsafe {
+                    std::env::set_var(self.key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(self.key);
+                },
+            }
         }
     }
 

@@ -3924,8 +3924,8 @@ fn resolve_browserstack_credentials(
     }
 
     Ok(ResolvedBrowserStack {
-        username: username.unwrap(),
-        access_key: access_key.unwrap(),
+        username: username.context("BrowserStack username resolved to None")?,
+        access_key: access_key.context("BrowserStack access key resolved to None")?,
         project,
     })
 }
@@ -5007,10 +5007,24 @@ fn summary_markdown_output_dir(summary_path: &Path, output: Option<&Path>) -> Pa
 }
 
 fn upsert_github_pr_comment(pr_number: &str, marker: &str, body: &str) -> Result<()> {
+    // Validate inputs to prevent URL path injection
+    if pr_number.is_empty() || !pr_number.chars().all(|c| c.is_ascii_digit()) {
+        bail!("PR number must be numeric, got: {}", pr_number);
+    }
     let token =
         env::var("GITHUB_TOKEN").context("provider_error: GITHUB_TOKEN is required for publish")?;
     let repository = env::var("GITHUB_REPOSITORY")
         .context("provider_error: GITHUB_REPOSITORY is required for publish")?;
+    if repository.matches('/').count() != 1
+        || repository
+            .chars()
+            .any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '/' | '-' | '_' | '.'))
+    {
+        bail!(
+            "GITHUB_REPOSITORY must be owner/repo format, got: {}",
+            repository
+        );
+    }
     let comments_url = format!(
         "https://api.github.com/repos/{}/issues/{}/comments",
         repository, pr_number
@@ -5771,7 +5785,7 @@ fn cmd_list(project_root: Option<PathBuf>, crate_path: Option<PathBuf>) -> Resul
         println!("Usage:");
         println!(
             "  cargo mobench run --target android --function {} --iterations 100",
-            all_benchmarks.first().unwrap()
+            all_benchmarks.first().map(|s| s.as_str()).unwrap_or("my_benchmark")
         );
     }
 
@@ -9617,5 +9631,89 @@ mod init_sdk_tests {
             contents.contains("library_name = \"my_project\""),
             "Config should have library_name with underscores"
         );
+    }
+}
+
+#[cfg(test)]
+mod resource_usage_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_extract_resource_usage_from_entry_fields() {
+        let entry = json!({
+            "resources": {
+                "elapsed_cpu_ms": 120,
+                "total_pss_kb": 4096,
+                "private_dirty_kb": 2048,
+                "native_heap_kb": 1024,
+                "java_heap_kb": 512
+            }
+        });
+
+        let usage = extract_benchmark_resource_usage(&entry, None).unwrap();
+        assert_eq!(usage.cpu_total_ms, Some(120));
+        assert_eq!(usage.total_pss_kb, Some(4096));
+        assert_eq!(usage.private_dirty_kb, Some(2048));
+        assert_eq!(usage.native_heap_kb, Some(1024));
+        assert_eq!(usage.java_heap_kb, Some(512));
+        // peak_memory_kb derived from raw fields when no perf_metrics
+        assert!(usage.peak_memory_kb.is_some());
+    }
+
+    #[test]
+    fn test_extract_resource_usage_with_perf_metrics_overrides_peak() {
+        let entry = json!({
+            "resources": {
+                "total_pss_kb": 4096
+            }
+        });
+        let perf = browserstack::PerformanceMetrics {
+            sample_count: 5,
+            memory: Some(browserstack::AggregateMemoryMetrics {
+                peak_mb: 10.0,
+                average_mb: 8.0,
+                min_mb: 6.0,
+            }),
+            cpu: None,
+            snapshots: vec![],
+        };
+
+        let usage = extract_benchmark_resource_usage(&entry, Some(&perf)).unwrap();
+        // peak_memory_kb should come from perf_metrics (10.0 * 1024 = 10240)
+        assert_eq!(usage.peak_memory_kb, Some(10240));
+        assert_eq!(usage.total_pss_kb, Some(4096));
+    }
+
+    #[test]
+    fn test_extract_resource_usage_empty_returns_none() {
+        let entry = json!({});
+        let usage = extract_benchmark_resource_usage(&entry, None);
+        assert!(usage.is_none());
+    }
+
+    #[test]
+    fn test_resource_usage_json_round_trip() {
+        let usage = BenchmarkResourceUsage {
+            cpu_total_ms: Some(250),
+            peak_memory_kb: Some(8192),
+            total_pss_kb: Some(4096),
+            private_dirty_kb: Some(2048),
+            native_heap_kb: Some(1024),
+            java_heap_kb: None,
+        };
+
+        let json_str = serde_json::to_string(&usage).unwrap();
+        let deserialized: BenchmarkResourceUsage = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(deserialized.cpu_total_ms, Some(250));
+        assert_eq!(deserialized.peak_memory_kb, Some(8192));
+        assert_eq!(deserialized.total_pss_kb, Some(4096));
+        assert_eq!(deserialized.private_dirty_kb, Some(2048));
+        assert_eq!(deserialized.native_heap_kb, Some(1024));
+        assert_eq!(deserialized.java_heap_kb, None);
+
+        // java_heap_kb should be absent in JSON due to skip_serializing_if
+        assert!(!json_str.contains("java_heap_kb"));
     }
 }

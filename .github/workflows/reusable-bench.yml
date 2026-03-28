@@ -198,6 +198,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          lockfile=$(find caller -name Cargo.lock -print -quit)
+          if [ -z "${lockfile}" ]; then
+            echo "No Cargo.lock found under caller/; skipping global uniffi-bindgen install"
+            exit 0
+          fi
           uniffi_version=$(awk '
             $0 == "[[package]]" { in_pkg=0 }
             $0 == "name = \"uniffi_bindgen\"" { in_pkg=1; next }
@@ -206,7 +211,7 @@ jobs:
               print $0
               exit
             }
-          ' caller/Cargo.lock)
+          ' "${lockfile}")
           if [ -n "${uniffi_version}" ]; then
             cargo install \
               --git https://github.com/mozilla/uniffi-rs \
@@ -386,7 +391,9 @@ jobs:
           echo "Using sdkmanager: $SDKMGR"
 
           # Install packages (best-effort — runner may already have them)
-          $SDKMGR --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" 2>&1 || true
+          if ! $SDKMGR --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" 2>&1; then
+            echo "::warning::sdkmanager install returned non-zero; will attempt to use pre-installed packages"
+          fi
 
           # Resolve NDK: prefer 26.1.10909125, fall back to latest available
           echo "Available NDKs:"
@@ -441,6 +448,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          lockfile=$(find caller -name Cargo.lock -print -quit)
+          if [ -z "${lockfile}" ]; then
+            echo "No Cargo.lock found under caller/; skipping global uniffi-bindgen install"
+            exit 0
+          fi
           uniffi_version=$(awk '
             $0 == "[[package]]" { in_pkg=0 }
             $0 == "name = \"uniffi_bindgen\"" { in_pkg=1; next }
@@ -449,7 +461,7 @@ jobs:
               print $0
               exit
             }
-          ' caller/Cargo.lock)
+          ' "${lockfile}")
           if [ -n "${uniffi_version}" ]; then
             cargo install \
               --git https://github.com/mozilla/uniffi-rs \
@@ -1080,6 +1092,16 @@ jobs:
             cp -R rendered/. history-bundle/rendered/
           fi
 
+          # Detect which platform result directories exist
+          platforms="[]"
+          has_ios=false; has_android=false
+          [ -d "results/ios" ] && has_ios=true
+          [ -d "results/android" ] && has_android=true
+          if $has_ios && $has_android; then platforms='["ios","android"]'
+          elif $has_ios; then platforms='["ios"]'
+          elif $has_android; then platforms='["android"]'
+          fi
+
           # Generate manifest
           jq -n \
             --arg ts "$TIMESTAMP" \
@@ -1087,29 +1109,14 @@ jobs:
             --arg pr "${PR_NUMBER:-}" \
             --arg by "${REQUESTED_BY:-ci}" \
             --arg ver "mobench-history-v1" \
+            --argjson platforms "$platforms" \
             '{
               schema_version: $ver,
               timestamp: $ts,
               commit_sha: $sha,
               pr_number: (if $pr != "" then ($pr | tonumber) else null end),
               requested_by: $by,
-              platforms: [
-                (if ("results/ios" | path(.) // empty) then "ios" else empty end),
-                (if ("results/android" | path(.) // empty) then "android" else empty end)
-              ]
-            }' > history-bundle/manifest.json 2>/dev/null || \
-          jq -n \
-            --arg ts "$TIMESTAMP" \
-            --arg sha "$HEAD_SHA" \
-            --arg pr "${PR_NUMBER:-}" \
-            --arg by "${REQUESTED_BY:-ci}" \
-            --arg ver "mobench-history-v1" \
-            '{
-              schema_version: $ver,
-              timestamp: $ts,
-              commit_sha: $sha,
-              pr_number: (if $pr != "" then ($pr | tonumber) else null end),
-              requested_by: $by
+              platforms: $platforms
             }' > history-bundle/manifest.json
 
       - name: Upload history bundle
