@@ -550,4 +550,5 @@ profiling through BrowserStack remains explicitly unsupported.
 - **`TESTING.md`**: Comprehensive testing guide with troubleshooting
 - **`README.md`**: Project overview and quick start
 - **`CLAUDE.md`**: Developer guide for this codebase
-- **`PROJECT_PLAN.md`**: Architecture and roadmap
+- **`docs/codebase/ARCHITECTURE.md`**: Current architecture reference
+- **`RELEASE_NOTES.md`**: Published release history and support status

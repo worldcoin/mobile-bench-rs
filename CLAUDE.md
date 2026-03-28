@@ -799,7 +799,8 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
 - **`BUILD.md`**: Complete build reference with prerequisites and troubleshooting
 - **`TESTING.md`**: Comprehensive testing guide with detailed troubleshooting
 - **`BENCH_SDK_INTEGRATION.md`**: Integration guide for SDK users
-- **`PROJECT_PLAN.md`**: Goals, architecture, task backlog
+- **`docs/codebase/ARCHITECTURE.md`**: Current architecture reference
+- **`RELEASE_NOTES.md`**: Published release history and support status
 - **`CLAUDE.md`**: This file - developer guide for the codebase
 
 ### Build Tooling

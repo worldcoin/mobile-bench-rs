@@ -270,10 +270,11 @@ cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 - `mobench_ref`
 - `mobench_version`
 
-Contract references:
-- `docs/CONTRACT_CI_V1.md`
-- `docs/schemas/summary-v1.schema.json`
-- `docs/schemas/ci-contract-v1.schema.json`
+Stable output references:
+- `https://github.com/worldcoin/mobile-bench-rs/blob/dev/README.md` CI section
+- `https://github.com/worldcoin/mobile-bench-rs/blob/dev/docs/schemas/summary-v1.schema.json`
+- `https://github.com/worldcoin/mobile-bench-rs/blob/dev/docs/schemas/ci-contract-v1.schema.json`
+- `https://github.com/worldcoin/mobile-bench-rs/blob/dev/RELEASE_NOTES.md`
 
 **Example:**
 ```bash

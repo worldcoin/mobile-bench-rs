@@ -733,5 +733,6 @@ To trigger manually:
 - [UniFFI Documentation](https://mozilla.github.io/uniffi-rs/)
 - [Android NDK Documentation](https://developer.android.com/ndk)
 - [Rust Cross-Compilation Guide](https://rust-lang.github.io/rustup/cross-compilation.html)
-- [PROJECT_PLAN.md](PROJECT_PLAN.md) - Roadmap and architecture
+- [docs/codebase/ARCHITECTURE.md](docs/codebase/ARCHITECTURE.md) - Current architecture reference
+- [RELEASE_NOTES.md](RELEASE_NOTES.md) - Published release history and support status
 - [CLAUDE.md](CLAUDE.md) - Developer guide for this codebase

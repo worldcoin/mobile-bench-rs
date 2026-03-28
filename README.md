@@ -181,12 +181,10 @@ CLI flags override config file values when provided.
 - `BUILD.md`: build prerequisites and troubleshooting
 - `TESTING.md`: testing guide and device workflows
 - `BROWSERSTACK_CI_INTEGRATION.md`: BrowserStack CI setup
-- `docs/CONTRACT_CI_V1.md`: frozen v1 CI input/output/error contract
-- `docs/adr/0001-mobench-ci-contract-v1.md`: CI contract ADR and compatibility policy
+- `RELEASE_NOTES.md`: published release history and support status
 - `docs/schemas/`: machine-readable CI/summary schema artifacts
-- `docs/MIGRATION_GUIDE.md`: migration guide (placeholder, linked from ADR)
+- `docs/MIGRATION_GUIDE.md`: migration notes for CI and reporting changes
 - `FETCH_RESULTS_GUIDE.md`: fetching and summarizing results
-- `PROJECT_PLAN.md`: goals and backlog
 - `CLAUDE.md`: developer guide
 
 ## Setup and Teardown
@@ -262,109 +260,9 @@ fn db_query(db: &Database) {
 
 ## Release Notes
 
-### v0.1.25
-
-- Clarified that profiling remains local-first in this release; BrowserStack native profiling is explicitly unsupported with actionable error text and a visible capability matrix.
-- Split `profile run` into target resolution, capture planning, and capture execution seams so planned manifests no longer imply that native capture actually ran.
-- Added device-selection inputs to `profile run` (`--device`, `--os-version`, `--profile`, `--device-matrix`) by reusing the existing deterministic device-resolution flow.
-- Added real local iOS native capture via simulator-host `sample`, with `sample.txt`, `stacks.folded`, `native-report.txt`, and `flamegraph.html` written into the normalized profile session layout.
-- Added regression coverage for profile help text, BrowserStack unsupported execution, dry-run planning semantics, and direct device target resolution.
-- Added `cargo mobench profile run|summarize` commands for a normalized local profiling session contract across Android and iOS.
-- Added the interactive dual-view flamegraph viewer plus full/focused SVG artifacts for local native profile runs.
-- Profile sessions now write run-scoped artifacts under `target/mobench/profile/<run-id>/` and refresh top-level latest-session `profile.json` and `summary.md` convenience files.
-- Profile manifests now preserve the selected provider and requested output format, and the CLI rejects unsupported format/backend combinations explicitly instead of silently planning the wrong artifacts.
-- Updated the profiling smoke-test docs to use working `cargo run -p mobench --bin mobench -- ...` invocations from the repo root.
-- Stabilized the SDK timing test suite by removing a timer-resolution assumption from the noop benchmark test.
-
-### v0.1.24
-
-- Switched BrowserStack device discovery to the unified `app-automate/devices.json` inventory for Android, iOS, and combined device listing.
-- Filtered unified BrowserStack inventory results locally by OS so Espresso resolution stays Android-only and XCUITest resolution stays iOS-only.
-- Added regression coverage for mixed Android+iOS BrowserStack inventories used by device-resolution commands.
-
-### v0.1.23
-
-- Added Sina-style per-function device comparison plots to local summaries:
-  - `cargo mobench ci run --plots <auto|off|require>`
-  - `cargo mobench report summarize --plots <auto|off|require>`
-- Rendered one SVG plot per benchmark function in the `Device Comparison Plots` section of local markdown summaries.
-- Switched summary resource reporting to `cpu_total_ms` and `peak_memory_kb`, and preserved BrowserStack-derived peak memory while backfilling CPU from raw benchmark results.
-- Enabled BrowserStack app profiling on Android and iOS runs, including App Profiling v2 parsing for iOS peak-memory enrichment.
-- Added baseline artifact download in the reusable CI workflow so `ci check-run` can compare PR results against the latest successful default-branch run.
-
-### v0.1.22
-
-- Fixed BrowserStack result fetching so `cargo mobench ci run --fetch` falls back to downloaded session artifacts when live device logs do not expose benchmark JSON.
-- Unified benchmark extraction across live logs, `bench-report.json`, iOS marker logs, and Android `BENCH_JSON` logs so per-function CI summaries are written with populated benchmark data.
-- Fixed merged CI output generation to preserve every function under each target and emit a top-level `summary` for single-target runs.
-- Fixed `cargo-mobench ci summarize` to read merged `{targets, ci}` outputs, recurse through nested target/function result directories, and fall back to raw `bench-report.json` when needed.
-
-### v0.1.21
-
-- Added a shared config-first project resolver across `build`, `run`, packaging, `list`, and `verify`.
-- Added `--project-root` and `--crate-path` parity across the main CLI commands for custom repository layouts.
-- `build --progress` now respects `mobench.toml` instead of assuming `bench-mobile`.
-- Dotenv loading now follows the resolved project root and config path.
-- `list` now discovers benchmarks from configured external crates instead of only legacy sample layouts.
-- `verify --smoke-test` now reports external-crate smoke tests as unsupported instead of failing with an empty benchmark list.
-
-### v0.1.14
-
-- Added CI contract-oriented commands and workflows:
-  - `cargo mobench ci run`
-  - `cargo mobench config validate`
-  - `cargo mobench devices resolve`
-  - `cargo mobench fixture init|build|verify|cache-key`
-  - `cargo mobench report summarize|github`
-- Standardized CI outputs under `target/mobench/ci/` with schema-backed metadata.
-- Added baseline comparison source support (`path|url|artifact:<path>`) and regression labels.
-- Improved local action safety for workflow input handling and sticky PR comment publishing.
-- Fixed iOS CI target setup (`x86_64-apple-ios`) and preserved CI outputs on regression exit.
-
-### v0.1.13
-
-- **Setup and teardown support**: `#[benchmark]` macro now supports `setup`, `teardown`, and `per_iteration` attributes for excluding expensive initialization from timing measurements
-  ```rust
-  fn setup_data() -> Vec<u8> { vec![0u8; 10_000_000] }
-
-  #[benchmark(setup = setup_data)]
-  fn process_data(data: &Vec<u8>) {
-      // Only this is measured, not the setup
-  }
-  ```
-- **New `check` command**: Validates prerequisites (NDK, Xcode, Rust targets, etc.) before building
-  ```bash
-  cargo mobench check --target android
-  cargo mobench check --target ios
-  ```
-- **New `verify` command**: Validates registry, spec, and artifacts
-- **New `summary` command**: Displays benchmark result statistics (avg/min/max/median)
-- **New `devices` command**: Lists available BrowserStack devices with validation
-- **`--progress` flag**: Simplified step-by-step output for `build` and `run` commands
-- **Consolidated `mobench-runner` into `mobench-sdk`**: The timing harness is now part of `mobench-sdk` as the `timing` module, simplifying the dependency graph
-- **SDK improvements**:
-  - `#[benchmark]` macro now validates function signature at compile time (no params, returns `()`)
-  - New `debug_benchmarks!()` macro for verifying benchmark registration
-  - Better error messages with available benchmarks list
-- **BrowserStack improvements**:
-  - Better credential error messages with setup instructions
-  - Artifact pre-flight validation before uploads
-  - Upload progress indication with file sizes
-  - Dashboard link printed immediately when build starts
-  - Improved device fuzzy matching with suggestions
-- **Fix iOS XCUITest test name mismatch**: Changed BrowserStack `only-testing` filter to use `testLaunchAndCaptureBenchmarkReport`
-
-### v0.1.12
-
-- **Fix iOS XCUITest BrowserStack detection**: Added Info.plist to the UITests target template, resolving issues where BrowserStack could not properly detect and run XCUITest bundles
-- **Improved video capture for BrowserStack**: Increased post-benchmark delay from 0.5s to 5.0s to ensure benchmark results are captured in BrowserStack video recordings
-- **Better UX during benchmark runs**: iOS app now shows "Running benchmarks..." text before results appear, providing visual feedback during execution
-- **Template sync**: Synchronized top-level iOS/Android templates with SDK-embedded templates for consistency
-
-### v0.1.11
-
-- Initial public release with `--release` flag support
-- `package-xcuitest` command for iOS BrowserStack testing
-- Updated mobile timing display and documentation
+Published release history and support status live in
+[`RELEASE_NOTES.md`](RELEASE_NOTES.md). Only `v0.1.25` is currently treated as
+supported; earlier crates.io publishes are retained there as historical test
+builds and should not be used.
 
 MIT licensed — World Foundation 2026.
