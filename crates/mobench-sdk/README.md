@@ -1,8 +1,8 @@
 # mobench-sdk
 
-Mobile benchmarking SDK for Rust - run benchmarks on real Android and iOS devices.
+Mobile benchmarking SDK for Rust.
 
-Transform your Rust project into a mobile benchmarking suite. This SDK provides everything you need to benchmark your Rust code on real mobile devices via BrowserStack or local emulators/simulators.
+Transform your Rust project into a mobile benchmarking suite. The SDK provides the timing/runtime layer, registry, builders, and generated mobile runners used by the `mobench` CLI for local execution, BrowserStack benchmark runs, and local native profiling.
 
 ## Features
 
@@ -12,10 +12,11 @@ Transform your Rust project into a mobile benchmarking suite. This SDK provides 
 - **Mobile app generation**: Create Android/iOS apps from templates
 - **Build automation**: Cross-compile and package for mobile platforms
 - **Statistical analysis**: Mean, median, stddev, percentiles
-- **BrowserStack integration**: Test on real devices in the cloud
+- **Semantic profiling phases**: Annotate benchmark sub-steps with `profile_phase(...)`
+- **BrowserStack benchmark integration**: Run timing benchmarks on real devices in the cloud
 - **UniFFI bindings**: Automatic FFI generation for mobile platforms
 - **Configuration file support**: `mobench.toml` for project settings
-- **Config-first CLI integration**: `mobench 0.1.22` resolves project root, crate name, and library name from flags, `mobench.toml`, workspace metadata, or git root
+- **Config-first CLI integration**: the CLI resolves project root, crate name, and library name from flags, `mobench.toml`, workspace metadata, or git root
 
 ## Quick Start
 
@@ -23,7 +24,7 @@ Add mobench-sdk to your project:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.22"
+mobench-sdk = "0.1"
 ```
 
 Mark functions to benchmark:
@@ -86,7 +87,7 @@ This creates:
 - `android/` or `ios/` - Mobile app projects
 - `bench-config.toml` - Configuration file
 
-The generated `bench-mobile/` crate is still the default scaffold, but the `mobench` CLI in `0.1.22` can also target existing custom crate layouts through `mobench.toml`, `--project-root`, and `--crate-path`.
+The generated `bench-mobile/` crate is still the default scaffold, but the CLI can also target existing custom crate layouts through `mobench.toml`, `--project-root`, and `--crate-path`.
 
 ### 2. Add Benchmarks
 
@@ -133,6 +134,21 @@ export BROWSERSTACK_ACCESS_KEY=your_key
 cargo mobench run --target android --function my_benchmark \
   --devices "Google Pixel 7-13.0" --release
 ```
+
+Local profiling:
+
+```bash
+cargo mobench profile run \
+  --target android \
+  --provider local \
+  --backend android-native \
+  --crate-path ./crates/my-benchmarks \
+  --function my_benchmark
+```
+
+When the benchmark emits semantic phases with `mobench_sdk::timing::profile_phase(...)`,
+the CLI merges those phase timings into the profile manifest and summary next to the
+native stack artifacts.
 
 ## Examples (Repository)
 
@@ -391,7 +407,7 @@ default_iterations = 100
 default_warmup = 10
 ```
 
-Resolution precedence in `0.1.22` is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
+Resolution precedence is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 ### `bench-config.toml` (Run Configuration)
 

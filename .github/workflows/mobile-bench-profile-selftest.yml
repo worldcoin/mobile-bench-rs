@@ -1,0 +1,95 @@
+name: Mobile Bench Profile Self-Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      crate_path:
+        description: "Benchmark crate to profile"
+        type: string
+        default: "crates/sample-fns"
+      function:
+        description: "Fully-qualified benchmark function"
+        type: string
+        default: "sample_fns::fibonacci"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ios-profile:
+    name: iOS local flamegraph self-test
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Ensure iOS Rust targets
+        shell: bash
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Install uniffi-bindgen
+        shell: bash
+        run: |
+          set -euo pipefail
+          uniffi_version=$(awk '
+            $0 == "[[package]]" { in_pkg=0 }
+            $0 == "name = \"uniffi_bindgen\"" { in_pkg=1; next }
+            in_pkg && /^version = / {
+              gsub(/^version = "|\"$/, "", $0)
+              print $0
+              exit
+            }
+          ' Cargo.lock)
+          if [ -n "${uniffi_version}" ]; then
+            cargo install \
+              --git https://github.com/mozilla/uniffi-rs \
+              --tag "v${uniffi_version}" \
+              uniffi-bindgen-cli \
+              --bin uniffi-bindgen
+          else
+            echo "No uniffi_bindgen entry in Cargo.lock; skipping global uniffi-bindgen install"
+          fi
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: List available simulators
+        run: xcrun simctl list devices available
+
+      - name: Run iOS local profile capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p mobench --bin mobench -- profile run \
+            --target ios \
+            --provider local \
+            --backend ios-instruments \
+            --crate-path "${{ inputs.crate_path }}" \
+            --function "${{ inputs.function }}" \
+            --output-dir target/mobench/profile-selftest
+
+      - name: Verify generated flamegraph artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f target/mobench/profile-selftest/profile.json
+          test -f target/mobench/profile-selftest/summary.md
+          find target/mobench/profile-selftest -name flamegraph.html -print -quit | grep -q .
+          find target/mobench/profile-selftest -name native-report.txt -print -quit | grep -q .
+          find target/mobench/profile-selftest -name sample.txt -print -quit | grep -q .
+
+      - name: Upload profiling artifacts
+        if: always()
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: mobench-profile-selftest-ios
+          path: target/mobench/profile-selftest
+          if-no-files-found: error

@@ -1,5 +1,7 @@
 # Flamegraph Tower Collapse Implementation Plan
 
+Status: not shipped. The tower-collapse implementation was rolled back; keep this file only as historical implementation context, not as the current viewer behavior.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make the flamegraph viewer hide tall thin low-self-time towers by default, show `+` expand affordances for those ranges, and let users zoom into the hidden range to inspect it.

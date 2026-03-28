@@ -1,7 +1,61 @@
 import SwiftUI
 
+private struct ProfileLaunchOptions {
+    let benchDelayMs: UInt64
+    let resultHoldMs: UInt64
+    let repeatUntilMs: UInt64
+    let warmupOnly: Bool
+
+    static func resolved() -> ProfileLaunchOptions {
+        let info = ProcessInfo.processInfo
+
+        var benchDelayMs = UInt64(info.environment["MOBENCH_BENCH_DELAY_MS"] ?? "0") ?? 0
+        var resultHoldMs = UInt64(
+            info.environment["MOBENCH_PROFILE_RESULT_HOLD_MS"] ?? "5000"
+        ) ?? 5000
+        var repeatUntilMs = UInt64(
+            info.environment["MOBENCH_PROFILE_REPEAT_UNTIL_MS"] ?? "0"
+        ) ?? 0
+        var warmupOnly = info.environment["MOBENCH_PROFILE_WARMUP_ONLY"] == "1"
+
+        for arg in info.arguments {
+            if arg.hasPrefix("--mobench-profile-bench-delay-ms="),
+               let value = arg.split(separator: "=", maxSplits: 1).last,
+               let parsed = UInt64(value) {
+                benchDelayMs = parsed
+            } else if arg.hasPrefix("--mobench-profile-result-hold-ms="),
+                      let value = arg.split(separator: "=", maxSplits: 1).last,
+                      let parsed = UInt64(value) {
+                resultHoldMs = parsed
+            } else if arg.hasPrefix("--mobench-profile-repeat-until-ms="),
+                      let value = arg.split(separator: "=", maxSplits: 1).last,
+                      let parsed = UInt64(value) {
+                repeatUntilMs = parsed
+            } else if arg == "--mobench-profile-warmup-only"
+                || arg == "--mobench-profile-warmup-only=1" {
+                warmupOnly = true
+            }
+        }
+
+        NSLog(
+            "[BenchRunner] Profile launch options: delayMs=%llu, repeatUntilMs=%llu, resultHoldMs=%llu, warmupOnly=%@",
+            benchDelayMs,
+            repeatUntilMs,
+            resultHoldMs,
+            warmupOnly ? "true" : "false"
+        )
+
+        return ProfileLaunchOptions(
+            benchDelayMs: benchDelayMs,
+            resultHoldMs: resultHoldMs,
+            repeatUntilMs: repeatUntilMs,
+            warmupOnly: warmupOnly
+        )
+    }
+}
+
 struct ContentView: View {
-    @State private var report: String = "Running benchmark..."
+    @State private var report: String = "Running benchmarks..."
     @State private var reportJSON: String = ""
     @State private var isCompleted: Bool = false
 
@@ -36,19 +90,39 @@ struct ContentView: View {
         }
         .onAppear {
             Task {
-                let result = await {{PROJECT_NAME_PASCAL}}FFI.runCurrentBenchmark()
+                let options = ProfileLaunchOptions.resolved()
+                if options.benchDelayMs > 0 {
+                    try? await Task.sleep(nanoseconds: options.benchDelayMs * 1_000_000)
+                }
+                let repeatDeadline = Date().addingTimeInterval(
+                    Double(options.repeatUntilMs) / 1_000.0
+                )
+                var repeatedRuns = 1
+                var result = await {{PROJECT_NAME_PASCAL}}FFI.runCurrentBenchmark()
+                while !options.warmupOnly && options.repeatUntilMs > 0 && Date() < repeatDeadline {
+                    result = await {{PROJECT_NAME_PASCAL}}FFI.runCurrentBenchmark()
+                    repeatedRuns += 1
+                }
                 report = result.displayText
                 reportJSON = result.jsonReport
                 isCompleted = true
 
-                // Log the JSON report with markers for BrowserStack device logs
+                // Log the JSON report with stable markers so local profiling tools,
+                // XCUITest, and BrowserStack fetch paths can all recover the payload.
                 NSLog("BENCH_REPORT_JSON_START")
                 NSLog("%@", result.jsonReport)
                 NSLog("BENCH_REPORT_JSON_END")
+                if repeatedRuns > 1 {
+                    NSLog("Repeated benchmark %d time(s) during profile capture", repeatedRuns)
+                }
 
-                // Keep the report on screen for at least 5 seconds so BrowserStack video captures it
-                NSLog("Displaying results for 5 seconds for video capture...")
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if options.warmupOnly {
+                    NSLog("Warmup-only profile run complete")
+                    return
+                }
+
+                NSLog("Displaying results for \(options.resultHoldMs) ms for capture output...")
+                try? await Task.sleep(nanoseconds: options.resultHoldMs * 1_000_000)
                 NSLog("Display hold complete")
             }
         }
