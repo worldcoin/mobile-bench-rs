@@ -2,7 +2,7 @@
 
 Complete build instructions for Android and iOS targets.
 
-In `mobench 0.1.22`, build commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to the legacy `bench-mobile/` layout. `build --progress` uses the same config-first resolution.
+Build commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to the legacy `bench-mobile/` layout. `build --progress` uses the same config-first resolution.
 
 > **For SDK Integrators**: Use the CLI commands:
 > - `cargo mobench check --target android` (validate prerequisites first)
@@ -530,20 +530,20 @@ Run host-side Rust tests:
 cargo test --all
 ```
 
-## Experimental Profiling Prerequisites
+## Local Profiling Prerequisites
 
-The experimental `cargo mobench profile ...` commands currently write planned
-profile-session artifacts and backend-specific output layouts. Each run is
-written under `target/mobench/profile/<run-id>/`, while
+`cargo mobench profile ...` is local-first in this release. Each run is written
+under `target/mobench/profile/<run-id>/`, while
 `target/mobench/profile/profile.json` and `summary.md` track the latest session.
-The commands do not yet invoke native profiling tools automatically, but the
-expected local toolchain is:
+Supported local backends attempt native capture and write raw plus processed
+artifacts such as `stacks.folded`, `native-report.txt`, and `flamegraph.html`.
+The expected local toolchain is:
 
 - Android: `adb` plus `simpleperf`
-- iOS: `xcrun` plus `xctrace`
+- iOS: `xcrun`, `simctl`, and macOS `sample`
 
 BrowserStack remains an execution target for benchmark runs, but native
-profiling through BrowserStack is not supported by the current MVP command path.
+profiling through BrowserStack remains explicitly unsupported.
 
 ## Additional Documentation
 

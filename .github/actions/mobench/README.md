@@ -1,6 +1,6 @@
 # mobench GitHub Action
 
-Run `mobench ci run` in GitHub Actions with caching, Android SDK setup, and artifact upload.
+Run benchmark-oriented `mobench` commands in GitHub Actions with caching, Android SDK setup, and artifact upload.
 
 ## Usage
 
@@ -50,6 +50,7 @@ Run `mobench ci run` in GitHub Actions with caching, Android SDK setup, and arti
 
 - Inputs are passed through environment variables in shell steps to reduce script-injection risk from workflow inputs.
 - `command` is allow-listed in the action implementation; unsupported command values fail the job early.
+- This action is for benchmark CI flows. Local native profiling has its own self-test workflow because it does not use the BrowserStack benchmark path.
 
 ## Cache keys
 

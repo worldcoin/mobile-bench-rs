@@ -4,7 +4,8 @@
 //! [![Documentation](https://docs.rs/mobench/badge.svg)](https://docs.rs/mobench)
 //! [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/worldcoin/mobile-bench-rs/blob/main/LICENSE)
 //!
-//! Command-line tool for building and running Rust benchmarks on mobile devices.
+//! Command-line tool for building, running, reporting, and profiling Rust
+//! benchmarks on mobile platforms.
 //!
 //! ## Overview
 //!
@@ -12,7 +13,8 @@
 //!
 //! - **Building** - Compiles Rust code for Android/iOS and packages mobile apps
 //! - **Running** - Executes benchmarks locally or on BrowserStack devices
-//! - **Reporting** - Collects and formats benchmark results
+//! - **Profiling** - Plans and executes supported local native captures
+//! - **Reporting** - Collects and formats benchmark and profiling results
 //!
 //! ## Installation
 //!
@@ -170,14 +172,14 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Run benchmarks on real devices via BrowserStack.
+    /// Run benchmarks locally or on BrowserStack devices.
     ///
     /// This is a single-command flow that:
     /// 1. Builds Rust libraries for the target platform
     /// 2. Packages mobile apps (APK/IPA) automatically
-    /// 3. Uploads to BrowserStack
-    /// 4. Schedules the benchmark run
-    /// 5. Fetches results when complete
+    /// 3. Uploads to BrowserStack when devices are requested
+    /// 4. Schedules the benchmark run when using BrowserStack
+    /// 5. Fetches results when the provider returns them
     ///
     /// For iOS, IPA and XCUITest packages are created automatically unless
     /// you provide --ios-app and --ios-test-suite to override.
@@ -328,7 +330,7 @@ enum Command {
         #[arg(long, help = "Optional output path for markdown report")]
         output: Option<PathBuf>,
     },
-    /// Initialize a new benchmark project with SDK (Phase 1 MVP).
+    /// Initialize a new benchmark project with the SDK templates.
     InitSdk {
         #[arg(long, value_enum)]
         target: SdkTarget,
@@ -339,7 +341,7 @@ enum Command {
         #[arg(long, help = "Generate example benchmarks")]
         examples: bool,
     },
-    /// Build mobile artifacts (Phase 1 MVP).
+    /// Build mobile artifacts from the resolved benchmark crate.
     Build {
         #[arg(long, value_enum)]
         target: SdkTarget,
@@ -409,7 +411,7 @@ enum Command {
         )]
         output_dir: Option<PathBuf>,
     },
-    /// List all discovered benchmark functions (Phase 1 MVP).
+    /// List all discovered benchmark functions.
     List {
         #[arg(
             long,
@@ -5498,7 +5500,7 @@ fn write_file(path: &Path, contents: &[u8]) -> Result<()> {
     fs::write(path, contents).with_context(|| format!("writing file {:?}", path))
 }
 
-/// Initialize a new benchmark project using mobench-sdk (Phase 1 MVP)
+/// Initialize a new benchmark project using `mobench-sdk`.
 fn cmd_init_sdk(
     target: SdkTarget,
     project_name: String,
@@ -5537,7 +5539,7 @@ fn cmd_init_sdk(
     Ok(())
 }
 
-/// Build mobile artifacts using mobench-sdk (Phase 1 MVP)
+/// Build mobile artifacts using `mobench-sdk`.
 fn cmd_build(
     target: SdkTarget,
     release: bool,

@@ -4,7 +4,7 @@
 
 # mobench
 
-Mobile benchmarking SDK for Rust. Build and run Rust benchmarks on Android and iOS, locally or on BrowserStack, with a library-first workflow and config-first project resolution for custom repository layouts.
+Mobile benchmarking toolkit for Rust. Build and run Rust benchmarks on Android and iOS, locally or on BrowserStack, with a library-first workflow, config-first project resolution, and local native profiling that produces interactive flamegraph artifacts.
 
 ## What it is
 
@@ -83,7 +83,7 @@ cargo mobench ci run --target android --function sample_fns::fibonacci --local-o
 cargo mobench report summarize --summary target/mobench/ci/summary.json --plots auto
 cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
 
-# Experimental profiling session capture
+# Local native profiling
 cargo mobench profile run --target android --function sample_fns::fibonacci \
   --provider local --backend android-native
 cargo mobench profile summarize --profile target/mobench/profile/profile.json
@@ -97,7 +97,7 @@ CI contract outputs are written to `target/mobench/ci/`:
 
 Local summary renderers (`ci run --plots ...` and `report summarize --plots ...`) append a `Device Comparison Plots` section with one Sina-style SVG per benchmark function. Summary resource fields use `cpu_total_ms` and `peak_memory_kb`; Android raw resource stats are preserved and iOS peak memory is enriched from BrowserStack app profiling when available.
 
-Experimental profiling commands are local-first in this release. Each session
+Profiling commands are local-first in this release. Each session
 writes its current manifest and summary under
 `target/mobench/profile/<run-id>/`, and the CLI also refreshes top-level
 `target/mobench/profile/profile.json` and `summary.md` as convenience copies of
@@ -109,9 +109,9 @@ The manifest is split into three explicit sections:
 - `semantic_profile`: optional benchmark phase data such as `prove` and `serialize`
 - `capture_metadata`: device resolution, capture settings, and warnings
 
-The summary renderer keeps native and semantic outputs separate so the flamegraph
-view stays focused on native stacks while phase timings remain readable as
-benchmark metadata.
+The summary renderer keeps native and semantic outputs separate so the
+interactive flamegraph viewer stays focused on native stacks while phase
+timings remain readable as benchmark metadata.
 
 When a benchmark uses `mobench_sdk::timing::profile_phase(...)`, local profile
 runs also persist a run-scoped semantic sidecar at
@@ -176,6 +176,7 @@ CLI flags override config file values when provided.
 
 ## Project docs
 
+- `docs/codebase/README.md`: current codebase reference map
 - `BENCH_SDK_INTEGRATION.md`: SDK integration guide
 - `BUILD.md`: build prerequisites and troubleshooting
 - `TESTING.md`: testing guide and device workflows
@@ -268,7 +269,8 @@ fn db_query(db: &Database) {
 - Added device-selection inputs to `profile run` (`--device`, `--os-version`, `--profile`, `--device-matrix`) by reusing the existing deterministic device-resolution flow.
 - Added real local iOS native capture via simulator-host `sample`, with `sample.txt`, `stacks.folded`, `native-report.txt`, and `flamegraph.html` written into the normalized profile session layout.
 - Added regression coverage for profile help text, BrowserStack unsupported execution, dry-run planning semantics, and direct device target resolution.
-- Added experimental `cargo mobench profile run|summarize` commands for a normalized local profiling session contract across Android and iOS.
+- Added `cargo mobench profile run|summarize` commands for a normalized local profiling session contract across Android and iOS.
+- Added the interactive dual-view flamegraph viewer plus full/focused SVG artifacts for local native profile runs.
 - Profile sessions now write run-scoped artifacts under `target/mobench/profile/<run-id>/` and refresh top-level latest-session `profile.json` and `summary.md` convenience files.
 - Profile manifests now preserve the selected provider and requested output format, and the CLI rejects unsupported format/backend combinations explicitly instead of silently planning the wrong artifacts.
 - Updated the profiling smoke-test docs to use working `cargo run -p mobench --bin mobench -- ...` invocations from the repo root.

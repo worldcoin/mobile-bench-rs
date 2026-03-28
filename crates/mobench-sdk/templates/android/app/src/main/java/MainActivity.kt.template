@@ -64,8 +64,9 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<TextView>(R.id.result_text)?.text = display
 
-        // Keep the report on screen for at least 5 seconds so BrowserStack video captures it
-        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for video capture...")
+        // Keep the report visible briefly so local smoke runs and remote automation
+        // have a stable window to read the results.
+        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for capture output...")
         Thread.sleep(5000)
         android.util.Log.i("BenchRunner", "Display hold complete")
     }
@@ -165,7 +166,7 @@ class MainActivity : AppCompatActivity() {
             DEFAULT_WARMUP
         )
 
-        // Check for intent extras (used for test automation and BrowserStack)
+        // Check for intent extras used by local automation, smoke tests, and provider-driven runs.
         val intentFunction = intent?.getStringExtra(FUNCTION_EXTRA)?.takeUnless { it.isBlank() }
         val intentIterations = intent?.let {
             val value = it.getIntExtra(ITERATIONS_EXTRA, -1)

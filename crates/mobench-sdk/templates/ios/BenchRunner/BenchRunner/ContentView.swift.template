@@ -107,7 +107,8 @@ struct ContentView: View {
                 reportJSON = result.jsonReport
                 isCompleted = true
 
-                // Log the JSON report with markers for BrowserStack device logs
+                // Log the JSON report with stable markers so local profiling tools,
+                // XCUITest, and BrowserStack fetch paths can all recover the payload.
                 NSLog("BENCH_REPORT_JSON_START")
                 NSLog("%@", result.jsonReport)
                 NSLog("BENCH_REPORT_JSON_END")

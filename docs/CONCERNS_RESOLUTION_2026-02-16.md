@@ -1,6 +1,6 @@
 # Concerns Resolution (2026-02-16)
 
-This document records the disposition of concerns previously tracked in `.planning/codebase/CONCERNS.md`.
+This document records the disposition of concerns previously tracked in the old codebase-planning backlog artifact that lived under `.planning/codebase/`.
 
 Disposition labels:
 - `fixed`: implemented in code on `codex/ci-devex`
@@ -70,5 +70,5 @@ Disposition labels:
 
 ## Notes
 
-- This file replaces the previous `.planning/codebase/CONCERNS.md` backlog artifact.
+- This file replaces the previous codebase-planning concerns backlog artifact.
 - Resolved items in this pass include safer iOS packaging command construction, cargo metadata JSON parsing, and canonicalization fallback visibility.

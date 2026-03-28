@@ -1,8 +1,8 @@
 # mobench
 
-Mobile benchmarking CLI for Rust - Run benchmarks on real Android and iOS devices.
+Mobile benchmarking CLI for Rust.
 
-The `mobench` CLI is the easiest way to benchmark your Rust code on mobile devices. It handles everything from project setup to building mobile apps to running tests on real devices via BrowserStack.
+The `mobench` CLI handles project setup, mobile artifact builds, benchmark execution, result reporting, and local native profiling for Android and iOS. Benchmark execution can run locally or on BrowserStack. Native profiling is currently local-first.
 
 ## Installation
 
@@ -101,24 +101,30 @@ cargo mobench run \
 
 **Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
 
-### 5. Plan a Local Profiling Session
+### 5. Run a Local Profiling Session
 
 ```bash
-# Write a run-scoped experimental profile session contract
+# Capture a local Android native profile
 cargo mobench profile run \
   --target android \
   --function fibonacci_30 \
+  --provider local \
   --backend android-native
 
-# Render the latest-session manifest as markdown
+# Summarize the latest profile session
 cargo mobench profile summarize \
   --profile target/mobench/profile/profile.json
 ```
 
-The current profiling MVP writes a normalized manifest plus planned artifact
-paths under `target/mobench/profile/<run-id>/` and refreshes top-level latest
-copies at `target/mobench/profile/profile.json` and `summary.md`. It does not
-yet drive native profiler tools automatically.
+Local profile runs now attempt real native capture for:
+
+- `local + android-native`: `simpleperf`, symbolized folded stacks, `native-report.txt`, full/focused SVGs, and `flamegraph.html`
+- `local + ios-instruments`: simulator-host `sample`, folded stacks, `native-report.txt`, full/focused SVGs, and `flamegraph.html`
+
+Each run writes a normalized manifest under `target/mobench/profile/<run-id>/`
+and refreshes `target/mobench/profile/profile.json` plus `summary.md` as
+latest-run convenience copies. BrowserStack native profiling remains explicitly
+unsupported in this release.
 
 ## Commands
 

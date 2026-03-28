@@ -1,5 +1,7 @@
 # Flamegraph Tower Collapse Design
 
+Status: not shipped. The thin-tower collapse experiment was rolled back after breaking the viewer UX, so this document is historical design context only.
+
 ## Goal
 
 Make the flamegraph viewer readable by default when a profile contains tall, thin towers of low-self-time frames. The viewer should hide those towers initially, show compact `+` expand affordances at their x-ranges, and let the user zoom into them on demand.
@@ -126,4 +128,3 @@ Add:
 - do not rewrite folded-stack artifacts on disk
 - do not remove access to raw full-process detail
 - do not rely on `inclusive time` as the primary collapse criterion
-

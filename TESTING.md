@@ -8,7 +8,7 @@ This document provides comprehensive testing instructions for mobile-bench-rs.
 > - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide
 > **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
 
-In `mobench 0.1.22`, build/run/list/verify/package commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`. `build --progress` uses that same config-first resolver.
+Build/run/list/verify/package commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`. `build --progress` uses that same config-first resolver.
 
 ## Table of Contents
 - [Prerequisites](#prerequisites)
@@ -650,18 +650,19 @@ cargo mobench compare \
 
 ### Profiling Command Smoke Checks
 
-The profiling subsystem currently focuses on the normalized session contract and
-backend-specific artifact planning. Use these commands as the first validation
-layer:
+The profiling subsystem is now local-first and attempts real native capture for
+`local + android-native` and `local + ios-instruments`. Use these commands as
+the first validation layer:
 
 ```bash
 # Profile parser + contract + backend planning tests
 cargo test -p mobench profile_
 
-# Android planned session
+# Android local native capture
 cargo run -p mobench --bin mobench -- profile run \
   --target android \
   --function sample_fns::fibonacci \
+  --provider local \
   --backend android-native
 
 # Render markdown summary from the generated manifest
@@ -669,11 +670,12 @@ cargo run -p mobench --bin mobench -- profile summarize \
   --profile target/mobench/profile/profile.json
 ```
 
-The current MVP should write a run-scoped session under
+Each run should write a run-scoped session under
 `target/mobench/profile/<run-id>/` plus top-level latest-session copies at
 `target/mobench/profile/profile.json` and `target/mobench/profile/summary.md`.
-Backend-specific planned artifact paths should live under the run-scoped
-`artifacts/` tree.
+For supported local native backends, the run-scoped `artifacts/` tree should
+contain real raw and processed artifacts such as `stacks.folded`,
+`native-report.txt`, and `flamegraph.html`.
 
 ### Adding New Test Functions
 
