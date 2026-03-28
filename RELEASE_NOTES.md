@@ -1,17 +1,19 @@
 # Release Notes
 
-`mobench` and `mobench-sdk` were published rapidly during bring-up. Only the
-current release line should be treated as supported. Every earlier crates.io
-publish is retained here for auditability, but unless noted otherwise it should
-be treated as a test build and should not be used for new integrations.
+`mobench`, `mobench-sdk`, and `mobench-macros` were published rapidly during
+bring-up. Only the current release line should be treated as supported. Every
+earlier crates.io publish is retained here for auditability, but unless noted
+otherwise it should be treated as a test build and should not be used for new
+integrations.
 
 Crates.io release history:
 - [mobench](https://crates.io/crates/mobench)
 - [mobench-sdk](https://crates.io/crates/mobench-sdk)
+- [mobench-macros](https://crates.io/crates/mobench-macros)
 
 ## Support Policy
 
-- `v0.1.25` is the current supported release.
+- `v0.1.26` is the current supported release.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -20,37 +22,52 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.25` | 2026-03-26 | `mobench 0.1.25`, `mobench-sdk 0.1.25` | Current supported release |
-| `v0.1.24` | 2026-03-26 | `mobench 0.1.24`, `mobench-sdk 0.1.24` | Test build. Do not use. |
-| `v0.1.23` | 2026-03-26 | `mobench 0.1.23`, `mobench-sdk 0.1.23` | Test build. Do not use. |
-| `v0.1.22` | 2026-03-25 | `mobench 0.1.22`, `mobench-sdk 0.1.22` | Test build. Do not use. |
-| `v0.1.21` | 2026-03-24 | `mobench 0.1.21`, `mobench-sdk 0.1.21` | Test build. Do not use. |
-| `v0.1.20` | 2026-03-24 | `mobench 0.1.20`, `mobench-sdk 0.1.20` | Test build. Do not use. |
-| `v0.1.19` | 2026-03-24 | `mobench 0.1.19`, `mobench-sdk 0.1.19` | Test build. Do not use. |
-| `v0.1.18` | 2026-03-24 | `mobench 0.1.18`, `mobench-sdk 0.1.18` | Test build. Do not use. |
-| `v0.1.17` | 2026-03-23 | `mobench 0.1.17`, `mobench-sdk 0.1.17` | Test build. Do not use. |
-| `v0.1.16` | 2026-03-18 | `mobench 0.1.16`, `mobench-sdk 0.1.16` | Test build. Do not use. |
+| `v0.1.26` | 2026-03-28 | `mobench 0.1.26`, `mobench-sdk 0.1.26`, `mobench-macros 0.1.26` | Current supported release |
+| `v0.1.25` | 2026-03-26 | `mobench 0.1.25`, `mobench-sdk 0.1.25`, `mobench-macros 0.1.25` | Test build. Do not use. |
+| `v0.1.24` | 2026-03-26 | `mobench 0.1.24`, `mobench-sdk 0.1.24`, `mobench-macros 0.1.24` | Test build. Do not use. |
+| `v0.1.23` | 2026-03-26 | `mobench 0.1.23`, `mobench-sdk 0.1.23`, `mobench-macros 0.1.23` | Test build. Do not use. |
+| `v0.1.22` | 2026-03-25 | `mobench 0.1.22`, `mobench-sdk 0.1.22`, `mobench-macros 0.1.22` | Test build. Do not use. |
+| `v0.1.21` | 2026-03-24 | `mobench 0.1.21`, `mobench-sdk 0.1.21`, `mobench-macros 0.1.21` | Test build. Do not use. |
+| `v0.1.20` | 2026-03-24 | `mobench 0.1.20`, `mobench-sdk 0.1.20`, `mobench-macros 0.1.20` | Test build. Do not use. |
+| `v0.1.19` | 2026-03-24 | `mobench 0.1.19`, `mobench-sdk 0.1.19`, `mobench-macros 0.1.19` | Test build. Do not use. |
+| `v0.1.18` | 2026-03-24 | `mobench 0.1.18`, `mobench-sdk 0.1.18`, `mobench-macros 0.1.18` | Test build. Do not use. |
+| `v0.1.17` | 2026-03-23 | `mobench 0.1.17`, `mobench-sdk 0.1.17`, `mobench-macros 0.1.17` | Test build. Do not use. |
+| `v0.1.16` | 2026-03-18 | `mobench 0.1.16`, `mobench-sdk 0.1.16`, `mobench-macros 0.1.16` | Test build. Do not use. |
 | `v0.1.15-patch-1` | 2026-03-12 | `mobench 0.1.15-patch-1` | Test build. Do not use. |
-| `v0.1.15` | 2026-03-06 | `mobench 0.1.15`, `mobench-sdk 0.1.15` | Test build. Do not use. |
-| `v0.1.14` | 2026-02-16 | `mobench 0.1.14`, `mobench-sdk 0.1.14` | Test build. Do not use. |
-| `v0.1.13` | 2026-01-21 | `mobench 0.1.13`, `mobench-sdk 0.1.13` | Test build. Do not use. |
-| `v0.1.12` | 2026-01-20 | `mobench 0.1.12`, `mobench-sdk 0.1.12` | Test build. Do not use. |
-| `v0.1.11` | 2026-01-19 | `mobench 0.1.11`, `mobench-sdk 0.1.11` | Test build. Do not use. |
-| `v0.1.10` | 2026-01-19 | `mobench 0.1.10`, `mobench-sdk 0.1.10` | Test build. Do not use. |
-| `v0.1.9` | 2026-01-19 | `mobench 0.1.9`, `mobench-sdk 0.1.9` | Test build. Do not use. |
-| `v0.1.8` | 2026-01-19 | `mobench 0.1.8`, `mobench-sdk 0.1.8` | Test build. Do not use. |
-| `v0.1.7` | 2026-01-19 | `mobench 0.1.7`, `mobench-sdk 0.1.7` | Test build. Do not use. |
-| `v0.1.6` | 2026-01-16 | `mobench 0.1.6`, `mobench-sdk 0.1.6` | Test build. Do not use. |
+| `v0.1.15` | 2026-03-06 | `mobench 0.1.15`, `mobench-sdk 0.1.15`, `mobench-macros 0.1.15` | Test build. Do not use. |
+| `v0.1.14` | 2026-02-16 | `mobench 0.1.14`, `mobench-sdk 0.1.14`, `mobench-macros 0.1.14` | Test build. Do not use. |
+| `v0.1.13` | 2026-01-21 | `mobench 0.1.13`, `mobench-sdk 0.1.13`, `mobench-macros 0.1.13` | Test build. Do not use. |
+| `v0.1.12` | 2026-01-20 | `mobench 0.1.12`, `mobench-sdk 0.1.12`, `mobench-macros 0.1.12` | Test build. Do not use. |
+| `v0.1.11` | 2026-01-19 | `mobench 0.1.11`, `mobench-sdk 0.1.11`, `mobench-macros 0.1.11` | Test build. Do not use. |
+| `v0.1.10` | 2026-01-19 | `mobench 0.1.10`, `mobench-sdk 0.1.10`, `mobench-macros 0.1.10` | Test build. Do not use. |
+| `v0.1.9` | 2026-01-19 | `mobench 0.1.9`, `mobench-sdk 0.1.9`, `mobench-macros 0.1.9` | Test build. Do not use. |
+| `v0.1.8` | 2026-01-19 | `mobench 0.1.8`, `mobench-sdk 0.1.8`, `mobench-macros 0.1.8` | Test build. Do not use. |
+| `v0.1.7` | 2026-01-19 | `mobench 0.1.7`, `mobench-sdk 0.1.7`, `mobench-macros 0.1.7` | Test build. Do not use. |
+| `v0.1.6` | 2026-01-16 | `mobench 0.1.6`, `mobench-sdk 0.1.6`, `mobench-macros 0.1.6` | Test build. Do not use. |
 | `v0.1.5` | 2026-01-15 | `mobench 0.1.5`, `mobench-sdk 0.1.5` | Test build. Do not use. |
-| `v0.1.4` | 2026-01-14 | `mobench 0.1.4`, `mobench-sdk 0.1.4` | Test build. Do not use. |
-| `v0.1.3` | 2026-01-14 | `mobench 0.1.3`, `mobench-sdk 0.1.3` | Yanked test build. Do not use. |
-| `v0.1.2` | 2026-01-14 | `mobench 0.1.2`, `mobench-sdk 0.1.2` | Yanked test build. Do not use. |
+| `v0.1.4` | 2026-01-14 | `mobench 0.1.4`, `mobench-sdk 0.1.4`, `mobench-macros 0.1.4` | Test build. Do not use. |
+| `v0.1.3` | 2026-01-14 | `mobench 0.1.3`, `mobench-sdk 0.1.3`, `mobench-macros 0.1.3` | Yanked test build. Do not use. |
+| `v0.1.2` | 2026-01-14 | `mobench 0.1.2`, `mobench-sdk 0.1.2`, `mobench-macros 0.1.2` | Yanked test build. Do not use. |
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
-| `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0` | Yanked test build. Do not use. |
+| `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
+
+## v0.1.26
+
+Status: current supported release.
+
+- Published a synchronized `mobench`, `mobench-sdk`, and `mobench-macros`
+  release so the registry dependency graph matches the current profiling and
+  packaging APIs.
+- Moved release history out of the root README into this standalone
+  `RELEASE_NOTES.md` file and backfilled the published crate history.
+- Cleaned up obsolete planning and contract docs from the repository-facing
+  docs surface.
+- Normalized crate README references so published crate pages link back to the
+  correct GitHub-hosted schema and release-history sources.
 
 ## v0.1.25
 
-Status: current supported release.
+Status: test build. Do not use.
 
 - Clarified that profiling remains local-first in this release; BrowserStack
   native profiling is explicitly unsupported with actionable error text and a

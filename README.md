@@ -261,8 +261,8 @@ fn db_query(db: &Database) {
 ## Release Notes
 
 Published release history and support status live in
-[`RELEASE_NOTES.md`](RELEASE_NOTES.md). Only `v0.1.25` is currently treated as
-supported; earlier crates.io publishes are retained there as historical test
-builds and should not be used.
+[`RELEASE_NOTES.md`](RELEASE_NOTES.md). Only the latest release listed there is
+treated as supported; earlier crates.io publishes are retained there as
+historical test builds and should not be used.
 
 MIT licensed — World Foundation 2026.
