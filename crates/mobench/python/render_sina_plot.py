@@ -181,19 +181,31 @@ def _normalize_plot_spec(spec: dict[str, object]) -> dict[str, object]:
 
 
 def _validate_plot_spec(plot: dict[str, object]) -> None:
-    devices = plot.get("devices")
+    for key in ("function_label", "target", "devices"):
+        if key not in plot:
+            raise ValueError(f"plot spec missing required key: {key}")
+
+    devices = plot["devices"]
     if not isinstance(devices, list) or not devices:
         raise ValueError("plot spec must contain at least one device")
 
-    for device in devices:
-        samples_ns = device.get("samples_ns") if isinstance(device, dict) else None
+    for i, device in enumerate(devices):
+        if not isinstance(device, dict):
+            raise ValueError(f"device[{i}] must be a JSON object")
+        for key in ("device_name", "os_version", "samples_ns"):
+            if key not in device:
+                raise ValueError(f"device[{i}] missing required key: {key}")
+        samples_ns = device["samples_ns"]
         if not isinstance(samples_ns, list) or not samples_ns:
             raise ValueError("each device must contain at least one sample")
 
 
+_MAX_PACK_RETRIES = 20
+
+
 def _pack_device_offsets(normalized_samples: Sequence[float]) -> list[float]:
     max_width = _BASE_HALF_WIDTH
-    while True:
+    for _ in range(_MAX_PACK_RETRIES):
         try:
             return pack_strip(
                 normalized_samples,
@@ -203,6 +215,10 @@ def _pack_device_offsets(normalized_samples: Sequence[float]) -> list[float]:
             )
         except ValueError:
             max_width *= 2
+    raise ValueError(
+        f"unable to pack {len(normalized_samples)} points after "
+        f"{_MAX_PACK_RETRIES} width expansions"
+    )
 
 
 def _compute_device_centers(half_widths: Sequence[float]) -> list[float]:

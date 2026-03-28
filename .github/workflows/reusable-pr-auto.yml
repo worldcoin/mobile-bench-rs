@@ -63,15 +63,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BENCH_LABEL: ${{ inputs.bench_label }}
           GATE_WORKFLOW: ${{ inputs.compile_gate_workflow_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER_EVENT: ${{ github.event.pull_request.number }}
+          HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA_WR: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
         run: |
           # For label events, use the PR directly
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            PR_NUMBER="${{ github.event.pull_request.number }}"
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            PR_NUMBER="$PR_NUMBER_EVENT"
+            HEAD_SHA="$HEAD_SHA_PR"
           else
             # For workflow_run events, find the associated PR
-            HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
-            PR_NUMBER=$(gh api "repos/${{ github.repository }}/pulls?state=open&sort=updated&direction=desc&per_page=20" \
+            HEAD_SHA="$HEAD_SHA_WR"
+            PR_NUMBER=$(gh api "repos/${REPO}/pulls?state=open&sort=updated&direction=desc&per_page=20" \
               --jq ".[] | select(.head.sha == \"${HEAD_SHA}\") | .number" | head -1)
             if [ -z "$PR_NUMBER" ]; then
               echo "::notice::No open PR found for SHA ${HEAD_SHA}, skipping"
@@ -81,7 +86,7 @@ jobs:
           fi
 
           # Check if bench label is present
-          HAS_LABEL=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" \
+          HAS_LABEL=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" \
             --jq ".[].name" | grep -qx "$BENCH_LABEL" && echo "true" || echo "false")
           if [ "$HAS_LABEL" != "true" ]; then
             echo "::notice::PR #${PR_NUMBER} does not have '${BENCH_LABEL}' label, skipping"
@@ -90,7 +95,7 @@ jobs:
           fi
 
           # Check if compile gate passed for this SHA
-          GATE_STATUS=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/check-runs" \
+          GATE_STATUS=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
             --jq ".check_runs[] | select(.name == \"${GATE_WORKFLOW}\" or (.app.name == \"GitHub Actions\" and .name == \"${GATE_WORKFLOW}\")) | .conclusion" \
             | head -1)
           if [ "$GATE_STATUS" != "success" ]; then
@@ -115,9 +120,10 @@ jobs:
           DEVICE_PROFILE: ${{ inputs.default_device_profile }}
           ITERATIONS: ${{ inputs.default_iterations }}
           WARMUP: ${{ inputs.default_warmup }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           gh workflow run "$WORKFLOW" \
-            --ref "${{ github.event.repository.default_branch }}" \
+            --ref "$DEFAULT_BRANCH" \
             -f head_sha="$HEAD_SHA" \
             -f crate_path="$CRATE_PATH" \
             -f functions="$FUNCTIONS" \

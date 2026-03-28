@@ -72,10 +72,40 @@ jobs:
           # Extract key=value pairs from /mobench command
           LINE=$(echo "$COMMENT_BODY" | head -1)
 
-          platform=$(echo "$LINE" | grep -oP 'platform=\K\S+' || echo "both")
-          device_profile=$(echo "$LINE" | grep -oP 'device_profile=\K\S+' || echo "low-spec")
-          iterations=$(echo "$LINE" | grep -oP 'iterations=\K\S+' || echo "$DEFAULT_ITERATIONS")
-          warmup=$(echo "$LINE" | grep -oP 'warmup=\K\S+' || echo "$DEFAULT_WARMUP")
+          # Parse with sed (portable, no grep -P dependency)
+          extract_val() {
+            echo "$LINE" | sed -n "s/.*${1}=\([^ ]*\).*/\1/p"
+          }
+
+          platform=$(extract_val platform)
+          device_profile=$(extract_val device_profile)
+          iterations=$(extract_val iterations)
+          warmup=$(extract_val warmup)
+
+          # Validate platform against allowlist
+          case "${platform:-both}" in
+            android|ios|both) platform="${platform:-both}" ;;
+            *) echo "::warning::Invalid platform '${platform}', defaulting to 'both'"; platform="both" ;;
+          esac
+
+          # Validate device_profile against allowlist
+          case "${device_profile:-low-spec}" in
+            low-spec|mid-spec|high-spec|flagship) device_profile="${device_profile:-low-spec}" ;;
+            *) echo "::warning::Invalid device_profile '${device_profile}', defaulting to 'low-spec'"; device_profile="low-spec" ;;
+          esac
+
+          # Validate numeric fields
+          if ! [[ "${iterations:-$DEFAULT_ITERATIONS}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid iterations '${iterations}', defaulting to '${DEFAULT_ITERATIONS}'"
+            iterations="$DEFAULT_ITERATIONS"
+          fi
+          iterations="${iterations:-$DEFAULT_ITERATIONS}"
+
+          if ! [[ "${warmup:-$DEFAULT_WARMUP}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid warmup '${warmup}', defaulting to '${DEFAULT_WARMUP}'"
+            warmup="$DEFAULT_WARMUP"
+          fi
+          warmup="${warmup:-$DEFAULT_WARMUP}"
 
           echo "platform=${platform}" >> "$GITHUB_OUTPUT"
           echo "device_profile=${device_profile}" >> "$GITHUB_OUTPUT"
@@ -106,9 +136,10 @@ jobs:
           REQUESTED_BY: ${{ github.event.comment.user.login }}
           FUNCTIONS: ${{ inputs.functions }}
           CRATE_PATH: ${{ inputs.crate_path }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           gh workflow run "$WORKFLOW" \
-            --ref "${{ github.event.repository.default_branch }}" \
+            --ref "$DEFAULT_BRANCH" \
             -f head_sha="$HEAD_SHA" \
             -f crate_path="$CRATE_PATH" \
             -f functions="$FUNCTIONS" \

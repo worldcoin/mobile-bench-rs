@@ -285,7 +285,16 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
     Ok(report)
 }
 
+const MAX_DIR_DEPTH: usize = 10;
+
 fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    collect_json_files_inner(dir, out, 0)
+}
+
+fn collect_json_files_inner(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<()> {
+    if depth > MAX_DIR_DEPTH {
+        return Ok(());
+    }
     let mut entries = std::fs::read_dir(dir)
         .with_context(|| format!("Failed to read results directory {}", dir.display()))?
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -294,8 +303,11 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 
     for entry in entries {
         let path = entry.path();
+        if path.is_symlink() {
+            continue;
+        }
         if path.is_dir() {
-            collect_json_files(&path, out)?;
+            collect_json_files_inner(&path, out, depth + 1)?;
         } else if path.extension().is_some_and(|ext| ext == "json") {
             out.push(path);
         }

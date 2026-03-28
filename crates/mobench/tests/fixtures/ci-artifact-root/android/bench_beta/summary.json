@@ -19,7 +19,7 @@
   },
   "summary": {
     "generated_at": "2026-03-01T09:05:00Z",
-    "generated_at_unix": 1740819900,
+    "generated_at_unix": 1772355900,
     "target": "android",
     "function": "bench_beta",
     "iterations": 20,

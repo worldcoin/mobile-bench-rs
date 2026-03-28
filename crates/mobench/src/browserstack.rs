@@ -788,9 +788,10 @@ impl BrowserStackClient {
         Ok(snapshots)
     }
 
-    /// Wait for build completion and fetch all results including performance metrics
+    /// Wait for build completion and fetch all results including performance metrics.
     ///
-    /// Returns both benchmark results and performance metrics
+    /// Convenience wrapper around [`Self::wait_and_fetch_all_results_with_poll`]
+    /// with default poll interval.
     #[allow(dead_code)]
     pub fn wait_and_fetch_all_results(
         &self,
@@ -1927,6 +1928,9 @@ mod tests {
                 match listener.accept() {
                     Ok((mut stream, _peer)) => {
                         last_activity = Instant::now();
+                        stream
+                            .set_nonblocking(false)
+                            .expect("set stream blocking");
 
                         let mut buf = [0_u8; 4096];
                         let bytes_read = stream.read(&mut buf).expect("read request");
@@ -1959,7 +1963,7 @@ mod tests {
                             .expect("write response");
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        if last_activity.elapsed() >= Duration::from_millis(250) {
+                        if last_activity.elapsed() >= Duration::from_secs(2) {
                             break;
                         }
                         thread::sleep(Duration::from_millis(10));
