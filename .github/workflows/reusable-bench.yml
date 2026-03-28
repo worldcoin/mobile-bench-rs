@@ -293,6 +293,7 @@ jobs:
           set -euo pipefail
           device_spec="${IOS_DEVICE}-${IOS_OS_VERSION}"
           echo "Running iOS benchmarks on: ${device_spec}"
+          rm -rf target/mobench/ci/ios
 
           cargo-mobench ci run \
             --target ios \
@@ -513,6 +514,7 @@ jobs:
           set -euo pipefail
           device_spec="${ANDROID_DEVICE}-${ANDROID_OS_VERSION}"
           echo "Running Android benchmarks on: ${device_spec}"
+          rm -rf target/mobench/ci/android
 
           cargo-mobench ci run \
             --target android \
