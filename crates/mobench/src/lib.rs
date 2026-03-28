@@ -138,6 +138,7 @@ use browserstack::{BrowserStackAuth, BrowserStackClient};
 
 mod browserstack;
 pub mod config;
+mod flamegraph_viewer;
 mod github;
 mod plots;
 mod profile;
@@ -662,7 +663,9 @@ enum ReportCommand {
 
 #[derive(Subcommand, Debug)]
 enum ProfileCommand {
-    /// Run a native profiling session and write profile artifacts.
+    #[command(
+        about = "Plan or execute a native profiling session; local android-native and ios-instruments now attempt real native capture"
+    )]
     Run(profile::ProfileRunArgs),
     /// Render markdown or JSON from a normalized profile manifest.
     Summarize(profile::ProfileSummarizeArgs),
@@ -846,7 +849,7 @@ impl CiTarget {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 #[clap(rename_all = "lowercase")]
-enum DevicePlatform {
+pub(crate) enum DevicePlatform {
     Android,
     Ios,
 }
@@ -979,16 +982,16 @@ struct DeviceMatrix {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct RunSpec {
-    target: MobileTarget,
-    function: String,
-    iterations: u32,
-    warmup: u32,
-    devices: Vec<String>,
+pub(crate) struct RunSpec {
+    pub(crate) target: MobileTarget,
+    pub(crate) function: String,
+    pub(crate) iterations: u32,
+    pub(crate) warmup: u32,
+    pub(crate) devices: Vec<String>,
     #[serde(skip_serializing, skip_deserializing, default)]
-    browserstack: Option<BrowserStackConfig>,
+    pub(crate) browserstack: Option<BrowserStackConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    ios_xcuitest: Option<IosXcuitestArtifacts>,
+    pub(crate) ios_xcuitest: Option<IosXcuitestArtifacts>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1021,22 +1024,22 @@ struct RunSummary {
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedProjectLayout {
-    project_root: PathBuf,
-    crate_dir: PathBuf,
-    crate_name: String,
-    library_name: String,
-    config_path: Option<PathBuf>,
-    output_dir: PathBuf,
-    default_function: Option<String>,
+pub(crate) struct ResolvedProjectLayout {
+    pub(crate) project_root: PathBuf,
+    pub(crate) crate_dir: PathBuf,
+    pub(crate) crate_name: String,
+    pub(crate) library_name: String,
+    pub(crate) config_path: Option<PathBuf>,
+    pub(crate) output_dir: PathBuf,
+    pub(crate) default_function: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ProjectLayoutOptions<'a> {
-    start_dir: Option<&'a Path>,
-    project_root: Option<&'a Path>,
-    crate_path: Option<&'a Path>,
-    config_path: Option<&'a Path>,
+pub(crate) struct ProjectLayoutOptions<'a> {
+    pub(crate) start_dir: Option<&'a Path>,
+    pub(crate) project_root: Option<&'a Path>,
+    pub(crate) crate_path: Option<&'a Path>,
+    pub(crate) config_path: Option<&'a Path>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1342,7 +1345,7 @@ pub fn run() -> Result<()> {
                                 println!("[3/4] Uploading to BrowserStack...");
                             }
                             let test_apk = build.test_suite_path.as_ref().context(
-                                "Android test suite APK missing. Run `cargo mobench build --target android` or `./gradlew assembleDebugAndroidTest` in target/mobench/android",
+                                "Android test suite APK missing. Run `cargo mobench build --target android` or `./gradlew app:assembleReleaseAndroidTest` in target/mobench/android",
                             )?;
                             let run = trigger_browserstack_espresso(&spec, &apk, test_apk)?;
                             remote_run = Some(run);
@@ -1873,7 +1876,7 @@ pub fn run() -> Result<()> {
         },
         Command::Profile { command } => match command {
             ProfileCommand::Run(args) => {
-                profile::cmd_profile_run(&args)?;
+                profile::cmd_profile_run(&args, cli.dry_run)?;
             }
             ProfileCommand::Summarize(args) => {
                 profile::cmd_profile_summarize(&args)?;
@@ -2060,7 +2063,9 @@ fn resolve_legacy_crate_dir(project_root: &Path) -> Result<PathBuf> {
     )
 }
 
-fn resolve_project_layout(options: ProjectLayoutOptions<'_>) -> Result<ResolvedProjectLayout> {
+pub(crate) fn resolve_project_layout(
+    options: ProjectLayoutOptions<'_>,
+) -> Result<ResolvedProjectLayout> {
     let start_dir = match options.start_dir {
         Some(path) => canonicalize_from(Path::new("."), path)?,
         None => std::env::current_dir().context("Failed to get current directory")?,
@@ -3506,7 +3511,7 @@ fn filter_devices_by_tags(devices: Vec<DeviceEntry>, tags: &[String]) -> Result<
     Ok(matched)
 }
 
-fn run_ios_build(
+pub(crate) fn run_ios_build(
     layout: &ResolvedProjectLayout,
     release: bool,
     dry_run: bool,
@@ -3959,7 +3964,10 @@ fn run_local_smoke(spec: &RunSpec) -> Result<Value> {
 ///
 /// This provides early feedback when a function name is misspelled or doesn't exist.
 /// If validation fails, it warns but continues (the final validation happens on device).
-fn validate_benchmark_function(layout: &ResolvedProjectLayout, function_name: &str) -> Result<()> {
+pub(crate) fn validate_benchmark_function(
+    layout: &ResolvedProjectLayout,
+    function_name: &str,
+) -> Result<()> {
     let benchmarks = discover_benchmarks_for_layout(layout)?;
     let found_any_benchmarks = !benchmarks.is_empty();
     let simple_name = function_name.split("::").last().unwrap_or(function_name);
@@ -4002,7 +4010,7 @@ fn validate_benchmark_function(layout: &ResolvedProjectLayout, function_name: &s
     Ok(())
 }
 
-fn persist_mobile_spec(
+pub(crate) fn persist_mobile_spec(
     layout: &ResolvedProjectLayout,
     spec: &RunSpec,
     release: bool,
@@ -5362,7 +5370,7 @@ fn format_ms(value: Option<u64>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn run_android_build(
+pub(crate) fn run_android_build(
     layout: &ResolvedProjectLayout,
     _ndk_home: &str,
     release: bool,
@@ -5425,7 +5433,7 @@ fn load_dotenv_global() {
     }
 }
 
-fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
+pub(crate) fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
     let mut directories = vec![layout.project_root.clone()];
     if let Some(config_path) = &layout.config_path
         && let Some(config_dir) = config_path.parent()
@@ -6718,14 +6726,21 @@ fn cmd_devices(
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ResolvedMatrixDevice {
-    name: String,
-    os: String,
-    os_version: String,
-    identifier: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ResolvedMatrixDevice {
+    pub(crate) name: String,
+    pub(crate) os: String,
+    pub(crate) os_version: String,
+    pub(crate) identifier: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    tags: Vec<String>,
+    pub(crate) tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedDeviceProfile {
+    pub(crate) profile: String,
+    pub(crate) source: String,
+    pub(crate) devices: Vec<ResolvedMatrixDevice>,
 }
 
 /// Built-in device profiles so `devices resolve` works without a YAML file.
@@ -6751,21 +6766,18 @@ fn builtin_device_for_profile(
     })
 }
 
-fn cmd_devices_resolve(
+pub(crate) fn resolve_devices_for_profile(
     platform: DevicePlatform,
-    profile: Option<String>,
+    profile: Option<&str>,
     config_path: Option<&Path>,
     device_matrix_path: Option<&Path>,
-    format: CheckOutputFormat,
-) -> Result<()> {
+) -> Result<ResolvedDeviceProfile> {
     let profile_str = profile
-        .as_deref()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .unwrap_or("default");
 
-    // Try loading matrix from file first; fall back to built-in profiles
-    let (resolved, source) = match resolve_matrix_for_cli(config_path, device_matrix_path) {
+    let (devices, source) = match resolve_matrix_for_cli(config_path, device_matrix_path) {
         Ok((matrix_path, config_tags)) => {
             let matrix = load_device_matrix(&matrix_path).with_context(|| {
                 format!(
@@ -6784,7 +6796,6 @@ fn cmd_devices_resolve(
             (devices, format!("matrix:{}", matrix_path.display()))
         }
         Err(_) => {
-            // No matrix file found — use built-in profiles
             if let Some(device) = builtin_device_for_profile(platform, profile_str) {
                 (vec![device], "builtin".to_string())
             } else {
@@ -6797,9 +6808,33 @@ fn cmd_devices_resolve(
         }
     };
 
+    Ok(ResolvedDeviceProfile {
+        profile: profile_str.to_string(),
+        source,
+        devices,
+    })
+}
+
+fn cmd_devices_resolve(
+    platform: DevicePlatform,
+    profile: Option<String>,
+    config_path: Option<&Path>,
+    device_matrix_path: Option<&Path>,
+    format: CheckOutputFormat,
+) -> Result<()> {
+    let resolved_profile = resolve_devices_for_profile(
+        platform,
+        profile.as_deref(),
+        config_path,
+        device_matrix_path,
+    )?;
+    let profile_str = resolved_profile.profile.as_str();
+    let resolved = &resolved_profile.devices;
+    let source = resolved_profile.source.as_str();
+
     match format {
         CheckOutputFormat::Text => {
-            for device in &resolved {
+            for device in resolved {
                 println!("{}", device.identifier);
             }
         }
@@ -7900,9 +7935,24 @@ fn check_xcodegen() -> PrereqCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
     use jsonschema::JSONSchema;
     use std::path::Path;
     use tempfile::TempDir;
+
+    fn render_profile_run_help() -> String {
+        let mut root = Cli::command();
+        let profile = root
+            .find_subcommand_mut("profile")
+            .expect("profile subcommand");
+        let run = profile
+            .find_subcommand_mut("run")
+            .expect("profile run subcommand");
+        let mut buffer = Vec::new();
+        run.write_long_help(&mut buffer)
+            .expect("render profile run help");
+        String::from_utf8(buffer).expect("help is utf-8")
+    }
 
     #[cfg(unix)]
     pub(crate) fn write_fake_plot_python(dir: &Path) -> PathBuf {
@@ -8609,6 +8659,135 @@ project = "proj"
             }
             _ => panic!("expected profile run command"),
         }
+    }
+
+    #[test]
+    fn profile_run_parses_direct_device_selection() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "profile",
+            "run",
+            "--target",
+            "ios",
+            "--function",
+            "sample_fns::fibonacci",
+            "--provider",
+            "browserstack",
+            "--backend",
+            "ios-instruments",
+            "--device",
+            "iPhone 14",
+            "--os-version",
+            "16",
+        ]);
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Run(args),
+            } => {
+                assert_eq!(args.target, MobileTarget::Ios);
+                assert_eq!(args.device.as_deref(), Some("iPhone 14"));
+                assert_eq!(args.os_version.as_deref(), Some("16"));
+            }
+            _ => panic!("expected profile run command"),
+        }
+    }
+
+    #[test]
+    fn profile_run_parses_profile_device_resolution_inputs() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "profile",
+            "run",
+            "--target",
+            "ios",
+            "--function",
+            "sample_fns::fibonacci",
+            "--provider",
+            "browserstack",
+            "--backend",
+            "ios-instruments",
+            "--profile",
+            "high-spec",
+            "--device-matrix",
+            "device-matrix.yaml",
+        ]);
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Run(args),
+            } => {
+                assert_eq!(args.profile.as_deref(), Some("high-spec"));
+                assert_eq!(
+                    args.device_matrix,
+                    Some(PathBuf::from("device-matrix.yaml"))
+                );
+            }
+            _ => panic!("expected profile run command"),
+        }
+    }
+
+    #[test]
+    fn profile_run_parses_capture_warmup_mode() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "profile",
+            "run",
+            "--target",
+            "android",
+            "--function",
+            "sample_fns::fibonacci",
+            "--warmup-mode",
+            "cold",
+        ]);
+
+        match cli.command {
+            Command::Profile {
+                command: ProfileCommand::Run(args),
+            } => {
+                assert_eq!(args.warmup_mode, Some(profile::CaptureWarmupMode::Cold));
+            }
+            _ => panic!("expected profile run command"),
+        }
+    }
+
+    #[test]
+    fn profile_run_help_mentions_planned_only_or_execution_scope() {
+        let help = render_profile_run_help();
+
+        assert!(
+            help.contains("Plan or execute a native profiling session; local android-native and ios-instruments now attempt real native capture"),
+            "expected profile run help to describe the real local Android/iOS execution scope, got:\n{help}"
+        );
+        assert!(
+            help.contains(
+                "local + android-native: attempts real simpleperf capture and symbolization"
+            ),
+            "expected profile run help to mention real Android native execution, got:\n{help}"
+        );
+        assert!(
+            help.contains(
+                "local + ios-instruments: attempts real simulator-host sample capture and flamegraph generation"
+            ),
+            "expected profile run help to mention real local iOS sample capture, got:\n{help}"
+        );
+        assert!(
+            help.contains("--warmup-mode"),
+            "expected profile run help to expose warm/cold profiling mode, got:\n{help}"
+        );
+    }
+
+    #[test]
+    fn profile_run_cli_surface_exposes_or_explicitly_omits_device_selection() {
+        let help = render_profile_run_help();
+
+        assert!(
+            help.contains("--device")
+                || help.contains("--profile")
+                || help.contains("--device-matrix")
+                || help.contains("device selection is unavailable"),
+            "expected profile run help to either expose device selection or explicitly document that it is unavailable, got:\n{help}"
+        );
     }
 
     #[test]

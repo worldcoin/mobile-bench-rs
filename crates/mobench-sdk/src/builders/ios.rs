@@ -677,7 +677,8 @@ impl IosBuilder {
         let crate_dir = self.find_crate_dir()?;
         let crate_name_underscored = self.crate_name.replace("-", "_");
 
-        // Check if bindings already exist (for repository testing with pre-generated bindings)
+        // Prefer fresh bindings so schema changes in BenchReport stay in sync with the app.
+        // Fall back to pre-generated bindings only if generation tooling is unavailable.
         let bindings_path = self
             .output_dir
             .join("ios")
@@ -685,12 +686,12 @@ impl IosBuilder {
             .join("BenchRunner")
             .join("Generated")
             .join(format!("{}.swift", crate_name_underscored));
-
-        if bindings_path.exists() {
-            if self.verbose {
-                println!("  Using existing Swift bindings at {:?}", bindings_path);
-            }
-            return Ok(());
+        let had_existing_bindings = bindings_path.exists();
+        if had_existing_bindings && self.verbose {
+            println!(
+                "  Found existing Swift bindings at {:?}; regenerating to keep the UniFFI schema current",
+                bindings_path
+            );
         }
 
         // Build host library to feed uniffi-bindgen
@@ -752,6 +753,15 @@ impl IosBuilder {
                 .unwrap_or(false);
 
             if !uniffi_available {
+                if had_existing_bindings {
+                    if self.verbose {
+                        println!(
+                            "  Warning: uniffi-bindgen is unavailable; keeping existing Swift bindings at {:?}",
+                            bindings_path
+                        );
+                    }
+                    return Ok(());
+                }
                 return Err(BenchError::Build(
                     "uniffi-bindgen not found and no pre-generated bindings exist.\n\n\
                      To fix this, either:\n\
@@ -774,7 +784,18 @@ impl IosBuilder {
                 .arg("swift")
                 .arg("--out-dir")
                 .arg(&out_dir);
-            run_command(cmd, "uniffi-bindgen swift")?;
+            if let Err(error) = run_command(cmd, "uniffi-bindgen swift") {
+                if had_existing_bindings {
+                    if self.verbose {
+                        println!(
+                            "  Warning: failed to regenerate Swift bindings ({error}); keeping existing bindings at {:?}",
+                            bindings_path
+                        );
+                    }
+                    return Ok(());
+                }
+                return Err(error);
+            }
         }
 
         if self.verbose {
