@@ -5300,25 +5300,68 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
     }
 
     for device in &summary.device_summaries {
+        let has_resource_usage = device
+            .benchmarks
+            .iter()
+            .any(|benchmark| benchmark.resource_usage.is_some());
+
         let _ = writeln!(output, "### Device: {}", device.device);
         let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
-        );
-        let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
-        for bench in &device.benchmarks {
+        if has_resource_usage {
             let _ = writeln!(
                 output,
-                "| {} | {} | {} | {} | {} | {} | {} |",
-                bench.function,
-                bench.samples,
-                format_ms(bench.mean_ns),
-                format_ms(bench.median_ns),
-                format_ms(bench.p95_ns),
-                format_ms(bench.min_ns),
-                format_ms(bench.max_ns)
+                "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) | CPU total (ms) | Peak memory |"
             );
+            let _ = writeln!(
+                output,
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+            );
+        } else {
+            let _ = writeln!(
+                output,
+                "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
+            );
+            let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+        }
+
+        for bench in &device.benchmarks {
+            if has_resource_usage {
+                let (cpu_total_ms, peak_memory) =
+                    if let Some(resource_usage) = &bench.resource_usage {
+                        (
+                            summarize::format_cpu_total_ms(resource_usage.cpu_total_ms),
+                            summarize::format_peak_memory(resource_usage.peak_memory_kb),
+                        )
+                    } else {
+                        ("—".to_string(), "—".to_string())
+                    };
+
+                let _ = writeln!(
+                    output,
+                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    bench.function,
+                    bench.samples,
+                    format_ms(bench.mean_ns),
+                    format_ms(bench.median_ns),
+                    format_ms(bench.p95_ns),
+                    format_ms(bench.min_ns),
+                    format_ms(bench.max_ns),
+                    cpu_total_ms,
+                    peak_memory,
+                );
+            } else {
+                let _ = writeln!(
+                    output,
+                    "| {} | {} | {} | {} | {} | {} | {} |",
+                    bench.function,
+                    bench.samples,
+                    format_ms(bench.mean_ns),
+                    format_ms(bench.median_ns),
+                    format_ms(bench.p95_ns),
+                    format_ms(bench.min_ns),
+                    format_ms(bench.max_ns)
+                );
+            }
         }
         let _ = writeln!(output);
     }
@@ -9449,6 +9492,100 @@ mod ci_merge_tests {
         assert!(markdown.contains("### Device: iPhone 13"));
     }
 
+    #[test]
+    fn render_markdown_summary_includes_resource_usage_columns_when_present() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-03-27T00:45:55.028899Z".to_string(),
+            generated_at_unix: 1_774_569_955,
+            target: MobileTarget::Android,
+            function: "bench_alpha".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["Pixel 8-14.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Pixel 8-14.0".to_string(),
+                benchmarks: vec![
+                    BenchmarkStats {
+                        function: "bench_alpha".to_string(),
+                        samples: 5,
+                        mean_ns: Some(17_000),
+                        median_ns: Some(17_000),
+                        p95_ns: Some(18_000),
+                        min_ns: Some(16_000),
+                        max_ns: Some(19_000),
+                        resource_usage: Some(BenchmarkResourceUsage {
+                            cpu_total_ms: Some(482),
+                            peak_memory_kb: Some(654_321),
+                            ..Default::default()
+                        }),
+                    },
+                    BenchmarkStats {
+                        function: "bench_beta".to_string(),
+                        samples: 5,
+                        mean_ns: Some(21_000),
+                        median_ns: Some(21_000),
+                        p95_ns: Some(22_000),
+                        min_ns: Some(20_000),
+                        max_ns: Some(23_000),
+                        resource_usage: Some(BenchmarkResourceUsage {
+                            cpu_total_ms: Some(51),
+                            peak_memory_kb: None,
+                            ..Default::default()
+                        }),
+                    },
+                    BenchmarkStats {
+                        function: "bench_gamma".to_string(),
+                        samples: 5,
+                        mean_ns: Some(25_000),
+                        median_ns: Some(25_000),
+                        p95_ns: Some(26_000),
+                        min_ns: Some(24_000),
+                        max_ns: Some(27_000),
+                        resource_usage: None,
+                    },
+                ],
+            }],
+        });
+
+        assert!(markdown.contains("CPU total (ms)"));
+        assert!(markdown.contains("Peak memory"));
+        assert!(markdown.contains("638.99 MB"));
+        assert!(markdown.contains("| 51 | — |"));
+        assert!(markdown.contains("| — | — |"));
+    }
+
+    #[test]
+    fn render_markdown_summary_keeps_timing_only_table_without_resource_usage() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-03-27T00:45:55.028899Z".to_string(),
+            generated_at_unix: 1_774_569_955,
+            target: MobileTarget::Ios,
+            function: "ffi_benchmark::bench_fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["iPhone 13-15".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "iPhone 13".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "ffi_benchmark::bench_fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(17_000),
+                    median_ns: Some(17_000),
+                    p95_ns: Some(18_000),
+                    min_ns: Some(16_000),
+                    max_ns: Some(19_000),
+                    resource_usage: None,
+                }],
+            }],
+        });
+
+        assert!(markdown.contains(
+            "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
+        ));
+        assert!(!markdown.contains("CPU total (ms)"));
+        assert!(!markdown.contains("Peak memory"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn render_summary_markdown_from_output_with_plots_embeds_image_links() {
@@ -9647,6 +9784,151 @@ mod ci_merge_tests {
         assert!(markdown.contains("![alpha](plots/alpha-ios.svg)"));
         assert!(dir.path().join("plots/alpha.svg").exists());
         assert!(dir.path().join("plots/alpha-ios.svg").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn render_summary_markdown_from_output_with_plots_preserves_resource_usage_columns() {
+        let merged = json!({
+            "targets": {
+                "android": {
+                    "summary": {
+                        "generated_at": "2026-03-25T00:00:00Z",
+                        "generated_at_unix": 1_742_862_400_u64,
+                        "target": "android",
+                        "function": "bench_alpha",
+                        "iterations": 3,
+                        "warmup": 1,
+                        "devices": ["Google Pixel 8-14.0"],
+                        "device_summaries": [{
+                            "device": "Google Pixel 8-14.0",
+                            "benchmarks": [{
+                                "function": "bench_alpha",
+                                "samples": 3,
+                                "mean_ns": 97_u64,
+                                "median_ns": 98_u64,
+                                "p95_ns": 100_u64,
+                                "min_ns": 95_u64,
+                                "max_ns": 100_u64,
+                                "resource_usage": {
+                                    "cpu_total_ms": 482,
+                                    "peak_memory_kb": 654321,
+                                    "total_pss_kb": 654321
+                                }
+                            }]
+                        }]
+                    },
+                    "functions": {
+                        "bench_alpha": {
+                            "summary": {
+                                "generated_at": "2026-03-25T00:00:00Z",
+                                "generated_at_unix": 1_742_862_400_u64,
+                                "target": "android",
+                                "function": "bench_alpha",
+                                "iterations": 3,
+                                "warmup": 1,
+                                "devices": ["Google Pixel 8-14.0"],
+                                "device_summaries": [{
+                                    "device": "Google Pixel 8-14.0",
+                                    "benchmarks": [{
+                                        "function": "bench_alpha",
+                                        "samples": 3,
+                                        "mean_ns": 97_u64,
+                                        "median_ns": 98_u64,
+                                        "p95_ns": 100_u64,
+                                        "min_ns": 95_u64,
+                                        "max_ns": 100_u64,
+                                        "resource_usage": {
+                                            "cpu_total_ms": 482,
+                                            "peak_memory_kb": 654321,
+                                            "total_pss_kb": 654321
+                                        }
+                                    }]
+                                }]
+                            },
+                            "benchmark_results": {
+                                "Google Pixel 8-14.0": [{
+                                    "function": "bench_alpha",
+                                    "samples": [95_u64, 98_u64, 100_u64]
+                                }]
+                            }
+                        }
+                    }
+                },
+                "ios": {
+                    "summary": {
+                        "generated_at": "2026-03-25T00:00:00Z",
+                        "generated_at_unix": 1_742_862_400_u64,
+                        "target": "ios",
+                        "function": "bench_alpha",
+                        "iterations": 3,
+                        "warmup": 1,
+                        "devices": ["iPhone 15-17.4"],
+                        "device_summaries": [{
+                            "device": "iPhone 15-17.4",
+                            "benchmarks": [{
+                                "function": "bench_alpha",
+                                "samples": 3,
+                                "mean_ns": 82_u64,
+                                "median_ns": 82_u64,
+                                "p95_ns": 84_u64,
+                                "min_ns": 80_u64,
+                                "max_ns": 84_u64
+                            }]
+                        }]
+                    },
+                    "functions": {
+                        "bench_alpha": {
+                            "summary": {
+                                "generated_at": "2026-03-25T00:00:00Z",
+                                "generated_at_unix": 1_742_862_400_u64,
+                                "target": "ios",
+                                "function": "bench_alpha",
+                                "iterations": 3,
+                                "warmup": 1,
+                                "devices": ["iPhone 15-17.4"],
+                                "device_summaries": [{
+                                    "device": "iPhone 15-17.4",
+                                    "benchmarks": [{
+                                        "function": "bench_alpha",
+                                        "samples": 3,
+                                        "mean_ns": 82_u64,
+                                        "median_ns": 82_u64,
+                                        "p95_ns": 84_u64,
+                                        "min_ns": 80_u64,
+                                        "max_ns": 84_u64
+                                    }]
+                                }]
+                            },
+                            "benchmark_results": {
+                                "iPhone 15-17.4": [{
+                                    "function": "bench_alpha",
+                                    "samples": [80_u64, 82_u64, 84_u64]
+                                }]
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_python = crate::tests::write_fake_plot_python(dir.path());
+
+        let markdown = render_summary_markdown_from_output_with_plots_using_python(
+            &merged,
+            dir.path(),
+            plots::PlotMode::Auto,
+            Some(&fake_python),
+        )
+        .expect("render merged markdown with plots");
+
+        assert!(markdown.contains("## android"));
+        assert!(markdown.contains("## ios"));
+        assert!(markdown.contains("CPU total (ms)"));
+        assert!(markdown.contains("Peak memory"));
+        assert!(markdown.contains("638.99 MB"));
+        assert!(markdown.contains("![alpha](plots/alpha.svg)"));
+        assert!(markdown.contains("![alpha](plots/alpha-ios.svg)"));
     }
 
     #[test]

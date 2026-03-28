@@ -708,13 +708,13 @@ fn raw_peak_memory_kb(
         })
 }
 
-fn format_cpu_total_ms(value: Option<u64>) -> String {
+pub(crate) fn format_cpu_total_ms(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "—".to_string())
 }
 
-fn format_peak_memory(value_kb: Option<u64>) -> String {
+pub(crate) fn format_peak_memory(value_kb: Option<u64>) -> String {
     value_kb
         .map(|value| format!("{:.2} MB", value as f64 / 1024.0))
         .unwrap_or_else(|| "—".to_string())
