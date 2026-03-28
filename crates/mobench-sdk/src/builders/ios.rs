@@ -1547,9 +1547,18 @@ impl IosBuilder {
         // Add signing parameters based on method
         match method {
             SigningMethod::AdHoc => {
-                // Ad-hoc signing (works for BrowserStack, no Apple ID needed)
-                // For ad-hoc, we disable signing during build and sign manually after
-                cmd.args(["CODE_SIGNING_REQUIRED=NO", "CODE_SIGNING_ALLOWED=NO"]);
+                // Ad-hoc packaging on CI needs the app target to skip both signing
+                // and product validation; otherwise Xcode exits 65 after emitting a
+                // partial .app bundle with no executable.
+                cmd.args([
+                    "VALIDATE_PRODUCT=NO",
+                    "CODE_SIGN_STYLE=Manual",
+                    "CODE_SIGN_IDENTITY=",
+                    "CODE_SIGNING_ALLOWED=NO",
+                    "CODE_SIGNING_REQUIRED=NO",
+                    "DEVELOPMENT_TEAM=",
+                    "PROVISIONING_PROFILE_SPECIFIER=",
+                ]);
             }
             SigningMethod::Development => {
                 // Development signing (requires Apple Developer account)
@@ -1612,18 +1621,57 @@ impl IosBuilder {
             println!("  App bundle created successfully at {:?}", app_path);
         }
 
+        let build_log_path = export_path.join("ipa-build.log");
         if let Ok(output) = &build_result
             && !output.status.success()
         {
+            let mut log = String::new();
+            log.push_str("STDOUT:\n");
+            log.push_str(&String::from_utf8_lossy(&output.stdout));
+            log.push_str("\n\nSTDERR:\n");
+            log.push_str(&String::from_utf8_lossy(&output.stderr));
+            let _ = fs::write(&build_log_path, log);
             println!(
-                "Warning: xcodebuild exited with {} but produced {}. Validating the bundle before continuing.",
+                "Warning: xcodebuild exited with {} but produced {}. Validating the bundle before continuing. Log: {}",
                 output.status,
-                app_path.display()
+                app_path.display(),
+                build_log_path.display()
             );
         }
 
         let source_info_plist = ios_dir.join(scheme).join("Info.plist");
-        self.ensure_device_app_bundle_metadata(&app_path, &source_info_plist, scheme)?;
+        if let Err(bundle_err) =
+            self.ensure_device_app_bundle_metadata(&app_path, &source_info_plist, scheme)
+        {
+            if let Ok(output) = &build_result
+                && !output.status.success()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(BenchError::Build(format!(
+                    "xcodebuild build produced an incomplete app bundle.\n\n\
+                     Project: {}\n\
+                     Scheme: {}\n\
+                     Configuration: {}\n\
+                     Derived data: {}\n\
+                     Exit status: {}\n\
+                     Log: {}\n\n\
+                     Bundle validation: {}\n\n\
+                     Stdout:\n{}\n\n\
+                     Stderr:\n{}",
+                    project_path.display(),
+                    scheme,
+                    build_configuration,
+                    build_dir.display(),
+                    output.status,
+                    build_log_path.display(),
+                    bundle_err,
+                    stdout,
+                    stderr
+                )));
+            }
+            return Err(bundle_err);
+        }
 
         if matches!(method, SigningMethod::AdHoc) {
             let profile = find_provisioning_profile();
