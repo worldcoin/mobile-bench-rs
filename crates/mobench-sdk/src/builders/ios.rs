@@ -76,6 +76,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// iOS builder that handles the complete build pipeline.
 ///
@@ -1645,7 +1646,10 @@ impl IosBuilder {
 
         println!("Creating IPA from app bundle...");
 
-        // Step 3: Create IPA (which is just a zip of Payload/{app})
+        // Step 3: Stage the app bundle inside Payload/ and archive it with
+        // `ditto`, which preserves the bundle structure the way Xcode-generated
+        // IPAs do. The earlier recursive copy + `zip` path produced invalid
+        // BrowserStack uploads in CI.
         let payload_dir = export_path.join("Payload");
         if payload_dir.exists() {
             fs::remove_dir_all(&payload_dir).map_err(|e| {
@@ -1664,11 +1668,11 @@ impl IosBuilder {
             ))
         })?;
 
-        // Copy app bundle into Payload/
+        // Copy app bundle into Payload/ using the standard macOS bundle copier.
         let dest_app = payload_dir.join(format!("{}.app", scheme));
-        self.copy_dir_recursive(&app_path, &dest_app)?;
+        self.copy_bundle_with_ditto(&app_path, &dest_app)?;
 
-        // Create zip archive
+        // Create IPA archive
         if ipa_path.exists() {
             fs::remove_file(&ipa_path).map_err(|e| {
                 BenchError::Build(format!(
@@ -1679,17 +1683,21 @@ impl IosBuilder {
             })?;
         }
 
-        let mut cmd = Command::new("zip");
-        cmd.arg("-qr")
-            .arg(&ipa_path)
+        let mut cmd = Command::new("ditto");
+        cmd.arg("-c")
+            .arg("-k")
+            .arg("--sequesterRsrc")
+            .arg("--keepParent")
             .arg("Payload")
+            .arg(&ipa_path)
             .current_dir(&export_path);
 
         if self.verbose {
             println!("  Running: {:?}", cmd);
         }
 
-        run_command(cmd, "zip IPA")?;
+        run_command(cmd, "create IPA archive with ditto")?;
+        self.validate_ipa_archive(&ipa_path, scheme)?;
 
         // Clean up Payload directory
         fs::remove_dir_all(&payload_dir).map_err(|e| {
@@ -1873,42 +1881,85 @@ impl IosBuilder {
         Ok(zip_path)
     }
 
-    /// Recursively copies a directory
-    fn copy_dir_recursive(&self, src: &Path, dest: &Path) -> Result<(), BenchError> {
-        fs::create_dir_all(dest).map_err(|e| {
-            BenchError::Build(format!("Failed to create directory {:?}: {}", dest, e))
-        })?;
+    fn copy_bundle_with_ditto(&self, src: &Path, dest: &Path) -> Result<(), BenchError> {
+        let mut cmd = Command::new("ditto");
+        cmd.arg(src).arg(dest);
 
-        for entry in fs::read_dir(src)
-            .map_err(|e| BenchError::Build(format!("Failed to read directory {:?}: {}", src, e)))?
-        {
-            let entry =
-                entry.map_err(|e| BenchError::Build(format!("Failed to read entry: {}", e)))?;
-            let path = entry.path();
-            let file_name = path
-                .file_name()
-                .ok_or_else(|| BenchError::Build(format!("Invalid file name in {:?}", path)))?;
-            let dest_path = dest.join(file_name);
-
-            if path.is_dir() {
-                self.copy_dir_recursive(&path, &dest_path)?;
-            } else {
-                fs::copy(&path, &dest_path).map_err(|e| {
-                    BenchError::Build(format!(
-                        "Failed to copy {:?} to {:?}: {}",
-                        path, dest_path, e
-                    ))
-                })?;
-            }
+        if self.verbose {
+            println!("  Running: {:?}", cmd);
         }
 
-        Ok(())
+        run_command(cmd, "copy app bundle with ditto")
+    }
+
+    fn validate_ipa_archive(&self, ipa_path: &Path, scheme: &str) -> Result<(), BenchError> {
+        let extract_root = env::temp_dir().join(format!(
+            "mobench-ipa-validate-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+
+        if extract_root.exists() {
+            fs::remove_dir_all(&extract_root).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to clear IPA validation dir at {}: {}",
+                    extract_root.display(),
+                    e
+                ))
+            })?;
+        }
+        fs::create_dir_all(&extract_root).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create IPA validation dir at {}: {}",
+                extract_root.display(),
+                e
+            ))
+        })?;
+
+        let mut extract = Command::new("ditto");
+        extract
+            .arg("-x")
+            .arg("-k")
+            .arg(ipa_path)
+            .arg(&extract_root);
+
+        let extract_result = run_command(extract, "extract IPA for validation");
+        if let Err(err) = extract_result {
+            let _ = fs::remove_dir_all(&extract_root);
+            return Err(err);
+        }
+
+        let info_plist = extract_root
+            .join("Payload")
+            .join(format!("{}.app", scheme))
+            .join("Info.plist");
+        let validation_result = if info_plist.is_file() {
+            Ok(())
+        } else {
+            Err(BenchError::Build(format!(
+                "IPA validation failed: {} is missing from {}.\n\n\
+                 The packaged IPA does not contain a valid iOS app bundle. \
+                 BrowserStack will reject this upload.",
+                info_plist
+                    .strip_prefix(&extract_root)
+                    .unwrap_or(&info_plist)
+                    .display(),
+                ipa_path.display()
+            )))
+        };
+
+        let _ = fs::remove_dir_all(&extract_root);
+        validation_result
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn test_ios_builder_creation() {
@@ -1931,6 +1982,86 @@ mod tests {
         let builder =
             IosBuilder::new("/tmp/test-project", "test-bench-mobile").output_dir("/custom/output");
         assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_validate_ipa_archive_rejects_missing_info_plist() {
+        let temp_dir = env::temp_dir().join(format!(
+            "mobench-ios-test-bad-ipa-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let payload = temp_dir.join("Payload/BenchRunner.app");
+        fs::create_dir_all(&payload).expect("create payload");
+        let ipa = temp_dir.join("broken.ipa");
+
+        let status = Command::new("ditto")
+            .arg("-c")
+            .arg("-k")
+            .arg("--sequesterRsrc")
+            .arg("--keepParent")
+            .arg("Payload")
+            .arg(&ipa)
+            .current_dir(&temp_dir)
+            .status()
+            .expect("run ditto");
+        assert!(status.success(), "ditto should create the broken test ipa");
+
+        let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let err = builder
+            .validate_ipa_archive(&ipa, "BenchRunner")
+            .expect_err("IPA missing Info.plist should be rejected");
+        assert!(
+            err.to_string().contains("Info.plist"),
+            "expected validation error mentioning Info.plist, got: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_validate_ipa_archive_accepts_payload_with_info_plist() {
+        let temp_dir = env::temp_dir().join(format!(
+            "mobench-ios-test-good-ipa-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let payload = temp_dir.join("Payload/BenchRunner.app");
+        fs::create_dir_all(&payload).expect("create payload");
+        let mut info = fs::File::create(payload.join("Info.plist")).expect("create plist");
+        writeln!(
+            info,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"></plist>"
+        )
+        .expect("write plist");
+        let ipa = temp_dir.join("valid.ipa");
+
+        let status = Command::new("ditto")
+            .arg("-c")
+            .arg("-k")
+            .arg("--sequesterRsrc")
+            .arg("--keepParent")
+            .arg("Payload")
+            .arg(&ipa)
+            .current_dir(&temp_dir)
+            .status()
+            .expect("run ditto");
+        assert!(status.success(), "ditto should create the valid test ipa");
+
+        let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
+        builder
+            .validate_ipa_archive(&ipa, "BenchRunner")
+            .expect("IPA with Info.plist should validate");
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
