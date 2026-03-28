@@ -1493,6 +1493,11 @@ pub fn public_bench() {
             "Bundle ID should NOT be duplicated as 'dev.world.benchmobile.benchmobile', got:\n{}",
             project_yml
         );
+        assert!(
+            project_yml.contains("embed: false"),
+            "Static xcframework dependency should be link-only, got:\n{}",
+            project_yml
+        );
 
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
