@@ -43,7 +43,6 @@ Device resolution semantics should reuse the same surface area instead of invent
 - public Rust items should use `//!` or `///` comments when they define user-facing behavior
 - comments should explain why a branch/tooling workaround exists, not restate obvious code
 - README and template docs should describe current shipped behavior, not superseded MVP constraints
-- design docs in `docs/plans/` should be marked clearly when a design was abandoned or rolled back
 
 ## Template editing
 
