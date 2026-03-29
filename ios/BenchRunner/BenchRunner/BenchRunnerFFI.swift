@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 private let defaultFunction = "sample_fns::fibonacci"
@@ -61,6 +62,11 @@ struct BenchmarkResult {
     let jsonReport: String
 }
 
+private struct ProcessResourceSnapshot {
+    let cpuTotalMs: UInt64?
+    let peakMemoryKb: UInt64?
+}
+
 enum BenchRunnerFFI {
     static func runCurrentBenchmark() async -> BenchmarkResult {
         let params = BenchParams.resolved()
@@ -75,9 +81,15 @@ enum BenchRunnerFFI {
         )
 
         do {
+            let beforeResources = captureProcessResourceSnapshot()
             let report = try runBenchmark(spec: spec)
+            let afterResources = captureProcessResourceSnapshot()
             let displayText = formatBenchReport(report)
-            let jsonReport = generateJSONReport(report)
+            let jsonReport = generateJSONReport(
+                report,
+                beforeResources: beforeResources,
+                afterResources: afterResources
+            )
             return BenchmarkResult(displayText: displayText, jsonReport: jsonReport)
         } catch let error as BenchError {
             let errorText = formatBenchError(error)
@@ -90,8 +102,59 @@ enum BenchRunnerFFI {
         }
     }
 
+    private static func captureProcessResourceSnapshot() -> ProcessResourceSnapshot {
+        var taskInfo = mach_task_basic_info_data_t()
+        var taskInfoCount = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<natural_t>.size
+        )
+
+        let status = withUnsafeMutablePointer(to: &taskInfo) { taskInfoPointer in
+            taskInfoPointer.withMemoryRebound(to: integer_t.self, capacity: Int(taskInfoCount)) {
+                integerPointer in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    integerPointer,
+                    &taskInfoCount
+                )
+            }
+        }
+
+        guard status == KERN_SUCCESS else {
+            return ProcessResourceSnapshot(cpuTotalMs: nil, peakMemoryKb: nil)
+        }
+
+        let userMs = UInt64(taskInfo.user_time.seconds) * 1000
+            + UInt64(taskInfo.user_time.microseconds) / 1000
+        let systemMs = UInt64(taskInfo.system_time.seconds) * 1000
+            + UInt64(taskInfo.system_time.microseconds) / 1000
+        let peakMemoryKb = UInt64(taskInfo.resident_size_max / 1024)
+
+        return ProcessResourceSnapshot(
+            cpuTotalMs: userMs + systemMs,
+            peakMemoryKb: peakMemoryKb
+        )
+    }
+
+    private static func elapsedCpuMs(
+        beforeResources: ProcessResourceSnapshot,
+        afterResources: ProcessResourceSnapshot
+    ) -> UInt64? {
+        guard let start = beforeResources.cpuTotalMs,
+              let end = afterResources.cpuTotalMs,
+              end >= start else {
+            return nil
+        }
+
+        return end - start
+    }
+
     /// Generates a JSON report matching the Android BENCH_JSON format for consistency
-    private static func generateJSONReport(_ report: BenchReport) -> String {
+    private static func generateJSONReport(
+        _ report: BenchReport,
+        beforeResources: ProcessResourceSnapshot,
+        afterResources: ProcessResourceSnapshot
+    ) -> String {
         var json: [String: Any] = [:]
 
         // Spec section
@@ -146,10 +209,19 @@ enum BenchRunnerFFI {
         }
 
         // Resource metrics (iOS-specific)
-        let resources: [String: Any] = [
+        var resources: [String: Any] = [
             "platform": "ios",
             "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
         ]
+        if let cpuTotalMs = elapsedCpuMs(
+            beforeResources: beforeResources,
+            afterResources: afterResources
+        ) {
+            resources["elapsed_cpu_ms"] = cpuTotalMs
+        }
+        if let peakMemoryKb = afterResources.peakMemoryKb {
+            resources["peak_memory_kb"] = peakMemoryKb
+        }
         json["resources"] = resources
 
         // Serialize to JSON string

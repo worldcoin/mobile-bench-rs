@@ -40,6 +40,18 @@ final class BenchRunnerUITests: XCTestCase {
         // Verify we got valid JSON (not an error message)
         XCTAssertFalse(jsonString.isEmpty, "Benchmark report JSON should not be empty")
         XCTAssertTrue(jsonString.hasPrefix("{"), "Benchmark report should be valid JSON (starts with '{')")
+
+        let data = try XCTUnwrap(jsonString.data(using: .utf8), "Benchmark JSON should encode as UTF-8")
+        let payload = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            "Benchmark JSON should decode into an object"
+        )
+        let resources = try XCTUnwrap(
+            payload["resources"] as? [String: Any],
+            "Benchmark JSON should include a resources object"
+        )
+        XCTAssertNotNil(resources["elapsed_cpu_ms"], "Benchmark JSON should include native CPU time")
+        XCTAssertNotNil(resources["peak_memory_kb"], "Benchmark JSON should include peak memory")
     }
 
     // Keep the old test name for backward compatibility

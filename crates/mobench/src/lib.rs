@@ -5180,10 +5180,16 @@ fn extract_benchmark_resource_usage(
     let java_heap_kb = resources
         .and_then(|res| res.get("java_heap_kb"))
         .and_then(json_value_to_u64);
+    let direct_peak_memory_kb = resources
+        .and_then(|res| res.get("peak_memory_kb"))
+        .and_then(json_value_to_u64);
 
-    let peak_memory_kb = perf_metrics
-        .and_then(|metrics| metrics.memory.as_ref())
-        .map(|memory| (memory.peak_mb * 1024.0).round() as u64)
+    let peak_memory_kb = direct_peak_memory_kb
+        .or_else(|| {
+            perf_metrics
+                .and_then(|metrics| metrics.memory.as_ref())
+                .map(|memory| (memory.peak_mb * 1024.0).round() as u64)
+        })
         .or_else(|| {
             raw_peak_memory_kb(total_pss_kb, private_dirty_kb, native_heap_kb, java_heap_kb)
         });
@@ -5795,7 +5801,10 @@ fn cmd_list(project_root: Option<PathBuf>, crate_path: Option<PathBuf>) -> Resul
         println!("Usage:");
         println!(
             "  cargo mobench run --target android --function {} --iterations 100",
-            all_benchmarks.first().map(|s| s.as_str()).unwrap_or("my_benchmark")
+            all_benchmarks
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("my_benchmark")
         );
     }
 
@@ -9748,6 +9757,50 @@ mod ci_merge_tests {
         assert_eq!(resource_usage["peak_memory_kb"], 249416);
         assert_eq!(resource_usage["cpu_total_ms"], Value::Null);
     }
+
+    #[test]
+    fn build_summary_preserves_direct_ios_resource_metrics() {
+        let spec = RunSpec {
+            target: MobileTarget::Ios,
+            function: "bench_nullifier_proving_only".into(),
+            iterations: 3,
+            warmup: 1,
+            devices: vec!["iPhone 15-17.0".into()],
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let run_summary = RunSummary {
+            spec: spec.clone(),
+            artifacts: None,
+            local_report: json!({}),
+            remote_run: None,
+            summary: empty_summary(&spec),
+            benchmark_results: Some(BTreeMap::from([(
+                "iPhone 15-17.0".to_string(),
+                vec![json!({
+                    "function": "bench_nullifier_proving_only",
+                    "mean_ns": 125000000_u64,
+                    "samples": [
+                        { "duration_ns": 120000000_u64 },
+                        { "duration_ns": 130000000_u64 }
+                    ],
+                    "resources": {
+                        "platform": "ios",
+                        "elapsed_cpu_ms": 482,
+                        "peak_memory_kb": 249416
+                    }
+                })],
+            )])),
+            performance_metrics: None,
+        };
+
+        let summary = build_summary(&run_summary).expect("build summary");
+        let value = serde_json::to_value(summary).expect("serialize summary");
+        let resource_usage = &value["device_summaries"][0]["benchmarks"][0]["resource_usage"];
+
+        assert_eq!(resource_usage["cpu_total_ms"], 482);
+        assert_eq!(resource_usage["peak_memory_kb"], 249416);
+    }
 }
 
 #[cfg(test)]
@@ -9864,6 +9917,20 @@ mod resource_usage_tests {
         // peak_memory_kb should come from perf_metrics (10.0 * 1024 = 10240)
         assert_eq!(usage.peak_memory_kb, Some(10240));
         assert_eq!(usage.total_pss_kb, Some(4096));
+    }
+
+    #[test]
+    fn test_extract_resource_usage_reads_direct_peak_memory_field() {
+        let entry = json!({
+            "resources": {
+                "elapsed_cpu_ms": 482,
+                "peak_memory_kb": 249416
+            }
+        });
+
+        let usage = extract_benchmark_resource_usage(&entry, None).unwrap();
+        assert_eq!(usage.cpu_total_ms, Some(482));
+        assert_eq!(usage.peak_memory_kb, Some(249416));
     }
 
     #[test]
