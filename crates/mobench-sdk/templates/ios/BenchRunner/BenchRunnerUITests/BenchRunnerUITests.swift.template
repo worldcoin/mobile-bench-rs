@@ -50,8 +50,24 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
             payload["resources"] as? [String: Any],
             "Benchmark JSON should include a resources object"
         )
-        XCTAssertNotNil(resources["elapsed_cpu_ms"], "Benchmark JSON should include native CPU time")
-        XCTAssertNotNil(resources["peak_memory_kb"], "Benchmark JSON should include peak memory")
+        let elapsedCpuMs = try XCTUnwrap(
+            resources["elapsed_cpu_ms"] as? NSNumber,
+            "Benchmark JSON should include native CPU time"
+        )
+        XCTAssertGreaterThan(
+            elapsedCpuMs.uint64Value,
+            0,
+            "Benchmark JSON should include a positive native CPU time"
+        )
+        let peakMemoryKb = try XCTUnwrap(
+            resources["peak_memory_kb"] as? NSNumber,
+            "Benchmark JSON should include peak memory"
+        )
+        XCTAssertGreaterThan(
+            peakMemoryKb.uint64Value,
+            0,
+            "Benchmark JSON should include a positive peak memory value"
+        )
     }
 
     // Keep the old test name for backward compatibility
