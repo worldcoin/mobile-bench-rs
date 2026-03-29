@@ -556,11 +556,13 @@ public func FfiConverterTypeBenchReport_lower(_ value: BenchReport) -> RustBuffe
 
 
 public struct BenchResourceUsage {
+    public var cpuMedianMs: UInt64?
     public var peakMemoryKb: UInt64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(peakMemoryKb: UInt64?) {
+    public init(cpuMedianMs: UInt64?, peakMemoryKb: UInt64?) {
+        self.cpuMedianMs = cpuMedianMs
         self.peakMemoryKb = peakMemoryKb
     }
 }
@@ -569,6 +571,9 @@ public struct BenchResourceUsage {
 
 extension BenchResourceUsage: Equatable, Hashable {
     public static func ==(lhs: BenchResourceUsage, rhs: BenchResourceUsage) -> Bool {
+        if lhs.cpuMedianMs != rhs.cpuMedianMs {
+            return false
+        }
         if lhs.peakMemoryKb != rhs.peakMemoryKb {
             return false
         }
@@ -576,6 +581,7 @@ extension BenchResourceUsage: Equatable, Hashable {
     }
 
     public func hash(into hasher: inout Hasher) {
+        hasher.combine(cpuMedianMs)
         hasher.combine(peakMemoryKb)
     }
 }
@@ -588,11 +594,13 @@ public struct FfiConverterTypeBenchResourceUsage: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BenchResourceUsage {
         return
             try BenchResourceUsage(
+                cpuMedianMs: FfiConverterOptionUInt64.read(from: &buf), 
                 peakMemoryKb: FfiConverterOptionUInt64.read(from: &buf)
         )
     }
 
     public static func write(_ value: BenchResourceUsage, into buf: inout [UInt8]) {
+        FfiConverterOptionUInt64.write(value.cpuMedianMs, into: &buf)
         FfiConverterOptionUInt64.write(value.peakMemoryKb, into: &buf)
     }
 }

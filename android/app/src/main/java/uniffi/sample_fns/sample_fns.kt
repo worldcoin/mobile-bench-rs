@@ -1060,6 +1060,7 @@ public object FfiConverterTypeBenchReport: FfiConverterRustBuffer<BenchReport> {
 
 
 data class BenchResourceUsage (
+    var `cpuMedianMs`: kotlin.ULong?, 
     var `peakMemoryKb`: kotlin.ULong?
 ) {
     
@@ -1073,14 +1074,17 @@ public object FfiConverterTypeBenchResourceUsage: FfiConverterRustBuffer<BenchRe
     override fun read(buf: ByteBuffer): BenchResourceUsage {
         return BenchResourceUsage(
             FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
         )
     }
 
     override fun allocationSize(value: BenchResourceUsage) = (
+            FfiConverterOptionalULong.allocationSize(value.`cpuMedianMs`) +
             FfiConverterOptionalULong.allocationSize(value.`peakMemoryKb`)
     )
 
     override fun write(value: BenchResourceUsage, buf: ByteBuffer) {
+            FfiConverterOptionalULong.write(value.`cpuMedianMs`, buf)
             FfiConverterOptionalULong.write(value.`peakMemoryKb`, buf)
     }
 }

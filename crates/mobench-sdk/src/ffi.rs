@@ -109,6 +109,7 @@ pub struct BenchReportFfi {
 /// FFI-ready resource usage captured during measured iterations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchResourceUsageFfi {
+    pub cpu_median_ms: Option<u64>,
     pub peak_memory_kb: Option<u64>,
 }
 
@@ -142,6 +143,7 @@ impl From<crate::RunnerReport> for BenchReportFfi {
 impl From<crate::BenchResourceUsage> for BenchResourceUsageFfi {
     fn from(resource_usage: crate::BenchResourceUsage) -> Self {
         Self {
+            cpu_median_ms: resource_usage.cpu_median_ms,
             peak_memory_kb: resource_usage.peak_memory_kb,
         }
     }

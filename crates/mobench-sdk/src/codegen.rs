@@ -175,6 +175,7 @@ pub struct SemanticPhase {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchResourceUsage {
+    pub cpu_median_ms: Option<u64>,
     pub peak_memory_kb: Option<u64>,
 }
 
@@ -240,6 +241,7 @@ impl From<mobench_sdk::SemanticPhase> for SemanticPhase {
 impl From<mobench_sdk::BenchResourceUsage> for BenchResourceUsage {
     fn from(resource_usage: mobench_sdk::BenchResourceUsage) -> Self {
         Self {
+            cpu_median_ms: resource_usage.cpu_median_ms,
             peak_memory_kb: resource_usage.peak_memory_kb,
         }
     }

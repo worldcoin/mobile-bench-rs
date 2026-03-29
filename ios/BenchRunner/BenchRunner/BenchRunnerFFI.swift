@@ -63,7 +63,6 @@ struct BenchmarkResult {
 }
 
 private struct ProcessResourceSnapshot {
-    let cpuTotalMs: UInt64?
     let peakMemoryKb: UInt64?
 }
 
@@ -81,13 +80,11 @@ enum BenchRunnerFFI {
         )
 
         do {
-            let beforeResources = captureProcessResourceSnapshot()
             let report = try runBenchmark(spec: spec)
             let afterResources = captureProcessResourceSnapshot()
             let displayText = formatBenchReport(report)
             let jsonReport = generateJSONReport(
                 report,
-                beforeResources: beforeResources,
                 afterResources: afterResources
             )
             return BenchmarkResult(displayText: displayText, jsonReport: jsonReport)
@@ -103,8 +100,6 @@ enum BenchRunnerFFI {
     }
 
     private static func captureProcessResourceSnapshot() -> ProcessResourceSnapshot {
-        let cpuTotalMs = captureLiveThreadCpuTotalMs()
-
         var taskInfo = mach_task_basic_info_data_t()
         var taskInfoCount = mach_msg_type_number_t(
             MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<natural_t>.size
@@ -123,92 +118,19 @@ enum BenchRunnerFFI {
         }
 
         guard status == KERN_SUCCESS else {
-            return ProcessResourceSnapshot(cpuTotalMs: cpuTotalMs, peakMemoryKb: nil)
+            return ProcessResourceSnapshot(peakMemoryKb: nil)
         }
 
         let peakMemoryKb = UInt64(taskInfo.resident_size_max / 1024)
 
         return ProcessResourceSnapshot(
-            cpuTotalMs: cpuTotalMs,
             peakMemoryKb: peakMemoryKb
         )
-    }
-
-    private static func captureLiveThreadCpuTotalMs() -> UInt64? {
-        var threads: thread_act_array_t?
-        var threadCount: mach_msg_type_number_t = 0
-
-        let status = task_threads(mach_task_self_, &threads, &threadCount)
-        guard status == KERN_SUCCESS, let threads else {
-            return nil
-        }
-
-        defer {
-            let allocationSize = vm_size_t(Int(threadCount) * MemoryLayout<thread_t>.stride)
-            vm_deallocate(
-                mach_task_self_,
-                vm_address_t(UInt(bitPattern: threads)),
-                allocationSize
-            )
-        }
-
-        var totalMs: UInt64 = 0
-
-        for threadIndex in 0..<Int(threadCount) {
-            var threadInfo = thread_basic_info_data_t()
-            let threadInfoCount = mach_msg_type_number_t(
-                MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<natural_t>.size
-            )
-            var mutableThreadInfoCount = threadInfoCount
-
-            let threadStatus = withUnsafeMutablePointer(to: &threadInfo) { threadInfoPointer in
-                threadInfoPointer.withMemoryRebound(
-                    to: integer_t.self,
-                    capacity: Int(threadInfoCount)
-                ) { integerPointer in
-                    thread_info(
-                        threads[threadIndex],
-                        thread_flavor_t(THREAD_BASIC_INFO),
-                        integerPointer,
-                        &mutableThreadInfoCount
-                    )
-                }
-            }
-
-            guard threadStatus == KERN_SUCCESS else {
-                continue
-            }
-
-            if (threadInfo.flags & TH_FLAGS_IDLE) != 0 {
-                continue
-            }
-
-            totalMs += UInt64(threadInfo.user_time.seconds) * 1000
-            totalMs += UInt64(threadInfo.user_time.microseconds) / 1000
-            totalMs += UInt64(threadInfo.system_time.seconds) * 1000
-            totalMs += UInt64(threadInfo.system_time.microseconds) / 1000
-        }
-
-        return totalMs
-    }
-
-    private static func elapsedCpuMs(
-        beforeResources: ProcessResourceSnapshot,
-        afterResources: ProcessResourceSnapshot
-    ) -> UInt64? {
-        guard let start = beforeResources.cpuTotalMs,
-              let end = afterResources.cpuTotalMs,
-              end >= start else {
-            return nil
-        }
-
-        return end - start
     }
 
     /// Generates a JSON report matching the Android BENCH_JSON format for consistency
     private static func generateJSONReport(
         _ report: BenchReport,
-        beforeResources: ProcessResourceSnapshot,
         afterResources: ProcessResourceSnapshot
     ) -> String {
         var json: [String: Any] = [:]
@@ -269,11 +191,8 @@ enum BenchRunnerFFI {
             "platform": "ios",
             "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
         ]
-        if let cpuTotalMs = elapsedCpuMs(
-            beforeResources: beforeResources,
-            afterResources: afterResources
-        ) {
-            resources["elapsed_cpu_ms"] = cpuTotalMs
+        if let cpuMedianMs = report.resourceUsage?.cpuMedianMs {
+            resources["cpu_median_ms"] = cpuMedianMs
         }
         let measuredPeakMemoryKb = report.resourceUsage?.peakMemoryKb
         if let peakMemoryKb = measuredPeakMemoryKb ?? afterResources.peakMemoryKb {

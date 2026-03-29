@@ -60,6 +60,8 @@ pub struct TimingStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_median_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_total_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_memory_kb: Option<u64>,
@@ -606,7 +608,8 @@ fn default_device_info(platform: &str) -> DeviceInfo {
 
 impl ResourceUsage {
     fn is_empty(&self) -> bool {
-        self.cpu_total_ms.is_none()
+        self.cpu_median_ms.is_none()
+            && self.cpu_total_ms.is_none()
             && self.peak_memory_kb.is_none()
             && self.total_pss_kb.is_none()
             && self.private_dirty_kb.is_none()
@@ -615,6 +618,9 @@ impl ResourceUsage {
     }
 
     fn merge_missing(&mut self, other: &Self) {
+        if self.cpu_median_ms.is_none() {
+            self.cpu_median_ms = other.cpu_median_ms;
+        }
         if self.cpu_total_ms.is_none() {
             self.cpu_total_ms = other.cpu_total_ms;
         }
@@ -646,6 +652,7 @@ fn parse_resource_usage(value: &serde_json::Value) -> Option<ResourceUsage> {
 fn parse_resource_usage_object(value: &serde_json::Value) -> Option<ResourceUsage> {
     let object = value.as_object()?;
 
+    let cpu_median_ms = object.get("cpu_median_ms").and_then(json_value_to_u64);
     let cpu_total_ms = object
         .get("cpu_total_ms")
         .or_else(|| object.get("elapsed_cpu_ms"))
@@ -669,6 +676,7 @@ fn parse_resource_usage_object(value: &serde_json::Value) -> Option<ResourceUsag
         });
 
     let resource_usage = ResourceUsage {
+        cpu_median_ms,
         cpu_total_ms,
         peak_memory_kb,
         total_pss_kb,
@@ -708,7 +716,7 @@ fn raw_peak_memory_kb(
         })
 }
 
-pub(crate) fn format_cpu_total_ms(value: Option<u64>) -> String {
+pub(crate) fn format_cpu_median_ms(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "—".to_string())
@@ -766,7 +774,7 @@ fn render_platform_table(platform: &PlatformReport) -> String {
 
     let mut headers = vec!["Benchmark", "Avg ms", "Best", "Worst", "Median", "P95"];
     if has_resource_usage {
-        headers.extend(["CPU total (ms)", "Peak memory"]);
+        headers.extend(["CPU median (ms)", "Peak memory"]);
     }
     table.set_header(
         headers
@@ -786,7 +794,7 @@ fn render_platform_table(platform: &PlatformReport) -> String {
 
         if has_resource_usage {
             if let Some(ru) = &bench.resource_usage {
-                row.push(Cell::new(format_cpu_total_ms(ru.cpu_total_ms)));
+                row.push(Cell::new(format_cpu_median_ms(ru.cpu_median_ms)));
                 row.push(Cell::new(format_peak_memory(ru.peak_memory_kb)));
             } else {
                 row.push(Cell::new("—"));
@@ -838,7 +846,7 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
 
         if has_ru {
             output.push_str(
-                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU total (ms) | Peak memory |\n",
+                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU median (ms) | Peak memory |\n",
             );
             output.push_str(
                 "|-----------|--------|------|-------|--------|-----|----------------|-------------|\n",
@@ -863,7 +871,7 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
                 if let Some(ru) = &bench.resource_usage {
                     row.push_str(&format!(
                         " {} | {} |",
-                        format_cpu_total_ms(ru.cpu_total_ms),
+                        format_cpu_median_ms(ru.cpu_median_ms),
                         format_peak_memory(ru.peak_memory_kb),
                     ));
                 } else {
@@ -914,6 +922,7 @@ pub fn enrich_with_browserstack(
                         continue;
                     }
                     let resource_usage = bench.resource_usage.get_or_insert(ResourceUsage {
+                        cpu_median_ms: None,
                         cpu_total_ms: None,
                         peak_memory_kb: None,
                         total_pss_kb: None,
@@ -1169,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_results_dir_preserves_summary_peak_memory_when_raw_results_add_cpu() {
+    fn test_load_results_dir_preserves_summary_peak_memory_when_raw_results_add_legacy_cpu_total() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("summary.json"),
@@ -1277,7 +1286,8 @@ mod tests {
                         std_dev_ms: Some(35.2),
                     },
                     resource_usage: Some(ResourceUsage {
-                        cpu_total_ms: Some(482),
+                        cpu_median_ms: Some(482),
+                        cpu_total_ms: None,
                         peak_memory_kb: Some(654321),
                         total_pss_kb: Some(654321),
                         private_dirty_kb: Some(321000),
@@ -1332,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_markdown_uses_cpu_total_and_peak_memory_columns() {
+    fn test_render_markdown_uses_cpu_median_and_peak_memory_columns() {
         let report = parse_summary_value(&json!({
             "summary": {
                 "generated_at": "2026-02-26T12:00:00Z",
@@ -1352,7 +1362,7 @@ mod tests {
                         "min_ns": 1180200000_u64,
                         "max_ns": 1298100000_u64,
                         "resource_usage": {
-                            "cpu_total_ms": 482,
+                            "cpu_median_ms": 482,
                             "peak_memory_kb": 654321,
                             "total_pss_kb": 654321
                         }
@@ -1364,7 +1374,7 @@ mod tests {
 
         let output = render_markdown(&report);
 
-        assert!(output.contains("CPU total (ms)"));
+        assert!(output.contains("CPU median (ms)"));
         assert!(output.contains("Peak memory"));
         assert!(output.contains("| 482 |"));
         assert!(output.contains("638.99 MB"));
@@ -1373,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_table_uses_cpu_total_and_peak_memory_columns() {
+    fn test_render_table_uses_cpu_median_and_peak_memory_columns() {
         let report = parse_summary_value(&json!({
             "summary": {
                 "generated_at": "2026-02-26T12:00:00Z",
@@ -1393,7 +1403,7 @@ mod tests {
                         "min_ns": 1180200000_u64,
                         "max_ns": 1298100000_u64,
                         "resource_usage": {
-                            "cpu_total_ms": 482,
+                            "cpu_median_ms": 482,
                             "peak_memory_kb": 654321,
                             "total_pss_kb": 654321
                         }
@@ -1405,12 +1415,52 @@ mod tests {
 
         let output = render_table(&report);
 
-        assert!(output.contains("CPU total (ms)"));
+        assert!(output.contains("CPU median (ms)"));
         assert!(output.contains("Peak memory"));
         assert!(output.contains("482"));
         assert!(output.contains("638.99 MB"));
         assert!(!output.contains("CPU %"));
         assert!(!output.contains("RAM MB"));
+    }
+
+    #[test]
+    fn test_parse_resource_usage_reads_cpu_median_field() {
+        let report = parse_summary_value(&json!({
+            "summary": {
+                "generated_at": "2026-03-28T12:00:00Z",
+                "target": "ios",
+                "function": "bench_nullifier_proving_only",
+                "iterations": 4,
+                "warmup": 1,
+                "devices": ["iPhone 15-17.0"],
+                "device_summaries": [{
+                    "device": "iPhone 15-17.0",
+                    "benchmarks": [{
+                        "function": "bench_nullifier_proving_only",
+                        "samples": 4,
+                        "mean_ns": 125000000_u64,
+                        "median_ns": 123000000_u64,
+                        "p95_ns": 130000000_u64,
+                        "min_ns": 120000000_u64,
+                        "max_ns": 130000000_u64,
+                        "resource_usage": {
+                            "cpu_median_ms": 17,
+                            "peak_memory_kb": 249416
+                        }
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        let benchmark = &report.platforms[0].benchmarks[0];
+        assert_eq!(
+            benchmark
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.cpu_median_ms),
+            Some(17)
+        );
     }
 
     #[test]

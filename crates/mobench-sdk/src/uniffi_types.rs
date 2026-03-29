@@ -217,6 +217,7 @@ pub struct BenchReportTemplate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchResourceUsageTemplate {
+    pub cpu_median_ms: Option<u64>,
     pub peak_memory_kb: Option<u64>,
 }
 
@@ -234,6 +235,7 @@ impl From<crate::RunnerReport> for BenchReportTemplate {
 impl From<crate::BenchResourceUsage> for BenchResourceUsageTemplate {
     fn from(resource_usage: crate::BenchResourceUsage) -> Self {
         Self {
+            cpu_median_ms: resource_usage.cpu_median_ms,
             peak_memory_kb: resource_usage.peak_memory_kb,
         }
     }

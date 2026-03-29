@@ -50,14 +50,14 @@ final class BenchRunnerUITests: XCTestCase {
             payload["resources"] as? [String: Any],
             "Benchmark JSON should include a resources object"
         )
-        let elapsedCpuMs = try XCTUnwrap(
-            resources["elapsed_cpu_ms"] as? NSNumber,
-            "Benchmark JSON should include native CPU time"
+        let cpuMedianMs = try XCTUnwrap(
+            resources["cpu_median_ms"] as? NSNumber,
+            "Benchmark JSON should include median CPU time"
         )
         XCTAssertGreaterThan(
-            elapsedCpuMs.uint64Value,
+            cpuMedianMs.uint64Value,
             0,
-            "Benchmark JSON should include a positive native CPU time"
+            "Benchmark JSON should include a positive median CPU time"
         )
         let peakMemoryKb = try XCTUnwrap(
             resources["peak_memory_kb"] as? NSNumber,

@@ -1090,6 +1090,8 @@ struct BenchmarkStats {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 struct BenchmarkResourceUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
+    cpu_median_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     cpu_total_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     peak_memory_kb: Option<u64>,
@@ -5123,7 +5125,8 @@ fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
 
 impl BenchmarkResourceUsage {
     fn is_empty(&self) -> bool {
-        self.cpu_total_ms.is_none()
+        self.cpu_median_ms.is_none()
+            && self.cpu_total_ms.is_none()
             && self.peak_memory_kb.is_none()
             && self.total_pss_kb.is_none()
             && self.private_dirty_kb.is_none()
@@ -5165,6 +5168,9 @@ fn extract_benchmark_resource_usage(
     perf_metrics: Option<&browserstack::PerformanceMetrics>,
 ) -> Option<BenchmarkResourceUsage> {
     let resources = entry.get("resources");
+    let cpu_median_ms = resources
+        .and_then(|res| res.get("cpu_median_ms"))
+        .and_then(json_value_to_u64);
     let cpu_total_ms = resources
         .and_then(|res| res.get("elapsed_cpu_ms"))
         .and_then(json_value_to_u64);
@@ -5195,6 +5201,7 @@ fn extract_benchmark_resource_usage(
         });
 
     let resource_usage = BenchmarkResourceUsage {
+        cpu_median_ms,
         cpu_total_ms,
         peak_memory_kb,
         total_pss_kb,
@@ -5310,7 +5317,7 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
         if has_resource_usage {
             let _ = writeln!(
                 output,
-                "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) | CPU total (ms) | Peak memory |"
+                "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) | CPU median (ms) | Peak memory |"
             );
             let _ = writeln!(
                 output,
@@ -5326,10 +5333,10 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
 
         for bench in &device.benchmarks {
             if has_resource_usage {
-                let (cpu_total_ms, peak_memory) =
+                let (cpu_median_ms, peak_memory) =
                     if let Some(resource_usage) = &bench.resource_usage {
                         (
-                            summarize::format_cpu_total_ms(resource_usage.cpu_total_ms),
+                            summarize::format_cpu_median_ms(resource_usage.cpu_median_ms),
                             summarize::format_peak_memory(resource_usage.peak_memory_kb),
                         )
                     } else {
@@ -5346,7 +5353,7 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
                     format_ms(bench.p95_ns),
                     format_ms(bench.min_ns),
                     format_ms(bench.max_ns),
-                    cpu_total_ms,
+                    cpu_median_ms,
                     peak_memory,
                 );
             } else {
@@ -9394,7 +9401,7 @@ mod ci_merge_tests {
                                 "min_ns": 100,
                                 "max_ns": 100,
                                 "resource_usage": {
-                                    "cpu_total_ms": 482,
+                                    "cpu_median_ms": 482,
                                     "peak_memory_kb": 654321,
                                     "total_pss_kb": 654321
                                 }
@@ -9418,7 +9425,7 @@ mod ci_merge_tests {
             .find(|benchmark| benchmark["function"] == "bench_a")
             .expect("bench_a");
 
-        assert_eq!(bench_a["resource_usage"]["cpu_total_ms"], 482);
+        assert_eq!(bench_a["resource_usage"]["cpu_median_ms"], 482);
         assert_eq!(bench_a["resource_usage"]["peak_memory_kb"], 654321);
     }
 
@@ -9514,7 +9521,7 @@ mod ci_merge_tests {
                         min_ns: Some(16_000),
                         max_ns: Some(19_000),
                         resource_usage: Some(BenchmarkResourceUsage {
-                            cpu_total_ms: Some(482),
+                            cpu_median_ms: Some(482),
                             peak_memory_kb: Some(654_321),
                             ..Default::default()
                         }),
@@ -9528,7 +9535,7 @@ mod ci_merge_tests {
                         min_ns: Some(20_000),
                         max_ns: Some(23_000),
                         resource_usage: Some(BenchmarkResourceUsage {
-                            cpu_total_ms: Some(51),
+                            cpu_median_ms: Some(51),
                             peak_memory_kb: None,
                             ..Default::default()
                         }),
@@ -9547,7 +9554,7 @@ mod ci_merge_tests {
             }],
         });
 
-        assert!(markdown.contains("CPU total (ms)"));
+        assert!(markdown.contains("CPU median (ms)"));
         assert!(markdown.contains("Peak memory"));
         assert!(markdown.contains("638.99 MB"));
         assert!(markdown.contains("| 51 | — |"));
@@ -9582,7 +9589,7 @@ mod ci_merge_tests {
         assert!(markdown.contains(
             "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
         ));
-        assert!(!markdown.contains("CPU total (ms)"));
+        assert!(!markdown.contains("CPU median (ms)"));
         assert!(!markdown.contains("Peak memory"));
     }
 
@@ -9811,7 +9818,7 @@ mod ci_merge_tests {
                                 "min_ns": 95_u64,
                                 "max_ns": 100_u64,
                                 "resource_usage": {
-                                    "cpu_total_ms": 482,
+                                    "cpu_median_ms": 482,
                                     "peak_memory_kb": 654321,
                                     "total_pss_kb": 654321
                                 }
@@ -9839,7 +9846,7 @@ mod ci_merge_tests {
                                         "min_ns": 95_u64,
                                         "max_ns": 100_u64,
                                         "resource_usage": {
-                                            "cpu_total_ms": 482,
+                                            "cpu_median_ms": 482,
                                             "peak_memory_kb": 654321,
                                             "total_pss_kb": 654321
                                         }
@@ -9924,7 +9931,7 @@ mod ci_merge_tests {
 
         assert!(markdown.contains("## android"));
         assert!(markdown.contains("## ios"));
-        assert!(markdown.contains("CPU total (ms)"));
+        assert!(markdown.contains("CPU median (ms)"));
         assert!(markdown.contains("Peak memory"));
         assert!(markdown.contains("638.99 MB"));
         assert!(markdown.contains("![alpha](plots/alpha.svg)"));
@@ -9959,7 +9966,7 @@ mod ci_merge_tests {
                         { "duration_ns": 130000000_u64 }
                     ],
                     "resources": {
-                        "elapsed_cpu_ms": 482,
+                        "cpu_median_ms": 482,
                         "total_pss_kb": 654321,
                         "private_dirty_kb": 321000,
                         "native_heap_kb": 120000,
@@ -9974,7 +9981,7 @@ mod ci_merge_tests {
         let value = serde_json::to_value(summary).expect("serialize summary");
         let resource_usage = &value["device_summaries"][0]["benchmarks"][0]["resource_usage"];
 
-        assert_eq!(resource_usage["cpu_total_ms"], 482);
+        assert_eq!(resource_usage["cpu_median_ms"], 482);
         assert_eq!(resource_usage["peak_memory_kb"], 654321);
         assert_eq!(resource_usage["total_pss_kb"], 654321);
         assert_eq!(resource_usage["private_dirty_kb"], 321000);
@@ -10037,6 +10044,7 @@ mod ci_merge_tests {
         let resource_usage = &value["device_summaries"][0]["benchmarks"][0]["resource_usage"];
 
         assert_eq!(resource_usage["peak_memory_kb"], 249416);
+        assert_eq!(resource_usage["cpu_median_ms"], Value::Null);
         assert_eq!(resource_usage["cpu_total_ms"], Value::Null);
     }
 
@@ -10068,7 +10076,7 @@ mod ci_merge_tests {
                     ],
                     "resources": {
                         "platform": "ios",
-                        "elapsed_cpu_ms": 482,
+                        "cpu_median_ms": 482,
                         "peak_memory_kb": 249416
                     }
                 })],
@@ -10080,7 +10088,7 @@ mod ci_merge_tests {
         let value = serde_json::to_value(summary).expect("serialize summary");
         let resource_usage = &value["device_summaries"][0]["benchmarks"][0]["resource_usage"];
 
-        assert_eq!(resource_usage["cpu_total_ms"], 482);
+        assert_eq!(resource_usage["cpu_median_ms"], 482);
         assert_eq!(resource_usage["peak_memory_kb"], 249416);
     }
 }
@@ -10205,13 +10213,13 @@ mod resource_usage_tests {
     fn test_extract_resource_usage_reads_direct_peak_memory_field() {
         let entry = json!({
             "resources": {
-                "elapsed_cpu_ms": 482,
+                "cpu_median_ms": 482,
                 "peak_memory_kb": 249416
             }
         });
 
         let usage = extract_benchmark_resource_usage(&entry, None).unwrap();
-        assert_eq!(usage.cpu_total_ms, Some(482));
+        assert_eq!(usage.cpu_median_ms, Some(482));
         assert_eq!(usage.peak_memory_kb, Some(249416));
     }
 
@@ -10225,6 +10233,7 @@ mod resource_usage_tests {
     #[test]
     fn test_resource_usage_json_round_trip() {
         let usage = BenchmarkResourceUsage {
+            cpu_median_ms: Some(17),
             cpu_total_ms: Some(250),
             peak_memory_kb: Some(8192),
             total_pss_kb: Some(4096),
@@ -10236,6 +10245,7 @@ mod resource_usage_tests {
         let json_str = serde_json::to_string(&usage).unwrap();
         let deserialized: BenchmarkResourceUsage = serde_json::from_str(&json_str).unwrap();
 
+        assert_eq!(deserialized.cpu_median_ms, Some(17));
         assert_eq!(deserialized.cpu_total_ms, Some(250));
         assert_eq!(deserialized.peak_memory_kb, Some(8192));
         assert_eq!(deserialized.total_pss_kb, Some(4096));
