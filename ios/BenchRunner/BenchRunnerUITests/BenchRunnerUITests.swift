@@ -5,7 +5,7 @@ final class BenchRunnerUITests: XCTestCase {
     /// Maximum time to wait for benchmark completion (5 minutes for long benchmarks)
     private let benchmarkTimeout: TimeInterval = 300.0
 
-    func testLaunchAndCaptureBenchmarkReport() {
+    func testLaunchAndCaptureBenchmarkReport() throws {
         let app = XCUIApplication()
         app.launch()
 
@@ -55,7 +55,7 @@ final class BenchRunnerUITests: XCTestCase {
     }
 
     // Keep the old test name for backward compatibility
-    func testLaunchShowsBenchmarkReport() {
-        testLaunchAndCaptureBenchmarkReport()
+    func testLaunchShowsBenchmarkReport() throws {
+        try testLaunchAndCaptureBenchmarkReport()
     }
 }
