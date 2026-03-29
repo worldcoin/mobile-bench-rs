@@ -1060,13 +1060,15 @@ pub fn ensure_android_project_with_options(
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
     let library_name = crate_name.replace('-', "_");
-    if android_project_exists(output_dir)
-        && android_project_matches_library(output_dir, &library_name)
-    {
-        return Ok(());
+    let project_exists = android_project_exists(output_dir);
+    let project_matches = android_project_matches_library(output_dir, &library_name);
+    if project_exists && !project_matches {
+        println!("Existing Android scaffolding does not match library, regenerating...");
+    } else if project_exists {
+        println!("Refreshing generated Android scaffolding...");
+    } else {
+        println!("Android project not found, generating scaffolding...");
     }
-
-    println!("Android project not found, generating scaffolding...");
     let project_slug = crate_name.replace('-', "_");
 
     // Resolve the default function by auto-detecting from source
@@ -1546,6 +1548,39 @@ pub fn public_bench() {
         assert!(
             refreshed.contains("repeatUntilMs"),
             "refreshed ContentView.swift should contain repeat-until profiling support, got:\n{}",
+            refreshed
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_android_project_refreshes_existing_main_activity_template() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-android-refresh-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        ensure_android_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("initial Android project generation should succeed");
+
+        let main_activity_path =
+            temp_dir.join("android/app/src/main/java/dev/world/samplefns/MainActivity.kt");
+        assert!(main_activity_path.exists(), "MainActivity.kt should exist");
+
+        fs::write(&main_activity_path, "stale generated content").unwrap();
+
+        ensure_android_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("refreshing existing Android project should succeed");
+
+        let refreshed = fs::read_to_string(&main_activity_path).unwrap();
+        assert!(
+            refreshed.contains("cpu_median_ms"),
+            "refreshed MainActivity.kt should contain the latest CPU logging template, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("peak_memory_kb"),
+            "refreshed MainActivity.kt should contain measured peak memory logging, got:\n{}",
             refreshed
         );
 

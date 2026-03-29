@@ -138,6 +138,7 @@ class MainActivity : AppCompatActivity() {
         Debug.getMemoryInfo(memInfo)
         val resources = JSONObject()
         report.resourceUsage?.cpuMedianMs?.let { resources.put("cpu_median_ms", it.toLong()) }
+        report.resourceUsage?.peakMemoryKb?.let { resources.put("peak_memory_kb", it.toLong()) }
         resources.put("uptime_ms", SystemClock.elapsedRealtime())
         resources.put("total_pss_kb", memInfo.totalPss)
         resources.put("private_dirty_kb", memInfo.totalPrivateDirty)
