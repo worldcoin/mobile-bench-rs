@@ -55,12 +55,20 @@ pub struct SemanticPhase {
     pub duration_ns: u64,
 }
 
+/// Resource usage aggregated across measured benchmark iterations.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct BenchResourceUsage {
+    pub cpu_median_ms: Option<u64>,
+    pub peak_memory_kb: Option<u64>,
+}
+
 /// Complete benchmark report with spec and timing samples.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchReport {
     pub spec: BenchSpec,
     pub samples: Vec<BenchSample>,
     pub phases: Vec<SemanticPhase>,
+    pub resource_usage: Option<BenchResourceUsage>,
 }
 
 /// Error types for benchmark operations.
@@ -118,12 +126,22 @@ impl From<mobench_sdk::SemanticPhase> for SemanticPhase {
     }
 }
 
+impl From<mobench_sdk::BenchResourceUsage> for BenchResourceUsage {
+    fn from(resource_usage: mobench_sdk::BenchResourceUsage) -> Self {
+        Self {
+            cpu_median_ms: resource_usage.cpu_median_ms,
+            peak_memory_kb: resource_usage.peak_memory_kb,
+        }
+    }
+}
+
 impl From<mobench_sdk::RunnerReport> for BenchReport {
     fn from(report: mobench_sdk::RunnerReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
             phases: report.phases.into_iter().map(Into::into).collect(),
+            resource_usage: report.resource_usage.map(Into::into),
         }
     }
 }
