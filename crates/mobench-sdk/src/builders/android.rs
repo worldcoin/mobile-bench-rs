@@ -577,7 +577,8 @@ impl AndroidBuilder {
         let crate_dir = self.find_crate_dir()?;
         let crate_name_underscored = self.crate_name.replace("-", "_");
 
-        // Check if bindings already exist (for repository testing with pre-generated bindings)
+        // Prefer fresh bindings so schema changes in BenchReport stay in sync with Android apps.
+        // Fall back to pre-generated bindings only when regeneration tooling is unavailable.
         let bindings_path = self
             .output_dir
             .join("android")
@@ -588,12 +589,12 @@ impl AndroidBuilder {
             .join("uniffi")
             .join(&crate_name_underscored)
             .join(format!("{}.kt", crate_name_underscored));
-
-        if bindings_path.exists() {
-            if self.verbose {
-                println!("  Using existing Kotlin bindings at {:?}", bindings_path);
-            }
-            return Ok(());
+        let had_existing_bindings = bindings_path.exists();
+        if had_existing_bindings && self.verbose {
+            println!(
+                "  Found existing Kotlin bindings at {:?}; regenerating to keep the UniFFI schema current",
+                bindings_path
+            );
         }
 
         // Build host library to feed uniffi-bindgen
@@ -610,6 +611,13 @@ impl AndroidBuilder {
             .join("src")
             .join("main")
             .join("java");
+        fs::create_dir_all(&out_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create Kotlin bindings dir at {}: {}. Check output directory permissions.",
+                out_dir.display(),
+                e
+            ))
+        })?;
 
         // Try cargo run first (works if crate has uniffi-bindgen binary target)
         let cargo_run_result = Command::new("cargo")
@@ -649,6 +657,15 @@ impl AndroidBuilder {
                 .unwrap_or(false);
 
             if !uniffi_available {
+                if had_existing_bindings {
+                    if self.verbose {
+                        println!(
+                            "  Warning: uniffi-bindgen is unavailable; keeping existing Kotlin bindings at {:?}",
+                            bindings_path
+                        );
+                    }
+                    return Ok(());
+                }
                 return Err(BenchError::Build(
                     "uniffi-bindgen not found and no pre-generated bindings exist.\n\n\
                      To fix this, either:\n\
@@ -671,7 +688,18 @@ impl AndroidBuilder {
                 .arg("kotlin")
                 .arg("--out-dir")
                 .arg(&out_dir);
-            run_command(cmd, "uniffi-bindgen kotlin")?;
+            if let Err(error) = run_command(cmd, "uniffi-bindgen kotlin") {
+                if had_existing_bindings {
+                    if self.verbose {
+                        println!(
+                            "  Warning: failed to regenerate Kotlin bindings ({error}); keeping existing bindings at {:?}",
+                            bindings_path
+                        );
+                    }
+                    return Ok(());
+                }
+                return Err(error);
+            }
         }
 
         if self.verbose {
@@ -1428,6 +1456,39 @@ fn parse_android_native_offset_frame(frame: &str) -> Option<(&str, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl Into<OsString>) -> Self {
+            let original = std::env::var_os(key);
+            // SAFETY: Tests serialize environment mutation through `env_lock()`.
+            unsafe { std::env::set_var(key, value.into()) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                // SAFETY: Tests serialize environment mutation through `env_lock()`.
+                unsafe { std::env::set_var(self.key, value) };
+            } else {
+                // SAFETY: Tests serialize environment mutation through `env_lock()`.
+                unsafe { std::env::remove_var(self.key) };
+            }
+        }
+    }
 
     #[test]
     fn test_android_builder_creation() {
@@ -1450,6 +1511,104 @@ mod tests {
         let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile")
             .output_dir("/custom/output");
         assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
+    }
+
+    #[test]
+    fn generate_uniffi_bindings_regenerates_existing_kotlin_bindings_when_tooling_is_available() {
+        let _env_guard = env_lock().lock().unwrap();
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "mobench-android-bindings-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        let crate_dir = temp_dir.join("crate");
+        let output_dir = temp_dir.join("output");
+        let bin_dir = temp_dir.join("bin");
+        let bindings_path = output_dir
+            .join("android/app/src/main/java/uniffi/ffi_benchmark/ffi_benchmark.kt");
+        let target_dir = crate_dir.join("target");
+        let lib_name = if cfg!(target_os = "macos") {
+            "libffi_benchmark.dylib"
+        } else {
+            "libffi_benchmark.so"
+        };
+
+        fs::create_dir_all(&crate_dir).unwrap();
+        fs::create_dir_all(bindings_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(
+            crate_dir.join("Cargo.toml"),
+            r#"[package]
+name = "ffi-benchmark"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+        fs::write(&bindings_path, "stale kotlin bindings").unwrap();
+
+        let cargo_path = bin_dir.join("cargo");
+        let cargo_script = format!(
+            "#!/bin/sh\n\
+set -eu\n\
+if [ \"$1\" = \"metadata\" ]; then\n\
+  printf '{{\"target_directory\":\"{}\"}}\\n'\n\
+  exit 0\n\
+fi\n\
+if [ \"$1\" = \"build\" ]; then\n\
+  mkdir -p '{}'\n\
+  : > '{}'\n\
+  exit 0\n\
+fi\n\
+if [ \"$1\" = \"run\" ]; then\n\
+  out_dir=''\n\
+  while [ \"$#\" -gt 0 ]; do\n\
+    if [ \"$1\" = \"--out-dir\" ]; then\n\
+      out_dir=\"$2\"\n\
+      break\n\
+    fi\n\
+    shift\n\
+  done\n\
+  mkdir -p \"$out_dir/uniffi/ffi_benchmark\"\n\
+  printf '%s' 'fresh kotlin bindings' > \"$out_dir/uniffi/ffi_benchmark/ffi_benchmark.kt\"\n\
+  exit 0\n\
+fi\n\
+echo \"unexpected cargo invocation: $@\" >&2\n\
+exit 1\n",
+            target_dir.display(),
+            target_dir.join("debug").display(),
+            target_dir.join("debug").join(lib_name).display(),
+        );
+        fs::write(&cargo_path, cargo_script).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&cargo_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&cargo_path, perms).unwrap();
+        }
+
+        let original_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut combined_path = OsString::from(bin_dir.as_os_str());
+        if !original_path.is_empty() {
+            combined_path.push(std::ffi::OsStr::new(":"));
+            combined_path.push(&original_path);
+        }
+        let _path_guard = EnvVarGuard::set("PATH", combined_path);
+
+        let builder = AndroidBuilder::new(&crate_dir, "ffi-benchmark")
+            .crate_dir(&crate_dir)
+            .output_dir(&output_dir);
+        builder.generate_uniffi_bindings().unwrap();
+
+        let generated = fs::read_to_string(&bindings_path).unwrap();
+        assert_eq!(generated, "fresh kotlin bindings");
+
+        fs::remove_dir_all(&temp_dir).ok();
     }
 
     #[test]
