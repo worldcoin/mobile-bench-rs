@@ -529,7 +529,7 @@ impl ResourceUsageCollector {
         };
         let resource_usage = Some(BenchResourceUsage {
             cpu_median_ms,
-            peak_memory_kb: self.peak_memory_kb.filter(|peak_memory_kb| *peak_memory_kb > 0),
+            peak_memory_kb: self.peak_memory_kb,
         });
         self.current_iteration_cpu_start_ms = None;
         self.cpu_samples_ms.clear();
@@ -1067,7 +1067,22 @@ fn platform_current_process_memory_kb() -> Option<u64> {
     Some(info.ri_phys_footprint / 1024)
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+#[cfg(target_os = "android")]
+fn platform_current_process_memory_kb() -> Option<u64> {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| parse_proc_status_memory_kb(&status))
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn parse_proc_status_memory_kb(status: &str) -> Option<u64> {
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?;
+        value.split_whitespace().next()?.parse().ok()
+    })
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
 fn platform_current_process_memory_kb() -> Option<u64> {
     None
 }
@@ -1319,6 +1334,23 @@ mod tests {
     }
 
     #[test]
+    fn measured_peak_memory_preserves_zero_delta() {
+        let _guard = TestMemorySamplesGuard;
+        set_test_memory_samples_kb([Some(100), Some(100), Some(100)]);
+
+        let spec = BenchSpec::new("mem-zero", 1, 0).unwrap();
+        let report = run_closure(spec, || Ok(())).unwrap();
+
+        assert_eq!(
+            report.resource_usage,
+            Some(BenchResourceUsage {
+                cpu_median_ms: None,
+                peak_memory_kb: Some(0),
+            })
+        );
+    }
+
+    #[test]
     fn measured_cpu_median_uses_per_iteration_deltas_only() {
         let _guard = TestMemorySamplesGuard;
         set_test_memory_samples_kb([Some(100); 7]);
@@ -1338,7 +1370,7 @@ mod tests {
             report.resource_usage,
             Some(BenchResourceUsage {
                 cpu_median_ms: Some(12),
-                peak_memory_kb: None,
+                peak_memory_kb: Some(0),
             })
         );
     }
@@ -1364,9 +1396,30 @@ mod tests {
             report.resource_usage,
             Some(BenchResourceUsage {
                 cpu_median_ms: Some(8),
-                peak_memory_kb: None,
+                peak_memory_kb: Some(0),
             })
         );
+    }
+
+    #[test]
+    fn parse_proc_status_memory_kb_reads_vm_rss() {
+        let status = "\
+Name:\ttest\n\
+VmPeak:\t   90304 kB\n\
+VmRSS:\t   21537 kB\n\
+RssAnon:\t   10144 kB\n";
+
+        assert_eq!(parse_proc_status_memory_kb(status), Some(21_537));
+    }
+
+    #[test]
+    fn parse_proc_status_memory_kb_returns_none_without_vm_rss() {
+        let status = "\
+Name:\ttest\n\
+VmPeak:\t   90304 kB\n\
+VmHWM:\t   24000 kB\n";
+
+        assert_eq!(parse_proc_status_memory_kb(status), None);
     }
 
     #[test]
