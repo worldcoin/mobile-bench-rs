@@ -102,6 +102,14 @@ pub struct BenchReportFfi {
     pub samples: Vec<BenchSampleFfi>,
     /// Optional semantic phase timings captured during measured iterations.
     pub phases: Vec<SemanticPhaseFfi>,
+    /// Optional resource usage scoped to measured iterations.
+    pub resource_usage: Option<BenchResourceUsageFfi>,
+}
+
+/// FFI-ready resource usage captured during measured iterations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchResourceUsageFfi {
+    pub peak_memory_kb: Option<u64>,
 }
 
 /// FFI-ready semantic phase timing.
@@ -126,6 +134,15 @@ impl From<crate::RunnerReport> for BenchReportFfi {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
             phases: report.phases.into_iter().map(Into::into).collect(),
+            resource_usage: report.resource_usage.map(Into::into),
+        }
+    }
+}
+
+impl From<crate::BenchResourceUsage> for BenchResourceUsageFfi {
+    fn from(resource_usage: crate::BenchResourceUsage) -> Self {
+        Self {
+            peak_memory_kb: resource_usage.peak_memory_kb,
         }
     }
 }
@@ -260,6 +277,7 @@ mod tests {
                 name: "prove".to_string(),
                 duration_ns: 300,
             }],
+            resource_usage: None,
         };
 
         let ffi: BenchReportFfi = report.into();

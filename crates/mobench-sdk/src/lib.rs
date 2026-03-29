@@ -383,7 +383,9 @@ pub use types::{BenchError, BenchSample, BenchSpec, RunnerReport};
 pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, NativeLibraryArtifact, Target};
 
 // Re-export timing types at the crate root for convenience
-pub use timing::{BenchSummary, SemanticPhase, TimingError, profile_phase, run_closure};
+pub use timing::{
+    BenchResourceUsage, BenchSummary, SemanticPhase, TimingError, profile_phase, run_closure,
+};
 
 /// Re-export of [`std::hint::black_box`] for preventing compiler optimizations.
 ///

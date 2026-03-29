@@ -476,12 +476,16 @@ fileprivate struct FfiConverterString: FfiConverter {
 public struct BenchReport {
     public var spec: BenchSpec
     public var samples: [BenchSample]
+    public var phases: [SemanticPhase]
+    public var resourceUsage: BenchResourceUsage?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(spec: BenchSpec, samples: [BenchSample]) {
+    public init(spec: BenchSpec, samples: [BenchSample], phases: [SemanticPhase], resourceUsage: BenchResourceUsage?) {
         self.spec = spec
         self.samples = samples
+        self.phases = phases
+        self.resourceUsage = resourceUsage
     }
 }
 
@@ -495,12 +499,20 @@ extension BenchReport: Equatable, Hashable {
         if lhs.samples != rhs.samples {
             return false
         }
+        if lhs.phases != rhs.phases {
+            return false
+        }
+        if lhs.resourceUsage != rhs.resourceUsage {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(spec)
         hasher.combine(samples)
+        hasher.combine(phases)
+        hasher.combine(resourceUsage)
     }
 }
 
@@ -513,13 +525,17 @@ public struct FfiConverterTypeBenchReport: FfiConverterRustBuffer {
         return
             try BenchReport(
                 spec: FfiConverterTypeBenchSpec.read(from: &buf), 
-                samples: FfiConverterSequenceTypeBenchSample.read(from: &buf)
+                samples: FfiConverterSequenceTypeBenchSample.read(from: &buf), 
+                phases: FfiConverterSequenceTypeSemanticPhase.read(from: &buf), 
+                resourceUsage: FfiConverterOptionTypeBenchResourceUsage.read(from: &buf)
         )
     }
 
     public static func write(_ value: BenchReport, into buf: inout [UInt8]) {
         FfiConverterTypeBenchSpec.write(value.spec, into: &buf)
         FfiConverterSequenceTypeBenchSample.write(value.samples, into: &buf)
+        FfiConverterSequenceTypeSemanticPhase.write(value.phases, into: &buf)
+        FfiConverterOptionTypeBenchResourceUsage.write(value.resourceUsage, into: &buf)
     }
 }
 
@@ -536,6 +552,64 @@ public func FfiConverterTypeBenchReport_lift(_ buf: RustBuffer) throws -> BenchR
 #endif
 public func FfiConverterTypeBenchReport_lower(_ value: BenchReport) -> RustBuffer {
     return FfiConverterTypeBenchReport.lower(value)
+}
+
+
+public struct BenchResourceUsage {
+    public var peakMemoryKb: UInt64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(peakMemoryKb: UInt64?) {
+        self.peakMemoryKb = peakMemoryKb
+    }
+}
+
+
+
+extension BenchResourceUsage: Equatable, Hashable {
+    public static func ==(lhs: BenchResourceUsage, rhs: BenchResourceUsage) -> Bool {
+        if lhs.peakMemoryKb != rhs.peakMemoryKb {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(peakMemoryKb)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBenchResourceUsage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BenchResourceUsage {
+        return
+            try BenchResourceUsage(
+                peakMemoryKb: FfiConverterOptionUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BenchResourceUsage, into buf: inout [UInt8]) {
+        FfiConverterOptionUInt64.write(value.peakMemoryKb, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBenchResourceUsage_lift(_ buf: RustBuffer) throws -> BenchResourceUsage {
+    return try FfiConverterTypeBenchResourceUsage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBenchResourceUsage_lower(_ value: BenchResourceUsage) -> RustBuffer {
+    return FfiConverterTypeBenchResourceUsage.lower(value)
 }
 
 
@@ -678,6 +752,75 @@ public func FfiConverterTypeBenchSpec_lower(_ value: BenchSpec) -> RustBuffer {
 
 
 /**
+ * Flat semantic phase timing captured during measured iterations.
+ */
+public struct SemanticPhase {
+    public var name: String
+    public var durationNs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, durationNs: UInt64) {
+        self.name = name
+        self.durationNs = durationNs
+    }
+}
+
+
+
+extension SemanticPhase: Equatable, Hashable {
+    public static func ==(lhs: SemanticPhase, rhs: SemanticPhase) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.durationNs != rhs.durationNs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(durationNs)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSemanticPhase: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SemanticPhase {
+        return
+            try SemanticPhase(
+                name: FfiConverterString.read(from: &buf), 
+                durationNs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SemanticPhase, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterUInt64.write(value.durationNs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticPhase_lift(_ buf: RustBuffer) throws -> SemanticPhase {
+    return try FfiConverterTypeSemanticPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticPhase_lower(_ value: SemanticPhase) -> RustBuffer {
+    return FfiConverterTypeSemanticPhase.lower(value)
+}
+
+
+/**
  * Error types for benchmark operations.
  */
 public enum BenchError {
@@ -753,6 +896,54 @@ extension BenchError: Foundation.LocalizedError {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeBenchResourceUsage: FfiConverterRustBuffer {
+    typealias SwiftType = BenchResourceUsage?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBenchResourceUsage.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBenchResourceUsage.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBenchSample: FfiConverterRustBuffer {
     typealias SwiftType = [BenchSample]
 
@@ -770,6 +961,31 @@ fileprivate struct FfiConverterSequenceTypeBenchSample: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeBenchSample.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSemanticPhase: FfiConverterRustBuffer {
+    typealias SwiftType = [SemanticPhase]
+
+    public static func write(_ value: [SemanticPhase], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSemanticPhase.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SemanticPhase] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SemanticPhase]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSemanticPhase.read(from: &buf))
         }
         return seq
     }

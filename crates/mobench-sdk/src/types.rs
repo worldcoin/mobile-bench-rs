@@ -18,7 +18,8 @@
 
 // Re-export timing types for convenience
 pub use crate::timing::{
-    BenchReport as RunnerReport, BenchSample, BenchSpec, BenchSummary, SemanticPhase,
+    BenchReport as RunnerReport, BenchResourceUsage, BenchSample, BenchSpec, BenchSummary,
+    SemanticPhase,
     TimingError as RunnerError,
 };
 

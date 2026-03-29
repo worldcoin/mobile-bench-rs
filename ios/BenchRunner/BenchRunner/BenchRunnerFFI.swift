@@ -275,7 +275,8 @@ enum BenchRunnerFFI {
         ) {
             resources["elapsed_cpu_ms"] = cpuTotalMs
         }
-        if let peakMemoryKb = afterResources.peakMemoryKb {
+        let measuredPeakMemoryKb = report.resourceUsage?.peakMemoryKb
+        if let peakMemoryKb = measuredPeakMemoryKb ?? afterResources.peakMemoryKb {
             resources["peak_memory_kb"] = peakMemoryKb
         }
         json["resources"] = resources

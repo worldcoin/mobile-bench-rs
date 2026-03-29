@@ -1021,7 +1021,9 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
  */
 data class BenchReport (
     var `spec`: BenchSpec, 
-    var `samples`: List<BenchSample>
+    var `samples`: List<BenchSample>, 
+    var `phases`: List<SemanticPhase>, 
+    var `resourceUsage`: BenchResourceUsage?
 ) {
     
     companion object
@@ -1035,17 +1037,51 @@ public object FfiConverterTypeBenchReport: FfiConverterRustBuffer<BenchReport> {
         return BenchReport(
             FfiConverterTypeBenchSpec.read(buf),
             FfiConverterSequenceTypeBenchSample.read(buf),
+            FfiConverterSequenceTypeSemanticPhase.read(buf),
+            FfiConverterOptionalTypeBenchResourceUsage.read(buf),
         )
     }
 
     override fun allocationSize(value: BenchReport) = (
             FfiConverterTypeBenchSpec.allocationSize(value.`spec`) +
-            FfiConverterSequenceTypeBenchSample.allocationSize(value.`samples`)
+            FfiConverterSequenceTypeBenchSample.allocationSize(value.`samples`) +
+            FfiConverterSequenceTypeSemanticPhase.allocationSize(value.`phases`) +
+            FfiConverterOptionalTypeBenchResourceUsage.allocationSize(value.`resourceUsage`)
     )
 
     override fun write(value: BenchReport, buf: ByteBuffer) {
             FfiConverterTypeBenchSpec.write(value.`spec`, buf)
             FfiConverterSequenceTypeBenchSample.write(value.`samples`, buf)
+            FfiConverterSequenceTypeSemanticPhase.write(value.`phases`, buf)
+            FfiConverterOptionalTypeBenchResourceUsage.write(value.`resourceUsage`, buf)
+    }
+}
+
+
+
+data class BenchResourceUsage (
+    var `peakMemoryKb`: kotlin.ULong?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBenchResourceUsage: FfiConverterRustBuffer<BenchResourceUsage> {
+    override fun read(buf: ByteBuffer): BenchResourceUsage {
+        return BenchResourceUsage(
+            FfiConverterOptionalULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BenchResourceUsage) = (
+            FfiConverterOptionalULong.allocationSize(value.`peakMemoryKb`)
+    )
+
+    override fun write(value: BenchResourceUsage, buf: ByteBuffer) {
+            FfiConverterOptionalULong.write(value.`peakMemoryKb`, buf)
     }
 }
 
@@ -1121,6 +1157,41 @@ public object FfiConverterTypeBenchSpec: FfiConverterRustBuffer<BenchSpec> {
 
 
 
+/**
+ * Flat semantic phase timing captured during measured iterations.
+ */
+data class SemanticPhase (
+    var `name`: kotlin.String, 
+    var `durationNs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSemanticPhase: FfiConverterRustBuffer<SemanticPhase> {
+    override fun read(buf: ByteBuffer): SemanticPhase {
+        return SemanticPhase(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SemanticPhase) = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterULong.allocationSize(value.`durationNs`)
+    )
+
+    override fun write(value: SemanticPhase, buf: ByteBuffer) {
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterULong.write(value.`durationNs`, buf)
+    }
+}
+
+
+
 
 
 /**
@@ -1184,6 +1255,70 @@ public object FfiConverterTypeBenchError : FfiConverterRustBuffer<BenchException
 /**
  * @suppress
  */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeBenchResourceUsage: FfiConverterRustBuffer<BenchResourceUsage?> {
+    override fun read(buf: ByteBuffer): BenchResourceUsage? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeBenchResourceUsage.read(buf)
+    }
+
+    override fun allocationSize(value: BenchResourceUsage?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeBenchResourceUsage.allocationSize(value)
+        }
+    }
+
+    override fun write(value: BenchResourceUsage?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeBenchResourceUsage.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeBenchSample: FfiConverterRustBuffer<List<BenchSample>> {
     override fun read(buf: ByteBuffer): List<BenchSample> {
         val len = buf.getInt()
@@ -1202,6 +1337,34 @@ public object FfiConverterSequenceTypeBenchSample: FfiConverterRustBuffer<List<B
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeBenchSample.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeSemanticPhase: FfiConverterRustBuffer<List<SemanticPhase>> {
+    override fun read(buf: ByteBuffer): List<SemanticPhase> {
+        val len = buf.getInt()
+        return List<SemanticPhase>(len) {
+            FfiConverterTypeSemanticPhase.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SemanticPhase>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSemanticPhase.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SemanticPhase>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSemanticPhase.write(it, buf)
         }
     }
 }
