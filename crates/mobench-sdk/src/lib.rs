@@ -375,12 +375,14 @@ pub use registry::{BenchFunction, discover_benchmarks, find_benchmark, list_benc
 pub use runner::{BenchmarkBuilder, run_benchmark};
 
 // Re-export types that are always available
-pub use types::{BenchError, BenchSample, BenchSpec, RunnerReport};
+pub use types::{BenchError, BenchSample, BenchSpec, HarnessTimelineSpan, RunnerReport};
 
 // Re-export types that require full feature
 #[cfg(feature = "full")]
 #[cfg_attr(docsrs, doc(cfg(feature = "full")))]
-pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, NativeLibraryArtifact, Target};
+pub use types::{
+    BuildConfig, BuildProfile, BuildResult, InitConfig, NativeLibraryArtifact, Target,
+};
 
 // Re-export timing types at the crate root for convenience
 pub use timing::{BenchSummary, SemanticPhase, TimingError, profile_phase, run_closure};

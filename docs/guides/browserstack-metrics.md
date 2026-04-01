@@ -2,6 +2,11 @@
 
 This document describes what device metrics BrowserStack provides and what we currently capture.
 
+This guide is about BrowserStack benchmark metrics, not native profiling. In
+the current release, BrowserStack remains a benchmark execution target for
+timing plus resource metrics. Native flamegraph/native stack capture is still
+local-only.
+
 ## Current Implementation
 
 ### ✅ What We Capture Now
@@ -31,15 +36,17 @@ We recursively download ALL URLs from session JSON, which typically includes:
 - Timing samples (duration_ns for each iteration)
 - Statistical metrics (mean, median, min, max, stddev)
 
-**Performance Metrics (v0.1.5+):**
+**Performance Metrics:**
 - Extracted from device logs (JSON output with `"type": "performance"` or `memory`/`cpu` fields)
+- Enriched from BrowserStack App Profiling v2 when that API returns additional session data
 - Memory usage (used_mb, max_mb, available_mb, total_mb)
   - Aggregate statistics: peak, average, min
 - CPU usage (usage_percent)
   - Aggregate statistics: peak, average, min
-- Automatically included in RunSummary when using `--fetch` flag
+- Normalized into run summaries and CI summaries when using `--fetch`
+- Surfaced as summary resource fields such as `cpu_total_ms` and `peak_memory_kb`
 
-### ⚠️ What We DON'T Capture (But BrowserStack Provides)
+### ⚠️ What We do not currently capture
 
 Based on [BrowserStack App Automate API documentation](https://www.browserstack.com/docs/app-automate/api-reference):
 
@@ -50,9 +57,10 @@ Based on [BrowserStack App Automate API documentation](https://www.browserstack.
 - `reason` - Failure reason if test failed
 - `build_tag` - Custom build tags
 
-**Performance Metrics:**
+**Performance metrics:**
 
-BrowserStack does NOT provide built-in CPU/Memory/Battery metrics in standard API responses. However, **mobench v0.1.5+ now supports extracting these metrics** if your app logs them:
+BrowserStack does not expose CPU/memory/battery metrics in the normal session
+JSON payloads. mobench therefore combines two sources when you use `--fetch`:
 
 1. **Collect metrics in your app** using Android/iOS APIs:
    - Android: `ActivityManager.MemoryInfo`, `Debug.MemoryInfo`
@@ -60,9 +68,9 @@ BrowserStack does NOT provide built-in CPU/Memory/Battery metrics in standard AP
 
 2. **Log to device logs** in JSON format (see example below)
 
-3. **mobench automatically extracts** them alongside benchmark results when using `--fetch`
+3. **mobench automatically extracts** them alongside benchmark results and merges in BrowserStack App Profiling v2 data when available
 
-## BrowserStack Limitations
+## BrowserStack limitations
 
 According to their documentation, BrowserStack App Automate **does not** provide:
 
@@ -71,7 +79,9 @@ According to their documentation, BrowserStack App Automate **does not** provide
 - ❌ Built-in battery/power profiling
 - ❌ Built-in frame rate/rendering metrics
 
-These metrics must be collected by **your application code** and logged.
+These metrics must either be collected by **your application code** and logged,
+or enriched from BrowserStack App Profiling v2 when that endpoint has data for a
+session. Neither path provides native stacks or flamegraphs.
 
 ## How to Add Performance Metrics
 
@@ -143,9 +153,7 @@ Ensure your app logs performance metrics as JSON to stdout/logcat:
 
 ### Step 3: Extract Metrics with mobench
 
-**✅ Implemented in v0.1.5+**
-
-mobench now automatically extracts both benchmark results and performance metrics:
+mobench automatically extracts both benchmark results and performance metrics:
 
 ```rust
 // Extracts benchmark results
@@ -260,9 +268,9 @@ For more comprehensive profiling, consider:
 
 For CI/benchmarking on BrowserStack:
 
-1. **Implement custom metric collection** in your app
-2. **Log metrics as JSON** to stdout/logcat
-3. **Use mobench `--fetch`** to extract performance metrics from logs
+1. **Implement custom metric collection** in your app for the metrics you care about most
+2. **Log metrics as JSON** to stdout/logcat so `mobench` can extract them deterministically
+3. **Use `mobench --fetch`** so device logs and App Profiling v2 enrichment both contribute to the final summary
 4. **Focus on metrics that matter** for your use case:
    - Memory: Peak usage, allocations during benchmark
    - CPU: Usage spikes during computation
@@ -282,3 +290,5 @@ grep '"type":"performance"' target/browserstack/*/session-*/device-logs.txt | jq
 - BrowserStack API Docs: https://www.browserstack.com/docs/app-automate/api-reference
 - Android MemoryInfo: https://developer.android.com/reference/android/app/ActivityManager.MemoryInfo
 - iOS Memory Profiling: https://developer.apple.com/documentation/foundation/task_management
+- [browserstack-ci.md](browserstack-ci.md): benchmark execution and CI usage
+- [fetch-results.md](fetch-results.md): fetch/output flow and artifact layout

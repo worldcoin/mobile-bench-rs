@@ -1,6 +1,6 @@
 # Technology Stack
 
-Updated: 2026-03-27
+Updated: 2026-04-01
 
 ## Languages
 
@@ -66,8 +66,10 @@ Profile outputs:
 - `summary.md`
 - raw capture artifacts (`sample.perf`, `sample.txt`, etc.)
 - processed stacks (`stacks.folded`, `native-report.txt`)
+- optional source links (`frame-locations.json` on Android)
 - viewer artifacts (`flamegraph.full.svg`, `flamegraph.focused.svg`, `flamegraph.html`)
 - semantic sidecar data (`artifacts/semantic/phases.json`)
+- differential bundles under `target/mobench/profile/diff/`
 
 ## Supported execution modes
 
@@ -77,4 +79,4 @@ Profile outputs:
 - Local iOS native profiling
 
 Explicitly not supported:
-- BrowserStack native profiling with retrievable flamegraph-capable artifacts
+- BrowserStack native profiling and retrievable flamegraph-capable artifacts

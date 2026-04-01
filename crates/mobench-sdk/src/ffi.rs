@@ -102,6 +102,8 @@ pub struct BenchReportFfi {
     pub samples: Vec<BenchSampleFfi>,
     /// Optional semantic phase timings captured during measured iterations.
     pub phases: Vec<SemanticPhaseFfi>,
+    /// Exact harness timeline spans in execution order.
+    pub timeline: Vec<HarnessTimelineSpanFfi>,
 }
 
 /// FFI-ready semantic phase timing.
@@ -120,12 +122,33 @@ impl From<crate::SemanticPhase> for SemanticPhaseFfi {
     }
 }
 
+/// FFI-ready exact harness timeline span.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarnessTimelineSpanFfi {
+    pub phase: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: u64,
+    pub iteration: Option<u32>,
+}
+
+impl From<crate::HarnessTimelineSpan> for HarnessTimelineSpanFfi {
+    fn from(span: crate::HarnessTimelineSpan) -> Self {
+        Self {
+            phase: span.phase,
+            start_offset_ns: span.start_offset_ns,
+            end_offset_ns: span.end_offset_ns,
+            iteration: span.iteration,
+        }
+    }
+}
+
 impl From<crate::RunnerReport> for BenchReportFfi {
     fn from(report: crate::RunnerReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
             phases: report.phases.into_iter().map(Into::into).collect(),
+            timeline: report.timeline.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -260,6 +283,12 @@ mod tests {
                 name: "prove".to_string(),
                 duration_ns: 300,
             }],
+            timeline: vec![crate::HarnessTimelineSpan {
+                phase: "measured-benchmark".to_string(),
+                start_offset_ns: 0,
+                end_offset_ns: 100,
+                iteration: Some(0),
+            }],
         };
 
         let ffi: BenchReportFfi = report.into();
@@ -268,6 +297,8 @@ mod tests {
         assert_eq!(ffi.samples[0].duration_ns, 100);
         assert_eq!(ffi.phases.len(), 1);
         assert_eq!(ffi.phases[0].name, "prove");
+        assert_eq!(ffi.timeline.len(), 1);
+        assert_eq!(ffi.timeline[0].phase, "measured-benchmark");
     }
 
     #[test]

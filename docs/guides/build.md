@@ -4,13 +4,13 @@ Complete build instructions for Android and iOS targets.
 
 Build commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to the legacy `bench-mobile/` layout. `build --progress` uses the same config-first resolution.
 
-> **For SDK Integrators**: Use the CLI commands:
+> **For SDK integrators**: use the CLI commands:
 > - `cargo mobench check --target android` (validate prerequisites first)
 > - `cargo mobench check --target ios` (validate prerequisites first)
 > - `cargo mobench build --target android`
 > - `cargo mobench build --target ios`
 >
-> See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide.
+> See [sdk-integration.md](sdk-integration.md) for the integration guide.
 
 ## Table of Contents
 - [Prerequisites Check](#prerequisites-check)
@@ -545,10 +545,13 @@ The expected local toolchain is:
 BrowserStack remains an execution target for benchmark runs, but native
 profiling through BrowserStack remains explicitly unsupported.
 
-## Additional Documentation
+For the full profiling workflow, artifact contract, symbol requirements, and
+overhead guidance, see [profiling.md](profiling.md).
 
-- **`TESTING.md`**: Comprehensive testing guide with troubleshooting
-- **`README.md`**: Project overview and quick start
-- **`CLAUDE.md`**: Developer guide for this codebase
-- **`docs/codebase/ARCHITECTURE.md`**: Current architecture reference
-- **`RELEASE_NOTES.md`**: Published release history and support status
+## Additional documentation
+
+- [testing.md](testing.md): comprehensive testing guide with troubleshooting
+- [../../README.md](../../README.md): project overview and quick start
+- [../../CLAUDE.md](../../CLAUDE.md): developer guide for this codebase
+- [../codebase/ARCHITECTURE.md](../codebase/ARCHITECTURE.md): current architecture reference
+- [../../RELEASE_NOTES.md](../../RELEASE_NOTES.md): published release history and support status

@@ -1,6 +1,6 @@
 # Testing
 
-Updated: 2026-03-27
+Updated: 2026-04-01
 
 ## Host-side Rust tests
 
@@ -67,6 +67,8 @@ Expected outputs:
 - `summary.md`
 - raw and processed native artifacts
 - `flamegraph.html`
+- `frame-locations.json` on Android when source metadata is available
+- `profile-diff.json` / `summary.md` under `target/mobench/profile/diff/` for differential comparisons
 
 ## Workflow-level testing
 

@@ -12,6 +12,10 @@ The BrowserStack client now supports:
 5. **Fetching results** - Download device logs and extract benchmark data
 6. **Result analysis** - Display summary statistics from reports
 
+This guide covers BrowserStack benchmark execution only. Native profiling remains
+local-first in the current release; `cargo mobench profile run --provider browserstack`
+is explicitly unsupported.
+
 ## Pre-flight Validation
 
 Before running benchmarks on BrowserStack, validate your setup:
@@ -500,7 +504,7 @@ cargo mobench summary results.json [--format text|json|csv]
 
 ## Next Steps
 
-- See `BROWSERSTACK_METRICS.md` for metrics and performance documentation
-- See `FETCH_RESULTS_GUIDE.md` for detailed fetch and summary workflows
+- See [browserstack-metrics.md](browserstack-metrics.md) for metrics and performance documentation
+- See [fetch-results.md](fetch-results.md) for detailed fetch and summary workflows
 - Check `crates/mobench/src/browserstack.rs` for full API documentation
 - Run `cargo doc --open -p mobench` for detailed API docs

@@ -1,6 +1,6 @@
 # Integrations
 
-Updated: 2026-03-27
+Updated: 2026-04-01
 
 ## BrowserStack
 
@@ -13,7 +13,7 @@ Purpose:
 Implementation:
 - client code lives in `crates/mobench/src/browserstack.rs`
 - auth uses `BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY`
-- benchmark CI workflows resolve device profiles through `cargo-mobench devices resolve`
+- benchmark CI workflows resolve device profiles through `cargo mobench devices resolve`
 
 Supported BrowserStack flows:
 - Android Espresso benchmark runs
@@ -23,6 +23,7 @@ Supported BrowserStack flows:
 
 Explicitly unsupported:
 - BrowserStack native profiling for `profile run`
+- retrievable BrowserStack flamegraph/native stack artifacts
 
 ## Local native profiling
 

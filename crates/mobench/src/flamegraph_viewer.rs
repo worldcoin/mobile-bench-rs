@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,11 +45,60 @@ impl ArtifactLink {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ViewerMetadataItem {
+    pub label: String,
+    pub value: String,
+}
+
+#[cfg(test)]
+impl ViewerMetadataItem {
+    pub(crate) fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ViewerHarnessTimelineSpan {
+    pub phase: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: u64,
+    pub iteration: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ViewerTraceEvent {
+    pub event_kind: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: Option<u64>,
+    pub frames: Vec<String>,
+    pub phase: Option<String>,
+    pub iteration: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ViewerTraceLane {
+    pub id: String,
+    pub label: String,
+    pub events: Vec<ViewerTraceEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct FrameSourceLink {
+    pub frame: String,
+    pub location: String,
+    pub href: String,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FlamegraphMode {
     Focused,
     Full,
+    Timeline,
 }
 
 impl FlamegraphMode {
@@ -56,6 +106,7 @@ impl FlamegraphMode {
         match self {
             Self::Focused => "focused",
             Self::Full => "full",
+            Self::Timeline => "timeline",
         }
     }
 }
@@ -63,12 +114,21 @@ impl FlamegraphMode {
 #[derive(Debug, Clone)]
 pub(crate) struct FlamegraphViewerDoc {
     pub title: String,
+    pub browser_title: String,
     pub full_svg_document: String,
     pub focused_svg_document: String,
     pub full_summary: ModeSummary,
     pub focused_summary: ModeSummary,
+    pub sampled_duration_secs: Option<f64>,
+    pub run_metadata: Vec<ViewerMetadataItem>,
+    pub harness_timeline: Vec<ViewerHarnessTimelineSpan>,
+    pub timeline_lanes: Vec<ViewerTraceLane>,
+    pub timeline_total_duration_ns: Option<u64>,
+    pub timeline_note: Option<String>,
     pub default_mode: FlamegraphMode,
     pub artifact_links: Vec<ArtifactLink>,
+    pub source_links: Vec<FrameSourceLink>,
+    pub source_link_note: Option<String>,
 }
 
 pub(crate) fn derive_benchmark_focused_folded_stacks(
@@ -152,16 +212,18 @@ pub(crate) fn summarize_folded_stacks(
 }
 
 pub(crate) fn count_folded_stack_lines(folded: &str) -> usize {
-    folded.lines().filter(|line| !line.trim().is_empty()).count()
+    folded
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
 }
 
-pub(crate) fn render_standalone_flamegraph_svg(
-    folded_stacks: &str,
-    title: &str,
-) -> Result<String> {
+pub(crate) fn render_standalone_flamegraph_svg(folded_stacks: &str, title: &str) -> Result<String> {
     if folded_stacks.trim().is_empty() {
-        return Ok("<!DOCTYPE html><html><body><p>No native frames were symbolized.</p></body></html>"
-            .into());
+        return Ok(
+            "<!DOCTYPE html><html><body><p>No native frames were symbolized.</p></body></html>"
+                .into(),
+        );
     }
 
     let mut options = inferno::flamegraph::Options::default();
@@ -178,7 +240,11 @@ pub(crate) fn render_standalone_flamegraph_svg(
 }
 
 pub(crate) fn render_flamegraph_viewer_html(doc: FlamegraphViewerDoc) -> String {
-    let default_mode = doc.default_mode.as_str();
+    let template = include_str!("flamegraph_viewer_template.html");
+    let default_mode = escape_json_for_inline_script(
+        &serde_json::to_string(doc.default_mode.as_str())
+            .expect("serialize default flamegraph mode"),
+    );
     let full_svg = escape_json_for_inline_script(
         &serde_json::to_string(&doc.full_svg_document).expect("serialize full svg"),
     );
@@ -194,666 +260,146 @@ pub(crate) fn render_flamegraph_viewer_html(doc: FlamegraphViewerDoc) -> String 
     let artifact_links = escape_json_for_inline_script(
         &serde_json::to_string(&doc.artifact_links).expect("serialize flamegraph artifact links"),
     );
-    let default_mode_json = escape_json_for_inline_script(
-        &serde_json::to_string(default_mode).expect("serialize default flamegraph mode"),
+    let sampled_duration_secs = escape_json_for_inline_script(
+        &serde_json::to_string(&doc.sampled_duration_secs)
+            .expect("serialize sampled duration seconds"),
+    );
+    let harness_timeline = escape_json_for_inline_script(
+        &serde_json::to_string(&doc.harness_timeline).expect("serialize harness timeline"),
+    );
+    let timeline_lanes = escape_json_for_inline_script(
+        &serde_json::to_string(&doc.timeline_lanes).expect("serialize timeline lanes"),
+    );
+    let timeline_total_duration_ns = escape_json_for_inline_script(
+        &serde_json::to_string(&doc.timeline_total_duration_ns)
+            .expect("serialize timeline total duration"),
+    );
+    let timeline_note = escape_json_for_inline_script(
+        &serde_json::to_string(&doc.timeline_note).expect("serialize timeline note"),
+    );
+    let source_links = escape_json_for_inline_script(
+        &serde_json::to_string(&doc.source_links).expect("serialize source links"),
+    );
+    let source_link_note = escape_json_for_inline_script(
+        &serde_json::to_string(&doc.source_link_note).expect("serialize source link note"),
     );
 
+    template
+        .replace("__BROWSER_TITLE__", &escape_html(&doc.browser_title))
+        .replace("__VIEWER_TITLE__", &escape_html(&doc.title))
+        .replace(
+            "__RUN_METADATA_MARKUP__",
+            &render_run_metadata_markup(&doc.run_metadata),
+        )
+        .replace(
+            "__HARNESS_TIMELINE_MARKUP__",
+            &render_harness_timeline_markup(&doc.harness_timeline),
+        )
+        .replace("__DEFAULT_MODE__", &default_mode)
+        .replace("__FOCUSED_SVG__", &focused_svg)
+        .replace("__FULL_SVG__", &full_svg)
+        .replace("__FOCUSED_SUMMARY__", &focused_summary)
+        .replace("__FULL_SUMMARY__", &full_summary)
+        .replace("__ARTIFACT_LINKS__", &artifact_links)
+        .replace("__SAMPLED_DURATION_SECS__", &sampled_duration_secs)
+        .replace("__HARNESS_TIMELINE_JSON__", &harness_timeline)
+        .replace("__TIMELINE_LANES_JSON__", &timeline_lanes)
+        .replace(
+            "__TIMELINE_TOTAL_DURATION_NS__",
+            &timeline_total_duration_ns,
+        )
+        .replace("__TIMELINE_NOTE__", &timeline_note)
+        .replace("__SOURCE_LINKS__", &source_links)
+        .replace("__SOURCE_LINK_NOTE__", &source_link_note)
+}
+
+fn render_run_metadata_markup(items: &[ViewerMetadataItem]) -> String {
+    items.iter()
+        .map(|item| {
+            format!(
+                "<div class=\"run-metadata-item\"><span class=\"run-metadata-label\">{}</span><span class=\"run-metadata-value\">{}</span></div>",
+                escape_html(&item.label),
+                escape_html(&item.value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn render_harness_timeline_markup(spans: &[ViewerHarnessTimelineSpan]) -> String {
+    let total_duration_ns = spans
+        .iter()
+        .map(|span| span.end_offset_ns)
+        .max()
+        .unwrap_or(0);
+    let mut segments = String::new();
+    for span in spans {
+        let left = if total_duration_ns == 0 {
+            0.0
+        } else {
+            (span.start_offset_ns as f64 / total_duration_ns as f64) * 100.0
+        };
+        let width = if total_duration_ns == 0 {
+            100.0
+        } else {
+            (((span.end_offset_ns.saturating_sub(span.start_offset_ns)) as f64)
+                / total_duration_ns as f64)
+                * 100.0
+        };
+        let label = harness_phase_label(&span.phase, span.iteration);
+        let duration = format_duration_ns(span.end_offset_ns.saturating_sub(span.start_offset_ns));
+        let title = format!(
+            "{} · {} to {}",
+            label,
+            format_duration_ns(span.start_offset_ns),
+            format_duration_ns(span.end_offset_ns)
+        );
+        segments.push_str(&format!(
+            "<span class=\"harness-segment\" data-phase=\"{}\" style=\"left:{:.4}%;width:{:.4}%\" title=\"{}\"><span class=\"harness-segment-name\">{}</span><span class=\"harness-segment-duration\">{}</span></span>",
+            escape_html(&span.phase),
+            left,
+            width.max(0.5),
+            escape_html(&title),
+            escape_html(&label),
+            escape_html(&duration),
+        ));
+    }
+
     format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{title}</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --bg: #f3f1d6;
-      --panel: rgba(255,255,255,0.78);
-      --panel-border: rgba(80,66,17,0.18);
-      --text: #2d260f;
-      --muted: #6f6339;
-      --accent: #9a3f20;
-      --accent-soft: rgba(154,63,32,0.12);
-      --shadow: 0 18px 40px rgba(77, 58, 11, 0.12);
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      background:
-        radial-gradient(circle at top left, rgba(255,255,255,0.55), transparent 22rem),
-        linear-gradient(180deg, #f8f6df 0%, #efe8b4 100%);
-      color: var(--text);
-      font: 14px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }}
-    .viewer {{
-      min-height: 100vh;
-      display: grid;
-      grid-template-rows: auto auto 1fr;
-      gap: 12px;
-      padding: 16px;
-    }}
-    .toolbar, .summary, .sidebar {{
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(14px);
-      border-radius: 16px;
-    }}
-    .toolbar {{
-      position: sticky;
-      top: 0;
-      z-index: 5;
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 14px;
-    }}
-    .toolbar-group {{
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }}
-    .toolbar-title {{
-      font-size: 13px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-right: 6px;
-    }}
-    button {{
-      border: 1px solid rgba(80,66,17,0.16);
-      background: rgba(255,255,255,0.86);
-      color: var(--text);
-      border-radius: 999px;
-      padding: 8px 12px;
-      font: inherit;
-      cursor: pointer;
-      transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
-    }}
-    button:hover {{
-      background: white;
-      border-color: rgba(80,66,17,0.28);
-    }}
-    button:disabled {{
-      opacity: 0.45;
-      cursor: not-allowed;
-    }}
-    button.active {{
-      background: var(--accent);
-      border-color: var(--accent);
-      color: white;
-    }}
-    button.selection-active {{
-      background: #c3621f;
-      border-color: #c3621f;
-      color: white;
-    }}
-    .summary {{
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
-      padding: 12px 14px;
-    }}
-    .summary-item {{
-      min-width: 0;
-    }}
-    .summary-label {{
-      display: block;
-      font-size: 11px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 4px;
-    }}
-    .summary-value {{
-      font-size: 13px;
-      font-weight: 600;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }}
-    .workspace {{
-      min-height: 0;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 320px;
-      gap: 12px;
-    }}
-    .graph-panel {{
-      position: relative;
-      min-height: 0;
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      border-radius: 16px;
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }}
-    .graph-stage {{
-      position: relative;
-      height: calc(100vh - 190px);
-      min-height: 540px;
-    }}
-    iframe {{
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      border: 0;
-      background: transparent;
-    }}
-    iframe[hidden] {{
-      display: none;
-    }}
-    .selection-overlay {{
-      position: absolute;
-      inset: 0;
-      display: none;
-      cursor: crosshair;
-      background: transparent;
-      z-index: 2;
-    }}
-    .selection-overlay.active {{
-      display: block;
-    }}
-    .selection-box {{
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      border: 1px solid rgba(154,63,32,0.65);
-      background: rgba(154,63,32,0.12);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35);
-      pointer-events: none;
-      display: none;
-    }}
-    .selection-box.visible {{
-      display: block;
-    }}
-    .selection-hint {{
-      position: absolute;
-      right: 14px;
-      bottom: 14px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: rgba(45,38,15,0.72);
-      color: white;
-      font-size: 12px;
-      z-index: 3;
-      display: none;
-    }}
-    .selection-hint.active {{
-      display: block;
-    }}
-    .sidebar {{
-      padding: 14px;
-      overflow: auto;
-    }}
-    .sidebar h2 {{
-      margin: 0 0 10px 0;
-      font-size: 14px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--muted);
-    }}
-    .warning {{
-      margin-bottom: 12px;
-      padding: 10px 12px;
-      border-radius: 12px;
-      background: rgba(195,98,31,0.12);
-      color: #6f3415;
-      border: 1px solid rgba(195,98,31,0.18);
-    }}
-    .frame-list, .artifact-list {{
-      list-style: none;
-      padding: 0;
-      margin: 0;
-      display: grid;
-      gap: 8px;
-    }}
-    .frame-item, .artifact-item {{
-      border: 1px solid rgba(80,66,17,0.10);
-      border-radius: 12px;
-      padding: 10px 12px;
-      background: rgba(255,255,255,0.6);
-    }}
-    .frame-name {{
-      display: block;
-      font-weight: 600;
-      word-break: break-word;
-      margin-bottom: 4px;
-    }}
-    .frame-meta {{
-      font-size: 12px;
-      color: var(--muted);
-    }}
-    .artifact-link {{
-      color: #7a341a;
-      text-decoration: none;
-      font-weight: 600;
-      word-break: break-word;
-    }}
-    .artifact-link:hover {{
-      text-decoration: underline;
-    }}
-    @media (max-width: 1100px) {{
-      .workspace {{
-        grid-template-columns: 1fr;
-      }}
-      .sidebar {{
-        max-height: none;
-      }}
-    }}
-    @media (max-width: 800px) {{
-      .summary {{
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }}
-      .graph-stage {{
-        min-height: 420px;
-        height: calc(100vh - 250px);
-      }}
-    }}
-  </style>
-</head>
-<body>
-  <div class="viewer">
-    <header class="toolbar">
-      <div class="toolbar-group">
-        <span class="toolbar-title">{title}</span>
-        <button id="mode-focused" data-mode="focused" class="active">Benchmark Only</button>
-        <button id="mode-full" data-mode="full">Full Process</button>
-      </div>
-      <div class="toolbar-group">
-        <button id="viewer-select-range">Select Range</button>
-        <button id="viewer-back" data-history-scope="focused">Back</button>
-        <button id="viewer-forward" data-history-scope="focused">Forward</button>
-        <button id="viewer-reset">Reset</button>
-        <button id="viewer-search">Search</button>
-      </div>
-    </header>
-    <section class="summary">
-      <div class="summary-item">
-        <span class="summary-label">Mode</span>
-        <span class="summary-value" id="summary-mode">Benchmark Only</span>
-      </div>
-      <div class="summary-item">
-        <span class="summary-label">Current Root</span>
-        <span class="summary-value" id="summary-root">all</span>
-      </div>
-      <div class="summary-item">
-        <span class="summary-label">Visible Samples</span>
-        <span class="summary-value" id="summary-samples">-</span>
-      </div>
-      <div class="summary-item">
-        <span class="summary-label">Selection Width</span>
-        <span class="summary-value" id="summary-range">100%</span>
-      </div>
-    </section>
-    <div class="workspace">
-      <section class="graph-panel">
-        <div class="graph-stage" id="graph-stage">
-          <iframe id="frame-focused" title="Benchmark only flamegraph"></iframe>
-          <iframe id="frame-full" title="Full process flamegraph" hidden></iframe>
-          <div id="selection-overlay" class="selection-overlay">
-            <div id="selection-box" class="selection-box"></div>
-          </div>
-          <div id="selection-hint" class="selection-hint">Drag across the graph to zoom the current x-axis range</div>
-        </div>
-      </section>
-      <aside class="sidebar">
-        <div id="sidebar-warning"></div>
-        <h2>Self Time</h2>
-        <ul id="self-frame-list" class="frame-list"></ul>
-        <h2 style="margin-top:18px;">Inclusive Time</h2>
-        <ul id="inclusive-frame-list" class="frame-list"></ul>
-        <h2 style="margin-top:18px;">Artifacts</h2>
-        <ul id="artifact-list" class="artifact-list"></ul>
-      </aside>
-    </div>
-  </div>
-  <script>
-    const MOBENCH_DOCS = {{
-      focused: {focused_svg},
-      full: {full_svg},
-    }};
-    const MOBENCH_SUMMARIES = {{
-      focused: {focused_summary},
-      full: {full_summary},
-    }};
-    const MOBENCH_ARTIFACTS = {artifact_links};
-    const MOBENCH_LABELS = {{
-      focused: "Benchmark Only",
-      full: "Full Process",
-    }};
-    const MOBENCH_STATE = {{
-      activeMode: {default_mode_json},
-      selectionMode: false,
-      loaded: new Set(),
-      currentView: {{
-        focused: null,
-        full: null,
-      }},
-    }};
-
-    const frames = {{
-      focused: document.getElementById("frame-focused"),
-      full: document.getElementById("frame-full"),
-    }};
-    const modeButtons = {{
-      focused: document.getElementById("mode-focused"),
-      full: document.getElementById("mode-full"),
-    }};
-    const summaryMode = document.getElementById("summary-mode");
-    const summaryRoot = document.getElementById("summary-root");
-    const summarySamples = document.getElementById("summary-samples");
-    const summaryRange = document.getElementById("summary-range");
-    const backButton = document.getElementById("viewer-back");
-    const forwardButton = document.getElementById("viewer-forward");
-    const resetButton = document.getElementById("viewer-reset");
-    const searchButton = document.getElementById("viewer-search");
-    const selectionButton = document.getElementById("viewer-select-range");
-    const selectionOverlay = document.getElementById("selection-overlay");
-    const selectionBox = document.getElementById("selection-box");
-    const selectionHint = document.getElementById("selection-hint");
-    const sidebarWarning = document.getElementById("sidebar-warning");
-    const selfFrameList = document.getElementById("self-frame-list");
-    const inclusiveFrameList = document.getElementById("inclusive-frame-list");
-    const artifactList = document.getElementById("artifact-list");
-
-    let dragStartX = null;
-    let dragCurrentX = null;
-
-    function getActiveFrame() {{
-      return frames[MOBENCH_STATE.activeMode];
-    }}
-
-    function getActiveWindow() {{
-      const frame = getActiveFrame();
-      return frame && frame.contentWindow ? frame.contentWindow : null;
-    }}
-
-    function getFrameWindow(mode) {{
-      const frame = frames[mode];
-      return frame && frame.contentWindow ? frame.contentWindow : null;
-    }}
-
-    function getFrameDocument(mode) {{
-      const frame = frames[mode];
-      return frame && frame.contentDocument ? frame.contentDocument : null;
-    }}
-
-    function ensureFrameLoaded(mode) {{
-      if (MOBENCH_STATE.loaded.has(mode)) {{
-        return;
-      }}
-      frames[mode].srcdoc = MOBENCH_DOCS[mode];
-      MOBENCH_STATE.loaded.add(mode);
-    }}
-
-    function switchMode(mode) {{
-      MOBENCH_STATE.activeMode = mode;
-      frames.focused.hidden = mode !== "focused";
-      frames.full.hidden = mode !== "full";
-      modeButtons.focused.classList.toggle("active", mode === "focused");
-      modeButtons.full.classList.toggle("active", mode === "full");
-      backButton.dataset.historyScope = mode;
-      forwardButton.dataset.historyScope = mode;
-      ensureFrameLoaded(mode);
-      stopSelectionMode();
-      renderSidebar();
-      refreshSummary();
-    }}
-
-    function renderSidebar() {{
-      const summary = MOBENCH_SUMMARIES[MOBENCH_STATE.activeMode];
-      sidebarWarning.innerHTML = "";
-      if (summary.warning) {{
-        const warning = document.createElement("div");
-        warning.className = "warning";
-        warning.textContent = summary.warning;
-        sidebarWarning.appendChild(warning);
-      }}
-
-      selfFrameList.innerHTML = "";
-      for (const frame of summary.self_frames) {{
-        const item = document.createElement("li");
-        item.className = "frame-item";
-        item.innerHTML = `
-          <span class="frame-name">${{escapeHtml(frame.frame)}}</span>
-          <span class="frame-meta">${{frame.samples.toLocaleString()}} samples · ${{frame.percent_total}}% self</span>
-        `;
-        selfFrameList.appendChild(item);
-      }}
-
-      inclusiveFrameList.innerHTML = "";
-      for (const frame of summary.inclusive_frames) {{
-        const item = document.createElement("li");
-        item.className = "frame-item";
-        item.innerHTML = `
-          <span class="frame-name">${{escapeHtml(frame.frame)}}</span>
-          <span class="frame-meta">${{frame.samples.toLocaleString()}} samples · ${{frame.percent_total}}% inclusive</span>
-        `;
-        inclusiveFrameList.appendChild(item);
-      }}
-
-      artifactList.innerHTML = "";
-      for (const artifact of MOBENCH_ARTIFACTS) {{
-        const item = document.createElement("li");
-        item.className = "artifact-item";
-        item.innerHTML = `<a class="artifact-link" href="${{escapeAttribute(artifact.path)}}">${{escapeHtml(artifact.label)}}</a>`;
-        artifactList.appendChild(item);
-      }}
-    }}
-
-    function refreshSummary() {{
-      const summary = MOBENCH_SUMMARIES[MOBENCH_STATE.activeMode];
-      const current = MOBENCH_STATE.currentView[MOBENCH_STATE.activeMode];
-      summaryMode.textContent = MOBENCH_LABELS[MOBENCH_STATE.activeMode];
-      summaryRoot.textContent = current && current.label ? current.label : "all";
-      const visibleSamples = current && typeof current.width === "number"
-        ? current.width
-        : summary.total_samples;
-      summarySamples.textContent = visibleSamples.toLocaleString();
-      const percent = summary.total_samples > 0
-        ? Math.max(1, Math.round((visibleSamples / summary.total_samples) * 100))
-        : 100;
-      summaryRange.textContent = `${{percent}}%`;
-
-      const activeWindow = getActiveWindow();
-      backButton.disabled = !(activeWindow && activeWindow.mobenchCanGoBack && activeWindow.mobenchCanGoBack());
-      forwardButton.disabled = !(activeWindow && activeWindow.mobenchCanGoForward && activeWindow.mobenchCanGoForward());
-    }}
-
-    function escapeHtml(value) {{
-      return String(value)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/\"/g, "&quot;");
-    }}
-
-    function escapeAttribute(value) {{
-      return escapeHtml(value).replace(/'/g, "&#39;");
-    }}
-
-    function parsePercent(value) {{
-      return parseFloat(String(value || "0").replace("%", "")) || 0;
-    }}
-
-    function getVisibleSamplesForMode(mode) {{
-      const current = MOBENCH_STATE.currentView[mode];
-      if (current && typeof current.width === "number" && current.width > 0) {{
-        return current.width;
-      }}
-      return Math.max(1, MOBENCH_SUMMARIES[mode].total_samples || 1);
-    }}
-
-    function startSelectionMode() {{
-      MOBENCH_STATE.selectionMode = true;
-      selectionButton.classList.add("selection-active");
-      selectionOverlay.classList.add("active");
-      selectionHint.classList.add("active");
-    }}
-
-    function stopSelectionMode() {{
-      MOBENCH_STATE.selectionMode = false;
-      selectionButton.classList.remove("selection-active");
-      selectionOverlay.classList.remove("active");
-      selectionHint.classList.remove("active");
-      selectionBox.classList.remove("visible");
-      dragStartX = null;
-      dragCurrentX = null;
-    }}
-
-    function updateSelectionBox() {{
-      if (dragStartX == null || dragCurrentX == null) {{
-        selectionBox.classList.remove("visible");
-        return;
-      }}
-      const left = Math.min(dragStartX, dragCurrentX);
-      const right = Math.max(dragStartX, dragCurrentX);
-      selectionBox.classList.add("visible");
-      selectionBox.style.left = `${{left}}px`;
-      selectionBox.style.width = `${{Math.max(1, right - left)}}px`;
-    }}
-
-    selectionOverlay.addEventListener("pointerdown", (event) => {{
-      if (!MOBENCH_STATE.selectionMode) {{
-        return;
-      }}
-      event.preventDefault();
-      const rect = selectionOverlay.getBoundingClientRect();
-      dragStartX = event.clientX - rect.left;
-      dragCurrentX = dragStartX;
-      updateSelectionBox();
-      selectionOverlay.setPointerCapture(event.pointerId);
-    }});
-
-    selectionOverlay.addEventListener("pointermove", (event) => {{
-      if (!MOBENCH_STATE.selectionMode || dragStartX == null) {{
-        return;
-      }}
-      const rect = selectionOverlay.getBoundingClientRect();
-      dragCurrentX = Math.min(rect.width, Math.max(0, event.clientX - rect.left));
-      updateSelectionBox();
-    }});
-
-    selectionOverlay.addEventListener("pointerup", (event) => {{
-      if (!MOBENCH_STATE.selectionMode || dragStartX == null || dragCurrentX == null) {{
-        stopSelectionMode();
-        return;
-      }}
-      const activeWindow = getActiveWindow();
-      if (activeWindow && activeWindow.mobenchZoomVisibleFraction) {{
-        const rect = selectionOverlay.getBoundingClientRect();
-        const from = Math.min(dragStartX, dragCurrentX) / rect.width;
-        const to = Math.max(dragStartX, dragCurrentX) / rect.width;
-        activeWindow.mobenchZoomVisibleFraction(from, to);
-      }}
-      stopSelectionMode();
-    }});
-
-    selectionOverlay.addEventListener("pointercancel", () => {{
-      stopSelectionMode();
-    }});
-
-    selectionButton.addEventListener("click", () => {{
-      if (MOBENCH_STATE.selectionMode) {{
-        stopSelectionMode();
-      }} else {{
-        startSelectionMode();
-      }}
-    }});
-
-    backButton.addEventListener("click", () => {{
-      const activeWindow = getActiveWindow();
-      if (activeWindow && activeWindow.mobenchHistoryBack) {{
-        activeWindow.mobenchHistoryBack();
-      }}
-    }});
-
-    forwardButton.addEventListener("click", () => {{
-      const activeWindow = getActiveWindow();
-      if (activeWindow && activeWindow.mobenchHistoryForward) {{
-        activeWindow.mobenchHistoryForward();
-      }}
-    }});
-
-    resetButton.addEventListener("click", () => {{
-      const activeWindow = getActiveWindow();
-      if (activeWindow && activeWindow.mobenchResetView) {{
-        activeWindow.mobenchResetView();
-      }}
-    }});
-
-    searchButton.addEventListener("click", () => {{
-      const activeWindow = getActiveWindow();
-      if (!activeWindow || !activeWindow.mobenchSearch) {{
-        return;
-      }}
-      const term = window.prompt("Search current flamegraph mode (regexp allowed). Leave empty to clear search.", "");
-      if (term === null) {{
-        return;
-      }}
-      activeWindow.mobenchSearch(term);
-    }});
-
-    modeButtons.focused.addEventListener("click", () => switchMode("focused"));
-    modeButtons.full.addEventListener("click", () => switchMode("full"));
-
-    window.addEventListener("message", (event) => {{
-      if (!event.data || event.data.type !== "mobench:view-change") {{
-        return;
-      }}
-      const mode = event.source === frames.focused.contentWindow
-        ? "focused"
-        : event.source === frames.full.contentWindow
-        ? "full"
-        : null;
-      if (!mode) {{
-        return;
-      }}
-      MOBENCH_STATE.currentView[mode] = event.data;
-      if (mode === MOBENCH_STATE.activeMode) {{
-        refreshSummary();
-      }}
-    }});
-
-    frames.focused.addEventListener("load", () => {{
-      const win = frames.focused.contentWindow;
-      if (win && win.mobenchGetViewState) {{
-        MOBENCH_STATE.currentView.focused = win.mobenchGetViewState();
-        if (MOBENCH_STATE.activeMode === "focused") {{
-          refreshSummary();
-        }}
-      }}
-    }});
-
-    frames.full.addEventListener("load", () => {{
-      const win = frames.full.contentWindow;
-      if (win && win.mobenchGetViewState) {{
-        MOBENCH_STATE.currentView.full = win.mobenchGetViewState();
-        if (MOBENCH_STATE.activeMode === "full") {{
-          refreshSummary();
-        }}
-      }}
-    }});
-
-    ensureFrameLoaded("focused");
-    ensureFrameLoaded("full");
-    switchMode(MOBENCH_STATE.activeMode);
-  </script>
-</body>
-</html>"#,
-        title = escape_html(&doc.title),
-        focused_svg = focused_svg,
-        full_svg = full_svg,
-        focused_summary = focused_summary,
-        full_summary = full_summary,
-        artifact_links = artifact_links,
-        default_mode_json = default_mode_json
+        "<div class=\"harness-timeline-meta\"><span class=\"harness-timeline-title\">Harness Timeline</span><span class=\"harness-timeline-total\" id=\"harness-total\">Exact harness time · {}</span></div><div class=\"harness-track\" id=\"harness-track\">{}</div><div class=\"harness-track-scale\" id=\"harness-scale\"><span>0</span><span>{}</span></div><div class=\"harness-readout\" id=\"harness-readout\">Hover a harness segment to inspect its full label.</div>",
+        escape_html(&format_duration_ns(total_duration_ns)),
+        segments,
+        escape_html(&format_duration_ns(total_duration_ns)),
     )
+}
+
+fn harness_phase_label(phase: &str, iteration: Option<u32>) -> String {
+    let base = match phase {
+        "setup" => "Setup",
+        "fixture-setup" => "Fixture Setup",
+        "warmup-benchmark" => "Warmup",
+        "measured-benchmark" => "Bench Body",
+        "teardown" => "Teardown",
+        "fixture-teardown" => "Fixture Teardown",
+        "harness" => "Harness",
+        _ => phase,
+    };
+    match iteration {
+        Some(iteration) => format!("{base} #{}", iteration + 1),
+        None => base.to_string(),
+    }
+}
+
+fn format_duration_ns(ns: u64) -> String {
+    if ns >= 1_000_000_000 {
+        format!("{:.2} s", ns as f64 / 1_000_000_000.0)
+    } else if ns >= 1_000_000 {
+        format!("{:.2} ms", ns as f64 / 1_000_000.0)
+    } else if ns >= 1_000 {
+        format!("{:.2} µs", ns as f64 / 1_000.0)
+    } else {
+        format!("{ns} ns")
+    }
 }
 
 fn escape_json_for_inline_script(json: &str) -> String {
@@ -893,7 +439,7 @@ fn prettify_folded_stacks_for_display(folded_stacks: &str) -> String {
         if trimmed.is_empty() {
             continue;
         }
-        let Some((stack, count)) = split_folded_stack_line(trimmed) else {
+        let Some((stack, counts)) = split_folded_stack_counts(trimmed) else {
             lines.push(trimmed.to_string());
             continue;
         };
@@ -902,7 +448,7 @@ fn prettify_folded_stacks_for_display(folded_stacks: &str) -> String {
             .map(prettify_frame_label)
             .collect::<Vec<_>>()
             .join(";");
-        lines.push(format!("{pretty_stack} {count}"));
+        lines.push(format!("{pretty_stack} {counts}"));
     }
     lines.join("\n")
 }
@@ -937,7 +483,10 @@ fn prettify_frame_label(frame: &str) -> String {
     pretty
 }
 
-fn trim_stack_to_first_anchor<'a>(frames: &'a [&'a str], anchors: &[&str]) -> Option<&'a [&'a str]> {
+fn trim_stack_to_first_anchor<'a>(
+    frames: &'a [&'a str],
+    anchors: &[&str],
+) -> Option<&'a [&'a str]> {
     frames
         .iter()
         .position(|frame| anchors.iter().any(|anchor| frame.contains(anchor)))
@@ -948,6 +497,19 @@ fn split_folded_stack_line(line: &str) -> Option<(&str, u64)> {
     let split = line.rfind(' ')?;
     let count = line[split + 1..].parse().ok()?;
     Some((&line[..split], count))
+}
+
+fn split_folded_stack_counts(line: &str) -> Option<(&str, &str)> {
+    let (rest, last) = line.rsplit_once(' ')?;
+    if last.parse::<i64>().is_err() {
+        return None;
+    }
+    if let Some((stack, previous)) = rest.rsplit_once(' ')
+        && previous.parse::<i64>().is_ok()
+    {
+        return Some((stack, &line[stack.len() + 1..]));
+    }
+    Some((rest, last))
 }
 
 fn finalize_standalone_flamegraph_document(rendered: String) -> String {
@@ -962,7 +524,118 @@ fn finalize_standalone_flamegraph_document(rendered: String) -> String {
         "#unzoom { cursor:pointer; display:none; }\n#search, #matched, #details, #title { display:none; }",
         1,
     );
+    let rendered = retint_flamegraph_background(rendered);
+    let rendered = retint_flamegraph_palette(rendered);
     inject_svg_script(rendered, MOBENCH_SVG_HELPER_SCRIPT)
+}
+
+fn retint_flamegraph_background(document: String) -> String {
+    document
+        .replace(r##"stop-color="#eeeeee""##, r##"stop-color="#ffffff""##)
+        .replace(r##"stop-color="#eeeeb0""##, r##"stop-color="#ffffff""##)
+}
+
+fn retint_flamegraph_palette(document: String) -> String {
+    const NEEDLE: &str = r#"fill="rgb("#;
+    if !document.contains(NEEDLE) {
+        return document;
+    }
+
+    let mut output = String::with_capacity(document.len());
+    let mut cursor = 0usize;
+
+    while let Some(relative) = document[cursor..].find(NEEDLE) {
+        let start = cursor + relative;
+        output.push_str(&document[cursor..start]);
+        let value_start = start + NEEDLE.len();
+        let Some(value_end) = document[value_start..].find(")\"") else {
+            output.push_str(&document[start..]);
+            return output;
+        };
+        let value_end = value_start + value_end;
+        let raw = &document[value_start..value_end];
+        let replacement = parse_fill_rgb(raw)
+            .map(|rgb| flamegraph_fill_for_rgb(rgb, frame_title_for_fill(&document, start)))
+            .unwrap_or_else(|| format!(r#"fill="rgb({raw})""#));
+        output.push_str(&replacement);
+        cursor = value_end + 2;
+    }
+
+    output.push_str(&document[cursor..]);
+    output
+}
+
+fn frame_title_for_fill<'a>(document: &'a str, fill_start: usize) -> &'a str {
+    document[..fill_start]
+        .rfind("<title>")
+        .and_then(|title_start| {
+            let title_body_start = title_start + "<title>".len();
+            document[title_body_start..fill_start]
+                .find("</title>")
+                .map(|title_end| &document[title_body_start..title_body_start + title_end])
+        })
+        .unwrap_or("neutral-frame")
+}
+
+fn parse_fill_rgb(raw: &str) -> Option<(u8, u8, u8)> {
+    let mut parts = raw.split(',');
+    let r = parts.next()?.trim().parse().ok()?;
+    let g = parts.next()?.trim().parse().ok()?;
+    let b = parts.next()?.trim().parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((r, g, b))
+}
+
+fn flamegraph_fill_for_rgb(rgb: (u8, u8, u8), title: &str) -> String {
+    let (r, g, b) = rgb;
+    if rgb == (0, 0, 0) {
+        return format!(r#"fill="rgb({r},{g},{b})""#);
+    }
+
+    if is_neutral_fill(rgb) {
+        return neutral_frame_fill_for_title(title);
+    }
+
+    if r >= g && r >= b && r.saturating_sub(b) > 12 {
+        let palette = [(255, 107, 116), (255, 123, 122), (255, 139, 127)];
+        let shade = ((r as usize + g as usize + b as usize) / 48).min(palette.len() - 1);
+        let (nr, ng, nb) = palette[shade];
+        return format!(r#"fill="rgb({nr},{ng},{nb})""#);
+    }
+
+    if b >= r && b >= g && b.saturating_sub(r) > 8 {
+        let palette = [(255, 214, 194), (255, 202, 179), (255, 191, 164)];
+        let shade = ((r as usize + g as usize + b as usize) / 96).min(palette.len() - 1);
+        let (nr, ng, nb) = palette[shade];
+        return format!(r#"fill="rgb({nr},{ng},{nb})""#);
+    }
+
+    format!(r#"fill="rgb({r},{g},{b})""#)
+}
+
+fn is_neutral_fill((r, g, b): (u8, u8, u8)) -> bool {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    max >= 242 && max.saturating_sub(min) <= 10
+}
+
+fn neutral_frame_fill_for_title(title: &str) -> String {
+    const PALETTE: [(u8, u8, u8); 8] = [
+        (255, 107, 116),
+        (255, 166, 95),
+        (255, 178, 92),
+        (255, 194, 99),
+        (255, 220, 107),
+        (255, 208, 123),
+        (255, 156, 120),
+        (255, 189, 118),
+    ];
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    title.hash(&mut hasher);
+    let (r, g, b) = PALETTE[(hasher.finish() as usize) % PALETTE.len()];
+    format!(r#"fill="rgb({r},{g},{b})""#)
 }
 
 fn inject_svg_script(document: String, script: &str) -> String {
@@ -1212,6 +885,21 @@ const MOBENCH_SVG_HELPER_SCRIPT: &str = r#"
     return view.width < total;
   }
 
+  window.mobenchScrollToBase = function () {
+    function applyScroll() {
+      var doc = document.documentElement || document.body;
+      var body = document.body || document.documentElement;
+      var maxScroll = Math.max(
+        0,
+        (doc ? doc.scrollHeight : 0),
+        (body ? body.scrollHeight : 0)
+      ) - window.innerHeight;
+      window.scrollTo(0, Math.max(0, maxScroll));
+    }
+    applyScroll();
+    setTimeout(applyScroll, 0);
+  };
+
   window.mobenchResetView = function () {
     var view = {
       xmin: 0,
@@ -1325,6 +1013,7 @@ const MOBENCH_SVG_HELPER_SCRIPT: &str = r#"
   window.addEventListener("load", function () {
     setTimeout(function () {
       window.mobenchResetView();
+      window.mobenchScrollToBase();
     }, 0);
   });
 })();
@@ -1337,6 +1026,7 @@ mod tests {
     fn sample_doc() -> FlamegraphViewerDoc {
         FlamegraphViewerDoc {
             title: "iOS Native Profile".into(),
+            browser_title: "Mobench Flamegraph - mobile-bench-rs".into(),
             full_svg_document: "<svg id=\"full\"></svg>".into(),
             focused_svg_document: "<svg id=\"focused\"></svg>".into(),
             full_summary: ModeSummary {
@@ -1373,8 +1063,65 @@ mod tests {
                     percent_total: 100,
                 }],
             },
+            sampled_duration_secs: Some(10.0),
+            run_metadata: vec![
+                ViewerMetadataItem::new("Target", "ios"),
+                ViewerMetadataItem::new("Benchmark", "sample_fns::fibonacci"),
+                ViewerMetadataItem::new("Run ID", "ios-demo"),
+            ],
+            harness_timeline: vec![
+                ViewerHarnessTimelineSpan {
+                    phase: "setup".into(),
+                    start_offset_ns: 0,
+                    end_offset_ns: 100,
+                    iteration: None,
+                },
+                ViewerHarnessTimelineSpan {
+                    phase: "measured-benchmark".into(),
+                    start_offset_ns: 100,
+                    end_offset_ns: 300,
+                    iteration: Some(0),
+                },
+                ViewerHarnessTimelineSpan {
+                    phase: "teardown".into(),
+                    start_offset_ns: 300,
+                    end_offset_ns: 420,
+                    iteration: None,
+                },
+            ],
+            timeline_lanes: vec![ViewerTraceLane {
+                id: "main".into(),
+                label: "Main Thread".into(),
+                events: vec![
+                    ViewerTraceEvent {
+                        event_kind: "span".into(),
+                        start_offset_ns: 0,
+                        end_offset_ns: Some(100),
+                        frames: vec!["fixture::setup".into()],
+                        phase: Some("setup".into()),
+                        iteration: None,
+                    },
+                    ViewerTraceEvent {
+                        event_kind: "sample".into(),
+                        start_offset_ns: 140,
+                        end_offset_ns: None,
+                        frames: vec![
+                            "sample_fns::run_benchmark".into(),
+                            "sample_fns::fibonacci".into(),
+                        ],
+                        phase: Some("measured-benchmark".into()),
+                        iteration: Some(0),
+                    },
+                ],
+            }],
+            timeline_total_duration_ns: Some(420),
+            timeline_note: Some(
+                "Timeline shows exact harness chronology and available trace samples.".into(),
+            ),
             default_mode: FlamegraphMode::Focused,
             artifact_links: vec![ArtifactLink::new("native-report.txt", "native-report.txt")],
+            source_links: Vec::new(),
+            source_link_note: Some("Source links are unavailable in this fixture.".into()),
         }
     }
 
@@ -1416,7 +1163,10 @@ mod tests {
 
         let focused = derive_benchmark_focused_folded_stacks(
             folded,
-            &["sample_fns::run_benchmark", "mobench_sdk::timing::run_closure"],
+            &[
+                "sample_fns::run_benchmark",
+                "mobench_sdk::timing::run_closure",
+            ],
         );
 
         assert_eq!(
@@ -1429,12 +1179,28 @@ mod tests {
     fn standalone_viewer_html_embeds_full_and_focused_modes() {
         let html = render_flamegraph_viewer_html(sample_doc());
 
+        assert!(html.contains("rel=\"icon\""));
+        assert!(html.contains("data:image/svg+xml"));
+        assert!(html.contains("<title>Mobench Flamegraph - mobile-bench-rs</title>"));
+        assert!(html.contains("iOS Native Profile"));
         assert!(html.contains("Benchmark Only"));
         assert!(html.contains("Full Process"));
+        assert!(html.contains("Timeline"));
         assert!(html.contains("data-mode=\"focused\""));
         assert!(html.contains("data-mode=\"full\""));
+        assert!(html.contains("data-mode=\"timeline\""));
         assert!(html.contains("<svg id=\\\"full\\\"><\\/svg>"));
         assert!(html.contains("<svg id=\\\"focused\\\"><\\/svg>"));
+    }
+
+    #[test]
+    fn viewer_html_embeds_reference_palette_shell_tokens() {
+        let html = render_flamegraph_viewer_html(sample_doc());
+
+        assert!(html.contains("--accent: #ff6b74;"));
+        assert!(html.contains("--accent-strong: #f25c68;"));
+        assert!(html.contains("--bg: #fffdfb;"));
+        assert!(html.contains("font: 14px/1.45 \"Avenir Next\", \"SF Pro Display\""));
     }
 
     #[test]
@@ -1442,11 +1208,46 @@ mod tests {
         let html = render_flamegraph_viewer_html(sample_doc());
         assert!(html.contains("id=\"viewer-back\""));
         assert!(html.contains("id=\"viewer-forward\""));
+        assert!(html.contains("id=\"viewer-fullscreen\""));
+        assert!(html.contains("id=\"viewer-toggle-timeline\""));
+        assert!(html.contains("id=\"viewer-legend\""));
         assert!(html.contains("id=\"viewer-reset\""));
         assert!(html.contains("id=\"viewer-search\""));
-        assert!(html.contains("id=\"viewer-select-range\""));
+        assert!(html.contains("id=\"viewer-select-range\" hidden"));
         assert!(html.contains("id=\"selection-overlay\""));
-        assert!(html.contains("data-history-scope=\"focused\""));
+        assert!(html.contains("Drag across the graph to zoom. Double-click to step back one range. Press T to toggle the timeline. Press R to reset. Press F for fullscreen."));
+        assert!(html.contains("function stepBackCurrentRange()"));
+        assert!(html.contains("function requestStepBackCurrentRange()"));
+        assert!(html.contains("function stepForwardCurrentRange()"));
+        assert!(html.contains("function toggleFullscreenGraph(force)"));
+        assert!(html.contains("function toggleTimelineStrip(force)"));
+        assert!(html.contains("function toggleShortcutLegend(force)"));
+        assert!(html.contains("function showSelectionHintFor(durationMs)"));
+        assert!(html.contains("function scrollAggregateFrameToBase(mode)"));
+        assert!(html.contains("function resetZoomFully()"));
+        assert!(html.contains("function scrollActiveGraphSurface(deltaX, deltaY)"));
+        assert!(html.contains("function isRepeatedOverlayTap(event)"));
+        assert!(html.contains("window.addEventListener(\"keydown\""));
+        assert!(html.contains("id=\"shortcut-overlay\""));
+        assert!(
+            html.contains("Keyboard and graph gestures for moving around the profiler quickly.")
+        );
+        assert!(html.contains("shortcut-badge"));
+        assert!(html.contains("showSelectionHintFor(3000);"));
+        assert!(html.contains("event.key === \"1\""));
+        assert!(html.contains("event.key === \"2\""));
+        assert!(html.contains("event.key === \"3\""));
+        assert!(html.contains("event.key === \"t\" || event.key === \"T\""));
+        assert!(html.contains("event.key === \"j\" || event.key === \"J\""));
+        assert!(html.contains("event.key === \"k\" || event.key === \"K\""));
+        assert!(html.contains("event.key === \"f\" || event.key === \"F\""));
+        assert!(html.contains("event.key === \"Escape\" && fullscreenVisible()"));
+        assert!(html.contains("event.key === \"?\" || (event.key === \"/\" && event.shiftKey)"));
+        assert!(html.contains("selectionOverlay.addEventListener(\"wheel\""));
+        assert!(html.contains("selectionOverlay.addEventListener(\"dblclick\""));
+        assert!(html.contains("id=\"timeline-stage\""));
+        assert!(html.contains("body.graph-fullscreen .graph-axis"));
+        assert!(html.contains("body.graph-fullscreen .harness-timeline"));
         assert!(!html.contains("target=\"_blank\""));
     }
 
@@ -1471,13 +1272,37 @@ mod tests {
     }
 
     #[test]
+    fn viewer_html_restores_metadata_harness_and_sampled_time_shell() {
+        let html = render_flamegraph_viewer_html(sample_doc());
+
+        assert!(html.contains("Visible Duration"));
+        assert!(html.contains("id=\"run-metadata\""));
+        assert!(html.contains(
+            "grid-template-columns: repeat(var(--run-metadata-columns, 1), minmax(0, 1fr));"
+        ));
+        assert!(html.contains("function syncRunMetadataColumns()"));
+        assert!(html.contains("id=\"harness-timeline\""));
+        assert!(html.contains("id=\"harness-readout\""));
+        assert!(html.contains("id=\"graph-axis\""));
+        assert!(html.contains(".harness-timeline {\n      grid-row: 1;"));
+        assert!(html.contains(".graph-stage {\n      grid-row: 2;"));
+        assert!(html.contains(".graph-axis {\n      grid-row: 3;"));
+    }
+
+    #[test]
+    fn viewer_html_tracks_aggregate_dataset_separately_from_timeline_mode() {
+        let html = render_flamegraph_viewer_html(sample_doc());
+
+        assert!(html.contains("lastAggregateMode"));
+        assert!(html.contains("getAggregateDatasetMode"));
+        assert!(html.contains("savedAggregateViews"));
+        assert!(html.contains("syncAggregateWindowToTimelineView"));
+    }
+
+    #[test]
     fn summarize_folded_stacks_caps_inclusive_percent_for_repeated_frames() {
-        let summary = summarize_folded_stacks(
-            "root;repeat;repeat 4\nroot;repeat;leaf 1\n",
-            2,
-            0,
-            None,
-        );
+        let summary =
+            summarize_folded_stacks("root;repeat;repeat 4\nroot;repeat;leaf 1\n", 2, 0, None);
 
         let repeat = summary
             .inclusive_frames
@@ -1505,14 +1330,25 @@ mod tests {
             None,
         );
 
-        assert!(summary
-            .self_frames
-            .iter()
-            .any(|frame| frame.frame == "sample_fns::fibonacci"));
-        assert!(summary
-            .self_frames
-            .iter()
-            .any(|frame| frame.frame == "<u32 as core::iter::range::Step>::forward_unchecked"));
+        assert!(
+            summary
+                .self_frames
+                .iter()
+                .any(|frame| frame.frame == "sample_fns::fibonacci")
+        );
+        assert!(
+            summary
+                .self_frames
+                .iter()
+                .any(|frame| frame.frame == "<u32 as core::iter::range::Step>::forward_unchecked")
+        );
+    }
+
+    #[test]
+    fn prettify_folded_stacks_preserves_differential_counts() {
+        let pretty =
+            prettify_folded_stacks_for_display("root;sample_fns::fibonacci::ha1ebbae54edac99d 3 7");
+        assert_eq!(pretty, "root;sample_fns::fibonacci 3 7");
     }
 
     #[test]
@@ -1535,6 +1371,7 @@ mod tests {
         assert!(svg.contains("var fluiddrawing = false;"));
         assert!(svg.contains("width:100vw"));
         assert!(svg.contains("mobenchZoomVisibleFraction"));
+        assert!(svg.contains("mobenchScrollToBase"));
     }
 
     #[test]
@@ -1546,5 +1383,33 @@ mod tests {
         assert!(svg.contains("mobenchSetCollapsedTowerPresentation"));
         assert!(svg.contains("mobenchClearCollapsedTowerPresentation"));
         assert!(svg.contains("mobenchZoomAbsoluteRange"));
+    }
+
+    #[test]
+    fn standalone_svg_retints_neutral_differential_frames() {
+        let svg = render_standalone_flamegraph_svg(
+            "root;sample_fns::fibonacci 1 1\nroot;sample_fns::checksum 1 1",
+            "Diff Flamegraph",
+        )
+        .expect("render differential svg");
+        assert!(!svg.contains("fill=\"rgb(250,250,250)\""));
+        assert!(!svg.contains("rgb(217, 215, 255)"));
+        assert!(!svg.contains("rgb(232, 228, 255)"));
+        assert!(
+            svg.contains("rgb(255,107,116)")
+                || svg.contains("rgb(255,178,92)")
+                || svg.contains("rgb(255,220,107)")
+                || svg.contains("rgb(255,207,177)")
+        );
+    }
+
+    #[test]
+    fn standalone_svg_replaces_default_gray_background_gradient() {
+        let svg =
+            render_standalone_flamegraph_svg("root;sample_fns::fibonacci 1", "Test Flamegraph")
+                .expect("render svg");
+        assert!(!svg.contains("stop-color=\"#eeeeee\""));
+        assert!(!svg.contains("stop-color=\"#eeeeb0\""));
+        assert!(svg.contains("stop-color=\"#ffffff\""));
     }
 }

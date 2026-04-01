@@ -1,6 +1,6 @@
 # Structure
 
-Updated: 2026-03-27
+Updated: 2026-04-01
 
 ## Workspace layout
 
@@ -18,9 +18,9 @@ mobile-bench-rs/
 ├── ios/                          # checked-in iOS runner/demo app
 ├── templates/                    # editable source templates mirrored into SDK templates
 ├── docs/
-│   ├── adr/
+│   ├── guides/                   # user-facing setup, integration, and BrowserStack guides
 │   ├── codebase/                 # this reference set
-│   ├── plans/                    # design and implementation notes
+│   ├── specs/                    # historical design/reference specs kept for context
 │   └── schemas/
 ├── .github/
 │   ├── actions/mobench/          # local composite action for benchmark CI
@@ -34,7 +34,8 @@ mobile-bench-rs/
 
 - `crates/mobench/src/lib.rs`: clap surface and benchmark/CI command orchestration
 - `crates/mobench/src/profile.rs`: local native profiling flow, manifests, summaries, artifact contracts
-- `crates/mobench/src/flamegraph_viewer.rs`: focused/full flamegraph generation and interactive HTML viewer
+- `crates/mobench/src/flamegraph_viewer.rs`: focused/full flamegraph generation, SVG retinting, and HTML viewer assembly
+- `crates/mobench/src/flamegraph_viewer_template.html`: interactive flamegraph shell, timeline mode, and keyboard/fullscreen controls
 - `crates/mobench/src/browserstack.rs`: BrowserStack App Automate REST client
 - `crates/mobench/src/config.rs`: config + matrix loading
 

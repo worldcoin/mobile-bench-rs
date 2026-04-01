@@ -2,19 +2,22 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::fs::File;
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{
     DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
     flamegraph_viewer::{
-        ArtifactLink as ViewerArtifactLink, FlamegraphMode, FlamegraphViewerDoc,
+        ArtifactLink as ViewerArtifactLink, FlamegraphMode, FlamegraphViewerDoc, FrameSourceLink,
+        ViewerHarnessTimelineSpan, ViewerMetadataItem, ViewerTraceEvent, ViewerTraceLane,
         count_folded_stack_lines, derive_benchmark_focused_folded_stacks,
-        render_flamegraph_viewer_html, render_standalone_flamegraph_svg,
-        summarize_folded_stacks,
+        render_flamegraph_viewer_html, render_standalone_flamegraph_svg, summarize_folded_stacks,
     },
-    load_dotenv_for_layout, persist_mobile_spec, resolve_devices_for_profile,
+    load_dotenv_for_layout, persist_mobile_spec, repo_root, resolve_devices_for_profile,
     resolve_project_layout, run_android_build, run_ios_build, validate_benchmark_function,
 };
 use mobench_sdk::types::NativeLibraryArtifact;
@@ -143,6 +146,25 @@ pub struct ProfileSummarizeArgs {
     pub output_format: ProfileSummaryFormat,
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct ProfileDiffArgs {
+    #[arg(long, help = "Path to the baseline profile.json manifest")]
+    pub baseline: PathBuf,
+    #[arg(long, help = "Path to the candidate profile.json manifest")]
+    pub candidate: PathBuf,
+    #[arg(
+        long,
+        default_value = "target/mobench/profile/diff",
+        help = "Output directory for differential profile artifacts"
+    )]
+    pub output_dir: PathBuf,
+    #[arg(
+        long,
+        help = "Normalize baseline sample counts to candidate totals before diffing"
+    )]
+    pub normalize: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CaptureStatus {
@@ -217,10 +239,21 @@ pub struct SemanticPhaseRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessTimelineSpanRecord {
+    pub phase: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: u64,
+    pub iteration: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SemanticProfileRecord {
     pub status: SemanticCaptureStatus,
     pub phases: Vec<SemanticPhaseRecord>,
     pub spans_path: Option<PathBuf>,
+    #[serde(default)]
+    pub harness_timeline: Vec<HarnessTimelineSpanRecord>,
+    pub timeline_path: Option<PathBuf>,
 }
 
 impl Default for SemanticProfileRecord {
@@ -229,6 +262,8 @@ impl Default for SemanticProfileRecord {
             status: SemanticCaptureStatus::Planned,
             phases: Vec::new(),
             spans_path: None,
+            harness_timeline: Vec::new(),
+            timeline_path: None,
         }
     }
 }
@@ -236,10 +271,42 @@ impl Default for SemanticProfileRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct CaptureMetadataRecord {
     pub device: Option<String>,
+    pub os: Option<String>,
     pub sample_duration_secs: Option<u64>,
+    pub benchmark_iterations: Option<u32>,
+    pub benchmark_warmup: Option<u32>,
     pub warmup_mode: Option<CaptureWarmupMode>,
     pub capture_method: Option<String>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChronologicalTraceSourceRecord {
+    kind: String,
+    profiler: String,
+    origin: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChronologicalTraceRecord {
+    source: ChronologicalTraceSourceRecord,
+    total_duration_ns: u64,
+    lanes: Vec<ViewerTraceLane>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct FrameLocationRecord {
+    frame: String,
+    source_path: PathBuf,
+    line: u32,
+}
+
+#[derive(Debug, Clone)]
+struct TimelinePayload {
+    lanes: Vec<ViewerTraceLane>,
+    total_duration_ns: Option<u64>,
+    note: Option<String>,
+    trace_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -529,7 +596,15 @@ where
         execute(args, &target, &mut manifest)
     };
 
-    write_profile_session_outputs(args, &run_output_dir, &manifest)?;
+    let should_persist_outputs = dry_run
+        || execution_result.is_ok()
+        || manifest.native_capture.status != CaptureStatus::Planned
+        || manifest.native_capture.symbolization.status != CaptureStatus::Planned
+        || manifest.semantic_profile.status != SemanticCaptureStatus::Planned;
+
+    if should_persist_outputs {
+        write_profile_session_outputs(args, &run_output_dir, &manifest)?;
+    }
     execution_result?;
 
     println!(
@@ -567,6 +642,8 @@ fn write_profile_session_outputs(
     let run_profile_path = run_output_dir.join("profile.json");
     let run_summary_path = run_output_dir.join("summary.md");
     write_semantic_phase_sidecar(manifest)?;
+    write_harness_timeline_sidecar(manifest)?;
+    refresh_flamegraph_viewer_from_manifest(run_output_dir, manifest)?;
     write_profile_manifest(&run_profile_path, &manifest)?;
     std::fs::write(&run_summary_path, rendered_summary.as_bytes())?;
 
@@ -594,6 +671,996 @@ fn write_semantic_phase_sidecar(manifest: &ProfileManifest) -> Result<()> {
     Ok(())
 }
 
+fn write_harness_timeline_sidecar(manifest: &ProfileManifest) -> Result<()> {
+    let Some(path) = manifest.semantic_profile.timeline_path.as_ref() else {
+        return Ok(());
+    };
+    if manifest.semantic_profile.harness_timeline.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&manifest.semantic_profile.harness_timeline)?,
+    )?;
+    Ok(())
+}
+
+fn prepare_viewer_timeline_payload(
+    run_output_dir: &Path,
+    processed_root: &Path,
+    manifest: &ProfileManifest,
+) -> Result<TimelinePayload> {
+    let trace_path = artifact_path_by_label(
+        &manifest.native_capture.processed_artifacts,
+        "chronological-trace",
+    )
+    .map(|path| resolve_run_relative_path(run_output_dir, path))
+    .unwrap_or_else(|| processed_root.join("chronological-trace.json"));
+    if trace_path.exists()
+        && let Ok(record) = load_chronological_trace_record(&trace_path)
+    {
+        let lanes = sanitize_trace_lanes(&record);
+        return Ok(TimelinePayload {
+            total_duration_ns: Some(record.total_duration_ns),
+            note: build_timeline_note(&lanes),
+            lanes,
+            trace_path: Some(trace_path),
+        });
+    }
+
+    let lanes = build_harness_only_viewer_timeline_lanes(manifest);
+    let total_duration_ns = compute_timeline_total_duration_ns(
+        &build_viewer_harness_timeline(manifest),
+        manifest.capture_metadata.sample_duration_secs,
+    );
+    let trace_path = write_chronological_trace_sidecar(
+        &trace_path,
+        manifest,
+        &lanes,
+        total_duration_ns,
+        "mobench-harness-timeline",
+    )?;
+    Ok(TimelinePayload {
+        note: build_timeline_note(&lanes),
+        lanes,
+        total_duration_ns,
+        trace_path,
+    })
+}
+
+fn load_chronological_trace_record(path: &Path) -> Result<ChronologicalTraceRecord> {
+    let body = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&body).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn sanitize_trace_lanes(trace: &ChronologicalTraceRecord) -> Vec<ViewerTraceLane> {
+    if trace.source.kind != "mobench-harness-timeline" {
+        return trace.lanes.clone();
+    }
+    trace
+        .lanes
+        .iter()
+        .map(|lane| ViewerTraceLane {
+            id: lane.id.clone(),
+            label: lane.label.clone(),
+            events: lane
+                .events
+                .iter()
+                .filter(|event| event.event_kind != "sample")
+                .cloned()
+                .collect(),
+        })
+        .filter(|lane| !lane.events.is_empty())
+        .collect()
+}
+
+fn refresh_flamegraph_viewer_from_manifest(
+    run_output_dir: &Path,
+    manifest: &ProfileManifest,
+) -> Result<()> {
+    let Some(viewer_path) = artifact_path_by_label(
+        &manifest.native_capture.processed_artifacts,
+        "flamegraph-viewer",
+    )
+    .map(|path| resolve_run_relative_path(run_output_dir, path)) else {
+        return Ok(());
+    };
+    let Some(processed_root) = viewer_path.parent() else {
+        return Ok(());
+    };
+
+    let Some(full_svg_path) = artifact_path_by_label(
+        &manifest.native_capture.processed_artifacts,
+        "flamegraph-full-svg",
+    )
+    .map(|path| resolve_run_relative_path(run_output_dir, path)) else {
+        return Ok(());
+    };
+    let Some(focused_svg_path) = artifact_path_by_label(
+        &manifest.native_capture.processed_artifacts,
+        "flamegraph-focused-svg",
+    )
+    .map(|path| resolve_run_relative_path(run_output_dir, path)) else {
+        return Ok(());
+    };
+    let Some(full_folded_path) = artifact_path_by_label(
+        &manifest.native_capture.processed_artifacts,
+        "collapsed-stacks",
+    )
+    .map(|path| resolve_run_relative_path(run_output_dir, path)) else {
+        return Ok(());
+    };
+
+    if !full_svg_path.exists() || !focused_svg_path.exists() || !full_folded_path.exists() {
+        return Ok(());
+    }
+
+    let full_svg = std::fs::read_to_string(&full_svg_path)
+        .with_context(|| format!("reading {}", full_svg_path.display()))?;
+    let focused_svg = std::fs::read_to_string(&focused_svg_path)
+        .with_context(|| format!("reading {}", focused_svg_path.display()))?;
+    let full_folded = std::fs::read_to_string(&full_folded_path)
+        .with_context(|| format!("reading {}", full_folded_path.display()))?;
+
+    let focused = derive_benchmark_focused_folded_stacks(
+        &full_folded,
+        benchmark_anchors_for_backend(manifest.backend),
+    );
+    let focused_warning = if focused.folded.trim().is_empty() {
+        Some(
+            "No benchmark anchor frames were detected; the benchmark-only view is falling back to the full-process flamegraph."
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let focused_folded = if focused.folded.trim().is_empty() {
+        full_folded.as_str()
+    } else {
+        focused.folded.as_str()
+    };
+
+    let harness_timeline = build_viewer_harness_timeline(manifest);
+    let timeline_payload =
+        prepare_viewer_timeline_payload(run_output_dir, processed_root, manifest)?;
+    let source_links = load_viewer_source_links(run_output_dir, processed_root, manifest)?;
+    let browser_title =
+        flamegraph_browser_title(project_name_from_workspace_path(run_output_dir).as_deref());
+    let viewer_html = render_flamegraph_viewer_html(FlamegraphViewerDoc {
+        title: flamegraph_title_for_manifest(manifest),
+        browser_title,
+        full_svg_document: full_svg,
+        focused_svg_document: focused_svg,
+        full_summary: summarize_folded_stacks(
+            &full_folded,
+            count_folded_stack_lines(&full_folded),
+            0,
+            None,
+        ),
+        focused_summary: summarize_folded_stacks(
+            focused_folded,
+            focused.matched_stack_count,
+            focused.excluded_stack_count,
+            focused_warning,
+        ),
+        sampled_duration_secs: manifest
+            .capture_metadata
+            .sample_duration_secs
+            .map(|value| value as f64),
+        run_metadata: build_viewer_run_metadata(manifest),
+        harness_timeline,
+        timeline_lanes: timeline_payload.lanes.clone(),
+        timeline_total_duration_ns: timeline_payload.total_duration_ns,
+        timeline_note: timeline_payload.note,
+        default_mode: FlamegraphMode::Focused,
+        artifact_links: build_viewer_artifact_links(
+            run_output_dir,
+            processed_root,
+            manifest,
+            timeline_payload.trace_path.as_deref(),
+        ),
+        source_links: source_links.clone(),
+        source_link_note: viewer_source_link_note(manifest, &source_links),
+    });
+
+    std::fs::write(&viewer_path, viewer_html)
+        .with_context(|| format!("writing {}", viewer_path.display()))?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DifferentialViewerManifest {
+    run_id: String,
+    baseline: String,
+    candidate: String,
+    #[serde(default)]
+    target: Option<MobileTarget>,
+    #[serde(default)]
+    function: Option<String>,
+    #[serde(default)]
+    backend: Option<ProfileBackend>,
+    #[serde(default)]
+    normalize: bool,
+    viewer_path: String,
+    #[serde(default)]
+    summary_path: Option<String>,
+    warnings: Vec<String>,
+    modes: Vec<DifferentialViewerModeRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DifferentialViewerModeRecord {
+    mode: String,
+    #[serde(default)]
+    baseline_folded: Option<String>,
+    #[serde(default)]
+    candidate_folded: Option<String>,
+    diff_folded: String,
+    flamegraph_svg: String,
+    #[serde(default)]
+    baseline_samples: Option<u64>,
+    #[serde(default)]
+    candidate_samples: Option<u64>,
+}
+
+fn refresh_differential_flamegraph_viewer_from_manifest_path(
+    diff_manifest_path: &Path,
+) -> Result<()> {
+    let diff_manifest_dir = diff_manifest_path
+        .parent()
+        .context("differential manifest path must have a parent directory")?;
+    let diff_manifest: DifferentialViewerManifest = serde_json::from_slice(
+        &std::fs::read(diff_manifest_path)
+            .with_context(|| format!("reading {}", diff_manifest_path.display()))?,
+    )
+    .with_context(|| format!("parsing {}", diff_manifest_path.display()))?;
+
+    let baseline_path = resolve_external_manifest_path(diff_manifest_dir, &diff_manifest.baseline);
+    let candidate_path =
+        resolve_external_manifest_path(diff_manifest_dir, &diff_manifest.candidate);
+    let viewer_path = resolve_external_manifest_path(diff_manifest_dir, &diff_manifest.viewer_path);
+    let processed_root = viewer_path
+        .parent()
+        .context("differential viewer path must have a parent directory")?;
+
+    let baseline_manifest = load_profile_manifest(&baseline_path)?;
+    let candidate_manifest = load_profile_manifest(&candidate_path)?;
+    let candidate_run_dir = candidate_path
+        .parent()
+        .context("candidate manifest path must have a parent directory")?;
+
+    let full_mode = differential_mode_record(&diff_manifest, "full")?;
+    let focused_mode = differential_mode_record(&diff_manifest, "focused")?;
+
+    let full_folded_path =
+        resolve_external_manifest_path(diff_manifest_dir, &full_mode.diff_folded);
+    let focused_folded_path =
+        resolve_external_manifest_path(diff_manifest_dir, &focused_mode.diff_folded);
+    let full_svg_path =
+        resolve_external_manifest_path(diff_manifest_dir, &full_mode.flamegraph_svg);
+    let focused_svg_path =
+        resolve_external_manifest_path(diff_manifest_dir, &focused_mode.flamegraph_svg);
+
+    let full_folded = std::fs::read_to_string(&full_folded_path)
+        .with_context(|| format!("reading {}", full_folded_path.display()))?;
+    let focused_folded = std::fs::read_to_string(&focused_folded_path)
+        .with_context(|| format!("reading {}", focused_folded_path.display()))?;
+    let full_svg = std::fs::read_to_string(&full_svg_path)
+        .with_context(|| format!("reading {}", full_svg_path.display()))?;
+    let focused_svg = std::fs::read_to_string(&focused_svg_path)
+        .with_context(|| format!("reading {}", focused_svg_path.display()))?;
+
+    let shared_warning = diff_manifest.warnings.first().cloned();
+    let full_summary = summarize_folded_stacks(
+        &full_folded,
+        count_folded_stack_lines(&full_folded),
+        0,
+        shared_warning.clone(),
+    );
+    let focused_summary = summarize_folded_stacks(
+        &focused_folded,
+        count_folded_stack_lines(&focused_folded),
+        0,
+        shared_warning,
+    );
+
+    let harness_timeline = build_viewer_harness_timeline(&candidate_manifest);
+    let timeline_payload =
+        prepare_viewer_timeline_payload(candidate_run_dir, processed_root, &candidate_manifest)?;
+    let source_links =
+        load_viewer_source_links(candidate_run_dir, processed_root, &candidate_manifest)?;
+    let browser_title =
+        flamegraph_browser_title(project_name_from_workspace_path(&candidate_path).as_deref());
+
+    let viewer_html = render_flamegraph_viewer_html(FlamegraphViewerDoc {
+        title: "Differential Flamegraph".into(),
+        browser_title,
+        full_svg_document: full_svg,
+        focused_svg_document: focused_svg,
+        full_summary,
+        focused_summary,
+        sampled_duration_secs: candidate_manifest
+            .capture_metadata
+            .sample_duration_secs
+            .map(|value| value as f64),
+        run_metadata: build_differential_viewer_run_metadata(
+            &diff_manifest.run_id,
+            &baseline_manifest,
+            &candidate_manifest,
+        ),
+        harness_timeline,
+        timeline_lanes: timeline_payload.lanes.clone(),
+        timeline_total_duration_ns: timeline_payload.total_duration_ns,
+        timeline_note: timeline_payload.note,
+        default_mode: FlamegraphMode::Focused,
+        artifact_links: build_differential_viewer_artifact_links(
+            processed_root,
+            candidate_run_dir,
+            &candidate_manifest,
+            &full_folded_path,
+            &focused_folded_path,
+            &full_svg_path,
+            &focused_svg_path,
+            timeline_payload.trace_path.as_deref(),
+        ),
+        source_links: source_links.clone(),
+        source_link_note: viewer_source_link_note(&candidate_manifest, &source_links),
+    });
+
+    std::fs::write(&viewer_path, viewer_html)
+        .with_context(|| format!("writing {}", viewer_path.display()))?;
+    Ok(())
+}
+
+fn differential_mode_record<'a>(
+    manifest: &'a DifferentialViewerManifest,
+    mode: &str,
+) -> Result<&'a DifferentialViewerModeRecord> {
+    manifest
+        .modes
+        .iter()
+        .find(|record| record.mode == mode)
+        .with_context(|| format!("missing `{mode}` mode in differential viewer manifest"))
+}
+
+fn resolve_external_manifest_path(base_dir: &Path, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        let manifest_relative = base_dir.join(path);
+        if manifest_relative.exists() {
+            return manifest_relative;
+        }
+        if let Some(workspace_root) = find_workspace_root(base_dir) {
+            let workspace_relative = workspace_root.join(path);
+            if workspace_relative.exists() || !manifest_relative.exists() {
+                return workspace_relative;
+            }
+        }
+        manifest_relative
+    }
+}
+
+fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+    for ancestor in start.ancestors() {
+        if ancestor.join("Cargo.toml").exists() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+fn build_differential_viewer_run_metadata(
+    diff_run_id: &str,
+    baseline_manifest: &ProfileManifest,
+    candidate_manifest: &ProfileManifest,
+) -> Vec<ViewerMetadataItem> {
+    let mut metadata = Vec::new();
+    metadata.push(ViewerMetadataItem {
+        label: "Baseline Run".into(),
+        value: baseline_manifest.run_id.clone(),
+    });
+    metadata.push(ViewerMetadataItem {
+        label: "Candidate Run".into(),
+        value: candidate_manifest.run_id.clone(),
+    });
+    metadata.push(ViewerMetadataItem {
+        label: "Target".into(),
+        value: match candidate_manifest.target {
+            MobileTarget::Android => "android".into(),
+            MobileTarget::Ios => "ios".into(),
+        },
+    });
+    metadata.push(ViewerMetadataItem {
+        label: "Backend".into(),
+        value: match candidate_manifest.backend {
+            ProfileBackend::AndroidNative => "android-native".into(),
+            ProfileBackend::IosInstruments => "ios-instruments".into(),
+            ProfileBackend::RustTracing => "rust-tracing".into(),
+            ProfileBackend::Auto => "auto".into(),
+        },
+    });
+    metadata.push(ViewerMetadataItem {
+        label: "Benchmark".into(),
+        value: candidate_manifest.function.clone(),
+    });
+    if let Some(device) = &candidate_manifest.capture_metadata.device {
+        metadata.push(ViewerMetadataItem {
+            label: "Device".into(),
+            value: device.clone(),
+        });
+    }
+    if let Some(os) = &candidate_manifest.capture_metadata.os {
+        metadata.push(ViewerMetadataItem {
+            label: "OS".into(),
+            value: os.clone(),
+        });
+    }
+    if candidate_manifest
+        .capture_metadata
+        .benchmark_iterations
+        .is_some()
+        || candidate_manifest
+            .capture_metadata
+            .benchmark_warmup
+            .is_some()
+    {
+        let measured = candidate_manifest
+            .capture_metadata
+            .benchmark_iterations
+            .unwrap_or(0);
+        let warmup = candidate_manifest
+            .capture_metadata
+            .benchmark_warmup
+            .unwrap_or(0);
+        metadata.push(ViewerMetadataItem {
+            label: "Iterations".into(),
+            value: format!("{measured} measured / {warmup} warmup"),
+        });
+    }
+    let mut capture_parts = Vec::new();
+    if let Some(method) = &candidate_manifest.capture_metadata.capture_method {
+        capture_parts.push(method.clone());
+    }
+    if let Some(mode) = candidate_manifest.capture_metadata.warmup_mode {
+        capture_parts.push(mode.as_str().to_string());
+    }
+    if let Some(duration) = candidate_manifest.capture_metadata.sample_duration_secs {
+        capture_parts.push(format!("{duration}s sample"));
+    }
+    if !capture_parts.is_empty() {
+        metadata.push(ViewerMetadataItem {
+            label: "Capture".into(),
+            value: capture_parts.join(" · "),
+        });
+    }
+    metadata.push(ViewerMetadataItem {
+        label: "Run ID".into(),
+        value: diff_run_id.to_string(),
+    });
+    metadata
+}
+
+fn build_differential_viewer_artifact_links(
+    processed_root: &Path,
+    candidate_run_dir: &Path,
+    candidate_manifest: &ProfileManifest,
+    full_folded_path: &Path,
+    focused_folded_path: &Path,
+    full_svg_path: &Path,
+    focused_svg_path: &Path,
+    trace_path: Option<&Path>,
+) -> Vec<ViewerArtifactLink> {
+    let mut links = Vec::new();
+
+    for label in [
+        "sample",
+        "simpleperf",
+        "trace-events",
+        "native-report",
+        "frame-locations",
+    ] {
+        if let Some(path) =
+            artifact_path_by_label(&candidate_manifest.native_capture.raw_artifacts, label)
+                .or_else(|| {
+                    artifact_path_by_label(
+                        &candidate_manifest.native_capture.processed_artifacts,
+                        label,
+                    )
+                })
+                .map(|path| resolve_run_relative_path(candidate_run_dir, path))
+                .filter(|path| path.exists())
+        {
+            links.push(ViewerArtifactLink::new(
+                artifact_display_label(label),
+                relative_path_from(processed_root, &path),
+            ));
+        }
+    }
+
+    links.push(ViewerArtifactLink::new(
+        "Full folded stacks",
+        relative_path_from(processed_root, full_folded_path),
+    ));
+    links.push(ViewerArtifactLink::new(
+        "Benchmark-focused folded stacks",
+        relative_path_from(processed_root, focused_folded_path),
+    ));
+    links.push(ViewerArtifactLink::new(
+        "Full-process SVG",
+        relative_path_from(processed_root, full_svg_path),
+    ));
+    links.push(ViewerArtifactLink::new(
+        "Benchmark-only SVG",
+        relative_path_from(processed_root, focused_svg_path),
+    ));
+
+    if let Some(path) = trace_path {
+        links.push(ViewerArtifactLink::new(
+            "Chronological trace",
+            relative_path_from(processed_root, path),
+        ));
+    }
+
+    if let Some(path) = candidate_manifest.semantic_profile.spans_path.as_deref() {
+        links.push(ViewerArtifactLink::new(
+            "Semantic phases",
+            relative_path_from(
+                processed_root,
+                &resolve_run_relative_path(candidate_run_dir, path),
+            ),
+        ));
+    }
+    if let Some(path) = candidate_manifest.semantic_profile.timeline_path.as_deref() {
+        links.push(ViewerArtifactLink::new(
+            "Harness timeline",
+            relative_path_from(
+                processed_root,
+                &resolve_run_relative_path(candidate_run_dir, path),
+            ),
+        ));
+    }
+
+    links
+}
+
+fn artifact_path_by_label<'a>(artifacts: &'a [ArtifactRecord], label: &str) -> Option<&'a Path> {
+    artifacts
+        .iter()
+        .find(|artifact| artifact.label == label)
+        .map(|artifact| artifact.path.as_path())
+}
+
+fn benchmark_anchors_for_backend(backend: ProfileBackend) -> &'static [&'static str] {
+    match backend {
+        ProfileBackend::AndroidNative => ANDROID_BENCHMARK_ANCHORS,
+        ProfileBackend::IosInstruments => IOS_BENCHMARK_ANCHORS,
+        ProfileBackend::RustTracing | ProfileBackend::Auto => &[],
+    }
+}
+
+fn flamegraph_browser_title(project_name: Option<&str>) -> String {
+    match project_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("Mobench Flamegraph - {name}"),
+        None => "Mobench Flamegraph".into(),
+    }
+}
+
+fn project_name_from_workspace_path(path: &Path) -> Option<String> {
+    find_workspace_root(path)
+        .and_then(|root| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .or_else(|| {
+            repo_root().ok().and_then(|root| {
+                root.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .filter(|name| !name.is_empty())
+            })
+        })
+}
+
+fn flamegraph_title_for_manifest(manifest: &ProfileManifest) -> String {
+    match manifest.backend {
+        ProfileBackend::AndroidNative => "Android Native Profile".into(),
+        ProfileBackend::IosInstruments => "iOS Native Profile".into(),
+        ProfileBackend::RustTracing => "Rust Tracing Profile".into(),
+        ProfileBackend::Auto => "Native Profile".into(),
+    }
+}
+
+fn build_viewer_run_metadata(manifest: &ProfileManifest) -> Vec<ViewerMetadataItem> {
+    let mut metadata = Vec::new();
+    metadata.push(ViewerMetadataItem {
+        label: "Run ID".into(),
+        value: manifest.run_id.clone(),
+    });
+    metadata.push(ViewerMetadataItem {
+        label: "Target".into(),
+        value: match manifest.target {
+            MobileTarget::Android => "android".into(),
+            MobileTarget::Ios => "ios".into(),
+        },
+    });
+    metadata.push(ViewerMetadataItem {
+        label: "Backend".into(),
+        value: match manifest.backend {
+            ProfileBackend::AndroidNative => "android-native".into(),
+            ProfileBackend::IosInstruments => "ios-instruments".into(),
+            ProfileBackend::RustTracing => "rust-tracing".into(),
+            ProfileBackend::Auto => "auto".into(),
+        },
+    });
+    metadata.push(ViewerMetadataItem {
+        label: "Benchmark".into(),
+        value: manifest.function.clone(),
+    });
+    if let Some(device) = &manifest.capture_metadata.device {
+        metadata.push(ViewerMetadataItem {
+            label: "Device".into(),
+            value: device.clone(),
+        });
+    }
+    if let Some(os) = &manifest.capture_metadata.os {
+        metadata.push(ViewerMetadataItem {
+            label: "OS".into(),
+            value: os.clone(),
+        });
+    }
+    if manifest.capture_metadata.benchmark_iterations.is_some()
+        || manifest.capture_metadata.benchmark_warmup.is_some()
+    {
+        let measured = manifest.capture_metadata.benchmark_iterations.unwrap_or(0);
+        let warmup = manifest.capture_metadata.benchmark_warmup.unwrap_or(0);
+        metadata.push(ViewerMetadataItem {
+            label: "Iterations".into(),
+            value: format!("{measured} measured / {warmup} warmup"),
+        });
+    }
+    let mut capture_parts = Vec::new();
+    if let Some(method) = &manifest.capture_metadata.capture_method {
+        capture_parts.push(method.clone());
+    }
+    if let Some(mode) = manifest.capture_metadata.warmup_mode {
+        capture_parts.push(mode.as_str().to_string());
+    }
+    if let Some(duration) = manifest.capture_metadata.sample_duration_secs {
+        capture_parts.push(format!("{duration}s sample"));
+    }
+    if !capture_parts.is_empty() {
+        metadata.push(ViewerMetadataItem {
+            label: "Capture".into(),
+            value: capture_parts.join(" · "),
+        });
+    }
+    metadata
+}
+
+fn build_viewer_harness_timeline(manifest: &ProfileManifest) -> Vec<ViewerHarnessTimelineSpan> {
+    manifest
+        .semantic_profile
+        .harness_timeline
+        .iter()
+        .map(|span| ViewerHarnessTimelineSpan {
+            phase: span.phase.clone(),
+            start_offset_ns: span.start_offset_ns,
+            end_offset_ns: span.end_offset_ns,
+            iteration: span.iteration,
+        })
+        .collect()
+}
+
+fn build_harness_only_viewer_timeline_lanes(manifest: &ProfileManifest) -> Vec<ViewerTraceLane> {
+    let harness_events: Vec<ViewerTraceEvent> = manifest
+        .semantic_profile
+        .harness_timeline
+        .iter()
+        .map(|span| ViewerTraceEvent {
+            event_kind: "span".into(),
+            start_offset_ns: span.start_offset_ns,
+            end_offset_ns: Some(span.end_offset_ns),
+            frames: Vec::new(),
+            phase: Some(span.phase.clone()),
+            iteration: span.iteration,
+        })
+        .collect();
+
+    let mut lanes = Vec::new();
+    if !harness_events.is_empty() {
+        lanes.push(ViewerTraceLane {
+            id: "harness".into(),
+            label: "Harness".into(),
+            events: harness_events,
+        });
+    }
+    lanes
+}
+
+fn compute_timeline_total_duration_ns(
+    harness_timeline: &[ViewerHarnessTimelineSpan],
+    sampled_duration_secs: Option<u64>,
+) -> Option<u64> {
+    harness_timeline
+        .iter()
+        .map(|span| span.end_offset_ns)
+        .max()
+        .or_else(|| sampled_duration_secs.map(|value| value.saturating_mul(1_000_000_000)))
+}
+
+fn trace_lanes_have_sample_events(lanes: &[ViewerTraceLane]) -> bool {
+    lanes.iter().any(|lane| {
+        lane.events
+            .iter()
+            .any(|event| event.event_kind == "sample" && !event.frames.is_empty())
+    })
+}
+
+fn build_timeline_note(lanes: &[ViewerTraceLane]) -> Option<String> {
+    if lanes.is_empty() {
+        return Some(
+            "Timeline mode becomes available once exact harness intervals or chronological trace events are recorded."
+                .into(),
+        );
+    }
+    if trace_lanes_have_sample_events(lanes) {
+        Some(
+            "Timeline mode shows exact harness chronology plus recorded stack samples. Aggregate flamegraph views remain full-session hotspot summaries."
+                .into(),
+        )
+    } else {
+        Some(
+            "Harness-only timeline. This capture recorded exact phase timing, but it does not include time-ordered stack samples for the selected interval."
+                .into(),
+        )
+    }
+}
+
+fn write_chronological_trace_sidecar(
+    trace_path: &Path,
+    manifest: &ProfileManifest,
+    lanes: &[ViewerTraceLane],
+    total_duration_ns: Option<u64>,
+    source_kind: &str,
+) -> Result<Option<PathBuf>> {
+    let Some(total_duration_ns) = total_duration_ns else {
+        return Ok(None);
+    };
+    if lanes.is_empty() {
+        return Ok(None);
+    }
+
+    let trace = ChronologicalTraceRecord {
+        source: ChronologicalTraceSourceRecord {
+            kind: source_kind.into(),
+            profiler: manifest
+                .capture_metadata
+                .capture_method
+                .clone()
+                .unwrap_or_else(|| match manifest.backend {
+                    ProfileBackend::AndroidNative => "simpleperf".into(),
+                    ProfileBackend::IosInstruments => "sample".into(),
+                    ProfileBackend::RustTracing => "trace-events".into(),
+                    ProfileBackend::Auto => "unknown".into(),
+                }),
+            origin: match manifest.provider {
+                ProfileProvider::Local => "local".into(),
+                ProfileProvider::Browserstack => "browserstack".into(),
+            },
+        },
+        total_duration_ns,
+        lanes: lanes.to_vec(),
+    };
+    if let Some(parent) = trace_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&trace_path, serde_json::to_vec_pretty(&trace)?)
+        .with_context(|| format!("writing {}", trace_path.display()))?;
+    Ok(Some(trace_path.to_path_buf()))
+}
+
+fn build_viewer_artifact_links(
+    run_output_dir: &Path,
+    processed_root: &Path,
+    manifest: &ProfileManifest,
+    trace_path: Option<&Path>,
+) -> Vec<ViewerArtifactLink> {
+    let mut links = Vec::new();
+    let artifact_order = [
+        "simpleperf",
+        "sample",
+        "trace-events",
+        "native-report",
+        "frame-locations",
+        "collapsed-stacks",
+        "benchmark-focused-stacks",
+        "flamegraph-full-svg",
+        "flamegraph-focused-svg",
+    ];
+
+    for label in artifact_order {
+        if let Some(path) = artifact_path_by_label(&manifest.native_capture.raw_artifacts, label)
+            .or_else(|| artifact_path_by_label(&manifest.native_capture.processed_artifacts, label))
+            .map(|path| resolve_run_relative_path(run_output_dir, path))
+            .filter(|path| path.exists())
+        {
+            links.push(ViewerArtifactLink::new(
+                artifact_display_label(label),
+                relative_path_from(processed_root, &path),
+            ));
+        }
+    }
+
+    if let Some(path) = trace_path {
+        links.push(ViewerArtifactLink::new(
+            "Chronological trace",
+            relative_path_from(processed_root, path),
+        ));
+    }
+
+    if let Some(path) = manifest.semantic_profile.spans_path.as_deref() {
+        links.push(ViewerArtifactLink::new(
+            "Semantic phases",
+            relative_path_from(
+                processed_root,
+                &resolve_run_relative_path(run_output_dir, path),
+            ),
+        ));
+    }
+    if let Some(path) = manifest.semantic_profile.timeline_path.as_deref() {
+        links.push(ViewerArtifactLink::new(
+            "Harness timeline",
+            relative_path_from(
+                processed_root,
+                &resolve_run_relative_path(run_output_dir, path),
+            ),
+        ));
+    }
+
+    links
+}
+
+fn artifact_display_label(label: &str) -> String {
+    match label {
+        "simpleperf" => "Raw sample.perf".into(),
+        "sample" => "Raw sample.txt".into(),
+        "trace-events" => "Raw trace-events.json".into(),
+        "native-report" => "Native report".into(),
+        "frame-locations" => "Frame locations".into(),
+        "collapsed-stacks" => "Full folded stacks".into(),
+        "benchmark-focused-stacks" => "Benchmark-focused folded stacks".into(),
+        "flamegraph-full-svg" => "Full-process SVG".into(),
+        "flamegraph-focused-svg" => "Benchmark-only SVG".into(),
+        _ => label.to_string(),
+    }
+}
+
+fn resolve_run_relative_path(run_output_dir: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() || path.starts_with(run_output_dir) {
+        path.to_path_buf()
+    } else {
+        run_output_dir.join(path)
+    }
+}
+
+fn relative_path_from(base_dir: &Path, target: &Path) -> String {
+    let base_components: Vec<_> = base_dir.components().collect();
+    let target_components: Vec<_> = target.components().collect();
+    let mut shared = 0;
+    while shared < base_components.len()
+        && shared < target_components.len()
+        && base_components[shared] == target_components[shared]
+    {
+        shared += 1;
+    }
+
+    let mut relative = PathBuf::new();
+    for _ in shared..base_components.len() {
+        relative.push("..");
+    }
+    for component in &target_components[shared..] {
+        relative.push(component.as_os_str());
+    }
+
+    if relative.as_os_str().is_empty() {
+        ".".into()
+    } else {
+        relative.to_string_lossy().replace('\\', "/")
+    }
+}
+
+fn default_source_link_note(manifest: &ProfileManifest) -> Option<String> {
+    match manifest.backend {
+        ProfileBackend::IosInstruments => Some(
+            "Source links are unavailable for simulator-host `sample` sessions in this release."
+                .into(),
+        ),
+        ProfileBackend::AndroidNative => Some(
+            "Source links are unavailable because this capture did not record Android frame location metadata.".into(),
+        ),
+        ProfileBackend::RustTracing => Some(
+            "Source links are unavailable for trace-events output in this release.".into(),
+        ),
+        ProfileBackend::Auto => None,
+    }
+}
+
+fn viewer_source_link_note(
+    manifest: &ProfileManifest,
+    source_links: &[FrameSourceLink],
+) -> Option<String> {
+    if source_links.is_empty() {
+        default_source_link_note(manifest)
+    } else {
+        None
+    }
+}
+
+fn load_viewer_source_links(
+    run_output_dir: &Path,
+    processed_root: &Path,
+    manifest: &ProfileManifest,
+) -> Result<Vec<FrameSourceLink>> {
+    let Some(sidecar_path) = artifact_path_by_label(
+        &manifest.native_capture.processed_artifacts,
+        "frame-locations",
+    )
+    .map(|path| resolve_run_relative_path(run_output_dir, path)) else {
+        return Ok(Vec::new());
+    };
+    if !sidecar_path.exists() {
+        return Ok(Vec::new());
+    }
+    let records: Vec<FrameLocationRecord> = serde_json::from_slice(
+        &std::fs::read(&sidecar_path)
+            .with_context(|| format!("reading {}", sidecar_path.display()))?,
+    )
+    .with_context(|| format!("parsing {}", sidecar_path.display()))?;
+    let repo_root = repo_root().ok();
+    Ok(records
+        .into_iter()
+        .filter_map(|record| {
+            frame_location_record_to_source_link(processed_root, repo_root.as_deref(), record)
+        })
+        .collect())
+}
+
+fn frame_location_record_to_source_link(
+    processed_root: &Path,
+    repo_root: Option<&Path>,
+    record: FrameLocationRecord,
+) -> Option<FrameSourceLink> {
+    let absolute_path = if record.source_path.is_absolute() {
+        record.source_path.clone()
+    } else if let Some(root) = repo_root {
+        root.join(&record.source_path)
+    } else {
+        record.source_path.clone()
+    };
+    let display_path = if let Some(root) = repo_root {
+        absolute_path
+            .strip_prefix(root)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| absolute_path.clone())
+    } else {
+        absolute_path.clone()
+    };
+    let href = format!(
+        "{}#L{}",
+        relative_path_from(processed_root, &absolute_path),
+        record.line
+    );
+    Some(FrameSourceLink {
+        frame: record.frame,
+        location: format!("{}:{}", display_path.display(), record.line),
+        href,
+    })
+}
+
 pub fn cmd_profile_summarize(args: &ProfileSummarizeArgs) -> Result<()> {
     let rendered = cmd_profile_summarize_for_test(args)?;
     if let Some(path) = &args.output {
@@ -605,6 +1672,282 @@ pub fn cmd_profile_summarize(args: &ProfileSummarizeArgs) -> Result<()> {
         println!("{rendered}");
     }
     Ok(())
+}
+
+pub fn cmd_profile_diff(args: &ProfileDiffArgs) -> Result<()> {
+    let baseline_manifest = load_profile_manifest(&args.baseline)?;
+    let candidate_manifest = load_profile_manifest(&args.candidate)?;
+    validate_profile_diff_inputs(
+        &args.baseline,
+        &baseline_manifest,
+        &args.candidate,
+        &candidate_manifest,
+    )?;
+
+    let baseline_run_dir = args
+        .baseline
+        .parent()
+        .context("baseline manifest path must have a parent directory")?;
+    let candidate_run_dir = args
+        .candidate
+        .parent()
+        .context("candidate manifest path must have a parent directory")?;
+    let diff_run_id = format!(
+        "{}--vs--{}",
+        baseline_manifest.run_id, candidate_manifest.run_id
+    );
+    let diff_run_dir = args.output_dir.join(&diff_run_id);
+    let processed_root = diff_run_dir.join("artifacts/processed");
+    std::fs::create_dir_all(&processed_root)?;
+
+    let full_mode = build_profile_diff_mode(
+        baseline_run_dir,
+        &baseline_manifest,
+        candidate_run_dir,
+        &candidate_manifest,
+        "full",
+        "collapsed-stacks",
+        processed_root.join("diff.full.folded"),
+        processed_root.join("flamegraph.full.svg"),
+        args.normalize,
+    )?;
+    let focused_mode = build_profile_diff_mode(
+        baseline_run_dir,
+        &baseline_manifest,
+        candidate_run_dir,
+        &candidate_manifest,
+        "focused",
+        "benchmark-focused-stacks",
+        processed_root.join("diff.focused.folded"),
+        processed_root.join("flamegraph.focused.svg"),
+        args.normalize,
+    )?;
+
+    let viewer_path = processed_root.join("flamegraph.html");
+    let summary_path = diff_run_dir.join("summary.md");
+    let diff_manifest = DifferentialViewerManifest {
+        run_id: diff_run_id,
+        baseline: path_string(&args.baseline),
+        candidate: path_string(&args.candidate),
+        target: Some(candidate_manifest.target),
+        function: Some(candidate_manifest.function.clone()),
+        backend: Some(candidate_manifest.backend),
+        normalize: args.normalize,
+        viewer_path: path_string(&viewer_path),
+        summary_path: Some(path_string(&summary_path)),
+        warnings: vec![
+            "Differential flamegraph colors: red = hotter in candidate, blue = hotter in baseline. Frame widths follow candidate sample counts."
+                .into(),
+        ],
+        modes: vec![full_mode, focused_mode],
+    };
+
+    let diff_manifest_path = diff_run_dir.join("profile-diff.json");
+    write_differential_manifest(&diff_manifest_path, &diff_manifest)?;
+    refresh_differential_flamegraph_viewer_from_manifest_path(&diff_manifest_path)?;
+
+    let summary = render_profile_diff_markdown(&diff_manifest);
+    std::fs::write(&summary_path, summary.as_bytes())
+        .with_context(|| format!("writing {}", summary_path.display()))?;
+
+    std::fs::create_dir_all(&args.output_dir)?;
+    write_differential_manifest(&args.output_dir.join("profile-diff.json"), &diff_manifest)?;
+    std::fs::write(args.output_dir.join("summary.md"), summary.as_bytes())?;
+
+    println!(
+        "Differential profile written to {}",
+        diff_manifest_path.display()
+    );
+    println!("Differential summary written to {}", summary_path.display());
+    println!("Differential viewer written to {}", viewer_path.display());
+    Ok(())
+}
+
+fn validate_profile_diff_inputs(
+    baseline_path: &Path,
+    baseline_manifest: &ProfileManifest,
+    candidate_path: &Path,
+    candidate_manifest: &ProfileManifest,
+) -> Result<()> {
+    if baseline_manifest.target != candidate_manifest.target {
+        bail!(
+            "profile diff requires the same target on both sides, got `{}` from {} and `{}` from {}",
+            baseline_manifest.target.as_str(),
+            baseline_path.display(),
+            candidate_manifest.target.as_str(),
+            candidate_path.display()
+        );
+    }
+    if baseline_manifest.backend != candidate_manifest.backend {
+        bail!(
+            "profile diff requires the same backend on both sides, got `{:?}` from {} and `{:?}` from {}",
+            baseline_manifest.backend,
+            baseline_path.display(),
+            candidate_manifest.backend,
+            candidate_path.display()
+        );
+    }
+    if baseline_manifest.function != candidate_manifest.function {
+        bail!(
+            "profile diff requires the same benchmark function on both sides, got `{}` from {} and `{}` from {}",
+            baseline_manifest.function,
+            baseline_path.display(),
+            candidate_manifest.function,
+            candidate_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn build_profile_diff_mode(
+    baseline_run_dir: &Path,
+    baseline_manifest: &ProfileManifest,
+    candidate_run_dir: &Path,
+    candidate_manifest: &ProfileManifest,
+    mode: &str,
+    artifact_label: &str,
+    diff_folded_path: PathBuf,
+    flamegraph_svg_path: PathBuf,
+    normalize: bool,
+) -> Result<DifferentialViewerModeRecord> {
+    let baseline_folded_path =
+        resolve_required_processed_artifact(baseline_run_dir, baseline_manifest, artifact_label)?;
+    let candidate_folded_path =
+        resolve_required_processed_artifact(candidate_run_dir, candidate_manifest, artifact_label)?;
+
+    if let Some(parent) = diff_folded_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut writer = BufWriter::new(
+        File::create(&diff_folded_path)
+            .with_context(|| format!("creating {}", diff_folded_path.display()))?,
+    );
+    inferno::differential::from_files(
+        inferno::differential::Options {
+            normalize,
+            strip_hex: false,
+        },
+        &baseline_folded_path,
+        &candidate_folded_path,
+        &mut writer,
+    )
+    .with_context(|| format!("diffing folded stacks for `{mode}` mode"))?;
+
+    let diff_folded = std::fs::read_to_string(&diff_folded_path)
+        .with_context(|| format!("reading {}", diff_folded_path.display()))?;
+    let svg = render_standalone_flamegraph_svg(&diff_folded, "Differential Flamegraph")?;
+    std::fs::write(&flamegraph_svg_path, svg.as_bytes())
+        .with_context(|| format!("writing {}", flamegraph_svg_path.display()))?;
+
+    Ok(DifferentialViewerModeRecord {
+        mode: mode.into(),
+        baseline_folded: Some(path_string(&baseline_folded_path)),
+        candidate_folded: Some(path_string(&candidate_folded_path)),
+        diff_folded: path_string(&diff_folded_path),
+        flamegraph_svg: path_string(&flamegraph_svg_path),
+        baseline_samples: Some(total_samples_in_folded_path(&baseline_folded_path)?),
+        candidate_samples: Some(total_samples_in_folded_path(&candidate_folded_path)?),
+    })
+}
+
+fn resolve_required_processed_artifact(
+    run_output_dir: &Path,
+    manifest: &ProfileManifest,
+    label: &str,
+) -> Result<PathBuf> {
+    artifact_path_by_label(&manifest.native_capture.processed_artifacts, label)
+        .map(|path| resolve_run_relative_path(run_output_dir, path))
+        .filter(|path| path.exists())
+        .with_context(|| {
+            format!(
+                "profile manifest `{}` is missing processed artifact `{label}`",
+                manifest.run_id
+            )
+        })
+}
+
+fn total_samples_in_folded_path(path: &Path) -> Result<u64> {
+    let folded =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(folded
+        .lines()
+        .filter_map(split_folded_stack_line)
+        .map(|(_, count)| count)
+        .sum())
+}
+
+fn split_folded_stack_line(line: &str) -> Option<(&str, u64)> {
+    let (stack, count) = line.rsplit_once(' ')?;
+    if stack.is_empty() || !count.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some((stack, count.parse().ok()?))
+}
+
+fn write_differential_manifest(path: &Path, manifest: &DifferentialViewerManifest) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_vec_pretty(manifest)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn render_profile_diff_markdown(manifest: &DifferentialViewerManifest) -> String {
+    let mut markdown = String::new();
+    let _ = writeln!(markdown, "# Differential Flamegraph Summary");
+    let _ = writeln!(markdown);
+    let _ = writeln!(markdown, "- Run ID: `{}`", manifest.run_id);
+    if let Some(target) = manifest.target {
+        let _ = writeln!(markdown, "- Target: `{}`", target.as_str());
+    }
+    if let Some(function) = &manifest.function {
+        let _ = writeln!(markdown, "- Function: `{function}`");
+    }
+    let _ = writeln!(markdown, "- Baseline: `{}`", manifest.baseline);
+    let _ = writeln!(markdown, "- Candidate: `{}`", manifest.candidate);
+    let _ = writeln!(markdown, "- Normalize: `{}`", manifest.normalize);
+    let _ = writeln!(markdown, "- Viewer: `{}`", manifest.viewer_path);
+    let _ = writeln!(markdown);
+    let _ = writeln!(
+        markdown,
+        "- Differential semantics: `red = hotter in candidate, blue = hotter in baseline, widths = candidate samples`"
+    );
+    if !manifest.warnings.is_empty() {
+        let _ = writeln!(markdown);
+        let _ = writeln!(markdown, "## Notes");
+        let _ = writeln!(markdown);
+        for warning in &manifest.warnings {
+            let _ = writeln!(markdown, "- {}", warning);
+        }
+    }
+    let _ = writeln!(markdown);
+    let _ = writeln!(markdown, "## Modes");
+    let _ = writeln!(markdown);
+    for mode in &manifest.modes {
+        let _ = writeln!(markdown, "### {}", mode.mode);
+        if let Some(path) = &mode.baseline_folded {
+            let _ = writeln!(markdown, "- Baseline folded: `{}`", path);
+        }
+        if let Some(path) = &mode.candidate_folded {
+            let _ = writeln!(markdown, "- Candidate folded: `{}`", path);
+        }
+        let _ = writeln!(markdown, "- Diff folded: `{}`", mode.diff_folded);
+        let _ = writeln!(markdown, "- SVG: `{}`", mode.flamegraph_svg);
+        if let (Some(before), Some(after)) = (mode.baseline_samples, mode.candidate_samples) {
+            let _ = writeln!(
+                markdown,
+                "- Samples: baseline `{}` -> candidate `{}`",
+                before, after
+            );
+        }
+        let _ = writeln!(markdown);
+    }
+    markdown
+}
+
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn capture_status_label(status: CaptureStatus) -> &'static str {
@@ -729,7 +2072,7 @@ pub(crate) fn write_android_symbolized_outputs(
     runtime_abi: Option<&str>,
     llvm_addr2line_path: &Path,
 ) -> Result<SymbolizationRecord> {
-    write_android_symbolized_outputs_with_resolver(
+    let record = write_android_symbolized_outputs_with_resolver(
         folded_stacks,
         native_libraries,
         processed_root,
@@ -741,7 +2084,15 @@ pub(crate) fn write_android_symbolized_outputs(
                 offset,
             )
         },
-    )
+    )?;
+    write_android_frame_location_sidecar(
+        folded_stacks,
+        native_libraries,
+        processed_root,
+        runtime_abi,
+        llvm_addr2line_path,
+    )?;
+    Ok(record)
 }
 
 pub(crate) fn write_android_symbolized_outputs_with_resolver<F>(
@@ -756,12 +2107,13 @@ where
 {
     std::fs::create_dir_all(processed_root)?;
 
-    let (symbolized_stacks, mut record, report) = symbolize_android_folded_stacks_with_native_libraries(
-        folded_stacks,
-        native_libraries,
-        runtime_abi,
-        resolve,
-    );
+    let (symbolized_stacks, mut record, report) =
+        symbolize_android_folded_stacks_with_native_libraries(
+            folded_stacks,
+            native_libraries,
+            runtime_abi,
+            resolve,
+        );
 
     std::fs::write(processed_root.join("stacks.folded"), &symbolized_stacks)?;
     std::fs::write(processed_root.join("native-report.txt"), &report)?;
@@ -777,6 +2129,140 @@ where
     }
 
     Ok(record)
+}
+
+fn write_android_frame_location_sidecar(
+    folded_stacks: &str,
+    native_libraries: &[NativeLibraryArtifact],
+    processed_root: &Path,
+    runtime_abi: Option<&str>,
+    llvm_addr2line_path: &Path,
+) -> Result<()> {
+    let records = collect_android_frame_location_records(
+        folded_stacks,
+        native_libraries,
+        runtime_abi,
+        llvm_addr2line_path,
+    )?;
+    if records.is_empty() {
+        return Ok(());
+    }
+    let sidecar_path = processed_root.join("frame-locations.json");
+    std::fs::write(&sidecar_path, serde_json::to_vec_pretty(&records)?)
+        .with_context(|| format!("writing {}", sidecar_path.display()))?;
+    Ok(())
+}
+
+fn collect_android_frame_location_records(
+    folded_stacks: &str,
+    native_libraries: &[NativeLibraryArtifact],
+    runtime_abi: Option<&str>,
+    llvm_addr2line_path: &Path,
+) -> Result<Vec<FrameLocationRecord>> {
+    let mut records = BTreeMap::<String, FrameLocationRecord>::new();
+    for line in folded_stacks.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((stack, _count)) = split_folded_stack_line(line) else {
+            continue;
+        };
+        for frame in stack.split(';') {
+            let Some((library_name, offset)) = parse_android_native_offset_frame(frame) else {
+                continue;
+            };
+            let Some(library_path) =
+                resolve_android_native_library_path(native_libraries, library_name, runtime_abi)
+            else {
+                continue;
+            };
+            let Some(record) =
+                resolve_android_frame_location_with_tool(llvm_addr2line_path, library_path, offset)
+            else {
+                continue;
+            };
+            records.entry(record.frame.clone()).or_insert(record);
+        }
+    }
+    Ok(records.into_values().collect())
+}
+
+fn resolve_android_frame_location_with_tool(
+    tool_path: &Path,
+    library_path: &Path,
+    offset: u64,
+) -> Option<FrameLocationRecord> {
+    let output = Command::new(tool_path)
+        .args(["-Cfpe"])
+        .arg(library_path)
+        .arg(format!("0x{offset:x}"))
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_android_addr2line_frame_location(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_android_addr2line_frame_location(stdout: &str) -> Option<FrameLocationRecord> {
+    let mut symbol = None::<String>;
+    let mut location = None::<String>;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed == "??" || trimmed.starts_with("?? ") {
+            continue;
+        }
+        if let Some((parsed_symbol, parsed_location)) = trimmed.split_once(" at ") {
+            symbol = Some(parsed_symbol.trim().to_owned());
+            if !parsed_location.trim().is_empty() && !parsed_location.starts_with("??") {
+                location = Some(parsed_location.trim().to_owned());
+                break;
+            }
+            continue;
+        }
+        if symbol.is_none() {
+            symbol = Some(trimmed.to_owned());
+            continue;
+        }
+        if !trimmed.starts_with("??") {
+            location = Some(trimmed.to_owned());
+            break;
+        }
+    }
+    let symbol = symbol?;
+    let location = location?;
+    let (source_path, line) = parse_addr2line_location(&location)?;
+    Some(FrameLocationRecord {
+        frame: symbol,
+        source_path,
+        line,
+    })
+}
+
+fn parse_addr2line_location(location: &str) -> Option<(PathBuf, u32)> {
+    let trimmed = location
+        .split(" (discriminator ")
+        .next()
+        .unwrap_or(location)
+        .trim();
+    if trimmed.is_empty() || trimmed.starts_with("??") {
+        return None;
+    }
+    let (path, line) = trimmed.rsplit_once(':')?;
+    Some((PathBuf::from(path), line.parse().ok()?))
+}
+
+fn parse_android_native_offset_frame(frame: &str) -> Option<(&str, u64)> {
+    let marker = ".so[+";
+    let marker_index = frame.find(marker)?;
+    let library_end = marker_index + 3;
+    let library_name = frame[..library_end].rsplit('/').next()?;
+    let offset_start = marker_index + marker.len();
+    let offset_end = frame[offset_start..].find(']')? + offset_start;
+    let offset_raw = &frame[offset_start..offset_end];
+    let offset = if let Some(hex) = offset_raw.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16).ok()?
+    } else {
+        offset_raw.parse().ok()?
+    };
+    Some((library_name, offset))
 }
 
 fn write_dual_view_flamegraph_bundle(
@@ -835,19 +2321,33 @@ fn write_dual_view_flamegraph_bundle(
 
     let viewer_html = render_flamegraph_viewer_html(FlamegraphViewerDoc {
         title: title.to_string(),
+        browser_title: flamegraph_browser_title(
+            project_name_from_workspace_path(processed_root).as_deref(),
+        ),
         full_svg_document: full_svg,
         focused_svg_document: focused_svg,
         full_summary,
         focused_summary,
+        sampled_duration_secs: None,
+        run_metadata: Vec::new(),
+        harness_timeline: Vec::new(),
+        timeline_lanes: Vec::new(),
+        timeline_total_duration_ns: None,
+        timeline_note: None,
         default_mode: FlamegraphMode::Focused,
         artifact_links: vec![
             ViewerArtifactLink::new(raw_artifact_label, raw_artifact_path),
             ViewerArtifactLink::new("Native report", "native-report.txt"),
             ViewerArtifactLink::new("Full folded stacks", "stacks.folded"),
-            ViewerArtifactLink::new("Benchmark-focused folded stacks", "benchmark.focused.folded"),
+            ViewerArtifactLink::new(
+                "Benchmark-focused folded stacks",
+                "benchmark.focused.folded",
+            ),
             ViewerArtifactLink::new("Full-process SVG", "flamegraph.full.svg"),
             ViewerArtifactLink::new("Benchmark-only SVG", "flamegraph.focused.svg"),
         ],
+        source_links: Vec::new(),
+        source_link_note: None,
     });
     std::fs::write(processed_root.join("flamegraph.html"), viewer_html)?;
 
@@ -1451,9 +2951,7 @@ fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManife
     let stderr_path = log_dir.join("app.stderr.log");
     let app_args = [
         format!("--mobench-profile-bench-delay-ms={DEFAULT_IOS_BENCH_DELAY_MS}"),
-        format!(
-            "--mobench-profile-repeat-until-ms={DEFAULT_IOS_PROFILE_REPEAT_UNTIL_MS}"
-        ),
+        format!("--mobench-profile-repeat-until-ms={DEFAULT_IOS_PROFILE_REPEAT_UNTIL_MS}"),
         format!(
             "--mobench-profile-result-hold-ms={}",
             DEFAULT_IOS_CAPTURE_DURATION_SECS * 1_000
@@ -2315,6 +3813,34 @@ fn populate_semantic_profile_from_benchmark_value(
     manifest: &mut ProfileManifest,
     benchmark_value: &Value,
 ) {
+    if let Some(spec) = benchmark_value.get("spec") {
+        manifest.capture_metadata.benchmark_iterations = spec
+            .get("iterations")
+            .and_then(Value::as_u64)
+            .map(|value| value as u32);
+        manifest.capture_metadata.benchmark_warmup = spec
+            .get("warmup")
+            .and_then(Value::as_u64)
+            .map(|value| value as u32);
+    }
+
+    if let Some(timeline) = benchmark_value.get("timeline").and_then(Value::as_array) {
+        manifest.semantic_profile.harness_timeline = timeline
+            .iter()
+            .filter_map(|span| {
+                Some(HarnessTimelineSpanRecord {
+                    phase: span.get("phase")?.as_str()?.to_string(),
+                    start_offset_ns: span.get("start_offset_ns")?.as_u64()?,
+                    end_offset_ns: span.get("end_offset_ns")?.as_u64()?,
+                    iteration: span
+                        .get("iteration")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as u32),
+                })
+            })
+            .collect();
+    }
+
     let Some(phases) = benchmark_value.get("phases").and_then(Value::as_array) else {
         return;
     };
@@ -2458,6 +3984,10 @@ fn build_capture_plan(
                     path: processed_root.join("native-report.txt"),
                 },
                 ArtifactRecord {
+                    label: "frame-locations".into(),
+                    path: processed_root.join("frame-locations.json"),
+                },
+                ArtifactRecord {
                     label: "benchmark-focused-stacks".into(),
                     path: processed_root.join("benchmark.focused.folded"),
                 },
@@ -2472,6 +4002,10 @@ fn build_capture_plan(
                 ArtifactRecord {
                     label: "flamegraph-viewer".into(),
                     path: processed_root.join("flamegraph.html"),
+                },
+                ArtifactRecord {
+                    label: "chronological-trace".into(),
+                    path: processed_root.join("chronological-trace.json"),
                 },
             ],
         ),
@@ -2504,6 +4038,10 @@ fn build_capture_plan(
                 ArtifactRecord {
                     label: "flamegraph-viewer".into(),
                     path: processed_root.join("flamegraph.html"),
+                },
+                ArtifactRecord {
+                    label: "chronological-trace".into(),
+                    path: processed_root.join("chronological-trace.json"),
                 },
             ],
         ),
@@ -2539,6 +4077,7 @@ fn build_capture_plan(
         },
         semantic_profile: SemanticProfileRecord {
             spans_path: Some(output_root.join("artifacts/semantic/phases.json")),
+            timeline_path: Some(output_root.join("artifacts/semantic/timeline.json")),
             ..SemanticProfileRecord::default()
         },
         capture_metadata: CaptureMetadataRecord {
@@ -2546,7 +4085,13 @@ fn build_capture_plan(
                 .device
                 .as_ref()
                 .map(|device| device.identifier.clone()),
+            os: target
+                .device
+                .as_ref()
+                .map(|device| format!("{} {}", device.os, device.os_version)),
             sample_duration_secs: None,
+            benchmark_iterations: None,
+            benchmark_warmup: None,
             warmup_mode: resolve_capture_warmup_mode(args.provider, backend, args.warmup_mode),
             capture_method: Some(match backend {
                 ProfileBackend::AndroidNative => "simpleperf".into(),
@@ -3117,6 +4662,440 @@ mod tests {
         assert!(sidecar.contains("\"serialize\""));
     }
 
+    fn write_timeline_demo_session(
+        output_dir: &Path,
+        run_output_dir: &Path,
+    ) -> Result<ProfileManifest> {
+        let raw_root = run_output_dir.join("artifacts/raw");
+        let processed_root = run_output_dir.join("artifacts/processed");
+        let semantic_root = run_output_dir.join("artifacts/semantic");
+
+        std::fs::create_dir_all(&raw_root)?;
+        std::fs::create_dir_all(&processed_root)?;
+        std::fs::create_dir_all(&semantic_root)?;
+
+        let mut manifest = sample_manifest();
+        manifest.run_id = "ios-demo".into();
+        manifest.target = MobileTarget::Ios;
+        manifest.backend = ProfileBackend::IosInstruments;
+        manifest.native_capture.status = CaptureStatus::Captured;
+        manifest.native_capture.symbolization.status = CaptureStatus::Captured;
+        manifest.native_capture.symbolization.tool = Some("sample".into());
+        manifest.capture_metadata.device = Some("iPhone 17 Pro-26.2".into());
+        manifest.capture_metadata.os = Some("iOS 26.2".into());
+        manifest.capture_metadata.capture_method = Some("sample/simctl".into());
+        manifest.capture_metadata.sample_duration_secs = Some(15);
+        manifest.capture_metadata.benchmark_iterations = Some(20);
+        manifest.capture_metadata.benchmark_warmup = Some(3);
+        manifest.capture_metadata.warmup_mode = Some(CaptureWarmupMode::Warm);
+        manifest.semantic_profile.spans_path = Some(semantic_root.join("phases.json"));
+        manifest.semantic_profile.timeline_path = Some(semantic_root.join("timeline.json"));
+        manifest.semantic_profile.harness_timeline = vec![
+            HarnessTimelineSpanRecord {
+                phase: "setup".into(),
+                start_offset_ns: 0,
+                end_offset_ns: 500_000_000,
+                iteration: None,
+            },
+            HarnessTimelineSpanRecord {
+                phase: "warmup-benchmark".into(),
+                start_offset_ns: 500_000_000,
+                end_offset_ns: 1_000_000_000,
+                iteration: Some(0),
+            },
+            HarnessTimelineSpanRecord {
+                phase: "measured-benchmark".into(),
+                start_offset_ns: 1_000_000_000,
+                end_offset_ns: 1_400_000_000,
+                iteration: Some(0),
+            },
+            HarnessTimelineSpanRecord {
+                phase: "measured-benchmark".into(),
+                start_offset_ns: 1_400_000_000,
+                end_offset_ns: 1_800_000_000,
+                iteration: Some(1),
+            },
+            HarnessTimelineSpanRecord {
+                phase: "teardown".into(),
+                start_offset_ns: 1_800_000_000,
+                end_offset_ns: 2_100_000_000,
+                iteration: None,
+            },
+        ];
+        manifest.native_capture.raw_artifacts = vec![ArtifactRecord {
+            label: "sample".into(),
+            path: raw_root.join("sample.txt"),
+        }];
+        manifest.native_capture.processed_artifacts = vec![
+            ArtifactRecord {
+                label: "collapsed-stacks".into(),
+                path: processed_root.join("stacks.folded"),
+            },
+            ArtifactRecord {
+                label: "native-report".into(),
+                path: processed_root.join("native-report.txt"),
+            },
+            ArtifactRecord {
+                label: "benchmark-focused-stacks".into(),
+                path: processed_root.join("benchmark.focused.folded"),
+            },
+            ArtifactRecord {
+                label: "flamegraph-full-svg".into(),
+                path: processed_root.join("flamegraph.full.svg"),
+            },
+            ArtifactRecord {
+                label: "flamegraph-focused-svg".into(),
+                path: processed_root.join("flamegraph.focused.svg"),
+            },
+            ArtifactRecord {
+                label: "flamegraph-viewer".into(),
+                path: processed_root.join("flamegraph.html"),
+            },
+            ArtifactRecord {
+                label: "chronological-trace".into(),
+                path: processed_root.join("chronological-trace.json"),
+            },
+        ];
+
+        std::fs::write(raw_root.join("sample.txt"), "synthetic sample output")?;
+        let folded = concat!(
+            "UIKitMain;runBenchmark(spec:);sample_fns::run_benchmark;sample_fns::fibonacci 5\n",
+            "UIKitMain;runBenchmark(spec:);sample_fns::run_benchmark;sample_fns::checksum 2\n",
+        );
+        write_dual_view_flamegraph_bundle(
+            folded,
+            &processed_root,
+            "iOS Native Profile",
+            IOS_BENCHMARK_ANCHORS,
+            "../raw/sample.txt",
+            "Raw sample.txt",
+        )?;
+        std::fs::write(
+            processed_root.join("chronological-trace.json"),
+            serde_json::to_vec_pretty(&ChronologicalTraceRecord {
+                source: ChronologicalTraceSourceRecord {
+                    kind: "mobench-demo-trace".into(),
+                    profiler: "sample/simctl".into(),
+                    origin: "local".into(),
+                },
+                total_duration_ns: 2_100_000_000,
+                lanes: vec![ViewerTraceLane {
+                    id: "main-thread".into(),
+                    label: "Main Thread".into(),
+                    events: vec![
+                        ViewerTraceEvent {
+                            event_kind: "sample".into(),
+                            start_offset_ns: 1_050_000_000,
+                            end_offset_ns: Some(1_180_000_000),
+                            frames: vec![
+                                "sample_fns::run_benchmark".into(),
+                                "sample_fns::fibonacci".into(),
+                            ],
+                            phase: Some("measured-benchmark".into()),
+                            iteration: Some(0),
+                        },
+                        ViewerTraceEvent {
+                            event_kind: "sample".into(),
+                            start_offset_ns: 1_430_000_000,
+                            end_offset_ns: Some(1_560_000_000),
+                            frames: vec![
+                                "sample_fns::run_benchmark".into(),
+                                "sample_fns::checksum".into(),
+                            ],
+                            phase: Some("measured-benchmark".into()),
+                            iteration: Some(1),
+                        },
+                    ],
+                }],
+            })
+            .expect("serialize demo trace"),
+        )?;
+
+        let args = ProfileRunArgs {
+            target: MobileTarget::Ios,
+            function: "sample_fns::fibonacci".into(),
+            provider: ProfileProvider::Local,
+            backend: ProfileBackend::IosInstruments,
+            format: ProfileFormat::Both,
+            output_dir: output_dir.to_path_buf(),
+            crate_path: None,
+            device: None,
+            os_version: None,
+            profile: None,
+            device_matrix: None,
+            config: None,
+            warmup_mode: Some(CaptureWarmupMode::Warm),
+        };
+        write_profile_session_outputs(&args, run_output_dir, &manifest)?;
+        Ok(manifest)
+    }
+
+    #[test]
+    fn write_profile_session_outputs_rewrites_flamegraph_with_timeline_payload() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let run_output_dir = dir.path().join("ios-demo");
+
+        let manifest =
+            write_timeline_demo_session(dir.path(), &run_output_dir).expect("write demo session");
+
+        let viewer_html =
+            std::fs::read_to_string(run_output_dir.join("artifacts/processed/flamegraph.html"))
+                .expect("read flamegraph viewer");
+        let trace_json = std::fs::read_to_string(
+            run_output_dir.join("artifacts/processed/chronological-trace.json"),
+        )
+        .expect("read chronological trace");
+
+        assert!(viewer_html.contains("Timeline"));
+        assert!(viewer_html.contains("iPhone 17 Pro-26.2"));
+        assert!(viewer_html.contains("20 measured / 3 warmup"));
+        assert!(viewer_html.contains("sample/simctl"));
+        assert!(viewer_html.contains("\"Main Thread\""));
+        assert!(viewer_html.contains("\"warmup-benchmark\""));
+        assert!(trace_json.contains("\"mobench-demo-trace\""));
+        assert!(trace_json.contains("\"Main Thread\""));
+        assert!(trace_json.contains(&manifest.function));
+    }
+
+    #[test]
+    #[ignore]
+    fn generate_flamegraph_timeline_demo_artifact() {
+        let output_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/mobench/flamegraph-timeline-demo");
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let run_output_dir = output_dir.join("ios-demo");
+
+        write_timeline_demo_session(&output_dir, &run_output_dir).expect("generate demo artifact");
+    }
+
+    #[test]
+    fn refresh_differential_viewer_manifest_writes_timeline_capable_html() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let baseline_run_dir = dir.path().join("baseline-run");
+        let candidate_run_dir = dir.path().join("candidate-run");
+        let diff_run_dir = dir.path().join("diff-run");
+        let diff_processed_dir = diff_run_dir.join("artifacts/processed");
+        std::fs::create_dir_all(&baseline_run_dir).expect("create baseline run dir");
+        std::fs::create_dir_all(&candidate_run_dir).expect("create candidate run dir");
+        std::fs::create_dir_all(&diff_processed_dir).expect("create diff processed dir");
+
+        let mut baseline_manifest = sample_manifest();
+        baseline_manifest.run_id = "baseline-run".into();
+        baseline_manifest.target = MobileTarget::Ios;
+        baseline_manifest.backend = ProfileBackend::IosInstruments;
+        baseline_manifest.capture_metadata.device = Some("iPhone 17 Pro-26.2".into());
+        baseline_manifest.capture_metadata.os = Some("iOS 26.2".into());
+        baseline_manifest.capture_metadata.capture_method = Some("sample/simctl".into());
+
+        let mut candidate_manifest = baseline_manifest.clone();
+        candidate_manifest.run_id = "candidate-run".into();
+
+        std::fs::write(
+            baseline_run_dir.join("profile.json"),
+            serde_json::to_vec_pretty(&baseline_manifest).expect("serialize baseline manifest"),
+        )
+        .expect("write baseline manifest");
+        std::fs::write(
+            candidate_run_dir.join("profile.json"),
+            serde_json::to_vec_pretty(&candidate_manifest).expect("serialize candidate manifest"),
+        )
+        .expect("write candidate manifest");
+
+        std::fs::write(
+            diff_processed_dir.join("diff.full.folded"),
+            "root;main 12\n",
+        )
+        .expect("write diff full folded");
+        std::fs::write(
+            diff_processed_dir.join("diff.focused.folded"),
+            "bench;sample_fns::fibonacci 7\n",
+        )
+        .expect("write diff focused folded");
+        std::fs::write(
+            diff_processed_dir.join("flamegraph.full.svg"),
+            "<svg id=\"full\"></svg>",
+        )
+        .expect("write diff full svg");
+        std::fs::write(
+            diff_processed_dir.join("flamegraph.focused.svg"),
+            "<svg id=\"focused\"></svg>",
+        )
+        .expect("write diff focused svg");
+
+        let diff_manifest_path = dir.path().join("profile-diff.json");
+        std::fs::write(
+            &diff_manifest_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "run_id": "baseline-run--vs--candidate-run",
+                "baseline": "baseline-run/profile.json",
+                "candidate": "candidate-run/profile.json",
+                "viewer_path": "diff-run/artifacts/processed/flamegraph.html",
+                "warnings": [
+                    "Differential flamegraph colors: red = hotter in candidate, blue = hotter in baseline. Frame widths follow candidate sample counts."
+                ],
+                "modes": [
+                    {
+                        "mode": "full",
+                        "diff_folded": "diff-run/artifacts/processed/diff.full.folded",
+                        "flamegraph_svg": "diff-run/artifacts/processed/flamegraph.full.svg"
+                    },
+                    {
+                        "mode": "focused",
+                        "diff_folded": "diff-run/artifacts/processed/diff.focused.folded",
+                        "flamegraph_svg": "diff-run/artifacts/processed/flamegraph.focused.svg"
+                    }
+                ]
+            }))
+            .expect("serialize diff manifest"),
+        )
+        .expect("write diff manifest");
+
+        refresh_differential_flamegraph_viewer_from_manifest_path(&diff_manifest_path)
+            .expect("refresh differential viewer");
+
+        let html = std::fs::read_to_string(diff_processed_dir.join("flamegraph.html"))
+            .expect("read differential flamegraph html");
+        assert!(html.contains("data-mode=\"timeline\""));
+        assert!(html.contains("Baseline Run"));
+        assert!(html.contains("Candidate Run"));
+        assert!(html.contains("Chronological trace"));
+        assert!(html.contains("Exact harness time"));
+    }
+
+    #[test]
+    fn cmd_profile_diff_writes_runtime_bundle() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let baseline_run_dir = dir.path().join("baseline-run");
+        let candidate_run_dir = dir.path().join("candidate-run");
+        std::fs::create_dir_all(baseline_run_dir.join("artifacts/processed"))
+            .expect("create baseline processed");
+        std::fs::create_dir_all(candidate_run_dir.join("artifacts/processed"))
+            .expect("create candidate processed");
+
+        let mut baseline_manifest = sample_manifest();
+        baseline_manifest.run_id = "baseline-run".into();
+        baseline_manifest.native_capture.status = CaptureStatus::Captured;
+        baseline_manifest.native_capture.symbolization.status = CaptureStatus::Captured;
+        let mut candidate_manifest = baseline_manifest.clone();
+        candidate_manifest.run_id = "candidate-run".into();
+
+        std::fs::write(
+            baseline_run_dir.join("artifacts/processed/stacks.folded"),
+            "root;sample_fns::fibonacci 4\n",
+        )
+        .expect("write baseline full");
+        std::fs::write(
+            baseline_run_dir.join("artifacts/processed/benchmark.focused.folded"),
+            "sample_fns::run_benchmark;sample_fns::fibonacci 4\n",
+        )
+        .expect("write baseline focused");
+        std::fs::write(
+            candidate_run_dir.join("artifacts/processed/stacks.folded"),
+            "root;sample_fns::fibonacci 7\nroot;sample_fns::checksum 1\n",
+        )
+        .expect("write candidate full");
+        std::fs::write(
+            candidate_run_dir.join("artifacts/processed/benchmark.focused.folded"),
+            "sample_fns::run_benchmark;sample_fns::fibonacci 7\n",
+        )
+        .expect("write candidate focused");
+
+        write_profile_manifest(&baseline_run_dir.join("profile.json"), &baseline_manifest)
+            .expect("write baseline manifest");
+        write_profile_manifest(&candidate_run_dir.join("profile.json"), &candidate_manifest)
+            .expect("write candidate manifest");
+
+        let output_dir = dir.path().join("diff");
+        cmd_profile_diff(&ProfileDiffArgs {
+            baseline: baseline_run_dir.join("profile.json"),
+            candidate: candidate_run_dir.join("profile.json"),
+            output_dir: output_dir.clone(),
+            normalize: true,
+        })
+        .expect("run profile diff");
+
+        let diff_dir = output_dir.join("baseline-run--vs--candidate-run");
+        assert!(diff_dir.join("profile-diff.json").exists());
+        assert!(diff_dir.join("summary.md").exists());
+        assert!(
+            diff_dir
+                .join("artifacts/processed/flamegraph.html")
+                .exists()
+        );
+        let summary = std::fs::read_to_string(diff_dir.join("summary.md")).expect("read summary");
+        assert!(summary.contains("Differential Flamegraph Summary"));
+        assert!(summary.contains("Normalize: `true`"));
+    }
+
+    #[test]
+    fn refresh_flamegraph_viewer_includes_android_source_links_when_sidecar_exists() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let run_output_dir = dir.path().join("android-source-demo");
+        let processed_root = run_output_dir.join("artifacts/processed");
+        std::fs::create_dir_all(&processed_root).expect("create processed root");
+
+        let mut manifest = sample_manifest();
+        manifest.run_id = "android-source-demo".into();
+        manifest.native_capture.status = CaptureStatus::Captured;
+        manifest.native_capture.symbolization.status = CaptureStatus::Captured;
+        manifest
+            .native_capture
+            .processed_artifacts
+            .push(ArtifactRecord {
+                label: "frame-locations".into(),
+                path: PathBuf::from("artifacts/processed/frame-locations.json"),
+            });
+
+        std::fs::write(
+            processed_root.join("stacks.folded"),
+            "root;sample_fns::fibonacci 5\n",
+        )
+        .expect("write full folded");
+        std::fs::write(
+            processed_root.join("benchmark.focused.folded"),
+            "sample_fns::run_benchmark;sample_fns::fibonacci 5\n",
+        )
+        .expect("write focused folded");
+        std::fs::write(
+            processed_root.join("flamegraph.full.svg"),
+            "<svg id=\"full\"></svg>",
+        )
+        .expect("write full svg");
+        std::fs::write(
+            processed_root.join("flamegraph.focused.svg"),
+            "<svg id=\"focused\"></svg>",
+        )
+        .expect("write focused svg");
+        std::fs::write(
+            processed_root.join("frame-locations.json"),
+            serde_json::to_vec_pretty(&vec![FrameLocationRecord {
+                frame: "sample_fns::fibonacci".into(),
+                source_path: PathBuf::from("crates/sample-fns/src/lib.rs"),
+                line: 42,
+            }])
+            .expect("serialize frame locations"),
+        )
+        .expect("write frame locations");
+
+        refresh_flamegraph_viewer_from_manifest(&run_output_dir, &manifest)
+            .expect("refresh flamegraph viewer");
+
+        let html = std::fs::read_to_string(processed_root.join("flamegraph.html"))
+            .expect("read viewer html");
+        assert!(html.contains("sample_fns::fibonacci"));
+        assert!(html.contains("crates/sample-fns/src/lib.rs:42"));
+    }
+
+    #[test]
+    #[ignore]
+    fn refresh_profile_diff_demo_viewer_artifact() {
+        let diff_manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("target/mobench/profile-diff-demo/profile-diff.json");
+        refresh_differential_flamegraph_viewer_from_manifest_path(&diff_manifest_path)
+            .expect("refresh profile diff demo viewer");
+    }
+
     #[test]
     fn profile_manifest_serializes_partial_failure_state() {
         let manifest = sample_manifest();
@@ -3319,6 +5298,69 @@ mod tests {
         assert_eq!(manifest.semantic_profile.phases[0].percent_total, Some(80));
         assert_eq!(manifest.semantic_profile.phases[1].name, "serialize");
         assert_eq!(manifest.semantic_profile.phases[1].percent_total, Some(10));
+    }
+
+    #[test]
+    fn semantic_profile_ingests_exact_harness_timeline_and_run_counts_from_bench_report_json() {
+        let args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        let target = resolve_profile_target(&args).expect("resolve target");
+        let mut manifest =
+            build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+                .expect("build capture plan");
+        let bench_report = serde_json::json!({
+            "spec": {
+                "name": "sample_fns::fibonacci",
+                "iterations": 2,
+                "warmup": 1
+            },
+            "samples": [
+                {"duration_ns": 100},
+                {"duration_ns": 300}
+            ],
+            "phases": [
+                {"name": "prove", "duration_ns": 320},
+                {"name": "serialize", "duration_ns": 40}
+            ],
+            "timeline": [
+                {
+                    "phase": "setup",
+                    "start_offset_ns": 0,
+                    "end_offset_ns": 10,
+                    "iteration": null
+                },
+                {
+                    "phase": "measured-benchmark",
+                    "start_offset_ns": 10,
+                    "end_offset_ns": 30,
+                    "iteration": 0
+                }
+            ]
+        });
+
+        populate_semantic_profile_from_benchmark_value(&mut manifest, &bench_report);
+
+        let json = serde_json::to_value(&manifest).expect("serialize manifest");
+        assert_eq!(
+            json["capture_metadata"]["benchmark_iterations"],
+            serde_json::json!(2)
+        );
+        assert_eq!(
+            json["capture_metadata"]["benchmark_warmup"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            json["semantic_profile"]["harness_timeline"][0]["phase"],
+            "setup"
+        );
+        assert_eq!(
+            json["semantic_profile"]["harness_timeline"][1]["phase"],
+            "measured-benchmark"
+        );
     }
 
     #[test]
@@ -4128,13 +6170,31 @@ mod tests {
                     },
                 ],
                 spans_path: Some(PathBuf::from("artifacts/semantic/spans.json")),
+                harness_timeline: vec![
+                    HarnessTimelineSpanRecord {
+                        phase: "setup".into(),
+                        start_offset_ns: 0,
+                        end_offset_ns: 100,
+                        iteration: None,
+                    },
+                    HarnessTimelineSpanRecord {
+                        phase: "measured-benchmark".into(),
+                        start_offset_ns: 100,
+                        end_offset_ns: 300,
+                        iteration: Some(0),
+                    },
+                ],
+                timeline_path: Some(PathBuf::from("artifacts/semantic/timeline.json")),
             },
             capture_metadata: CaptureMetadataRecord {
                 device: target
                     .device
                     .as_ref()
                     .map(|device| device.identifier.clone()),
+                os: Some("android 13".into()),
                 sample_duration_secs: Some(15),
+                benchmark_iterations: Some(20),
+                benchmark_warmup: Some(3),
                 warmup_mode: Some(CaptureWarmupMode::Warm),
                 capture_method: Some("simpleperf".into()),
                 warnings: vec!["missing symbols".into()],

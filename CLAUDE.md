@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
+mobile-bench-rs (now **mobench**) is a mobile benchmarking toolkit for Rust. It supports benchmark execution on local devices or BrowserStack and local-first native profiling on Android and iOS. It provides a library-first design with a `#[benchmark]` attribute macro plus CLI tools for building, testing, running, reporting, and profiling benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.25):**
+**Published on crates.io as the mobench ecosystem (v0.1.27):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -70,10 +70,11 @@ The CLI supports both Espresso (Android) and XCUITest (iOS) test automation fram
 
 **Primary Documentation:**
 
-- **`BUILD.md`**: Complete build reference with prerequisites, step-by-step instructions, and troubleshooting for both Android and iOS
-- **`TESTING.md`**: Comprehensive testing guide with advanced scenarios and detailed troubleshooting
+- **`docs/guides/build.md`**: Complete build reference with prerequisites, step-by-step instructions, and troubleshooting for both Android and iOS
+- **`docs/guides/testing.md`**: Comprehensive testing guide with advanced scenarios and detailed troubleshooting
+- **`docs/guides/sdk-integration.md`**: Integration guide for SDK users
 
-For comprehensive testing instructions, see **`TESTING.md`** which includes:
+For comprehensive testing instructions, see **`docs/guides/testing.md`** which includes:
 
 - Prerequisites and setup
 - Host testing (cargo test)
@@ -418,7 +419,7 @@ fn my_expensive_operation() {
 
 The macro automatically registers functions at compile time via the `inventory` crate.
 
-**Setup and Teardown (v0.1.13+)**: The `#[benchmark]` macro supports setup and teardown for excluding expensive initialization from timing:
+**Setup and teardown**: The `#[benchmark]` macro supports setup and teardown for excluding expensive initialization from timing:
 
 ```rust
 // Setup runs once before all iterations (not measured)
@@ -450,7 +451,7 @@ fn db_query(db: &Database) {
 }
 ```
 
-**Macro Validation (v0.1.13+)**: The `#[benchmark]` macro validates function signatures at compile time:
+**Macro validation**: The `#[benchmark]` macro validates function signatures at compile time:
 - Simple benchmarks: no parameters, returns `()`
 - With setup: one parameter matching setup return type
 - Compile errors include helpful messages about requirements
@@ -553,7 +554,7 @@ Credentials are resolved in this order:
 2. Environment variables: `BROWSERSTACK_USERNAME`, `BROWSERSTACK_ACCESS_KEY`, `BROWSERSTACK_PROJECT`
 3. `.env.local` file (loaded automatically via `dotenvy`)
 
-**Improved Error Messages (v0.1.13+)**: Missing credentials now show setup instructions:
+**Credential error messages**: Missing credentials now show setup instructions:
 - Instructions for setting environment variables
 - Link to BrowserStack account settings page
 - Hints for `.env.local` file setup
@@ -594,7 +595,7 @@ The workflow supports manual dispatch with platform selection:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.25"
+mobench-sdk = "0.1.27"
 inventory = "0.3"
 ```
 
@@ -796,9 +797,10 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
 
 ### Documentation
 
-- **`BUILD.md`**: Complete build reference with prerequisites and troubleshooting
-- **`TESTING.md`**: Comprehensive testing guide with detailed troubleshooting
-- **`BENCH_SDK_INTEGRATION.md`**: Integration guide for SDK users
+- **`docs/guides/build.md`**: Complete build reference with prerequisites and troubleshooting
+- **`docs/guides/testing.md`**: Comprehensive testing guide with detailed troubleshooting
+- **`docs/guides/sdk-integration.md`**: Integration guide for SDK users
+- **`docs/guides/browserstack-ci.md`**: BrowserStack benchmark execution and CI guidance
 - **`docs/codebase/ARCHITECTURE.md`**: Current architecture reference
 - **`RELEASE_NOTES.md`**: Published release history and support status
 - **`CLAUDE.md`**: This file - developer guide for the codebase

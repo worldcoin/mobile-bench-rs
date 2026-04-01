@@ -10,6 +10,7 @@ documentation = "https://docs.rs/mobench"
 readme = "README.md"
 keywords = ["benchmark", "mobile", "android", "ios", "performance"]
 categories = ["development-tools", "command-line-utilities"]
+exclude = ["artifacts/**"]
 
 [badges]
 maintenance = { status = "actively-developed" }
@@ -36,7 +37,7 @@ path = "src/bin/cargo-mobench.rs"
 
 [dependencies]
 anyhow.workspace = true
-mobench-sdk = { version = "0.1.26", path = "../mobench-sdk" }
+mobench-sdk = { version = "0.1.27", path = "../mobench-sdk" }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

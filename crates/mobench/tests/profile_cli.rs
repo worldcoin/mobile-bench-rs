@@ -126,3 +126,23 @@ fn profile_run_cli_surface_exposes_or_explicitly_omits_device_selection() {
         "expected help to expose device selection or explicitly document its absence, got:\n{stdout}"
     );
 }
+
+#[test]
+fn profile_diff_help_exposes_runtime_command_surface() {
+    let output = run_mobench(["profile", "diff", "--help"]);
+    assert!(output.status.success(), "expected diff help to succeed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--baseline"),
+        "expected baseline arg, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--candidate"),
+        "expected candidate arg, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("--normalize"),
+        "expected normalize flag, got:\n{stdout}"
+    );
+}

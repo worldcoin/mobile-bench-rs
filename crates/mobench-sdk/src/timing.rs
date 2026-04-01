@@ -236,6 +236,17 @@ pub struct BenchReport {
 
     /// Optional semantic phase timings captured during measured iterations.
     pub phases: Vec<SemanticPhase>,
+
+    /// Exact harness timeline spans in execution order.
+    pub timeline: Vec<HarnessTimelineSpan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessTimelineSpan {
+    pub phase: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: u64,
+    pub iteration: Option<u32>,
 }
 
 impl BenchReport {
@@ -333,6 +344,29 @@ impl BenchReport {
             p99_ns: self.percentile_ns(99.0),
         }
     }
+}
+
+fn instant_offset_ns(origin: Instant, instant: Instant) -> u64 {
+    instant
+        .duration_since(origin)
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn push_timeline_span(
+    timeline: &mut Vec<HarnessTimelineSpan>,
+    origin: Instant,
+    phase: &str,
+    started_at: Instant,
+    ended_at: Instant,
+    iteration: Option<u32>,
+) {
+    timeline.push(HarnessTimelineSpan {
+        phase: phase.to_string(),
+        start_offset_ns: instant_offset_ns(origin, started_at),
+        end_offset_ns: instant_offset_ns(origin, ended_at),
+        iteration,
+    });
 }
 
 /// Statistical summary of benchmark results.
@@ -585,22 +619,42 @@ where
     }
 
     reset_semantic_phase_collection();
+    let harness_origin = Instant::now();
+    let mut timeline = Vec::new();
 
     // Warmup phase - not measured
-    for _ in 0..spec.warmup {
+    for iteration in 0..spec.warmup {
+        let phase_start = Instant::now();
         f()?;
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "warmup-benchmark",
+            phase_start,
+            Instant::now(),
+            Some(iteration),
+        );
     }
 
     // Measurement phase
     begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for _ in 0..spec.iterations {
+    for iteration in 0..spec.iterations {
         let start = Instant::now();
         if let Err(err) = f() {
             let _ = finish_semantic_phase_collection();
             return Err(err);
         }
-        samples.push(BenchSample::from_duration(start.elapsed()));
+        let end = Instant::now();
+        samples.push(BenchSample::from_duration(end.duration_since(start)));
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "measured-benchmark",
+            start,
+            end,
+            Some(iteration),
+        );
     }
     let phases = finish_semantic_phase_collection();
 
@@ -608,6 +662,7 @@ where
         spec,
         samples,
         phases,
+        timeline,
     })
 }
 
@@ -654,25 +709,54 @@ where
     }
 
     reset_semantic_phase_collection();
+    let harness_origin = Instant::now();
+    let mut timeline = Vec::new();
 
     // Setup phase - not timed
+    let setup_start = Instant::now();
     let input = setup();
+    push_timeline_span(
+        &mut timeline,
+        harness_origin,
+        "setup",
+        setup_start,
+        Instant::now(),
+        None,
+    );
 
     // Warmup phase - not recorded
-    for _ in 0..spec.warmup {
+    for iteration in 0..spec.warmup {
+        let phase_start = Instant::now();
         f(&input)?;
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "warmup-benchmark",
+            phase_start,
+            Instant::now(),
+            Some(iteration),
+        );
     }
 
     // Measurement phase
     begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for _ in 0..spec.iterations {
+    for iteration in 0..spec.iterations {
         let start = Instant::now();
         if let Err(err) = f(&input) {
             let _ = finish_semantic_phase_collection();
             return Err(err);
         }
-        samples.push(BenchSample::from_duration(start.elapsed()));
+        let end = Instant::now();
+        samples.push(BenchSample::from_duration(end.duration_since(start)));
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "measured-benchmark",
+            start,
+            end,
+            Some(iteration),
+        );
     }
     let phases = finish_semantic_phase_collection();
 
@@ -680,6 +764,7 @@ where
         spec,
         samples,
         phases,
+        timeline,
     })
 }
 
@@ -727,25 +812,63 @@ where
     }
 
     reset_semantic_phase_collection();
+    let harness_origin = Instant::now();
+    let mut timeline = Vec::new();
 
     // Warmup phase
-    for _ in 0..spec.warmup {
+    for iteration in 0..spec.warmup {
+        let setup_start = Instant::now();
         let input = setup();
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "fixture-setup",
+            setup_start,
+            Instant::now(),
+            Some(iteration),
+        );
+        let phase_start = Instant::now();
         f(input)?;
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "warmup-benchmark",
+            phase_start,
+            Instant::now(),
+            Some(iteration),
+        );
     }
 
     // Measurement phase
     begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for _ in 0..spec.iterations {
+    for iteration in 0..spec.iterations {
+        let setup_start = Instant::now();
         let input = setup(); // Not timed
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "fixture-setup",
+            setup_start,
+            Instant::now(),
+            Some(iteration),
+        );
 
         let start = Instant::now();
         if let Err(err) = f(input) {
             let _ = finish_semantic_phase_collection();
             return Err(err);
         }
-        samples.push(BenchSample::from_duration(start.elapsed()));
+        let end = Instant::now();
+        samples.push(BenchSample::from_duration(end.duration_since(start)));
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "measured-benchmark",
+            start,
+            end,
+            Some(iteration),
+        );
     }
     let phases = finish_semantic_phase_collection();
 
@@ -753,6 +876,7 @@ where
         spec,
         samples,
         phases,
+        timeline,
     })
 }
 
@@ -802,35 +926,74 @@ where
     }
 
     reset_semantic_phase_collection();
+    let harness_origin = Instant::now();
+    let mut timeline = Vec::new();
 
     // Setup phase - not timed
+    let setup_start = Instant::now();
     let input = setup();
+    push_timeline_span(
+        &mut timeline,
+        harness_origin,
+        "setup",
+        setup_start,
+        Instant::now(),
+        None,
+    );
 
     // Warmup phase
-    for _ in 0..spec.warmup {
+    for iteration in 0..spec.warmup {
+        let phase_start = Instant::now();
         f(&input)?;
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "warmup-benchmark",
+            phase_start,
+            Instant::now(),
+            Some(iteration),
+        );
     }
 
     // Measurement phase
     begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for _ in 0..spec.iterations {
+    for iteration in 0..spec.iterations {
         let start = Instant::now();
         if let Err(err) = f(&input) {
             let _ = finish_semantic_phase_collection();
             return Err(err);
         }
-        samples.push(BenchSample::from_duration(start.elapsed()));
+        let end = Instant::now();
+        samples.push(BenchSample::from_duration(end.duration_since(start)));
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "measured-benchmark",
+            start,
+            end,
+            Some(iteration),
+        );
     }
     let phases = finish_semantic_phase_collection();
 
     // Teardown phase - not timed
+    let teardown_start = Instant::now();
     teardown(input);
+    push_timeline_span(
+        &mut timeline,
+        harness_origin,
+        "teardown",
+        teardown_start,
+        Instant::now(),
+        None,
+    );
 
     Ok(BenchReport {
         spec,
         samples,
         phases,
+        timeline,
     })
 }
 
@@ -1010,5 +1173,32 @@ mod tests {
         assert_eq!(SETUP_COUNT.load(Ordering::SeqCst), 1);
         assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 1);
         assert_eq!(report.samples.len(), 3);
+    }
+
+    #[test]
+    fn bench_report_serializes_exact_harness_timeline() {
+        let spec = BenchSpec::new("timeline", 2, 1).unwrap();
+        let report = run_closure_with_setup_teardown(
+            spec,
+            || {
+                std::thread::sleep(Duration::from_millis(1));
+                "resource"
+            },
+            |_resource| {
+                std::thread::sleep(Duration::from_millis(1));
+                Ok(())
+            },
+            |_resource| {
+                std::thread::sleep(Duration::from_millis(1));
+            },
+        )
+        .unwrap();
+
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["timeline"][0]["phase"], "setup");
+        assert_eq!(json["timeline"][1]["phase"], "warmup-benchmark");
+        assert_eq!(json["timeline"][2]["phase"], "measured-benchmark");
+        assert_eq!(json["timeline"][3]["phase"], "measured-benchmark");
+        assert_eq!(json["timeline"][4]["phase"], "teardown");
     }
 }
