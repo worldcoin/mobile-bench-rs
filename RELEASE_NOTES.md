@@ -13,7 +13,7 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.26` is the current supported release.
+- `v0.1.28` is the current supported release.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -22,7 +22,9 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.26` | 2026-03-28 | `mobench 0.1.26`, `mobench-sdk 0.1.26`, `mobench-macros 0.1.26` | Current supported release |
+| `v0.1.28` | 2026-04-02 | `mobench 0.1.28`, `mobench-sdk 0.1.28`, `mobench-macros 0.1.28` | Current supported release |
+| `v0.1.27` | 2026-04-01 | `mobench 0.1.27`, `mobench-sdk 0.1.27`, `mobench-macros 0.1.27` | Test build. Do not use. |
+| `v0.1.26` | 2026-03-28 | `mobench 0.1.26`, `mobench-sdk 0.1.26`, `mobench-macros 0.1.26` | Test build. Do not use. |
 | `v0.1.25` | 2026-03-26 | `mobench 0.1.25`, `mobench-sdk 0.1.25`, `mobench-macros 0.1.25` | Test build. Do not use. |
 | `v0.1.24` | 2026-03-26 | `mobench 0.1.24`, `mobench-sdk 0.1.24`, `mobench-macros 0.1.24` | Test build. Do not use. |
 | `v0.1.23` | 2026-03-26 | `mobench 0.1.23`, `mobench-sdk 0.1.23`, `mobench-macros 0.1.23` | Test build. Do not use. |
@@ -51,9 +53,43 @@ Crates.io release history:
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
 
-## v0.1.26
+## v0.1.28
 
 Status: current supported release.
+
+- Added resource-aware markdown rendering to `report summarize`, so the
+  sticky-comment/report path now shows benchmark resource columns instead of
+  dropping them.
+- Switched summary CPU reporting to `CPU median (ms)` based on per-measured
+  iteration process CPU deltas instead of aggregate benchmark-invocation CPU.
+- Added native iOS benchmark resource collection and threaded it through the
+  existing CI summary/report model.
+- Scoped measured peak memory to the benchmark body by excluding warmup,
+  one-time setup/teardown, and per-iteration setup from the tracked baseline.
+- Fixed Android CI reuse of stale generated UniFFI bindings and stale generated
+  scaffolding from cached targets, which previously caused missing results or
+  stale resource fields.
+- Added direct Android process-memory sampling so Android emits measured
+  `peak_memory_kb` in raw benchmark reports instead of relying on summary-time
+  PSS/heap fallbacks.
+- Preserved measured `peak_memory_kb = 0` as a real result so summaries no
+  longer replace zero-delta runs with coarse fallback memory totals.
+- Validated the end-to-end CI path with successful both-platform runs
+  `23705449560` and `23706060742`.
+
+## v0.1.27
+
+Status: test build. Do not use.
+
+- Published the synchronized `0.1.27` crate line, but `report summarize` still
+  rendered markdown through the legacy summary table path.
+- `ci summarize` already had resource-aware markdown, but sticky comments and
+  `report summarize` output still omitted CPU and memory columns in this
+  release.
+
+## v0.1.26
+
+Status: test build. Do not use.
 
 - Published a synchronized `mobench`, `mobench-sdk`, and `mobench-macros`
   release so the registry dependency graph matches the current profiling and
