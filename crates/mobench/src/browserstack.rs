@@ -1928,9 +1928,7 @@ mod tests {
                 match listener.accept() {
                     Ok((mut stream, _peer)) => {
                         last_activity = Instant::now();
-                        stream
-                            .set_nonblocking(false)
-                            .expect("set stream blocking");
+                        stream.set_nonblocking(false).expect("set stream blocking");
 
                         let mut buf = [0_u8; 4096];
                         let bytes_read = stream.read(&mut buf).expect("read request");

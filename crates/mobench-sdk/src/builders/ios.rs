@@ -2030,11 +2030,7 @@ impl IosBuilder {
         })?;
 
         let mut extract = Command::new("ditto");
-        extract
-            .arg("-x")
-            .arg("-k")
-            .arg(ipa_path)
-            .arg(&extract_root);
+        extract.arg("-x").arg("-k").arg(ipa_path).arg(&extract_root);
 
         let extract_result = run_command(extract, "extract IPA for validation");
         if let Err(err) = extract_result {

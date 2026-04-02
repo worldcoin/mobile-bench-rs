@@ -87,6 +87,10 @@ cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
 cargo mobench profile run --target android --function sample_fns::fibonacci \
   --provider local --backend android-native
 cargo mobench profile summarize --profile target/mobench/profile/profile.json
+cargo mobench profile diff \
+  --baseline target/mobench/profile/android-sample_fns--fibonacci/profile.json \
+  --candidate target/mobench/profile/profile.json \
+  --normalize
 ```
 
 CI contract outputs are written to `target/mobench/ci/`:
@@ -101,13 +105,21 @@ Profiling commands are local-first in this release. Each session
 writes its current manifest and summary under
 `target/mobench/profile/<run-id>/`, and the CLI also refreshes top-level
 `target/mobench/profile/profile.json` and `summary.md` as convenience copies of
-the latest run.
+the latest run. Differential comparisons write to
+`target/mobench/profile/diff/<baseline-run-id>--vs--<candidate-run-id>/` and
+refresh top-level `profile-diff.json` / `summary.md` under the diff root.
 
 The manifest is split into three explicit sections:
 
 - `native_capture`: native stack artifacts, symbolization state, and viewer hints
 - `semantic_profile`: optional benchmark phase data such as `prove` and `serialize`
 - `capture_metadata`: device resolution, capture settings, and warnings
+
+Android-native sessions also emit `artifacts/processed/frame-locations.json`
+when `llvm-addr2line` can recover file/line metadata. The interactive viewer
+uses that sidecar to surface source links for selected frames and hot-path
+entries. iOS simulator-host `sample` sessions do not expose source links in the
+current release.
 
 The summary renderer keeps native and semantic outputs separate so the
 interactive flamegraph viewer stays focused on native stacks while phase
@@ -135,6 +147,20 @@ Warm mode is the default for local Android/iOS native plans. On Android it perfo
 one preparatory launch before recording to prime startup caches and reduce first-run
 noise. That improves the capture, but it does not remove all per-process bridge
 initialization from the recorded run.
+
+For flamegraph regression work, the recommended workflow is:
+
+- archive the per-session `profile.json` plus processed folded stacks as CI artifacts
+- fetch a baseline session and a candidate session
+- run `cargo mobench profile diff --baseline <profile.json> --candidate <profile.json> --normalize`
+- inspect `target/mobench/profile/diff/.../artifacts/processed/flamegraph.html`
+
+The current flamegraph viewer keeps aggregate hotspot analysis and exact harness
+timing separate: `Benchmark Only` and `Full Process` stay aggregate flamegraphs,
+while `Timeline` exposes exact harness intervals and any recorded chronological
+samples without relabeling the aggregate x-axis as wall-clock time.
+
+![Mobench flamegraph viewer](assets/flamegraph-viewer.png)
 
 When you need device-specific planning inputs for profiling, `profile run`
 reuses the same resolution model as `devices resolve`:
@@ -176,15 +202,19 @@ CLI flags override config file values when provided.
 
 ## Project docs
 
+- `docs/guides/README.md`: guide index for setup, integration, BrowserStack CI, fetch flows, and troubleshooting
+- `docs/guides/sdk-integration.md`: SDK integration guide
+- `docs/guides/build.md`: build prerequisites and troubleshooting
+- `docs/guides/profiling.md`: local native profiling guide, artifact layout, and symbol requirements
+- `docs/guides/testing.md`: testing guide and device workflows
+- `docs/guides/browserstack-ci.md`: BrowserStack benchmark CI setup
+- `docs/guides/browserstack-metrics.md`: BrowserStack metric normalization and limits
+- `docs/guides/fetch-results.md`: fetching and summarizing results
 - `docs/codebase/README.md`: current codebase reference map
-- `BENCH_SDK_INTEGRATION.md`: SDK integration guide
-- `BUILD.md`: build prerequisites and troubleshooting
-- `TESTING.md`: testing guide and device workflows
-- `BROWSERSTACK_CI_INTEGRATION.md`: BrowserStack CI setup
-- `RELEASE_NOTES.md`: published release history and support status
-- `docs/schemas/`: machine-readable CI/summary schema artifacts
 - `docs/MIGRATION_GUIDE.md`: migration notes for CI and reporting changes
-- `FETCH_RESULTS_GUIDE.md`: fetching and summarizing results
+- `docs/specs/dx-improvement-spec.md`: historical DX design spec, kept for context only
+- `docs/schemas/`: machine-readable CI/summary schema artifacts
+- `RELEASE_NOTES.md`: published release history and support status
 - `CLAUDE.md`: developer guide
 
 ## Setup and Teardown

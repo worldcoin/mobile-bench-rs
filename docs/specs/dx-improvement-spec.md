@@ -1,5 +1,12 @@
 # mobench DX Improvement Spec
 
+This is a historical design document. It is kept for context, not as the
+current source of truth. For shipped behavior, use:
+
+- [../guides/README.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/guides/README.md)
+- [../codebase/README.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/codebase/README.md)
+- [../../RELEASE_NOTES.md](/Users/dcbuilder/Code/world/mobile-bench-rs/RELEASE_NOTES.md)
+
 ## Goals
 
 Primary goals

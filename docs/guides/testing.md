@@ -2,11 +2,11 @@
 
 This document provides comprehensive testing instructions for mobile-bench-rs.
 
-> **For SDK Integrators**: If you're importing `mobench-sdk` into your project, use:
+> **For SDK integrators**: if you're importing `mobench-sdk` into your project, use:
 > - `cargo mobench build --target <android|ios>` for builds
 > - Scripts shown below are legacy tooling for this repository
-> - See [BENCH_SDK_INTEGRATION.md](BENCH_SDK_INTEGRATION.md) for the integration guide
-> **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see **[BUILD.md](BUILD.md)**. This document focuses on testing scenarios and troubleshooting.
+> - See [sdk-integration.md](sdk-integration.md) for the integration guide
+> **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see [build.md](build.md). This document focuses on testing scenarios and troubleshooting.
 
 Build/run/list/verify/package commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`. `build --progress` uses that same config-first resolver.
 
@@ -282,8 +282,8 @@ xcodebuild -project target/mobench/ios/BenchRunner/BenchRunner.xcodeproj \
   -destination 'platform=iOS Simulator,name=iPhone 15' \
   -derivedDataPath target/mobench/ios/build
 
-# Launch with arguments
-xcrun simctl launch booted dev.world.bench.BenchRunner \
+# Launch with arguments (replace the bundle id if your project uses a custom one)
+xcrun simctl launch booted dev.world.bench \
   --bench-function=sample_fns::checksum \
   --bench-iterations=30 \
   --bench-warmup=5
@@ -418,23 +418,9 @@ xcodegen generate
 
 **Problem**: "Cannot find type 'RustBuffer' in scope" or FFI type errors
 ```bash
-# Solution: Ensure the bridging header is configured
-# Check that BenchRunner-Bridging-Header.h exists at:
-# target/mobench/ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h
-
-# If missing, create it with:
-cat > target/mobench/ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h << 'EOF'
-//
-//  BenchRunner-Bridging-Header.h
-//  BenchRunner
-//
-//  Bridge to import C FFI from Rust (UniFFI-generated)
-//
-
-#import "sample_fnsFFI.h"
-EOF
-
-# Then regenerate the Xcode project:
+# Solution: regenerate the generated project instead of hand-authoring the header
+rm -rf target/mobench/ios
+cargo mobench build --target ios
 cd target/mobench/ios/BenchRunner
 xcodegen generate
 ```
@@ -526,9 +512,9 @@ cargo test --all
 
 ## Advanced Testing
 
-### BrowserStack Integration Testing
+### BrowserStack integration testing
 
-See the main [README.md](README.md) for BrowserStack testing instructions.
+See [browserstack-ci.md](browserstack-ci.md) for the BrowserStack benchmark flow.
 
 #### Device Validation
 
@@ -714,25 +700,21 @@ fn test_my_new_function() {
 }
 ```
 
-## Continuous Integration
+## Continuous integration
 
-The project includes a GitHub Actions workflow (`.github/workflows/mobile-bench.yml`) that:
-- Runs host tests on every push
-- Builds Android APK (optional)
-- Builds iOS xcframework (optional)
-- Uploads artifacts
+Current workflow families:
+- `.github/workflows/mobile-bench.yml`: fixture benchmark workflow for the checked-in example crate
+- `.github/workflows/mobile-bench-plot-fixtures.yml`: plot rendering verification
+- `.github/workflows/mobile-bench-selftest.yml`: sample benchmark self-test
+- `.github/workflows/mobile-bench-profile-selftest.yml`: local profiling self-test
 
-To trigger manually:
-1. Go to GitHub Actions tab
-2. Select "mobile-bench-rs CI"
-3. Click "Run workflow"
-4. Select platform(s) to build
+Prefer the workflow docs in [../codebase/TESTING.md](../codebase/TESTING.md) when you need an internal map of which workflow owns which validation surface.
 
-## Additional Resources
+## Additional resources
 
 - [UniFFI Documentation](https://mozilla.github.io/uniffi-rs/)
 - [Android NDK Documentation](https://developer.android.com/ndk)
 - [Rust Cross-Compilation Guide](https://rust-lang.github.io/rustup/cross-compilation.html)
-- [docs/codebase/ARCHITECTURE.md](docs/codebase/ARCHITECTURE.md) - Current architecture reference
-- [RELEASE_NOTES.md](RELEASE_NOTES.md) - Published release history and support status
-- [CLAUDE.md](CLAUDE.md) - Developer guide for this codebase
+- [../codebase/ARCHITECTURE.md](../codebase/ARCHITECTURE.md) - current architecture reference
+- [../../RELEASE_NOTES.md](../../RELEASE_NOTES.md) - published release history and support status
+- [../../CLAUDE.md](../../CLAUDE.md) - developer guide for this codebase

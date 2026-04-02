@@ -669,6 +669,8 @@ enum ProfileCommand {
         about = "Plan or execute a native profiling session; local android-native and ios-instruments now attempt real native capture"
     )]
     Run(profile::ProfileRunArgs),
+    /// Generate a differential flamegraph bundle from two normalized profile manifests.
+    Diff(profile::ProfileDiffArgs),
     /// Render markdown or JSON from a normalized profile manifest.
     Summarize(profile::ProfileSummarizeArgs),
 }
@@ -1879,6 +1881,9 @@ pub fn run() -> Result<()> {
         Command::Profile { command } => match command {
             ProfileCommand::Run(args) => {
                 profile::cmd_profile_run(&args, cli.dry_run)?;
+            }
+            ProfileCommand::Diff(args) => {
+                profile::cmd_profile_diff(&args)?;
             }
             ProfileCommand::Summarize(args) => {
                 profile::cmd_profile_summarize(&args)?;
@@ -5450,7 +5455,7 @@ pub(crate) fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
     }
 }
 
-fn repo_root() -> Result<PathBuf> {
+pub(crate) fn repo_root() -> Result<PathBuf> {
     let cwd = std::env::current_dir().context("resolving repo root from current directory")?;
     if let Some(root) = find_repo_root(&cwd) {
         return Ok(root);
@@ -5795,7 +5800,10 @@ fn cmd_list(project_root: Option<PathBuf>, crate_path: Option<PathBuf>) -> Resul
         println!("Usage:");
         println!(
             "  cargo mobench run --target android --function {} --iterations 100",
-            all_benchmarks.first().map(|s| s.as_str()).unwrap_or("my_benchmark")
+            all_benchmarks
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("my_benchmark")
         );
     }
 

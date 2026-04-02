@@ -174,10 +174,19 @@ pub struct SemanticPhase {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct HarnessTimelineSpan {
+    pub phase: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: u64,
+    pub iteration: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchReport {
     pub spec: BenchSpec,
     pub samples: Vec<BenchSample>,
     pub phases: Vec<SemanticPhase>,
+    pub timeline: Vec<HarnessTimelineSpan>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -231,12 +240,24 @@ impl From<mobench_sdk::SemanticPhase> for SemanticPhase {
     }
 }
 
+impl From<mobench_sdk::HarnessTimelineSpan> for HarnessTimelineSpan {
+    fn from(span: mobench_sdk::HarnessTimelineSpan) -> Self {
+        Self {
+            phase: span.phase,
+            start_offset_ns: span.start_offset_ns,
+            end_offset_ns: span.end_offset_ns,
+            iteration: span.iteration,
+        }
+    }
+}
+
 impl From<mobench_sdk::RunnerReport> for BenchReport {
     fn from(report: mobench_sdk::RunnerReport) -> Self {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
             phases: report.phases.into_iter().map(Into::into).collect(),
+            timeline: report.timeline.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1285,7 +1306,10 @@ mod tests {
         generate_android_project(&temp_dir, "ffi_benchmark", "ffi_benchmark::bench_fibonacci")
             .unwrap();
         let old_package_dir = temp_dir.join("android/app/src/main/java/dev/world/ffibenchmark");
-        assert!(old_package_dir.exists(), "expected first package tree to exist");
+        assert!(
+            old_package_dir.exists(),
+            "expected first package tree to exist"
+        );
 
         generate_android_project(
             &temp_dir,
@@ -1295,7 +1319,10 @@ mod tests {
         .unwrap();
 
         let new_package_dir = temp_dir.join("android/app/src/main/java/dev/world/basicbenchmark");
-        assert!(new_package_dir.exists(), "expected new package tree to exist");
+        assert!(
+            new_package_dir.exists(),
+            "expected new package tree to exist"
+        );
         assert!(
             !old_package_dir.exists(),
             "old package tree should be removed when regenerating the Android scaffold"

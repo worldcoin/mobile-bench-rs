@@ -350,8 +350,8 @@ For external crates configured via `mobench.toml`, use `cargo mobench list` and 
 
 ## See Also
 
-- `BROWSERSTACK_CI_INTEGRATION.md` - Programmatic API for custom workflows
-- `BROWSERSTACK_METRICS.md` - Metrics and performance documentation
+- [browserstack-ci.md](browserstack-ci.md) - programmatic API for custom workflows
+- [browserstack-metrics.md](browserstack-metrics.md) - metrics and performance documentation
 - `cargo mobench run --help` - Full CLI options
 - `cargo mobench summary --help` - Summary command options
 - `cargo mobench verify --help` - Verification command options

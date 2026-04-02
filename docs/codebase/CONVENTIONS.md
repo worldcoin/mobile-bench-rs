@@ -1,6 +1,6 @@
 # Conventions
 
-Updated: 2026-03-27
+Updated: 2026-04-01
 
 ## Naming
 
@@ -17,9 +17,15 @@ Updated: 2026-03-27
 - processed profile artifacts keep stable names:
   - `stacks.folded`
   - `native-report.txt`
+  - `frame-locations.json` when Android symbolization resolves file/line metadata
   - `flamegraph.full.svg`
   - `flamegraph.focused.svg`
   - `flamegraph.html`
+- differential profile outputs live under `target/mobench/profile/diff/` and use:
+  - `profile-diff.json`
+  - `summary.md`
+  - `diff.full.folded`
+  - `diff.focused.folded`
 
 ## Config conventions
 

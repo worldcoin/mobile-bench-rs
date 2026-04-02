@@ -1,6 +1,6 @@
 # Architecture
 
-Updated: 2026-03-27
+Updated: 2026-04-01
 
 ## System shape
 
@@ -38,7 +38,8 @@ Responsibilities:
 Important modules:
 - `lib.rs`: command parsing and benchmark/CI orchestration
 - `profile.rs`: target resolution, capture planning, capture execution, manifest/summary writing
-- `flamegraph_viewer.rs`: focused/full folded-stack derivation and interactive flamegraph HTML generation
+- `flamegraph_viewer.rs`: focused/full folded-stack derivation, SVG retinting, and interactive viewer document generation
+- `flamegraph_viewer_template.html`: browser-side flamegraph shell, timeline interactions, legend/fullscreen UX, and metadata layout
 - `browserstack.rs`: App Automate upload, schedule, polling, and fetch helpers
 
 ### SDK/runtime layer
@@ -106,11 +107,13 @@ Current status:
 4. post-processing writes:
    - `stacks.folded`
    - `native-report.txt`
+   - `frame-locations.json` on Android when file/line metadata is available
    - `flamegraph.full.svg`
    - `flamegraph.focused.svg`
    - `flamegraph.html`
    - `artifacts/semantic/phases.json` when phase data exists
 5. `profile summarize` renders the manifest into Markdown or JSON
+6. `profile diff` compares two profile sessions and writes a separate diff bundle under `target/mobench/profile/diff/`
 
 ### Device resolution flow
 

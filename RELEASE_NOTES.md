@@ -13,7 +13,9 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.26` is the current supported release.
+- `v0.1.27` is the current supported release.
+- `v0.1.26` is the immediately previous supported release, superseded by
+  `v0.1.27`.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -22,7 +24,8 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.26` | 2026-03-28 | `mobench 0.1.26`, `mobench-sdk 0.1.26`, `mobench-macros 0.1.26` | Current supported release |
+| `v0.1.27` | 2026-04-01 | `mobench 0.1.27`, `mobench-sdk 0.1.27`, `mobench-macros 0.1.27` | Current supported release |
+| `v0.1.26` | 2026-03-28 | `mobench 0.1.26`, `mobench-sdk 0.1.26`, `mobench-macros 0.1.26` | Superseded by `v0.1.27` |
 | `v0.1.25` | 2026-03-26 | `mobench 0.1.25`, `mobench-sdk 0.1.25`, `mobench-macros 0.1.25` | Test build. Do not use. |
 | `v0.1.24` | 2026-03-26 | `mobench 0.1.24`, `mobench-sdk 0.1.24`, `mobench-macros 0.1.24` | Test build. Do not use. |
 | `v0.1.23` | 2026-03-26 | `mobench 0.1.23`, `mobench-sdk 0.1.23`, `mobench-macros 0.1.23` | Test build. Do not use. |
@@ -51,9 +54,31 @@ Crates.io release history:
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
 
-## v0.1.26
+## v0.1.27
 
 Status: current supported release.
+
+- Promoted `cargo mobench profile diff` from internal/demo-only code into the
+  shipped CLI surface, including normalized diff manifests, summaries, SVGs,
+  and an interactive viewer bundle.
+- Added exact harness timeline capture to `mobench-sdk` and exposed that data
+  throughout the profile/session contract, enabling truthful phase metadata in
+  the flamegraph viewer.
+- Added source-link sidecars (`frame-locations.json`) and shipped viewer support
+  for Android file/line navigation when symbolization can recover source
+  metadata.
+- Redesigned the flamegraph viewer shell with consistent typography, warm
+  palette retinting, timeline/fullscreen/legend controls, keyboard navigation,
+  and a more legible metadata layout.
+- Added BrowserStack-facing naming normalization so project labels and uploaded
+  binaries follow the benchmarked repository name for demos and recordings.
+- Reorganized user-facing docs under `docs/guides/`, updated codebase
+  references, and added a checked-in flamegraph screenshot to the profiling
+  docs.
+
+## v0.1.26
+
+Status: superseded by `v0.1.27`.
 
 - Published a synchronized `mobench`, `mobench-sdk`, and `mobench-macros`
   release so the registry dependency graph matches the current profiling and

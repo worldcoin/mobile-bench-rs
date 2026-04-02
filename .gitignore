@@ -24,6 +24,7 @@ run-summary.json
 run-summary-*.json
 run-summary-*.md
 run-summary-*.csv
+crates/mobench/artifacts/
 bench-config.toml
 device-matrix.yaml
 run-*.json
