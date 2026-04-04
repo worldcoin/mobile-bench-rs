@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: aarch64-linux-android
       - uses: ./.github/actions/mobench
         with:
           command: cargo mobench ci run
@@ -80,6 +80,7 @@ jobs:
 ### Summary output notes
 
 - `summary.json`, `summary.md`, and `results.csv` remain the stable required outputs.
+- Android CI defaults to `arm64-v8a`; add extra ABIs explicitly in `mobench.toml` or caller workflows only when needed.
 - `plots/*.svg` is additive and only appears when local plot rendering is enabled and a Python + Matplotlib runtime is available, or when `--plots require` is used successfully.
 - Local markdown summaries now include `cpu_total_ms` and `peak_memory_kb` instead of percentage/average-RAM columns.
 - The reusable workflow attempts to compare against the latest successful default-branch run by downloading its per-platform `summary.json` artifacts before calling `ci check-run`.

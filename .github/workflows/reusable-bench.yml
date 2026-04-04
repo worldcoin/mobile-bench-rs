@@ -56,7 +56,7 @@ on:
         description: "Comma-separated Android Rust targets"
         required: false
         type: string
-        default: "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android"
+        default: "aarch64-linux-android"
       build_release:
         description: "Build in release mode"
         required: false
@@ -351,10 +351,8 @@ jobs:
       - name: Ensure Android Rust targets
         shell: bash
         run: |
-          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          rustup target add aarch64-linux-android
           rustup component add rust-std --target aarch64-linux-android
-          rustup component add rust-std --target armv7-linux-androideabi
-          rustup component add rust-std --target x86_64-linux-android
           rustup target list --installed | grep -E "android"
 
       - name: Cache cargo registry/git

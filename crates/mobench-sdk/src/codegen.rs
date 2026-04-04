@@ -339,6 +339,7 @@ pub fn generate_android_project(
     default_function: &str,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("android");
+    let preserved_assets = collect_preserved_android_assets(&target_dir)?;
     reset_generated_project_dir(&target_dir)?;
     let library_name = project_slug.replace('-', "_");
     let project_pascal = to_pascal_case(project_slug);
@@ -377,10 +378,73 @@ pub fn generate_android_project(
         },
     ];
     render_dir(&ANDROID_TEMPLATES, &target_dir, &vars)?;
+    restore_preserved_android_assets(&target_dir, &preserved_assets)?;
 
     // Move Kotlin files to the correct package directory structure
     // The package "dev.world.{project_slug}" maps to directory "dev/world/{project_slug}/"
     move_kotlin_files_to_package_dir(&target_dir, &package_name)?;
+
+    Ok(())
+}
+
+fn collect_preserved_android_assets(
+    target_dir: &Path,
+) -> Result<Vec<(PathBuf, Vec<u8>)>, BenchError> {
+    let assets_dir = target_dir.join("app/src/main/assets");
+    let mut preserved = Vec::new();
+
+    if assets_dir.exists() {
+        collect_preserved_files(&assets_dir, &assets_dir, &mut preserved)?;
+    }
+
+    Ok(preserved)
+}
+
+fn collect_preserved_files(
+    root: &Path,
+    current: &Path,
+    preserved: &mut Vec<(PathBuf, Vec<u8>)>,
+) -> Result<(), BenchError> {
+    let mut entries = fs::read_dir(current)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BenchError::Io)?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_preserved_files(root, &path, preserved)?;
+            continue;
+        }
+
+        let relative = path.strip_prefix(root).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to preserve Android asset {:?}: {}",
+                path, e
+            ))
+        })?;
+        preserved.push((relative.to_path_buf(), fs::read(&path)?));
+    }
+
+    Ok(())
+}
+
+fn restore_preserved_android_assets(
+    target_dir: &Path,
+    preserved_assets: &[(PathBuf, Vec<u8>)],
+) -> Result<(), BenchError> {
+    if preserved_assets.is_empty() {
+        return Ok(());
+    }
+
+    let assets_dir = target_dir.join("app/src/main/assets");
+    for (relative, contents) in preserved_assets {
+        let asset_path = assets_dir.join(relative);
+        if let Some(parent) = asset_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(asset_path, contents)?;
+    }
 
     Ok(())
 }
@@ -1326,6 +1390,52 @@ mod tests {
         assert!(
             !old_package_dir.exists(),
             "old package tree should be removed when regenerating the Android scaffold"
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_android_project_preserves_existing_assets_on_regeneration() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-android-assets-regenerate-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_android_project(&temp_dir, "ffi_benchmark", "ffi_benchmark::bench_fibonacci")
+            .unwrap();
+
+        let assets_dir = temp_dir.join("android/app/src/main/assets");
+        fs::create_dir_all(assets_dir.join("nested")).unwrap();
+        fs::write(
+            assets_dir.join("bench_spec.json"),
+            r#"{"function":"ffi_benchmark::bench_fibonacci"}"#,
+        )
+        .unwrap();
+        fs::write(
+            assets_dir.join("bench_meta.json"),
+            r#"{"build_id":"build-123"}"#,
+        )
+        .unwrap();
+        fs::write(assets_dir.join("nested/custom.txt"), "keep me").unwrap();
+
+        generate_android_project(
+            &temp_dir,
+            "basic_benchmark",
+            "basic_benchmark::bench_fibonacci",
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(assets_dir.join("bench_spec.json")).unwrap(),
+            r#"{"function":"ffi_benchmark::bench_fibonacci"}"#
+        );
+        assert_eq!(
+            fs::read_to_string(assets_dir.join("bench_meta.json")).unwrap(),
+            r#"{"build_id":"build-123"}"#
+        );
+        assert_eq!(
+            fs::read_to_string(assets_dir.join("nested/custom.txt")).unwrap(),
+            "keep me"
         );
 
         fs::remove_dir_all(&temp_dir).ok();

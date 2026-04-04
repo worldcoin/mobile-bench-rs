@@ -1033,6 +1033,7 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) crate_dir: PathBuf,
     pub(crate) crate_name: String,
     pub(crate) library_name: String,
+    pub(crate) android_abis: Option<Vec<String>>,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) output_dir: PathBuf,
     pub(crate) default_function: Option<String>,
@@ -1529,6 +1530,25 @@ pub fn run() -> Result<()> {
                     fetch_timeout_secs,
                 ) {
                     println!("Warning: Failed to fetch detailed artifacts: {}", e);
+                }
+
+                if run_summary.benchmark_results.is_none() {
+                    match recover_benchmark_results_from_fetched_artifacts(&output_root) {
+                        Ok(Some(recovered)) => {
+                            println!(
+                                "Recovered benchmark results from fetched artifacts for {} device(s)",
+                                recovered.len()
+                            );
+                            run_summary.benchmark_results = Some(recovered);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            println!(
+                                "Warning: Failed to recover benchmark results from fetched artifacts: {}",
+                                e
+                            );
+                        }
+                    }
                 }
             } else if fetch {
                 println!("No BrowserStack run to fetch (devices not provided?)");
@@ -2126,6 +2146,7 @@ pub(crate) fn resolve_project_layout(
         .as_ref()
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
+    let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
     let output_dir = config
         .as_ref()
         .and_then(|cfg| cfg.project.output_dir.clone())
@@ -2146,6 +2167,7 @@ pub(crate) fn resolve_project_layout(
         crate_dir,
         crate_name,
         library_name,
+        android_abis,
         config_path,
         output_dir,
         default_function,
@@ -2170,6 +2192,15 @@ fn ensure_verify_smoke_test_supported(layout: &ResolvedProjectLayout) -> Result<
         "verify --smoke-test is unsupported for external crate '{}'; smoke tests only work for benchmark crates linked into the mobench CLI binary",
         layout.crate_name
     )
+}
+
+fn configured_android_abis(layout: &ResolvedProjectLayout) -> Vec<String> {
+    layout
+        .android_abis
+        .as_ref()
+        .filter(|abis| !abis.is_empty())
+        .cloned()
+        .unwrap_or_else(|| vec!["arm64-v8a".to_string()])
 }
 
 fn write_config_template(path: &Path, target: MobileTarget, overwrite: bool) -> Result<()> {
@@ -3220,6 +3251,200 @@ fn fetch_browserstack_artifacts(
     Ok(())
 }
 
+fn recover_benchmark_results_from_fetched_artifacts(
+    output_root: &Path,
+) -> Result<Option<BTreeMap<String, Vec<Value>>>> {
+    let build_path = output_root.join("build.json");
+    if !build_path.exists() {
+        return Ok(None);
+    }
+
+    let build_json = read_json_value(&build_path)?;
+    let session_devices = extract_session_device_names(&build_json);
+    let mut recovered = BTreeMap::new();
+    let mut last_error = None;
+
+    let mut session_dirs = fs::read_dir(output_root)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("reading fetched BrowserStack artifact directory")?;
+    session_dirs.sort_by_key(|entry| entry.path());
+
+    for entry in session_dirs {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let Some(session_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(session_id) = session_name.strip_prefix("session-") else {
+            continue;
+        };
+
+        let bench_report_path = path.join("bench-report.json");
+        if !bench_report_path.exists() {
+            continue;
+        }
+
+        let device_name = session_devices
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| session_id.to_string());
+
+        let report = match read_json_value(&bench_report_path) {
+            Ok(report) => report,
+            Err(err) => {
+                last_error = Some(err.context(format!(
+                    "reading recovered bench report {}",
+                    bench_report_path.display()
+                )));
+                continue;
+            }
+        };
+
+        let entries = normalize_recovered_benchmark_report(&report, &device_name);
+        if entries.is_empty() {
+            continue;
+        }
+
+        recovered
+            .entry(device_name)
+            .or_insert_with(Vec::new)
+            .extend(entries);
+    }
+
+    if recovered.is_empty() {
+        if let Some(err) = last_error {
+            return Err(err);
+        }
+        return Ok(None);
+    }
+
+    Ok(Some(recovered))
+}
+
+fn extract_session_device_names(build_json: &Value) -> BTreeMap<String, String> {
+    let mut session_devices = BTreeMap::new();
+
+    if let Some(devices) = build_json.get("devices").and_then(|value| value.as_array()) {
+        for device in devices {
+            let device_name = device
+                .get("device")
+                .or_else(|| device.get("name"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            if let Some(sessions) = device.get("sessions").and_then(|value| value.as_array()) {
+                for session in sessions {
+                    let session_id = session
+                        .get("id")
+                        .or_else(|| session.get("session_id"))
+                        .or_else(|| session.get("sessionId"))
+                        .and_then(|value| value.as_str());
+                    if let Some(session_id) = session_id {
+                        session_devices.insert(session_id.to_string(), device_name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(sessions) = build_json
+        .get("sessions")
+        .and_then(|value| value.as_array())
+    {
+        for session in sessions {
+            let session_id = session
+                .get("id")
+                .or_else(|| session.get("session_id"))
+                .or_else(|| session.get("sessionId"))
+                .and_then(|value| value.as_str());
+            let device_name = session
+                .get("device")
+                .or_else(|| session.get("name"))
+                .and_then(|value| value.as_str());
+            if let (Some(session_id), Some(device_name)) = (session_id, device_name) {
+                session_devices
+                    .entry(session_id.to_string())
+                    .or_insert_with(|| device_name.to_string());
+            }
+        }
+    }
+
+    session_devices
+}
+
+fn normalize_recovered_benchmark_report(report: &Value, device_name: &str) -> Vec<Value> {
+    match report {
+        Value::Array(entries) => entries
+            .iter()
+            .filter_map(|entry| normalize_recovered_benchmark_entry(entry, device_name))
+            .collect(),
+        _ => normalize_recovered_benchmark_entry(report, device_name)
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn normalize_recovered_benchmark_entry(entry: &Value, device_name: &str) -> Option<Value> {
+    let mut value = entry.clone();
+    let samples = extract_samples(&value);
+    let stats = compute_sample_stats(&samples);
+    let object = value.as_object_mut()?;
+
+    if !object.contains_key("function")
+        && let Some(function) = object
+            .get("spec")
+            .and_then(|spec| spec.get("name"))
+            .and_then(|name| name.as_str())
+    {
+        object.insert("function".to_string(), Value::String(function.to_string()));
+    }
+
+    if !object.contains_key("device") {
+        object.insert("device".to_string(), Value::String(device_name.to_string()));
+    }
+
+    if let Some(stats) = stats {
+        object
+            .entry("mean_ns".to_string())
+            .or_insert_with(|| Value::from(stats.mean_ns));
+        object
+            .entry("median_ns".to_string())
+            .or_insert_with(|| Value::from(stats.median_ns));
+        object
+            .entry("min_ns".to_string())
+            .or_insert_with(|| Value::from(stats.min_ns));
+        object
+            .entry("max_ns".to_string())
+            .or_insert_with(|| Value::from(stats.max_ns));
+        object
+            .entry("p95_ns".to_string())
+            .or_insert_with(|| Value::from(stats.p95_ns));
+    }
+
+    let has_function = object
+        .get("function")
+        .and_then(|value| value.as_str())
+        .is_some();
+    let has_samples = object
+        .get("samples")
+        .and_then(|value| value.as_array())
+        .is_some();
+
+    if has_function && has_samples {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn read_json_value(path: &Path) -> Result<Value> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("reading JSON file {}", path.display()))?;
+    serde_json::from_str(&contents).with_context(|| format!("parsing JSON file {}", path.display()))
+}
+
 fn browserstack_base_path(target: MobileTarget) -> &'static str {
     match target {
         MobileTarget::Android => "app-automate/espresso/v2",
@@ -3538,6 +3763,7 @@ pub(crate) fn run_ios_build(
         target: mobench_sdk::Target::Ios,
         profile,
         incremental: true,
+        android_abis: None,
     };
     let result = builder.build(&cfg)?;
     let header = layout
@@ -3565,6 +3791,7 @@ fn package_ios_xcuitest_artifacts(
         target: mobench_sdk::Target::Ios,
         profile,
         incremental: true,
+        android_abis: None,
     };
     builder
         .build(&cfg)
@@ -5393,6 +5620,7 @@ pub(crate) fn run_android_build(
         target: mobench_sdk::Target::Android,
         profile,
         incremental: true,
+        android_abis: layout.android_abis.clone(),
     };
     let builder =
         mobench_sdk::builders::AndroidBuilder::new(&layout.project_root, layout.crate_name.clone())
@@ -5573,6 +5801,7 @@ fn cmd_build(
                 mobench_sdk::BuildProfile::Debug
             },
             incremental: true,
+            android_abis: layout.android_abis.clone(),
         };
 
         match target {
@@ -5672,6 +5901,7 @@ fn cmd_build(
             mobench_sdk::BuildProfile::Debug
         },
         incremental: true,
+        android_abis: layout.android_abis.clone(),
     };
 
     match target {
@@ -6032,10 +6262,10 @@ fn cmd_verify(
 
                     // Check JNI libs
                     let jni_base = effective_output_dir.join("android/app/src/main/jniLibs");
-                    let abis = ["arm64-v8a", "armeabi-v7a", "x86_64"];
+                    let abis = configured_android_abis(&layout);
                     for abi in abis {
                         let lib_path = jni_base
-                            .join(abi)
+                            .join(&abi)
                             .join(format!("lib{}.so", layout.library_name));
                         if lib_path.exists() {
                             artifact_details.push(format!("JNI lib ({}): OK", abi));
@@ -7568,8 +7798,6 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
             checks.push(check_android_ndk_home());
             checks.push(check_cargo_ndk());
             checks.push(check_rust_target("aarch64-linux-android"));
-            checks.push(check_rust_target("armv7-linux-androideabi"));
-            checks.push(check_rust_target("x86_64-linux-android"));
             checks.push(check_jdk());
         }
         SdkTarget::Ios => {
@@ -7585,8 +7813,6 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
             checks.push(check_android_ndk_home());
             checks.push(check_cargo_ndk());
             checks.push(check_rust_target("aarch64-linux-android"));
-            checks.push(check_rust_target("armv7-linux-androideabi"));
-            checks.push(check_rust_target("x86_64-linux-android"));
             checks.push(check_jdk());
             checks.push(check_xcode());
             checks.push(check_xcodegen());
@@ -8018,6 +8244,9 @@ resolver = "2"
 crate = "zk-mobile-bench"
 library_name = "zk_mobile_bench"
 
+[android]
+abis = ["arm64-v8a", "x86_64"]
+
 [benchmarks]
 default_function = "zk_mobile_bench::bench_query_proof_generation"
 "#,
@@ -8255,6 +8484,10 @@ project = "proj"
         assert_eq!(layout.crate_dir, crate_dir);
         assert_eq!(layout.crate_name, "zk-mobile-bench");
         assert_eq!(layout.library_name, "zk_mobile_bench");
+        assert_eq!(
+            layout.android_abis,
+            Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()])
+        );
         assert_eq!(
             layout.default_function.as_deref(),
             Some("zk_mobile_bench::bench_query_proof_generation")
@@ -9755,6 +9988,104 @@ mod ci_merge_tests {
 
         assert_eq!(resource_usage["peak_memory_kb"], 249416);
         assert_eq!(resource_usage["cpu_total_ms"], Value::Null);
+    }
+
+    #[test]
+    fn recover_benchmark_results_from_fetched_artifacts_rehydrates_summary_data() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("build.json"),
+            serde_json::to_string_pretty(&json!({
+                "build_id": "build-123",
+                "status": "timeout",
+                "devices": [{
+                    "device": "Google Pixel 8-14.0",
+                    "sessions": [{
+                        "id": "session-pixel",
+                        "status": "running"
+                    }]
+                }]
+            }))
+            .expect("serialize build json"),
+        )
+        .expect("write build.json");
+
+        let session_dir = dir.path().join("session-session-pixel");
+        std::fs::create_dir_all(&session_dir).expect("create session dir");
+        std::fs::write(
+            session_dir.join("bench-report.json"),
+            serde_json::to_string_pretty(&json!({
+                "spec": {
+                    "name": "bench_nullifier_proving_only",
+                    "iterations": 3,
+                    "warmup": 1
+                },
+                "samples": [
+                    {"duration_ns": 120000000_u64},
+                    {"duration_ns": 130000000_u64}
+                ],
+                "resources": {
+                    "elapsed_cpu_ms": 482,
+                    "total_pss_kb": 654321
+                }
+            }))
+            .expect("serialize bench report"),
+        )
+        .expect("write bench report");
+
+        let recovered = recover_benchmark_results_from_fetched_artifacts(dir.path())
+            .expect("recover benchmark results")
+            .expect("expected recovered benchmark results");
+        let recovered_value =
+            serde_json::to_value(&recovered).expect("serialize recovered benchmark results");
+        let entry = &recovered_value["Google Pixel 8-14.0"][0];
+
+        assert_eq!(
+            entry["function"].as_str(),
+            Some("bench_nullifier_proving_only")
+        );
+        assert_eq!(entry["mean_ns"].as_u64(), Some(125000000));
+
+        let spec = RunSpec {
+            target: MobileTarget::Android,
+            function: "bench_nullifier_proving_only".into(),
+            iterations: 3,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".into()],
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let run_summary = RunSummary {
+            spec: spec.clone(),
+            artifacts: None,
+            local_report: json!({}),
+            remote_run: None,
+            summary: empty_summary(&spec),
+            benchmark_results: Some(recovered),
+            performance_metrics: None,
+        };
+
+        let summary = build_summary(&run_summary).expect("build recovered summary");
+        let device_summary = summary
+            .device_summaries
+            .iter()
+            .find(|device| device.device == "Google Pixel 8-14.0")
+            .expect("device summary");
+        let benchmark = device_summary
+            .benchmarks
+            .iter()
+            .find(|benchmark| benchmark.function == "bench_nullifier_proving_only")
+            .expect("benchmark summary");
+
+        assert_eq!(benchmark.samples, 2);
+        assert_eq!(benchmark.mean_ns, Some(125000000));
+        assert_eq!(
+            benchmark
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.cpu_total_ms),
+            Some(482)
+        );
     }
 }
 

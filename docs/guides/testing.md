@@ -39,8 +39,11 @@ The check command will identify missing tools and provide installation instructi
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # https://www.rust-lang.org/tools/install
 
-# Install required targets
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+# Install the default Android target
+rustup target add aarch64-linux-android
+
+# Optional: add extra Android targets only if you configure extra ABIs
+# rustup target add armv7-linux-androideabi x86_64-linux-android
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 # https://doc.rust-lang.org/rustup/targets.html
 
@@ -62,6 +65,9 @@ export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
 # Verify NDK is available
 ls $ANDROID_NDK_HOME
 ```
+
+BrowserStack real-device runs only need `arm64-v8a` by default. Configure `[android].abis` in
+`mobench.toml` if you want to build/package extra Android ABIs.
 
 ### iOS (macOS only)
 ```bash

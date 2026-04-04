@@ -274,8 +274,9 @@
 //!
 //! - Android NDK (set `ANDROID_NDK_HOME` environment variable)
 //! - `cargo-ndk` (`cargo install cargo-ndk`)
-//! - Rust targets: `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`
-//!
+//! - Rust targets: `rustup target add aarch64-linux-android`
+//! - Optional extra ABI targets only when configured explicitly
+//! 
 //! ### iOS
 //!
 //! - Xcode with command line tools

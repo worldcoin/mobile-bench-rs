@@ -14,6 +14,7 @@ Crates.io release history:
 ## Support Policy
 
 - `v0.1.27` is the current supported release.
+- `v0.1.29` is the next planned release and is not published yet.
 - `v0.1.26` is the immediately previous supported release, superseded by
   `v0.1.27`.
 - Every earlier published version is a historical test build and should not be
@@ -53,6 +54,24 @@ Crates.io release history:
 | `v0.1.2` | 2026-01-14 | `mobench 0.1.2`, `mobench-sdk 0.1.2`, `mobench-macros 0.1.2` | Yanked test build. Do not use. |
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
+
+## Upcoming v0.1.29
+
+Status: planned release. Not published yet.
+
+- Preserve `app/src/main/assets` when regenerating Android projects so checked-in
+  benchmark assets such as `bench_spec.json` and `bench_meta.json` are not
+  dropped during scaffold refreshes.
+- Default Android builds to `arm64-v8a` / `aarch64-linux-android` so BrowserStack
+  real-device CI no longer requires installing unused `armeabi-v7a` and
+  `x86_64` Rust/NDK targets.
+- Add configurable Android ABI selection via `[android].abis` in `mobench.toml`
+  for projects that still need multi-ABI builds.
+- Recover benchmark summaries from fetched BrowserStack artifacts after timeout
+  or partial completion by rehydrating results from `build.json` and
+  `session-*/bench-report.json` before generating summary outputs.
+- Add regression coverage for preserved Android assets, configurable ABI
+  defaults, and artifact-based summary recovery.
 
 ## v0.1.27
 

@@ -14,7 +14,7 @@ Before diving into the full guide, ensure your project meets these requirements:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.27"
+mobench-sdk = "0.1.29"
 inventory = "0.3"  # Required for benchmark registration
 
 [lib]
@@ -112,7 +112,7 @@ In your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.27"
+mobench-sdk = "0.1.29"
 ```
 
 ## 3) Annotate benchmark functions
@@ -434,10 +434,17 @@ cargo mobench build --target android
 
 This automatically:
 
-- Builds Rust libraries for all Android ABIs (arm64-v8a, armeabi-v7a, x86_64)
+- Builds Rust libraries for the default Android ABI (`arm64-v8a`)
 - Generates UniFFI Kotlin bindings
 - Copies .so files to jniLibs
 - Runs Gradle to create the APK
+
+To build extra Android ABIs, opt in via `mobench.toml`:
+
+```toml
+[android]
+abis = ["arm64-v8a", "x86_64"]
+```
 
 Install and run on emulator or device:
 

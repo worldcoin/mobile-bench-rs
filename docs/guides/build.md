@@ -53,8 +53,6 @@ Checking Android prerequisites...
   [PASS] ANDROID_NDK_HOME set: /Users/you/Library/Android/sdk/ndk/29.0.14206865
   [PASS] cargo-ndk installed
   [PASS] Rust target aarch64-linux-android installed
-  [PASS] Rust target armv7-linux-androideabi installed
-  [PASS] Rust target x86_64-linux-android installed
 
 All prerequisites satisfied!
 ```
@@ -80,8 +78,11 @@ Download: https://www.rust-lang.org/tools/install
 # Set environment variable (add to ~/.zshrc or ~/.bashrc)
 export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
 
-# Install required Rust targets
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+# Install the default Android Rust target
+rustup target add aarch64-linux-android
+
+# Optional: add extra ABIs when you explicitly configure them in mobench.toml
+# rustup target add armv7-linux-androideabi x86_64-linux-android
 
 # Install cargo-ndk
 cargo install cargo-ndk
@@ -144,10 +145,15 @@ adb shell am start -n dev.world.bench/.MainActivity
 cargo mobench build --target android
 ```
 
-This compiles Rust code for three Android ABIs:
-- `aarch64-linux-android` → `arm64-v8a` (64-bit ARM devices)
-- `armv7-linux-androideabi` → `armeabi-v7a` (32-bit ARM devices)
-- `x86_64-linux-android` → `x86_64` (x86 emulators)
+By default this compiles Rust code for one Android ABI:
+- `aarch64-linux-android` → `arm64-v8a` (BrowserStack real devices and modern Android hardware)
+
+If you need extra ABIs for emulators or legacy devices, configure them explicitly in `mobench.toml`:
+
+```toml
+[android]
+abis = ["arm64-v8a", "x86_64"]
+```
 
 Output: `target/{target-triple}/release/libsample_fns.so`
 

@@ -41,7 +41,7 @@ cargo mobench check --target android --format json
 
 The `check` command validates:
 - Rust toolchain and cargo
-- Android: NDK, cargo-ndk, Rust targets, JDK
+- Android: NDK, cargo-ndk, the default `aarch64-linux-android` target, JDK
 - iOS: Xcode, xcodegen, Rust targets
 
 ### Validate Devices
@@ -118,6 +118,11 @@ println!("Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{
 
 // 4. Wait for completion and fetch results
 let (results, _performance) = client.wait_and_fetch_all_results(&run.build_id, "espresso", Some(600))?;
+```
+
+If live polling times out or BrowserStack only partially completes, `mobench` still downloads
+per-session `bench-report.json` artifacts and now rebuilds `summary.json` / `results.csv` from
+those fetched artifacts when benchmark samples are present.
 
 // 5. Process results
 for (device, bench_results) in results {
