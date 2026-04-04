@@ -477,7 +477,9 @@ cargo mobench report summarize --summary target/mobench/ci/summary.json --output
 
 ### `report github` - Sticky PR Comment Payload/Publish
 
-Create or update sticky PR comments from standardized outputs:
+Create or update sticky PR comments from standardized outputs. When the
+standardized summary includes resource usage, the PR comment also shows
+`CPU total (ms)` and `Peak memory` columns next to the timing statistics.
 
 ```bash
 # Print comment body

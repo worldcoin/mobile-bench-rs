@@ -123,6 +123,8 @@ let (results, _performance) = client.wait_and_fetch_all_results(&run.build_id, "
 If live polling times out or BrowserStack only partially completes, `mobench` still downloads
 per-session `bench-report.json` artifacts and now rebuilds `summary.json` / `results.csv` from
 those fetched artifacts when benchmark samples are present.
+The sticky PR comment generated from that summary also includes `CPU total (ms)` and `Peak memory`
+when the fetched artifacts include resource usage.
 
 // 5. Process results
 for (device, bench_results) in results {

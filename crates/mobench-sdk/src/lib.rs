@@ -7,7 +7,7 @@
 //! A mobile benchmarking SDK for Rust that provides the runtime, builders, and
 //! generated mobile runners used by the `mobench` CLI for local execution,
 //! BrowserStack benchmark runs, and local native profiling.
-//!
+//! 
 //! ## Overview
 //!
 //! `mobench-sdk` provides a simple, declarative API for defining benchmarks that can
@@ -276,7 +276,7 @@
 //! - `cargo-ndk` (`cargo install cargo-ndk`)
 //! - Rust targets: `rustup target add aarch64-linux-android`
 //! - Optional extra ABI targets only when configured explicitly
-//! 
+//!
 //! ### iOS
 //!
 //! - Xcode with command line tools

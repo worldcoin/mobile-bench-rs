@@ -5526,25 +5526,57 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
     }
 
     for device in &summary.device_summaries {
+        let has_resource_usage = device
+            .benchmarks
+            .iter()
+            .any(|bench| bench.resource_usage.is_some());
         let _ = writeln!(output, "### Device: {}", device.device);
         let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
-        );
-        let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
-        for bench in &device.benchmarks {
+        if has_resource_usage {
             let _ = writeln!(
                 output,
-                "| {} | {} | {} | {} | {} | {} | {} |",
-                bench.function,
-                bench.samples,
-                format_ms(bench.mean_ns),
-                format_ms(bench.median_ns),
-                format_ms(bench.p95_ns),
-                format_ms(bench.min_ns),
-                format_ms(bench.max_ns)
+                "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) | CPU total (ms) | Peak memory |"
             );
+            let _ = writeln!(
+                output,
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+            );
+        } else {
+            let _ = writeln!(
+                output,
+                "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
+            );
+            let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+        }
+        for bench in &device.benchmarks {
+            if has_resource_usage {
+                let resource_usage = bench.resource_usage.as_ref();
+                let _ = writeln!(
+                    output,
+                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    bench.function,
+                    bench.samples,
+                    format_ms(bench.mean_ns),
+                    format_ms(bench.median_ns),
+                    format_ms(bench.p95_ns),
+                    format_ms(bench.min_ns),
+                    format_ms(bench.max_ns),
+                    format_cpu_total_ms(resource_usage.and_then(|usage| usage.cpu_total_ms)),
+                    format_peak_memory(resource_usage.and_then(|usage| usage.peak_memory_kb))
+                );
+            } else {
+                let _ = writeln!(
+                    output,
+                    "| {} | {} | {} | {} | {} | {} | {} |",
+                    bench.function,
+                    bench.samples,
+                    format_ms(bench.mean_ns),
+                    format_ms(bench.median_ns),
+                    format_ms(bench.p95_ns),
+                    format_ms(bench.min_ns),
+                    format_ms(bench.max_ns)
+                );
+            }
         }
         let _ = writeln!(output);
     }
@@ -5602,6 +5634,18 @@ fn format_ms(value: Option<u64>) -> String {
     value
         .map(format_duration_smart)
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_cpu_total_ms(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn format_peak_memory(value_kb: Option<u64>) -> String {
+    value_kb
+        .map(|value| format!("{:.2} MB", value as f64 / 1024.0))
+        .unwrap_or_else(|| "—".to_string())
 }
 
 pub(crate) fn run_android_build(
@@ -9679,6 +9723,43 @@ mod ci_merge_tests {
         assert!(markdown.starts_with("### Benchmark Summary\n"));
         assert!(markdown.contains("- Target: iOS"));
         assert!(markdown.contains("### Device: iPhone 13"));
+    }
+
+    #[test]
+    fn render_markdown_summary_includes_resource_usage_columns_when_present() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-04-04T20:27:43.836753Z".to_string(),
+            generated_at_unix: 1_775_304_463,
+            target: MobileTarget::Android,
+            function: "multiple".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["Google Pixel 6-12.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Google Pixel 6".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "ffi_benchmark::bench_checksum".to_string(),
+                    samples: 5,
+                    mean_ns: Some(1_527_000),
+                    median_ns: Some(1_344_000),
+                    p95_ns: Some(2_274_000),
+                    min_ns: Some(1_326_000),
+                    max_ns: Some(2_274_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: Some(482),
+                        peak_memory_kb: Some(249_416),
+                        total_pss_kb: None,
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        });
+
+        assert!(markdown.contains("CPU total (ms)"));
+        assert!(markdown.contains("Peak memory"));
+        assert!(markdown.contains("| ffi_benchmark::bench_checksum | 5 | 1.527ms | 1.344ms | 2.274ms | 1.326ms | 2.274ms | 482 | 243.57 MB |"));
     }
 
     #[cfg(unix)]
