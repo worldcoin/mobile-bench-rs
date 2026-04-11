@@ -14,7 +14,7 @@ Before diving into the full guide, ensure your project meets these requirements:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.29"
+mobench-sdk = "0.1.30"
 inventory = "0.3"  # Required for benchmark registration
 
 [lib]
@@ -112,7 +112,7 @@ In your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.29"
+mobench-sdk = "0.1.30"
 ```
 
 ## 3) Annotate benchmark functions
@@ -546,11 +546,12 @@ cargo mobench run \
   --warmup 10 \
   --devices "iPhone 14-16" \
   --release \
-  --ios-app target/mobench/ios/BenchRunner.ipa \
-  --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip
+  --ios-completion-timeout-secs 900
 ```
 
 **Important**: Always use the `--release` flag for BrowserStack runs to reduce artifact sizes and prevent upload timeouts.
+
+If you use the default managed artifact paths under `target/mobench/ios/`, `cargo mobench run` can package the IPA and XCUITest runner automatically with the current `bench_spec.json`. Pass `--ios-app` / `--ios-test-suite` only when you need explicit prebuilt artifacts.
 
 **iOS Packaging Commands:**
 
@@ -558,6 +559,8 @@ cargo mobench run \
   - `--method adhoc`: No Apple ID required, works for BrowserStack
   - `--method development`: Requires Apple Developer account
 - `package-xcuitest`: Creates the XCUITest runner zip that BrowserStack uses to drive test automation. Outputs to `target/mobench/ios/BenchRunnerUITests.zip`
+
+For slower iOS devices or larger benchmark bundles, the generated XCUITest wait can also be configured in `bench-config.toml` via `[browserstack].ios_completion_timeout_secs = 900`.
 
 ## 9) Device Selection Guide
 

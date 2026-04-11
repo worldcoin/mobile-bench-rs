@@ -247,6 +247,11 @@ enum Command {
         ios_app: Option<PathBuf>,
         #[arg(long, help = "Path to iOS XCUITest test suite package (.zip or .ipa)")]
         ios_test_suite: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "iOS benchmark completion timeout in seconds for generated XCUITest harnesses"
+        )]
+        ios_completion_timeout_secs: Option<u64>,
         #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
         fetch: bool,
         #[arg(long, default_value = "target/browserstack")]
@@ -347,6 +352,11 @@ enum Command {
         target: SdkTarget,
         #[arg(long, help = "Build in release mode")]
         release: bool,
+        #[arg(
+            long,
+            help = "iOS benchmark completion timeout in seconds for generated XCUITest harnesses"
+        )]
+        ios_completion_timeout_secs: Option<u64>,
         #[arg(
             long,
             help = "Project root containing mobench.toml or the Cargo workspace"
@@ -735,6 +745,11 @@ struct CiRunArgs {
     ios_app: Option<PathBuf>,
     #[arg(long, help = "Path to iOS XCUITest test suite package (.zip or .ipa)")]
     ios_test_suite: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "iOS benchmark completion timeout in seconds for generated XCUITest harnesses"
+    )]
+    ios_completion_timeout_secs: Option<u64>,
     #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
     fetch: bool,
     #[arg(long, default_value = "target/browserstack")]
@@ -950,6 +965,8 @@ struct BrowserStackConfig {
     app_automate_username: String,
     app_automate_access_key: String,
     project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    ios_completion_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -992,6 +1009,8 @@ pub(crate) struct RunSpec {
     pub(crate) iterations: u32,
     pub(crate) warmup: u32,
     pub(crate) devices: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) ios_completion_timeout_secs: Option<u64>,
     #[serde(skip_serializing, skip_deserializing, default)]
     pub(crate) browserstack: Option<BrowserStackConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1147,6 +1166,7 @@ pub fn run() -> Result<()> {
             release,
             ios_app,
             ios_test_suite,
+            ios_completion_timeout_secs,
             fetch,
             fetch_output_dir,
             fetch_poll_interval_secs,
@@ -1172,6 +1192,7 @@ pub fn run() -> Result<()> {
                 device_tags,
                 ios_app,
                 ios_test_suite,
+                ios_completion_timeout_secs,
                 local_only,
                 release,
                 cli.dry_run,
@@ -1364,7 +1385,12 @@ pub fn run() -> Result<()> {
                             println!("Building for iOS...");
                             println!("  Building Rust library for iOS targets...");
                         }
-                        let (xcframework, header) = run_ios_build(&layout, release, cli.dry_run)?;
+                        let (xcframework, header) = run_ios_build(
+                            &layout,
+                            release,
+                            cli.dry_run,
+                            spec.ios_completion_timeout_secs,
+                        )?;
                         if !progress {
                             println!("\u{2713} Built iOS xcframework at {:?}", xcframework);
                         }
@@ -1385,7 +1411,11 @@ pub fn run() -> Result<()> {
                                 println!(
                                     "📦 Packaging iOS BrowserStack artifacts with current bench_spec..."
                                 );
-                                let packaged = package_ios_xcuitest_artifacts(&layout, release)?;
+                                let packaged = package_ios_xcuitest_artifacts(
+                                    &layout,
+                                    release,
+                                    spec.ios_completion_timeout_secs,
+                                )?;
                                 println!("  ✓ IPA: {}", packaged.app.display());
                                 println!("  ✓ XCUITest: {}", packaged.test_suite.display());
                                 ios_xcuitest = Some(packaged);
@@ -1455,6 +1485,7 @@ pub fn run() -> Result<()> {
                 println!("Waiting for build {} to complete...", build_id);
                 println!("Dashboard: {}", dashboard_url);
 
+                let mut fetch_error = None;
                 match client.wait_and_fetch_all_results_with_poll(
                     build_id,
                     platform,
@@ -1515,6 +1546,7 @@ pub fn run() -> Result<()> {
                     Err(e) => {
                         println!("\nWarning: Failed to fetch results: {}", e);
                         println!("Build may still be accessible at: {}", dashboard_url);
+                        fetch_error = Some(e.to_string());
                     }
                 }
 
@@ -1532,7 +1564,7 @@ pub fn run() -> Result<()> {
                     println!("Warning: Failed to fetch detailed artifacts: {}", e);
                 }
 
-                if run_summary.benchmark_results.is_none() {
+                if !has_benchmark_payloads(run_summary.benchmark_results.as_ref()) {
                     match recover_benchmark_results_from_fetched_artifacts(&output_root) {
                         Ok(Some(recovered)) => {
                             println!(
@@ -1549,6 +1581,16 @@ pub fn run() -> Result<()> {
                             );
                         }
                     }
+                }
+
+                if let Some(fetch_error) = fetch_error
+                    && !has_benchmark_payloads(run_summary.benchmark_results.as_ref())
+                {
+                    return Err(anyhow!(
+                        "fetch did not recover any benchmark payloads for BrowserStack build {}: {}",
+                        build_id,
+                        fetch_error
+                    ));
                 }
             } else if fetch {
                 println!("No BrowserStack run to fetch (devices not provided?)");
@@ -1756,6 +1798,7 @@ pub fn run() -> Result<()> {
         Command::Build {
             target,
             release,
+            ios_completion_timeout_secs,
             project_root,
             output_dir,
             crate_path,
@@ -1764,6 +1807,7 @@ pub fn run() -> Result<()> {
             cmd_build(
                 target,
                 release,
+                ios_completion_timeout_secs,
                 project_root,
                 output_dir,
                 crate_path,
@@ -2226,6 +2270,7 @@ fn write_config_template(path: &Path, target: MobileTarget, overwrite: bool) -> 
             app_automate_username: "${BROWSERSTACK_USERNAME}".into(),
             app_automate_access_key: "${BROWSERSTACK_ACCESS_KEY}".into(),
             project: Some("mobile-bench-rs".into()),
+            ios_completion_timeout_secs: (target == MobileTarget::Ios).then_some(600),
         },
         ios_xcuitest,
     };
@@ -2315,6 +2360,8 @@ pub struct RunRequest {
     pub ios_app: Option<PathBuf>,
     /// Optional iOS XCUITest suite package for BrowserStack.
     pub ios_test_suite: Option<PathBuf>,
+    /// Optional iOS benchmark completion timeout used during generated XCUITest runs.
+    pub ios_completion_timeout_secs: Option<u64>,
     /// Fetch BrowserStack artifacts after completion.
     pub fetch: bool,
     /// Output directory for fetched BrowserStack artifacts.
@@ -2426,6 +2473,10 @@ pub fn run_request(request: &RunRequest) -> Result<RunResult> {
     }
     if let Some(path) = &request.ios_test_suite {
         cmd.arg("--ios-test-suite").arg(path);
+    }
+    if let Some(timeout_secs) = request.ios_completion_timeout_secs {
+        cmd.arg("--ios-completion-timeout-secs")
+            .arg(timeout_secs.to_string());
     }
     if let Some(path) = &request.crate_path {
         cmd.arg("--crate-path").arg(path);
@@ -3070,6 +3121,7 @@ fn cmd_ci_run_single(
         release: args.release,
         ios_app: args.ios_app.clone(),
         ios_test_suite: args.ios_test_suite.clone(),
+        ios_completion_timeout_secs: args.ios_completion_timeout_secs,
         fetch: args.fetch,
         fetch_output_dir: args.fetch_output_dir.clone(),
         fetch_poll_interval_secs: args.fetch_poll_interval_secs,
@@ -3322,6 +3374,10 @@ fn recover_benchmark_results_from_fetched_artifacts(
     }
 
     Ok(Some(recovered))
+}
+
+fn has_benchmark_payloads(results: Option<&BTreeMap<String, Vec<Value>>>) -> bool {
+    results.is_some_and(|results| results.values().any(|entries| !entries.is_empty()))
 }
 
 fn extract_session_device_names(build_json: &Value) -> BTreeMap<String, String> {
@@ -3597,14 +3653,24 @@ fn resolve_run_spec(
     device_tags: Vec<String>,
     ios_app: Option<PathBuf>,
     ios_test_suite: Option<PathBuf>,
+    ios_completion_timeout_secs: Option<u64>,
     local_only: bool,
     _release: bool,
     dry_run: bool,
 ) -> Result<RunSpec> {
     if let Some(cfg_path) = config {
         let cfg = load_config(cfg_path)?;
-        let matrix_path = device_matrix.unwrap_or(cfg.device_matrix.as_path());
-        let matrix = load_device_matrix(matrix_path)?;
+        let configured_ios_completion_timeout_secs = ios_completion_timeout_secs
+            .or(cfg.browserstack.ios_completion_timeout_secs);
+        let matrix_path = device_matrix
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| {
+                resolve_project_relative_path(
+                    cfg_path.parent().unwrap_or_else(|| Path::new(".")),
+                    cfg.device_matrix.as_path(),
+                )
+            });
+        let matrix = load_device_matrix(&matrix_path)?;
         let resolved_tags = if !device_tags.is_empty() {
             Some(device_tags)
         } else {
@@ -3620,6 +3686,7 @@ fn resolve_run_spec(
             iterations: cfg.iterations,
             warmup: cfg.warmup,
             devices: device_names,
+            ios_completion_timeout_secs: configured_ios_completion_timeout_secs,
             browserstack: Some(cfg.browserstack),
             ios_xcuitest: cfg.ios_xcuitest,
         });
@@ -3678,6 +3745,7 @@ fn resolve_run_spec(
         iterations,
         warmup,
         devices: resolved_devices,
+        ios_completion_timeout_secs,
         browserstack: None,
         ios_xcuitest,
     })
@@ -3743,10 +3811,45 @@ fn filter_devices_by_tags(devices: Vec<DeviceEntry>, tags: &[String]) -> Result<
     Ok(matched)
 }
 
+fn with_ios_benchmark_timeout_env<T>(
+    timeout_secs: Option<u64>,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let Some(timeout_secs) = timeout_secs else {
+        return f();
+    };
+
+    let previous = env::var_os("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS");
+    println!("Using iOS benchmark completion timeout: {timeout_secs}s");
+
+    // SAFETY: mobench updates this process-scoped env var synchronously around a
+    // single iOS build/codegen invocation and restores the prior value before
+    // returning. The CLI does not spawn worker threads in this window.
+    unsafe { env::set_var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS", timeout_secs.to_string()) };
+
+    let result = f();
+
+    match previous {
+        Some(value) => {
+            // SAFETY: restoring the process env var under the same single-threaded
+            // assumptions described above.
+            unsafe { env::set_var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS", value) };
+        }
+        None => {
+            // SAFETY: restoring the absent state under the same single-threaded
+            // assumptions described above.
+            unsafe { env::remove_var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS") };
+        }
+    }
+
+    result
+}
+
 pub(crate) fn run_ios_build(
     layout: &ResolvedProjectLayout,
     release: bool,
     dry_run: bool,
+    ios_completion_timeout_secs: Option<u64>,
 ) -> Result<(PathBuf, PathBuf)> {
     let builder =
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
@@ -3765,7 +3868,9 @@ pub(crate) fn run_ios_build(
         incremental: true,
         android_abis: None,
     };
-    let result = builder.build(&cfg)?;
+    let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
+        Ok(builder.build(&cfg)?)
+    })?;
     let header = layout
         .output_dir
         .join("ios/include")
@@ -3776,6 +3881,7 @@ pub(crate) fn run_ios_build(
 fn package_ios_xcuitest_artifacts(
     layout: &ResolvedProjectLayout,
     release: bool,
+    ios_completion_timeout_secs: Option<u64>,
 ) -> Result<IosXcuitestArtifacts> {
     let builder =
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
@@ -3793,8 +3899,7 @@ fn package_ios_xcuitest_artifacts(
         incremental: true,
         android_abis: None,
     };
-    builder
-        .build(&cfg)
+    with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || Ok(builder.build(&cfg)?))
         .context("Failed to build iOS xcframework before packaging")?;
     let app = builder
         .package_ipa("BenchRunner", mobench_sdk::builders::SigningMethod::AdHoc)
@@ -5412,10 +5517,14 @@ fn extract_benchmark_resource_usage(
     let java_heap_kb = resources
         .and_then(|res| res.get("java_heap_kb"))
         .and_then(json_value_to_u64);
+    let reported_peak_memory_kb = resources
+        .and_then(|res| res.get("peak_memory_kb"))
+        .and_then(json_value_to_u64);
 
     let peak_memory_kb = perf_metrics
         .and_then(|metrics| metrics.memory.as_ref())
         .map(|memory| (memory.peak_mb * 1024.0).round() as u64)
+        .or(reported_peak_memory_kb)
         .or_else(|| {
             raw_peak_memory_kb(total_pss_kb, private_dirty_kb, native_heap_kb, java_heap_kb)
         });
@@ -5820,6 +5929,7 @@ fn cmd_init_sdk(
 fn cmd_build(
     target: SdkTarget,
     release: bool,
+    ios_completion_timeout_secs: Option<u64>,
     project_root: Option<PathBuf>,
     output_dir: Option<PathBuf>,
     crate_path: Option<PathBuf>,
@@ -5877,7 +5987,9 @@ fn cmd_build(
                 .output_dir(&effective_output_dir)
                 .crate_dir(&layout.crate_dir);
                 println!("[2/3] Building iOS xcframework...");
-                let result = builder.build(&build_config)?;
+                let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
+                    Ok(builder.build(&build_config)?)
+                })?;
                 println!("[3/3] Done!");
                 if !dry_run {
                     println!("\n\u{2713} Framework: {:?}", result.app_path);
@@ -5906,7 +6018,9 @@ fn cmd_build(
                 .output_dir(&effective_output_dir)
                 .crate_dir(&layout.crate_dir);
                 println!("[4/5] Building iOS xcframework...");
-                let ios_result = ios_builder.build(&build_config)?;
+                let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
+                    Ok(ios_builder.build(&build_config)?)
+                })?;
 
                 println!("[5/5] Done!");
                 if !dry_run {
@@ -5978,7 +6092,9 @@ fn cmd_build(
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
             .crate_dir(&layout.crate_dir);
-            let result = builder.build(&build_config)?;
+            let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
+                Ok(builder.build(&build_config)?)
+            })?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
@@ -6015,7 +6131,9 @@ fn cmd_build(
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
             .crate_dir(&layout.crate_dir);
-            let ios_result = ios_builder.build(&build_config)?;
+            let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
+                Ok(ios_builder.build(&build_config)?)
+            })?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
@@ -7282,6 +7400,7 @@ fn cmd_fixture_build(
             SdkTarget::Android,
             release,
             None,
+            None,
             output_dir,
             crate_path,
             false,
@@ -7292,6 +7411,7 @@ fn cmd_fixture_build(
             cmd_build(
                 SdkTarget::Ios,
                 release,
+                None,
                 None,
                 output_dir.clone(),
                 crate_path,
@@ -7313,6 +7433,7 @@ fn cmd_fixture_build(
                 SdkTarget::Android,
                 release,
                 None,
+                None,
                 output_dir.clone(),
                 crate_path.clone(),
                 false,
@@ -7322,6 +7443,7 @@ fn cmd_fixture_build(
             cmd_build(
                 SdkTarget::Ios,
                 release,
+                None,
                 None,
                 output_dir.clone(),
                 crate_path,
@@ -8348,6 +8470,7 @@ pub fn bench_query_proof_generation() {}
             Vec::new(),
             None,
             None,
+            None,
             false,
             false, // release
             false,
@@ -8420,6 +8543,7 @@ project = "proj"
             Some(config_path.as_path()),
             Some(cli_matrix_path.as_path()),
             Vec::new(),
+            None,
             None,
             None,
             false,
@@ -8591,6 +8715,7 @@ project = "proj"
         cmd_build(
             SdkTarget::Ios,
             false,
+            None,
             Some(project_root),
             None,
             None,
@@ -8641,6 +8766,7 @@ project = "proj"
             None,
             None,
             Vec::new(),
+            None,
             None,
             None,
             false,
@@ -8699,6 +8825,7 @@ project = "proj"
             iterations: 3,
             warmup: 1,
             devices: vec![],
+            ios_completion_timeout_secs: None,
             browserstack: None,
             ios_xcuitest: None,
         };
@@ -8728,6 +8855,7 @@ project = "proj"
             None,
             None,
             Vec::new(),
+            None,
             None,
             None,
             false,
@@ -8846,6 +8974,7 @@ project = "proj"
                 assert_eq!(args.target, CiTarget::Android);
                 assert_eq!(args.function.as_deref(), Some("sample_fns::fibonacci"));
                 assert_eq!(args.output_dir, PathBuf::from("target/mobench/ci"));
+                assert_eq!(args.ios_completion_timeout_secs, None);
             }
             _ => panic!("expected ci run command"),
         }
@@ -8871,6 +9000,119 @@ project = "proj"
             }
             _ => panic!("expected ci run command"),
         }
+    }
+
+    #[test]
+    fn ci_run_parses_ios_completion_timeout_secs() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "ci",
+            "run",
+            "--target",
+            "ios",
+            "--function",
+            "sample_fns::fibonacci",
+            "--ios-completion-timeout-secs",
+            "900",
+        ]);
+
+        match cli.command {
+            Command::Ci {
+                command: CiCommand::Run(args),
+            } => {
+                assert_eq!(args.ios_completion_timeout_secs, Some(900));
+            }
+            _ => panic!("expected ci run command"),
+        }
+    }
+
+    #[test]
+    fn build_parses_ios_completion_timeout_secs() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "build",
+            "--target",
+            "ios",
+            "--ios-completion-timeout-secs",
+            "750",
+        ]);
+
+        match cli.command {
+            Command::Build {
+                ios_completion_timeout_secs,
+                ..
+            } => {
+                assert_eq!(ios_completion_timeout_secs, Some(750));
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn resolve_run_spec_reads_ios_completion_timeout_from_config() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config_path = temp_dir.path().join("bench-config.toml");
+
+        let config_toml = r#"target = "ios"
+function = "sample_fns::fibonacci"
+iterations = 10
+warmup = 2
+device_matrix = "device-matrix.yaml"
+
+[browserstack]
+app_automate_username = "user"
+app_automate_access_key = "key"
+project = "proj"
+ios_completion_timeout_secs = 900
+
+[ios_xcuitest]
+app = "target/ios/BenchRunner.ipa"
+test_suite = "target/ios/BenchRunnerUITests.zip"
+"#;
+        write_file(&config_path, config_toml.as_bytes()).expect("write config");
+        write_file(
+            &temp_dir.path().join("device-matrix.yaml"),
+            br#"devices:
+  - name: iPhone 16 Pro
+    os: ios
+    os_version: "18"
+"#,
+        )
+        .expect("write matrix");
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: None,
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .unwrap();
+        let spec = resolve_run_spec(
+            MobileTarget::Ios,
+            "ignored::value".into(),
+            1,
+            0,
+            Vec::new(),
+            &layout,
+            Some(config_path.as_path()),
+            None,
+            Vec::new(),
+            None,
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .expect("resolve spec");
+
+        assert_eq!(spec.ios_completion_timeout_secs, Some(900));
+        assert_eq!(
+            spec.browserstack
+                .as_ref()
+                .and_then(|cfg| cfg.ios_completion_timeout_secs),
+            Some(900)
+        );
     }
 
     #[test]
@@ -9318,6 +9560,7 @@ project = "proj"
             iterations: 3,
             warmup: 1,
             devices: vec![],
+            ios_completion_timeout_secs: None,
             browserstack: None,
             ios_xcuitest: None,
         };
@@ -9333,6 +9576,7 @@ project = "proj"
                 iterations: 3,
                 warmup: 1,
                 devices: vec![],
+                ios_completion_timeout_secs: None,
                 browserstack: None,
                 ios_xcuitest: None,
             }),
@@ -9970,6 +10214,7 @@ mod ci_merge_tests {
             iterations: 3,
             warmup: 1,
             devices: vec!["Google Pixel 8-14.0".into()],
+            ios_completion_timeout_secs: None,
             browserstack: None,
             ios_xcuitest: None,
         };
@@ -10021,6 +10266,7 @@ mod ci_merge_tests {
             iterations: 3,
             warmup: 1,
             devices: vec!["iPhone 15-17.0".into()],
+            ios_completion_timeout_secs: None,
             browserstack: None,
             ios_xcuitest: None,
         };
@@ -10133,6 +10379,7 @@ mod ci_merge_tests {
             iterations: 3,
             warmup: 1,
             devices: vec!["Google Pixel 8-14.0".into()],
+            ios_completion_timeout_secs: None,
             browserstack: None,
             ios_xcuitest: None,
         };
@@ -10284,6 +10531,20 @@ mod resource_usage_tests {
         // peak_memory_kb should come from perf_metrics (10.0 * 1024 = 10240)
         assert_eq!(usage.peak_memory_kb, Some(10240));
         assert_eq!(usage.total_pss_kb, Some(4096));
+    }
+
+    #[test]
+    fn test_extract_resource_usage_reads_explicit_peak_memory_kb() {
+        let entry = json!({
+            "resources": {
+                "elapsed_cpu_ms": 120,
+                "peak_memory_kb": 1673010
+            }
+        });
+
+        let usage = extract_benchmark_resource_usage(&entry, None).unwrap();
+        assert_eq!(usage.cpu_total_ms, Some(120));
+        assert_eq!(usage.peak_memory_kb, Some(1673010));
     }
 
     #[test]

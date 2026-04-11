@@ -121,10 +121,11 @@ let (results, _performance) = client.wait_and_fetch_all_results(&run.build_id, "
 ```
 
 If live polling times out or BrowserStack only partially completes, `mobench` still downloads
-per-session `bench-report.json` artifacts and now rebuilds `summary.json` / `results.csv` from
-those fetched artifacts when benchmark samples are present.
-The sticky PR comment generated from that summary also includes `CPU total (ms)` and `Peak memory`
-when the fetched artifacts include resource usage.
+per-session artifacts and rebuilds `summary.json` / `results.csv` from fetched `bench-report.json`
+payloads when benchmark samples are present. If no benchmark payloads can be recovered, the command
+fails red instead of silently emitting an empty summary. The sticky PR comment generated from the
+recovered summary also includes `CPU total (ms)` and `Peak memory` when the fetched artifacts
+include resource usage.
 
 // 5. Process results
 for (device, bench_results) in results {
@@ -153,6 +154,10 @@ cargo mobench run \
   --ci \
   --output target/mobench/results.json
 ```
+
+For iOS BrowserStack runs, you can raise the generated XCUITest wait with
+`--ios-completion-timeout-secs <N>` or `[browserstack].ios_completion_timeout_secs = <N>` in the
+run config.
 
 **Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
 

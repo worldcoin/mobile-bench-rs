@@ -99,7 +99,7 @@ CI contract outputs are written to `target/mobench/ci/`:
 - `results.csv`
 - `plots/*.svg` when local plot rendering is enabled
 
-Local summary renderers (`ci run --plots ...` and `report summarize --plots ...`) append a `Device Comparison Plots` section with one Sina-style SVG per benchmark function. Summary resource fields use `cpu_total_ms` and `peak_memory_kb`; Android raw resource stats are preserved and iOS peak memory is enriched from BrowserStack app profiling when available.
+Local summary renderers (`ci run --plots ...` and `report summarize --plots ...`) append a `Device Comparison Plots` section with one Sina-style SVG per benchmark function. Summary resource fields use `cpu_total_ms` and `peak_memory_kb`; Android raw resource stats are preserved, and the generated iOS runner now emits raw `elapsed_cpu_ms` / `peak_memory_kb` so iOS summaries still carry resource usage even when BrowserStack app profiling is absent. BrowserStack App Profiling v2 remains an enrichment source when it has additional session data.
 
 Profiling commands are local-first in this release. Each session
 writes its current manifest and summary under
@@ -196,9 +196,13 @@ Resolution precedence is: explicit CLI flags (`--project-root`, `--crate-path`) 
 
 CLI flags override config file values when provided.
 - In `cargo mobench run --config <FILE>` mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
+- In `cargo mobench run --config <FILE>` mode, `device_matrix` paths are resolved relative to the config file location.
+- For iOS BrowserStack runs, `--ios-completion-timeout-secs <N>` or `[browserstack].ios_completion_timeout_secs = <N>` controls the generated XCUITest completion timeout.
 - For regression comparisons, `--baseline` should point to a previous run summary; if it resolves to the same output path, mobench snapshots the prior file before writing the candidate summary.
 - In the reusable GitHub workflow, the default baseline source is the latest successful run on the repository default branch when matching artifacts are available.
 - `cargo mobench verify --smoke-test` is only supported for benchmark crates linked into the `mobench` CLI binary. External crates discovered through `mobench.toml`, `--project-root`, or `--crate-path` should use `cargo mobench list` and `cargo mobench verify --check-artifacts`.
+
+For BrowserStack fetch flows, mobench preserves downloaded build/session artifacts even when polling or fetch fails. If no benchmark payloads can be recovered from those fetched artifacts, the command exits non-zero instead of silently writing an empty summary.
 
 ## Project docs
 

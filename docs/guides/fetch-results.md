@@ -29,7 +29,8 @@ When `--fetch` is enabled:
 3. **Polls** for build completion (checks every 5 seconds)
 4. **Fetches** device logs from all sessions
 5. **Extracts** benchmark results as JSON
-6. **Merges** results into output file
+6. **Merges** recovered results into the output file
+7. **Preserves** fetched BrowserStack artifacts under the fetch output directory for CI triage
 
 ## Output Format
 
@@ -188,14 +189,18 @@ jobs:
 
 ### Build Timeout
 
-If the build exceeds the timeout, you'll see:
+If the build exceeds the timeout and no benchmark payloads can be recovered from fetched artifacts, the command fails with an error like:
 
 ```
-Warning: Failed to fetch benchmark results: Timeout waiting for build 88f8c5a... to complete (waited 600 seconds)
-Build may still be accessible at: https://app-automate.browserstack.com/dashboard/v2/builds/88f8c5a...
+fetch did not recover any benchmark payloads for BrowserStack build 88f8c5a...: Timeout waiting for build 88f8c5a... to complete (waited 600 seconds)
 ```
 
-The command will still succeed and write partial results. You can manually check the dashboard or use the separate `fetch` command:
+Downloaded artifacts are still preserved under `--fetch-output-dir`, so you can inspect `build.json`,
+`session.json`, device logs, videos, and any recovered `bench-report.json` files after the red run.
+If benchmark payloads *are* recovered from those fetched artifacts, mobench rebuilds the summary and the
+run can still succeed.
+
+You can also manually check the dashboard or use the separate `fetch` command:
 
 ```bash
 cargo mobench fetch \
@@ -206,10 +211,10 @@ cargo mobench fetch \
 
 ### Build Failed
 
-If the test fails on BrowserStack:
+If the test fails on BrowserStack and no benchmark payloads can be recovered:
 
 ```
-Warning: Failed to fetch benchmark results: Build 88f8c5a... failed with status: failed
+fetch did not recover any benchmark payloads for BrowserStack build 88f8c5a...: Build 88f8c5a... failed with status: failed
 ```
 
 Check the dashboard for error details. Common causes:
@@ -288,7 +293,7 @@ cargo mobench summary results.json --format csv
 2. **Always use --release for BrowserStack** to reduce artifact sizes (~544MB debug vs ~133MB release) and prevent upload timeouts
 3. **Use summary command** to quickly analyze results
 4. **Set reasonable timeouts** based on your benchmark duration
-5. **Check exit codes** - command succeeds even if fetch warns
+5. **Check exit codes** - fetch is only non-fatal when benchmark payloads were successfully recovered from fetched artifacts
 6. **Archive results** as CI artifacts for historical tracking
 7. **Use GitHub Actions summaries** to display results inline
 

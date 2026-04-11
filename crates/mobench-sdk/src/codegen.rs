@@ -4,6 +4,7 @@
 //! embedded templates. It handles template parameterization and file generation.
 
 use crate::types::{BenchError, InitConfig, Target};
+use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -449,6 +450,39 @@ fn restore_preserved_android_assets(
     Ok(())
 }
 
+fn collect_preserved_ios_resources(
+    target_dir: &Path,
+) -> Result<Vec<(PathBuf, Vec<u8>)>, BenchError> {
+    let resources_dir = target_dir.join("BenchRunner/BenchRunner/Resources");
+    let mut preserved = Vec::new();
+
+    if resources_dir.exists() {
+        collect_preserved_files(&resources_dir, &resources_dir, &mut preserved)?;
+    }
+
+    Ok(preserved)
+}
+
+fn restore_preserved_ios_resources(
+    target_dir: &Path,
+    preserved_resources: &[(PathBuf, Vec<u8>)],
+) -> Result<(), BenchError> {
+    if preserved_resources.is_empty() {
+        return Ok(());
+    }
+
+    let resources_dir = target_dir.join("BenchRunner/BenchRunner/Resources");
+    for (relative, contents) in preserved_resources {
+        let resource_path = resources_dir.join(relative);
+        if let Some(parent) = resource_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(resource_path, contents)?;
+    }
+
+    Ok(())
+}
+
 fn reset_generated_project_dir(target_dir: &Path) -> Result<(), BenchError> {
     if target_dir.exists() {
         fs::remove_dir_all(target_dir).map_err(|e| {
@@ -546,6 +580,7 @@ pub fn generate_ios_project(
     default_function: &str,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("ios");
+    let preserved_resources = collect_preserved_ios_resources(&target_dir)?;
     reset_generated_project_dir(&target_dir)?;
     // Sanitize bundle ID components to ensure they only contain alphanumeric characters
     // iOS bundle identifiers should not contain hyphens or underscores
@@ -581,9 +616,33 @@ pub fn generate_ios_project(
             name: "LIBRARY_NAME",
             value: project_slug.replace('-', "_"),
         },
+        TemplateVar {
+            name: "BENCHMARK_TIMEOUT_SECS",
+            value: ios_benchmark_timeout_secs(),
+        },
     ];
     render_dir(&IOS_TEMPLATES, &target_dir, &vars)?;
+    restore_preserved_ios_resources(&target_dir, &preserved_resources)?;
     Ok(())
+}
+
+fn ios_benchmark_timeout_secs() -> String {
+    match env::var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS") {
+        Ok(raw_value) => {
+            let trimmed = raw_value.trim();
+            match trimmed.parse::<u64>() {
+                Ok(timeout_secs) if timeout_secs > 0 => format!("{timeout_secs}.0"),
+                _ => {
+                    eprintln!(
+                        "Ignoring invalid MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS='{}'; falling back to 300.0",
+                        raw_value
+                    );
+                    "300.0".to_string()
+                }
+            }
+        }
+        Err(_) => "300.0".to_string(),
+    }
 }
 
 /// Generates bench-config.toml configuration file
@@ -1637,6 +1696,140 @@ pub fn public_bench() {
         );
 
         // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_ios_project_preserves_existing_resources_on_regeneration() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-resources-regenerate-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_ios_project(
+            &temp_dir,
+            "bench_mobile",
+            "BenchRunner",
+            "dev.world.benchmobile",
+            "bench_mobile::bench_prepare",
+        )
+        .unwrap();
+
+        let resources_dir = temp_dir.join("ios/BenchRunner/BenchRunner/Resources");
+        fs::create_dir_all(resources_dir.join("nested")).unwrap();
+        fs::write(
+            resources_dir.join("bench_spec.json"),
+            r#"{"function":"bench_mobile::bench_prove","iterations":2,"warmup":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            resources_dir.join("bench_meta.json"),
+            r#"{"build_id":"build-123"}"#,
+        )
+        .unwrap();
+        fs::write(resources_dir.join("nested/custom.txt"), "keep me").unwrap();
+
+        generate_ios_project(
+            &temp_dir,
+            "bench_mobile",
+            "BenchRunner",
+            "dev.world.benchmobile",
+            "bench_mobile::bench_prepare",
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("bench_spec.json")).unwrap(),
+            r#"{"function":"bench_mobile::bench_prove","iterations":2,"warmup":1}"#
+        );
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("bench_meta.json")).unwrap(),
+            r#"{"build_id":"build-123"}"#
+        );
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("nested/custom.txt")).unwrap(),
+            "keep me"
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_ios_project_uses_configured_timeout_in_ui_tests() {
+        use std::sync::{Mutex, OnceLock};
+
+        static IOS_TIMEOUT_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-timeout-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let _guard = IOS_TIMEOUT_ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        unsafe {
+            env::set_var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS", "600");
+        }
+
+        generate_ios_project(
+            &temp_dir,
+            "bench_mobile",
+            "BenchRunner",
+            "dev.world.benchmobile",
+            "bench_mobile::bench_prepare",
+        )
+        .unwrap();
+
+        let ui_test_path = temp_dir.join(
+            "ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift",
+        );
+        let ui_test = fs::read_to_string(&ui_test_path)
+            .expect("BenchRunnerUITests.swift should exist");
+
+        assert!(
+            ui_test.contains("benchmarkTimeout: TimeInterval = 600.0"),
+            "BenchRunnerUITests.swift should use the configured timeout, got:\n{}",
+            ui_test
+        );
+
+        unsafe {
+            env::remove_var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS");
+        }
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_ios_project_includes_raw_resource_metrics_in_json_report() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-resource-metrics-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let result = generate_ios_project(
+            &temp_dir,
+            "bench_mobile",
+            "BenchRunner",
+            "dev.world.benchmobile",
+            "bench_mobile::bench_passport_complete_age_check_prove",
+        );
+        assert!(
+            result.is_ok(),
+            "generate_ios_project failed: {:?}",
+            result.err()
+        );
+
+        let ffi_path = temp_dir.join("ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift");
+        let ffi = fs::read_to_string(&ffi_path).expect("BenchRunnerFFI.swift should exist");
+
+        assert!(
+            ffi.contains("\"elapsed_cpu_ms\""),
+            "BenchRunnerFFI.swift should emit elapsed_cpu_ms into raw resources, got:\n{}",
+            ffi
+        );
+        assert!(
+            ffi.contains("\"peak_memory_kb\""),
+            "BenchRunnerFFI.swift should emit peak_memory_kb into raw resources, got:\n{}",
+            ffi
+        );
+
         fs::remove_dir_all(&temp_dir).ok();
     }
 

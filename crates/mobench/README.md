@@ -156,6 +156,7 @@ cargo mobench build --target <android|ios> [OPTIONS]
 **Options:**
 - `--target <android|ios>` - Platform to build for (required)
 - `--release` - Build in release mode (default: debug)
+- `--ios-completion-timeout-secs <N>` - iOS-only benchmark completion timeout for generated XCUITest harnesses
 - `--output-dir <DIR>` - Output directory for mobile artifacts (default: `target/mobench/`)
 - `--project-root <PATH>` - Project root containing `mobench.toml` or the Cargo workspace
 - `--crate-path <PATH>` - Path to the benchmark crate (default: resolve from flags, `mobench.toml`, workspace, or git root)
@@ -206,6 +207,7 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 - `--config <FILE>` - Load run spec from config file
 - `--ios-app <FILE>` - iOS .ipa or zipped .app for BrowserStack
 - `--ios-test-suite <FILE>` - iOS XCUITest runner (.zip or .ipa)
+- `--ios-completion-timeout-secs <N>` - iOS-only benchmark completion timeout for generated XCUITest harnesses
 - `--output <FILE>` - Save results to JSON file (default: target/mobench/results.json)
 - `--summary-csv` - Write CSV summary alongside JSON/Markdown
 - `--fetch` - Fetch BrowserStack results after completion
@@ -560,11 +562,14 @@ device_tags = ["default"] # optional; filter devices by tag
 app_automate_username = "${BROWSERSTACK_USERNAME}"
 app_automate_access_key = "${BROWSERSTACK_ACCESS_KEY}"
 project = "my-project-benchmarks"
+ios_completion_timeout_secs = 600 # optional; iOS XCUITest completion timeout in seconds
 
 [ios_xcuitest]
 app = "target/mobench/ios/BenchRunner.ipa"
 test_suite = "target/mobench/ios/BenchRunnerUITests.zip"
 ```
+
+`device_matrix` is resolved relative to the config file location when using `--config`.
 
 ### Device Matrix Format (`device-matrix.yaml`)
 
@@ -599,8 +604,8 @@ BrowserStack credentials can be provided via:
 3. **Config file** with variable expansion:
    ```toml
    [browserstack]
-   username = "${BROWSERSTACK_USERNAME}"
-   access_key = "${BROWSERSTACK_ACCESS_KEY}"
+   app_automate_username = "${BROWSERSTACK_USERNAME}"
+   app_automate_access_key = "${BROWSERSTACK_ACCESS_KEY}"
    ```
 
 ## Requirements

@@ -2,8 +2,8 @@ import XCTest
 
 final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
 
-    /// Maximum time to wait for benchmark completion (5 minutes for long benchmarks)
-    private let benchmarkTimeout: TimeInterval = 300.0
+    /// Maximum time to wait for benchmark completion (set by the configured benchmark timeout)
+    private let benchmarkTimeout: TimeInterval = {{BENCHMARK_TIMEOUT_SECS}}
 
     func testLaunchAndCaptureBenchmarkReport() {
         let app = XCUIApplication()

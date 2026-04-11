@@ -13,9 +13,9 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.29` is the current supported release.
-- `v0.1.28` is the immediately previous supported release, superseded by
-  `v0.1.29`.
+- `v0.1.30` is the current supported release.
+- `v0.1.29` is the immediately previous supported release, superseded by
+  `v0.1.30`.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -24,7 +24,8 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.29` | 2026-04-04 | `mobench 0.1.29`, `mobench-sdk 0.1.29`, `mobench-macros 0.1.29` | Current supported release |
+| `v0.1.30` | 2026-04-11 | `mobench 0.1.30`, `mobench-sdk 0.1.30`, `mobench-macros 0.1.30` | Current supported release |
+| `v0.1.29` | 2026-04-04 | `mobench 0.1.29`, `mobench-sdk 0.1.29`, `mobench-macros 0.1.29` | Superseded by `v0.1.30` |
 | `v0.1.28` | 2026-04-02 | `mobench 0.1.28`, `mobench-sdk 0.1.28`, `mobench-macros 0.1.28` | Superseded by `v0.1.29` |
 | `v0.1.27` | 2026-04-01 | `mobench 0.1.27`, `mobench-sdk 0.1.27`, `mobench-macros 0.1.27` | Test build. Do not use. |
 | `v0.1.26` | 2026-03-28 | `mobench 0.1.26`, `mobench-sdk 0.1.26`, `mobench-macros 0.1.26` | Test build. Do not use. |
@@ -56,9 +57,31 @@ Crates.io release history:
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
 
-## v0.1.29
+## v0.1.30
 
 Status: current supported release.
+
+- Preserve `BenchRunner/Resources` when regenerating iOS projects so checked-in
+  `bench_spec.json` and `bench_meta.json` survive scaffold refreshes.
+- Add configurable iOS benchmark completion timeouts through
+  `--ios-completion-timeout-secs` and `[browserstack].ios_completion_timeout_secs`,
+  and thread that value into generated XCUITest harnesses.
+- Emit raw iOS benchmark resource metrics directly in the generated runner JSON,
+  including `resources.elapsed_cpu_ms` and `resources.peak_memory_kb`.
+- Prefer explicit raw `resources.peak_memory_kb` when building summaries, so
+  CI outputs still carry peak memory even when BrowserStack profiling data is
+  absent.
+- Fail BrowserStack fetch flows when timeout/error recovery produces no
+  benchmark payloads, instead of silently generating empty summaries.
+- Resolve config-relative `device_matrix` paths from the config file directory,
+  matching the checked-in config template contract.
+- Add regression coverage for iOS resource preservation, timeout templating,
+  raw iOS resource emission, config timeout parsing, config-relative device
+  matrices, and raw peak-memory summary extraction.
+
+## v0.1.29
+
+Status: superseded by `v0.1.30`.
 
 - Preserve `app/src/main/assets` when regenerating Android projects so checked-in
   benchmark assets such as `bench_spec.json` and `bench_meta.json` are not

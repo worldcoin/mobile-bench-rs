@@ -39,12 +39,16 @@ We recursively download ALL URLs from session JSON, which typically includes:
 **Performance Metrics:**
 - Extracted from device logs (JSON output with `"type": "performance"` or `memory`/`cpu` fields)
 - Enriched from BrowserStack App Profiling v2 when that API returns additional session data
+- The generated iOS runner now emits raw benchmark resource fields directly in each benchmark payload:
+  - `resources.elapsed_cpu_ms`
+  - `resources.peak_memory_kb`
 - Memory usage (used_mb, max_mb, available_mb, total_mb)
   - Aggregate statistics: peak, average, min
 - CPU usage (usage_percent)
   - Aggregate statistics: peak, average, min
 - Normalized into run summaries and CI summaries when using `--fetch`
 - Surfaced as summary resource fields such as `cpu_total_ms` and `peak_memory_kb`
+- iOS summaries prefer raw `resources.peak_memory_kb` when BrowserStack profiling data is absent, so `performance_metrics == {}` no longer implies missing memory totals
 
 ### ⚠️ What We do not currently capture
 
@@ -60,11 +64,13 @@ Based on [BrowserStack App Automate API documentation](https://www.browserstack.
 **Performance metrics:**
 
 BrowserStack does not expose CPU/memory/battery metrics in the normal session
-JSON payloads. mobench therefore combines two sources when you use `--fetch`:
+JSON payloads. mobench therefore combines runner-emitted metrics with optional
+BrowserStack enrichment when you use `--fetch`:
 
 1. **Collect metrics in your app** using Android/iOS APIs:
    - Android: `ActivityManager.MemoryInfo`, `Debug.MemoryInfo`
    - iOS: `task_info`, `mach_task_basic_info`
+   - The standard generated iOS runner already does this for benchmark CPU total and peak memory
 
 2. **Log to device logs** in JSON format (see example below)
 
@@ -268,7 +274,7 @@ For more comprehensive profiling, consider:
 
 For CI/benchmarking on BrowserStack:
 
-1. **Implement custom metric collection** in your app for the metrics you care about most
+1. **Use the built-in runner metrics first**; the standard generated iOS runner already records benchmark CPU total and peak memory
 2. **Log metrics as JSON** to stdout/logcat so `mobench` can extract them deterministically
 3. **Use `mobench --fetch`** so device logs and App Profiling v2 enrichment both contribute to the final summary
 4. **Focus on metrics that matter** for your use case:

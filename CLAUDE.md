@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mobile-bench-rs (now **mobench**) is a mobile benchmarking toolkit for Rust. It supports benchmark execution on local devices or BrowserStack and local-first native profiling on Android and iOS. It provides a library-first design with a `#[benchmark]` attribute macro plus CLI tools for building, testing, running, reporting, and profiling benchmarks.
 
-**Published on crates.io as the mobench ecosystem (current release: v0.1.29):**
+**Published on crates.io as the mobench ecosystem (current release: v0.1.30):**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -595,7 +595,7 @@ The workflow supports manual dispatch with platform selection:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.29"
+mobench-sdk = "0.1.30"
 inventory = "0.3"
 ```
 

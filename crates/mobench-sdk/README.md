@@ -17,6 +17,7 @@ Transform your Rust project into a mobile benchmarking suite. The SDK provides t
 - **UniFFI bindings**: Automatic FFI generation for mobile platforms
 - **Configuration file support**: `mobench.toml` for project settings
 - **Config-first CLI integration**: the CLI resolves project root, crate name, and library name from flags, `mobench.toml`, workspace metadata, or git root
+- **Scaffold-safe spec bundling**: generated Android assets and iOS bundle resources preserve `bench_spec.json` / `bench_meta.json` across regeneration
 
 ## Quick Start
 
@@ -423,11 +424,14 @@ device_tags = ["default"] # optional; filter devices by tag
 app_automate_username = "${BROWSERSTACK_USERNAME}"
 app_automate_access_key = "${BROWSERSTACK_ACCESS_KEY}"
 project = "my-project-benchmarks"
+ios_completion_timeout_secs = 600 # optional; iOS XCUITest completion timeout in seconds
 
 [ios_xcuitest]
 app = "target/mobench/ios/BenchRunner.ipa"
 test_suite = "target/mobench/ios/BenchRunnerUITests.zip"
 ```
+
+`device_matrix` is resolved relative to the config file location when using `cargo mobench run --config ...`.
 
 ### `device-matrix.yaml`
 
