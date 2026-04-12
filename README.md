@@ -85,6 +85,15 @@ CI contract outputs are written to `target/mobench/ci/`:
 - `summary.md`
 - `results.csv`
 
+`summary.md` uses unit-neutral headers (`Mean`, `Median`, `P95`, `Min`, `Max`) and renders the default `CPU` column from measured-iteration `cpu_median_ms` in total seconds (for example `0.482s`).
+
+`results.csv` includes benchmark-scoped resource columns directly:
+- `cpu_total_ms`
+- `cpu_median_ms`
+- `peak_memory_kb`
+
+Missing resource metrics are emitted as blank CSV fields.
+
 ## Configuration
 
 mobench supports a `mobench.toml` configuration file for project settings:
@@ -208,6 +217,9 @@ fn db_query(db: &Database) {
   - `cargo mobench fixture init|build|verify|cache-key`
   - `cargo mobench report summarize|github`
 - Standardized CI outputs under `target/mobench/ci/` with schema-backed metadata.
+- Added benchmark-scoped resource exports to `summary.json`, `summary.md`, and `results.csv`.
+- Switched the default human-readable CPU metric to measured-iteration `cpu_median_ms` rendered in total seconds.
+- Made CI and compare markdown table headers unit-neutral while keeping cell values unit-aware.
 - Added baseline comparison source support (`path|url|artifact:<path>`) and regression labels.
 - Improved local action safety for workflow input handling and sticky PR comment publishing.
 - Fixed iOS CI target setup (`x86_64-apple-ios`) and preserved CI outputs on regression exit.

@@ -63,6 +63,12 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -172,25 +178,43 @@ impl BenchSpec {
 /// ```
 /// use mobench_sdk::timing::BenchSample;
 ///
-/// let sample = BenchSample { duration_ns: 1_500_000 };
+/// let sample = BenchSample {
+///     duration_ns: 1_500_000,
+///     ..Default::default()
+/// };
 ///
 /// // Convert to milliseconds
 /// let ms = sample.duration_ns as f64 / 1_000_000.0;
 /// assert_eq!(ms, 1.5);
 /// ```
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BenchSample {
     /// Duration of the iteration in nanoseconds.
     ///
     /// Measured using [`std::time::Instant`] for monotonic, high-resolution timing.
     pub duration_ns: u64,
+
+    /// CPU time consumed by the measured iteration in milliseconds.
+    ///
+    /// This is captured around the measured benchmark closure only and excludes
+    /// warmup, setup, teardown, and report generation overhead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_time_ms: Option<u64>,
+
+    /// Peak memory growth during the measured iteration in kilobytes.
+    ///
+    /// Values are baseline-adjusted immediately before the measured closure
+    /// enters so harness footprint is not counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_memory_kb: Option<u64>,
 }
 
 impl BenchSample {
-    /// Creates a sample from a [`Duration`].
-    fn from_duration(duration: Duration) -> Self {
+    fn from_measurement(duration: Duration, resources: IterationResourceUsage) -> Self {
         Self {
             duration_ns: duration.as_nanos() as u64,
+            cpu_time_ms: resources.cpu_time_ms,
+            peak_memory_kb: resources.peak_memory_kb,
         }
     }
 }
@@ -232,6 +256,20 @@ pub struct BenchReport {
     ///
     /// The length equals `spec.iterations`. Samples are in execution order.
     pub samples: Vec<BenchSample>,
+
+    /// Optional semantic phase timings captured during measured iterations.
+    pub phases: Vec<SemanticPhase>,
+
+    /// Exact harness timeline spans in execution order.
+    pub timeline: Vec<HarnessTimelineSpan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessTimelineSpan {
+    pub phase: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: u64,
+    pub iteration: Option<u32>,
 }
 
 impl BenchReport {
@@ -313,6 +351,56 @@ impl BenchReport {
             .unwrap_or(0)
     }
 
+    /// Returns the total measured CPU time in milliseconds across all iterations.
+    #[must_use]
+    pub fn cpu_total_ms(&self) -> Option<u64> {
+        let values = self
+            .samples
+            .iter()
+            .filter_map(|sample| sample.cpu_time_ms)
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            return None;
+        }
+
+        let total = values
+            .iter()
+            .fold(0_u128, |sum, value| sum.saturating_add(u128::from(*value)));
+        Some(total.min(u128::from(u64::MAX)) as u64)
+    }
+
+    /// Returns the median measured CPU time in milliseconds across all iterations.
+    #[must_use]
+    pub fn cpu_median_ms(&self) -> Option<u64> {
+        let mut values = self
+            .samples
+            .iter()
+            .filter_map(|sample| sample.cpu_time_ms)
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            return None;
+        }
+
+        values.sort_unstable();
+        let len = values.len();
+        Some(if len % 2 == 0 {
+            let lower = u128::from(values[(len / 2) - 1]);
+            let upper = u128::from(values[len / 2]);
+            ((lower + upper) / 2) as u64
+        } else {
+            values[len / 2]
+        })
+    }
+
+    /// Returns the maximum baseline-adjusted peak memory growth in kilobytes.
+    #[must_use]
+    pub fn peak_memory_kb(&self) -> Option<u64> {
+        self.samples
+            .iter()
+            .filter_map(|sample| sample.peak_memory_kb)
+            .max()
+    }
+
     /// Returns a statistical summary of the benchmark results.
     #[must_use]
     pub fn summary(&self) -> BenchSummary {
@@ -329,6 +417,35 @@ impl BenchReport {
             p99_ns: self.percentile_ns(99.0),
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+struct IterationResourceUsage {
+    cpu_time_ms: Option<u64>,
+    peak_memory_kb: Option<u64>,
+}
+
+fn instant_offset_ns(origin: Instant, instant: Instant) -> u64 {
+    instant
+        .duration_since(origin)
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn push_timeline_span(
+    timeline: &mut Vec<HarnessTimelineSpan>,
+    origin: Instant,
+    phase: &str,
+    started_at: Instant,
+    ended_at: Instant,
+    iteration: Option<u32>,
+) {
+    timeline.push(HarnessTimelineSpan {
+        phase: phase.to_string(),
+        start_offset_ns: instant_offset_ns(origin, started_at),
+        end_offset_ns: instant_offset_ns(origin, ended_at),
+        iteration,
+    });
 }
 
 /// Statistical summary of benchmark results.
@@ -354,6 +471,323 @@ pub struct BenchSummary {
     pub p95_ns: f64,
     /// 99th percentile in nanoseconds.
     pub p99_ns: f64,
+}
+
+/// Flat semantic phase timing captured during a benchmark run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticPhase {
+    pub name: String,
+    pub duration_ns: u64,
+}
+
+#[derive(Default)]
+struct SemanticPhaseCollector {
+    enabled: bool,
+    depth: usize,
+    phases: Vec<SemanticPhase>,
+}
+
+impl SemanticPhaseCollector {
+    fn reset(&mut self) {
+        self.enabled = false;
+        self.depth = 0;
+        self.phases.clear();
+    }
+
+    fn begin_measurement(&mut self) {
+        self.reset();
+        self.enabled = true;
+    }
+
+    fn finish(&mut self) -> Vec<SemanticPhase> {
+        self.enabled = false;
+        self.depth = 0;
+        std::mem::take(&mut self.phases)
+    }
+
+    fn enter_phase(&mut self) -> Option<bool> {
+        if !self.enabled {
+            return None;
+        }
+        let top_level = self.depth == 0;
+        self.depth += 1;
+        Some(top_level)
+    }
+
+    fn exit_phase(&mut self, name: &str, top_level: bool, elapsed: Duration) {
+        self.depth = self.depth.saturating_sub(1);
+        if !self.enabled || !top_level {
+            return;
+        }
+
+        let duration_ns = elapsed.as_nanos().min(u128::from(u64::MAX)) as u64;
+        if let Some(phase) = self.phases.iter_mut().find(|phase| phase.name == name) {
+            phase.duration_ns = phase.duration_ns.saturating_add(duration_ns);
+        } else {
+            self.phases.push(SemanticPhase {
+                name: name.to_string(),
+                duration_ns,
+            });
+        }
+    }
+}
+
+thread_local! {
+    static SEMANTIC_PHASE_COLLECTOR: RefCell<SemanticPhaseCollector> =
+        RefCell::new(SemanticPhaseCollector::default());
+}
+
+struct SemanticPhaseGuard {
+    name: String,
+    started_at: Option<Instant>,
+    top_level: bool,
+}
+
+impl Drop for SemanticPhaseGuard {
+    fn drop(&mut self) {
+        let Some(started_at) = self.started_at else {
+            return;
+        };
+
+        let elapsed = started_at.elapsed();
+        SEMANTIC_PHASE_COLLECTOR.with(|collector| {
+            collector
+                .borrow_mut()
+                .exit_phase(&self.name, self.top_level, elapsed);
+        });
+    }
+}
+
+fn reset_semantic_phase_collection() {
+    SEMANTIC_PHASE_COLLECTOR.with(|collector| collector.borrow_mut().reset());
+}
+
+fn begin_semantic_phase_collection() {
+    SEMANTIC_PHASE_COLLECTOR.with(|collector| collector.borrow_mut().begin_measurement());
+}
+
+fn finish_semantic_phase_collection() -> Vec<SemanticPhase> {
+    SEMANTIC_PHASE_COLLECTOR.with(|collector| collector.borrow_mut().finish())
+}
+
+trait ResourceMonitor {
+    type Token;
+
+    fn start(&mut self) -> Self::Token;
+
+    fn finish(&mut self, token: Self::Token) -> IterationResourceUsage;
+}
+
+#[derive(Default)]
+struct DefaultResourceMonitor;
+
+struct DefaultResourceToken {
+    cpu_time_start_ns: Option<u64>,
+    memory_sampler: Option<MemoryPeakSampler>,
+}
+
+impl ResourceMonitor for DefaultResourceMonitor {
+    type Token = DefaultResourceToken;
+
+    fn start(&mut self) -> Self::Token {
+        Self::Token {
+            cpu_time_start_ns: current_thread_cpu_time_ns(),
+            memory_sampler: MemoryPeakSampler::start(),
+        }
+    }
+
+    fn finish(&mut self, token: Self::Token) -> IterationResourceUsage {
+        let cpu_time_ms = match (token.cpu_time_start_ns, current_thread_cpu_time_ns()) {
+            (Some(start_ns), Some(end_ns)) if end_ns >= start_ns => {
+                Some(round_ns_to_ms(end_ns - start_ns))
+            }
+            _ => None,
+        };
+
+        IterationResourceUsage {
+            cpu_time_ms,
+            peak_memory_kb: token
+                .memory_sampler
+                .and_then(MemoryPeakSampler::stop)
+                .filter(|value| *value > 0),
+        }
+    }
+}
+
+fn round_ns_to_ms(ns: u64) -> u64 {
+    ((u128::from(ns) + 500_000) / 1_000_000) as u64
+}
+
+#[cfg(unix)]
+fn current_thread_cpu_time_ns() -> Option<u64> {
+    let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, ts.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+
+    let ts = unsafe { ts.assume_init() };
+    let secs = u64::try_from(ts.tv_sec).ok()?;
+    let nanos = u64::try_from(ts.tv_nsec).ok()?;
+    Some(secs.saturating_mul(1_000_000_000).saturating_add(nanos))
+}
+
+#[cfg(not(unix))]
+fn current_thread_cpu_time_ns() -> Option<u64> {
+    None
+}
+
+const MEMORY_SAMPLER_INTERVAL: Duration = Duration::from_millis(1);
+
+struct MemoryPeakSampler {
+    baseline_kb: u64,
+    stop_flag: Arc<AtomicBool>,
+    peak_kb: Arc<AtomicU64>,
+    handle: JoinHandle<()>,
+}
+
+impl MemoryPeakSampler {
+    fn start() -> Option<Self> {
+        let baseline_kb = current_process_memory_kb()?;
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let peak_kb = Arc::new(AtomicU64::new(baseline_kb));
+        let sampler_stop = Arc::clone(&stop_flag);
+        let sampler_peak = Arc::clone(&peak_kb);
+
+        let handle = thread::Builder::new()
+            .name("mobench-memory-sampler".to_string())
+            .spawn(move || {
+                while !sampler_stop.load(Ordering::Acquire) {
+                    if let Some(current_kb) = current_process_memory_kb() {
+                        update_atomic_max(&sampler_peak, current_kb);
+                    }
+                    thread::sleep(MEMORY_SAMPLER_INTERVAL);
+                }
+
+                if let Some(current_kb) = current_process_memory_kb() {
+                    update_atomic_max(&sampler_peak, current_kb);
+                }
+            })
+            .ok()?;
+
+        Some(Self {
+            baseline_kb,
+            stop_flag,
+            peak_kb,
+            handle,
+        })
+    }
+
+    fn stop(self) -> Option<u64> {
+        self.stop_flag.store(true, Ordering::Release);
+        let _ = self.handle.join();
+        let peak_kb = self.peak_kb.load(Ordering::Acquire);
+        Some(peak_kb.saturating_sub(self.baseline_kb))
+    }
+}
+
+fn update_atomic_max(target: &AtomicU64, value: u64) {
+    let mut current = target.load(Ordering::Relaxed);
+    while value > current {
+        match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "linux"))]
+fn current_process_memory_kb() -> Option<u64> {
+    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let resident_pages = statm
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u64>().ok())?;
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        return None;
+    }
+    let page_size = u64::try_from(page_size).ok()?;
+    Some(resident_pages.saturating_mul(page_size) / 1024)
+}
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn current_process_memory_kb() -> Option<u64> {
+    let mut info = std::mem::MaybeUninit::<libc::mach_task_basic_info_data_t>::uninit();
+    let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+    #[allow(deprecated)]
+    let rc = unsafe {
+        libc::task_info(
+            libc::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            info.as_mut_ptr().cast::<libc::integer_t>(),
+            &mut count,
+        )
+    };
+    if rc != libc::KERN_SUCCESS {
+        return None;
+    }
+
+    let info = unsafe { info.assume_init() };
+    Some((info.resident_size / 1024) as u64)
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "ios",
+    target_os = "macos"
+)))]
+fn current_process_memory_kb() -> Option<u64> {
+    None
+}
+
+fn measure_iteration<M, F>(
+    monitor: &mut M,
+    f: F,
+) -> Result<(BenchSample, Instant, Instant), TimingError>
+where
+    M: ResourceMonitor,
+    F: FnOnce() -> Result<(), TimingError>,
+{
+    let token = monitor.start();
+    let started_at = Instant::now();
+    let result = f();
+    let ended_at = Instant::now();
+    let resources = monitor.finish(token);
+    result.map(|_| {
+        (
+            BenchSample::from_measurement(ended_at.duration_since(started_at), resources),
+            started_at,
+            ended_at,
+        )
+    })
+}
+
+/// Records a flat semantic phase when called inside an active benchmark measurement loop.
+///
+/// Phases are aggregated across measured iterations and ignored during warmup/setup.
+/// Nested phases are intentionally collapsed in v1 to keep the output flat.
+pub fn profile_phase<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    let guard = SEMANTIC_PHASE_COLLECTOR.with(|collector| {
+        let mut collector = collector.borrow_mut();
+        match collector.enter_phase() {
+            Some(top_level) => SemanticPhaseGuard {
+                name: name.to_string(),
+                started_at: Some(Instant::now()),
+                top_level,
+            },
+            None => SemanticPhaseGuard {
+                name: String::new(),
+                started_at: None,
+                top_level: false,
+            },
+        }
+    });
+
+    let result = f();
+    drop(guard);
+    result
 }
 
 /// Errors that can occur during benchmark execution.
@@ -451,26 +885,72 @@ pub fn run_closure<F>(spec: BenchSpec, mut f: F) -> Result<BenchReport, TimingEr
 where
     F: FnMut() -> Result<(), TimingError>,
 {
+    let mut monitor = DefaultResourceMonitor;
+    run_closure_with_monitor(spec, &mut monitor, move || f())
+}
+
+fn run_closure_with_monitor<F, M>(
+    spec: BenchSpec,
+    monitor: &mut M,
+    mut f: F,
+) -> Result<BenchReport, TimingError>
+where
+    F: FnMut() -> Result<(), TimingError>,
+    M: ResourceMonitor,
+{
     if spec.iterations == 0 {
         return Err(TimingError::NoIterations {
             count: spec.iterations,
         });
     }
 
+    reset_semantic_phase_collection();
+    let harness_origin = Instant::now();
+    let mut timeline = Vec::new();
+
     // Warmup phase - not measured
-    for _ in 0..spec.warmup {
+    for iteration in 0..spec.warmup {
+        let phase_start = Instant::now();
         f()?;
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "warmup-benchmark",
+            phase_start,
+            Instant::now(),
+            Some(iteration),
+        );
     }
 
     // Measurement phase
+    begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for _ in 0..spec.iterations {
-        let start = Instant::now();
-        f()?;
-        samples.push(BenchSample::from_duration(start.elapsed()));
+    for iteration in 0..spec.iterations {
+        let (sample, start, end) = match measure_iteration(monitor, || f()) {
+            Ok(measurement) => measurement,
+            Err(err) => {
+                let _ = finish_semantic_phase_collection();
+                return Err(err);
+            }
+        };
+        samples.push(sample);
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "measured-benchmark",
+            start,
+            end,
+            Some(iteration),
+        );
     }
+    let phases = finish_semantic_phase_collection();
 
-    Ok(BenchReport { spec, samples })
+    Ok(BenchReport {
+        spec,
+        samples,
+        phases,
+        timeline,
+    })
 }
 
 /// Runs a benchmark with setup that executes once before all iterations.
@@ -509,29 +989,86 @@ where
     S: FnOnce() -> T,
     F: FnMut(&T) -> Result<(), TimingError>,
 {
+    let mut monitor = DefaultResourceMonitor;
+    run_closure_with_setup_with_monitor(spec, &mut monitor, setup, move |input| f(input))
+}
+
+fn run_closure_with_setup_with_monitor<S, T, F, M>(
+    spec: BenchSpec,
+    monitor: &mut M,
+    setup: S,
+    mut f: F,
+) -> Result<BenchReport, TimingError>
+where
+    S: FnOnce() -> T,
+    F: FnMut(&T) -> Result<(), TimingError>,
+    M: ResourceMonitor,
+{
     if spec.iterations == 0 {
         return Err(TimingError::NoIterations {
             count: spec.iterations,
         });
     }
 
+    reset_semantic_phase_collection();
+    let harness_origin = Instant::now();
+    let mut timeline = Vec::new();
+
     // Setup phase - not timed
+    let setup_start = Instant::now();
     let input = setup();
+    push_timeline_span(
+        &mut timeline,
+        harness_origin,
+        "setup",
+        setup_start,
+        Instant::now(),
+        None,
+    );
 
     // Warmup phase - not recorded
-    for _ in 0..spec.warmup {
+    for iteration in 0..spec.warmup {
+        let phase_start = Instant::now();
         f(&input)?;
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "warmup-benchmark",
+            phase_start,
+            Instant::now(),
+            Some(iteration),
+        );
     }
 
     // Measurement phase
+    begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for _ in 0..spec.iterations {
-        let start = Instant::now();
-        f(&input)?;
-        samples.push(BenchSample::from_duration(start.elapsed()));
+    for iteration in 0..spec.iterations {
+        let (sample, start, end) = match measure_iteration(monitor, || f(&input)) {
+            Ok(measurement) => measurement,
+            Err(err) => {
+                let _ = finish_semantic_phase_collection();
+                return Err(err);
+            }
+        };
+        samples.push(sample);
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "measured-benchmark",
+            start,
+            end,
+            Some(iteration),
+        );
     }
+    let phases = finish_semantic_phase_collection();
 
-    Ok(BenchReport { spec, samples })
+    Ok(BenchReport {
+        spec,
+        samples,
+        phases,
+        timeline,
+    })
 }
 
 /// Runs a benchmark with per-iteration setup.
@@ -571,29 +1108,100 @@ where
     S: FnMut() -> T,
     F: FnMut(T) -> Result<(), TimingError>,
 {
+    let mut monitor = DefaultResourceMonitor;
+    run_closure_with_setup_per_iter_with_monitor(
+        spec,
+        &mut monitor,
+        move || setup(),
+        move |input| f(input),
+    )
+}
+
+fn run_closure_with_setup_per_iter_with_monitor<S, T, F, M>(
+    spec: BenchSpec,
+    monitor: &mut M,
+    mut setup: S,
+    mut f: F,
+) -> Result<BenchReport, TimingError>
+where
+    S: FnMut() -> T,
+    F: FnMut(T) -> Result<(), TimingError>,
+    M: ResourceMonitor,
+{
     if spec.iterations == 0 {
         return Err(TimingError::NoIterations {
             count: spec.iterations,
         });
     }
 
+    reset_semantic_phase_collection();
+    let harness_origin = Instant::now();
+    let mut timeline = Vec::new();
+
     // Warmup phase
-    for _ in 0..spec.warmup {
+    for iteration in 0..spec.warmup {
+        let setup_start = Instant::now();
         let input = setup();
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "fixture-setup",
+            setup_start,
+            Instant::now(),
+            Some(iteration),
+        );
+        let phase_start = Instant::now();
         f(input)?;
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "warmup-benchmark",
+            phase_start,
+            Instant::now(),
+            Some(iteration),
+        );
     }
 
     // Measurement phase
+    begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for _ in 0..spec.iterations {
+    for iteration in 0..spec.iterations {
+        let setup_start = Instant::now();
         let input = setup(); // Not timed
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "fixture-setup",
+            setup_start,
+            Instant::now(),
+            Some(iteration),
+        );
 
-        let start = Instant::now();
-        f(input)?; // Only this is timed
-        samples.push(BenchSample::from_duration(start.elapsed()));
+        let (sample, start, end) = match measure_iteration(monitor, || f(input)) {
+            Ok(measurement) => measurement,
+            Err(err) => {
+                let _ = finish_semantic_phase_collection();
+                return Err(err);
+            }
+        };
+        samples.push(sample);
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "measured-benchmark",
+            start,
+            end,
+            Some(iteration),
+        );
     }
+    let phases = finish_semantic_phase_collection();
 
-    Ok(BenchReport { spec, samples })
+    Ok(BenchReport {
+        spec,
+        samples,
+        phases,
+        timeline,
+    })
 }
 
 /// Runs a benchmark with setup and teardown.
@@ -635,46 +1243,159 @@ where
     F: FnMut(&T) -> Result<(), TimingError>,
     D: FnOnce(T),
 {
+    let mut monitor = DefaultResourceMonitor;
+    run_closure_with_setup_teardown_with_monitor(
+        spec,
+        &mut monitor,
+        setup,
+        move |input| f(input),
+        teardown,
+    )
+}
+
+fn run_closure_with_setup_teardown_with_monitor<S, T, F, D, M>(
+    spec: BenchSpec,
+    monitor: &mut M,
+    setup: S,
+    mut f: F,
+    teardown: D,
+) -> Result<BenchReport, TimingError>
+where
+    S: FnOnce() -> T,
+    F: FnMut(&T) -> Result<(), TimingError>,
+    D: FnOnce(T),
+    M: ResourceMonitor,
+{
     if spec.iterations == 0 {
         return Err(TimingError::NoIterations {
             count: spec.iterations,
         });
     }
 
+    reset_semantic_phase_collection();
+    let harness_origin = Instant::now();
+    let mut timeline = Vec::new();
+
     // Setup phase - not timed
+    let setup_start = Instant::now();
     let input = setup();
+    push_timeline_span(
+        &mut timeline,
+        harness_origin,
+        "setup",
+        setup_start,
+        Instant::now(),
+        None,
+    );
 
     // Warmup phase
-    for _ in 0..spec.warmup {
+    for iteration in 0..spec.warmup {
+        let phase_start = Instant::now();
         f(&input)?;
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "warmup-benchmark",
+            phase_start,
+            Instant::now(),
+            Some(iteration),
+        );
     }
 
     // Measurement phase
+    begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for _ in 0..spec.iterations {
-        let start = Instant::now();
-        f(&input)?;
-        samples.push(BenchSample::from_duration(start.elapsed()));
+    for iteration in 0..spec.iterations {
+        let (sample, start, end) = match measure_iteration(monitor, || f(&input)) {
+            Ok(measurement) => measurement,
+            Err(err) => {
+                let _ = finish_semantic_phase_collection();
+                return Err(err);
+            }
+        };
+        samples.push(sample);
+        push_timeline_span(
+            &mut timeline,
+            harness_origin,
+            "measured-benchmark",
+            start,
+            end,
+            Some(iteration),
+        );
     }
+    let phases = finish_semantic_phase_collection();
 
     // Teardown phase - not timed
+    let teardown_start = Instant::now();
     teardown(input);
+    push_timeline_span(
+        &mut timeline,
+        harness_origin,
+        "teardown",
+        teardown_start,
+        Instant::now(),
+        None,
+    );
 
-    Ok(BenchReport { spec, samples })
+    Ok(BenchReport {
+        spec,
+        samples,
+        phases,
+        timeline,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct FakeResourceMonitor {
+        samples: Vec<IterationResourceUsage>,
+        started: usize,
+        finished: usize,
+    }
+
+    impl FakeResourceMonitor {
+        fn new(samples: Vec<IterationResourceUsage>) -> Self {
+            Self {
+                samples,
+                started: 0,
+                finished: 0,
+            }
+        }
+    }
+
+    impl ResourceMonitor for FakeResourceMonitor {
+        type Token = usize;
+
+        fn start(&mut self) -> Self::Token {
+            let token = self.started;
+            self.started += 1;
+            assert!(
+                token < self.samples.len(),
+                "resource capture should only run for measured iterations"
+            );
+            token
+        }
+
+        fn finish(&mut self, token: Self::Token) -> IterationResourceUsage {
+            self.finished += 1;
+            self.samples
+                .get(token)
+                .cloned()
+                .expect("resource usage for measured iteration")
+        }
+    }
+
     #[test]
-    fn runs_benchmark() {
+    fn runs_benchmark_collects_requested_samples() {
         let spec = BenchSpec::new("noop", 3, 1).unwrap();
         let report = run_closure(spec, || Ok(())).unwrap();
 
         assert_eq!(report.samples.len(), 3);
-        let non_zero = report.samples.iter().filter(|s| s.duration_ns > 0).count();
-        assert!(non_zero >= 1);
+        assert_eq!(report.spec.name, "noop");
+        assert_eq!(report.spec.iterations, 3);
     }
 
     #[test]
@@ -697,14 +1418,232 @@ mod tests {
 
     #[test]
     fn serializes_to_json() {
-        let spec = BenchSpec::new("test", 10, 2).unwrap();
-        let report = run_closure(spec, || Ok(())).unwrap();
+        let report = BenchReport {
+            spec: BenchSpec::new("test", 10, 2).unwrap(),
+            samples: vec![BenchSample {
+                duration_ns: 1_000_000,
+                cpu_time_ms: Some(42),
+                peak_memory_kb: Some(512),
+            }],
+            phases: vec![SemanticPhase {
+                name: "prove".to_string(),
+                duration_ns: 1_000_000,
+            }],
+            timeline: vec![HarnessTimelineSpan {
+                phase: "measured-benchmark".to_string(),
+                start_offset_ns: 0,
+                end_offset_ns: 1_000_000,
+                iteration: Some(0),
+            }],
+        };
 
         let json = serde_json::to_string(&report).unwrap();
         let restored: BenchReport = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.spec.name, "test");
-        assert_eq!(restored.samples.len(), 10);
+        assert_eq!(restored.samples.len(), 1);
+        assert_eq!(restored.samples[0].cpu_time_ms, Some(42));
+        assert_eq!(restored.samples[0].peak_memory_kb, Some(512));
+        assert_eq!(restored.phases.len(), 1);
+        assert_eq!(restored.phases[0].name, "prove");
+        assert!(restored.phases[0].duration_ns > 0);
+    }
+
+    #[test]
+    fn profile_phase_records_only_measured_iterations() {
+        let spec = BenchSpec::new("semantic", 2, 1).unwrap();
+        let mut call_index = 0u32;
+        let report = run_closure(spec, || {
+            let phase_name = if call_index == 0 {
+                "warmup-only"
+            } else {
+                "prove"
+            };
+            call_index += 1;
+            profile_phase(phase_name, || std::thread::sleep(Duration::from_millis(1)));
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(
+            !report
+                .phases
+                .iter()
+                .any(|phase| phase.name == "warmup-only"),
+            "warmup phases should not be recorded"
+        );
+        let prove = report
+            .phases
+            .iter()
+            .find(|phase| phase.name == "prove")
+            .expect("prove phase");
+        assert!(prove.duration_ns > 0);
+    }
+
+    #[test]
+    fn profile_phase_keeps_the_v1_model_flat() {
+        let spec = BenchSpec::new("semantic-flat", 1, 0).unwrap();
+        let report = run_closure(spec, || {
+            profile_phase("prove", || {
+                std::thread::sleep(Duration::from_millis(1));
+                profile_phase("inner", || std::thread::sleep(Duration::from_millis(1)));
+            });
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(report.phases.iter().any(|phase| phase.name == "prove"));
+        assert!(
+            !report.phases.iter().any(|phase| phase.name == "inner"),
+            "nested phases should not create a second flat phase entry"
+        );
+    }
+
+    #[test]
+    fn measured_cpu_excludes_warmup_iterations() {
+        let spec = BenchSpec::new("cpu", 2, 1).unwrap();
+        let mut monitor = FakeResourceMonitor::new(vec![
+            IterationResourceUsage {
+                cpu_time_ms: Some(11),
+                peak_memory_kb: Some(32),
+            },
+            IterationResourceUsage {
+                cpu_time_ms: Some(17),
+                peak_memory_kb: Some(64),
+            },
+        ]);
+        let mut calls = 0_u32;
+
+        let report = run_closure_with_monitor(spec, &mut monitor, || {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(calls, 3);
+        assert_eq!(monitor.started, 2);
+        assert_eq!(monitor.finished, 2);
+        assert_eq!(
+            report
+                .samples
+                .iter()
+                .map(|sample| sample.cpu_time_ms)
+                .collect::<Vec<_>>(),
+            vec![Some(11), Some(17)]
+        );
+        assert_eq!(report.cpu_total_ms(), Some(28));
+    }
+
+    #[test]
+    fn measured_cpu_excludes_outer_harness_and_report_overhead() {
+        let spec = BenchSpec::new("cpu-harness", 2, 1).unwrap();
+        let mut monitor = FakeResourceMonitor::new(vec![
+            IterationResourceUsage {
+                cpu_time_ms: Some(5),
+                peak_memory_kb: Some(12),
+            },
+            IterationResourceUsage {
+                cpu_time_ms: Some(7),
+                peak_memory_kb: Some(18),
+            },
+        ]);
+
+        let mut setup_calls = 0_u32;
+        let mut teardown_calls = 0_u32;
+        let report = run_closure_with_setup_teardown_with_monitor(
+            spec,
+            &mut monitor,
+            || {
+                setup_calls += 1;
+                vec![1_u8, 2, 3]
+            },
+            |_fixture| Ok(()),
+            |_fixture| {
+                teardown_calls += 1;
+            },
+        )
+        .unwrap();
+
+        let _serialized = serde_json::to_string(&report).unwrap();
+
+        assert_eq!(setup_calls, 1);
+        assert_eq!(teardown_calls, 1);
+        assert_eq!(monitor.started, 2);
+        assert_eq!(report.cpu_total_ms(), Some(12));
+        assert_eq!(report.cpu_median_ms(), Some(6));
+    }
+
+    #[test]
+    fn single_iteration_cpu_median_matches_the_measured_iteration() {
+        let spec = BenchSpec::new("single", 1, 0).unwrap();
+        let mut monitor = FakeResourceMonitor::new(vec![IterationResourceUsage {
+            cpu_time_ms: Some(42),
+            peak_memory_kb: Some(24),
+        }]);
+
+        let report = run_closure_with_monitor(spec, &mut monitor, || Ok(())).unwrap();
+
+        assert_eq!(report.samples[0].cpu_time_ms, Some(42));
+        assert_eq!(report.cpu_total_ms(), Some(42));
+        assert_eq!(report.cpu_median_ms(), Some(42));
+    }
+
+    #[test]
+    fn multiple_iterations_export_the_median_cpu_sample() {
+        let spec = BenchSpec::new("median", 3, 0).unwrap();
+        let mut monitor = FakeResourceMonitor::new(vec![
+            IterationResourceUsage {
+                cpu_time_ms: Some(19),
+                peak_memory_kb: Some(10),
+            },
+            IterationResourceUsage {
+                cpu_time_ms: Some(7),
+                peak_memory_kb: Some(30),
+            },
+            IterationResourceUsage {
+                cpu_time_ms: Some(11),
+                peak_memory_kb: Some(20),
+            },
+        ]);
+
+        let report = run_closure_with_monitor(spec, &mut monitor, || Ok(())).unwrap();
+
+        assert_eq!(report.cpu_median_ms(), Some(11));
+        assert_eq!(report.cpu_total_ms(), Some(37));
+    }
+
+    #[test]
+    fn peak_memory_excludes_harness_baseline_overhead() {
+        let spec = BenchSpec::new("memory", 2, 1).unwrap();
+        let mut monitor = FakeResourceMonitor::new(vec![
+            IterationResourceUsage {
+                cpu_time_ms: Some(3),
+                peak_memory_kb: Some(48),
+            },
+            IterationResourceUsage {
+                cpu_time_ms: Some(4),
+                peak_memory_kb: Some(96),
+            },
+        ]);
+
+        let report = run_closure_with_setup_teardown_with_monitor(
+            spec,
+            &mut monitor,
+            || vec![0_u8; 1024],
+            |_fixture| Ok(()),
+            |_fixture| {},
+        )
+        .unwrap();
+
+        assert_eq!(
+            report
+                .samples
+                .iter()
+                .map(|sample| sample.peak_memory_kb)
+                .collect::<Vec<_>>(),
+            vec![Some(48), Some(96)]
+        );
+        assert_eq!(report.peak_memory_kb(), Some(96));
     }
 
     #[test]
@@ -782,5 +1721,32 @@ mod tests {
         assert_eq!(SETUP_COUNT.load(Ordering::SeqCst), 1);
         assert_eq!(TEARDOWN_COUNT.load(Ordering::SeqCst), 1);
         assert_eq!(report.samples.len(), 3);
+    }
+
+    #[test]
+    fn bench_report_serializes_exact_harness_timeline() {
+        let spec = BenchSpec::new("timeline", 2, 1).unwrap();
+        let report = run_closure_with_setup_teardown(
+            spec,
+            || {
+                std::thread::sleep(Duration::from_millis(1));
+                "resource"
+            },
+            |_resource| {
+                std::thread::sleep(Duration::from_millis(1));
+                Ok(())
+            },
+            |_resource| {
+                std::thread::sleep(Duration::from_millis(1));
+            },
+        )
+        .unwrap();
+
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["timeline"][0]["phase"], "setup");
+        assert_eq!(json["timeline"][1]["phase"], "warmup-benchmark");
+        assert_eq!(json["timeline"][2]["phase"], "measured-benchmark");
+        assert_eq!(json["timeline"][3]["phase"], "measured-benchmark");
+        assert_eq!(json["timeline"][4]["phase"], "teardown");
     }
 }

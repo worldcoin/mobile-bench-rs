@@ -39,6 +39,13 @@ We recursively download ALL URLs from session JSON, which typically includes:
   - Aggregate statistics: peak, average, min
 - Automatically included in RunSummary when using `--fetch` flag
 
+**Benchmark-scoped resource metrics (current default):**
+- Each measured iteration can emit `cpu_time_ms` and `peak_memory_kb`
+- `mobench` derives `cpu_median_ms` from measured iterations only
+- `summary.md` renders the default `CPU` column from `cpu_median_ms` in total seconds
+- `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
+- BrowserStack aggregate memory is only used as a fallback when benchmark-scoped peak memory is absent
+
 ### ⚠️ What We DON'T Capture (But BrowserStack Provides)
 
 Based on [BrowserStack App Automate API documentation](https://www.browserstack.com/docs/app-automate/api-reference):
@@ -52,7 +59,7 @@ Based on [BrowserStack App Automate API documentation](https://www.browserstack.
 
 **Performance Metrics:**
 
-BrowserStack does NOT provide built-in CPU/Memory/Battery metrics in standard API responses. However, **mobench v0.1.5+ now supports extracting these metrics** if your app logs them:
+BrowserStack does NOT provide built-in CPU/Memory/Battery metrics in standard API responses. `mobench` therefore treats benchmark-scoped app-emitted metrics as the primary source of truth, and only falls back to BrowserStack aggregate memory when the benchmark payload does not provide peak memory.
 
 1. **Collect metrics in your app** using Android/iOS APIs:
    - Android: `ActivityManager.MemoryInfo`, `Debug.MemoryInfo`

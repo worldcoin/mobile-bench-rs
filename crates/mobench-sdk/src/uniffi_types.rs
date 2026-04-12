@@ -38,6 +38,8 @@
 //! #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 //! pub struct BenchSample {
 //!     pub duration_ns: u64,
+//!     pub cpu_time_ms: Option<u64>,
+//!     pub peak_memory_kb: Option<u64>,
 //! }
 //!
 //! #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -181,12 +183,18 @@ impl From<BenchSpecTemplate> for crate::BenchSpec {
 pub struct BenchSampleTemplate {
     /// Duration of the iteration in nanoseconds.
     pub duration_ns: u64,
+    /// CPU time consumed by the measured iteration in milliseconds.
+    pub cpu_time_ms: Option<u64>,
+    /// Peak memory growth during the measured iteration in kilobytes.
+    pub peak_memory_kb: Option<u64>,
 }
 
 impl From<crate::BenchSample> for BenchSampleTemplate {
     fn from(sample: crate::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
         }
     }
 }
@@ -195,6 +203,8 @@ impl From<BenchSampleTemplate> for crate::BenchSample {
     fn from(sample: BenchSampleTemplate) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
         }
     }
 }
@@ -331,9 +341,15 @@ mod tests {
 
     #[test]
     fn test_bench_sample_template_conversion() {
-        let sdk_sample = crate::BenchSample { duration_ns: 12345 };
+        let sdk_sample = crate::BenchSample {
+            duration_ns: 12345,
+            cpu_time_ms: Some(12),
+            peak_memory_kb: Some(48),
+        };
         let template: BenchSampleTemplate = sdk_sample.into();
         assert_eq!(template.duration_ns, 12345);
+        assert_eq!(template.cpu_time_ms, Some(12));
+        assert_eq!(template.peak_memory_kb, Some(48));
     }
 
     #[test]

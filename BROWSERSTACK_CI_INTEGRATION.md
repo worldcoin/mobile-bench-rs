@@ -81,6 +81,11 @@ cargo mobench verify --target android --smoke-test --function my_benchmark
 cargo mobench report summarize --summary target/mobench/ci/summary.json
 ```
 
+Standard CI outputs now carry benchmark-scoped resource metrics directly:
+- `summary.md` shows `CPU` (measured-iteration `cpu_median_ms`) and `Peak memory` with unit-neutral headers
+- `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
+- missing resource data is emitted as blank CSV fields rather than placeholder strings
+
 ## Quick Example
 
 ```rust

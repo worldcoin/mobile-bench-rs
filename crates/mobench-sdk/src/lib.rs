@@ -4,14 +4,15 @@
 //! [![Documentation](https://docs.rs/mobench-sdk/badge.svg)](https://docs.rs/mobench-sdk)
 //! [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/worldcoin/mobile-bench-rs/blob/main/LICENSE)
 //!
-//! A mobile benchmarking SDK for Rust that enables running performance benchmarks
-//! on real Android and iOS devices via BrowserStack App Automate.
+//! A mobile benchmarking SDK for Rust that provides the runtime, builders, and
+//! generated mobile runners used by the `mobench` CLI for local execution,
+//! BrowserStack benchmark runs, and local native profiling.
 //!
 //! ## Overview
 //!
 //! `mobench-sdk` provides a simple, declarative API for defining benchmarks that can
-//! run on mobile devices. It handles the complexity of cross-compilation, FFI bindings,
-//! and mobile app packaging automatically.
+//! run on mobile devices. It handles the timing/runtime layer, cross-compilation,
+//! FFI bindings, template generation, and mobile app packaging used by the CLI.
 //!
 //! ## Quick Setup Checklist
 //!
@@ -106,6 +107,10 @@
 //! # Run on BrowserStack (use --release for smaller APK uploads)
 //! cargo mobench run --target android --function my_expensive_operation \
 //!     --iterations 100 --warmup 10 --devices "Google Pixel 7-13.0" --release
+//!
+//! # Or capture a local native profile
+//! cargo mobench profile run --target android --provider local \
+//!     --backend android-native --function my_expensive_operation
 //! ```
 //!
 //! ## Architecture
@@ -269,12 +274,13 @@
 //!
 //! - Android NDK (set `ANDROID_NDK_HOME` environment variable)
 //! - `cargo-ndk` (`cargo install cargo-ndk`)
-//! - Rust targets: `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`
+//! - Rust targets: `rustup target add aarch64-linux-android`
+//! - Optional extra ABI targets only when configured explicitly
 //!
 //! ### iOS
 //!
 //! - Xcode with command line tools
-//! - `uniffi-bindgen` (`cargo install uniffi-bindgen`)
+//! - `uniffi-bindgen` (`cargo install --git https://github.com/mozilla/uniffi-rs --tag <uniffi-tag> uniffi-bindgen-cli --bin uniffi-bindgen`)
 //! - `xcodegen` (optional, `brew install xcodegen`)
 //! - Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`
 //!
@@ -378,7 +384,9 @@ pub use types::{BenchError, BenchSample, BenchSpec, RunnerReport};
 pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, Target};
 
 // Re-export timing types at the crate root for convenience
-pub use timing::{BenchSummary, TimingError, run_closure};
+pub use timing::{
+    BenchSummary, HarnessTimelineSpan, SemanticPhase, TimingError, profile_phase, run_closure,
+};
 
 /// Re-export of [`std::hint::black_box`] for preventing compiler optimizations.
 ///

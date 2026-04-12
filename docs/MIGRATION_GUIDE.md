@@ -81,4 +81,11 @@ jobs:
 - ADR: `docs/adr/0001-mobench-ci-contract-v1.md`
 - Schemas: `docs/schemas/summary-v1.schema.json`, `docs/schemas/ci-contract-v1.schema.json`
 
+### Summary/CSV contract updates
+
+- `summary.md` now uses unit-neutral timing headers
+- the default human-readable CPU column is `CPU`, rendered from measured-iteration `cpu_median_ms` in total seconds
+- `results.csv` now includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
+- missing resource values are left blank in CSV output
+
 Any change to required output files or metadata keys requires a contract-version bump.

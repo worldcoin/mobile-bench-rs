@@ -875,6 +875,38 @@ struct BenchmarkStats {
     p95_ns: Option<u64>,
     min_ns: Option<u64>,
     max_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource_usage: Option<BenchmarkResourceUsage>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct BenchmarkResourceUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cpu_total_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cpu_median_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_memory_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_pss_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    private_dirty_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_heap_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    java_heap_kb: Option<u64>,
+}
+
+impl BenchmarkResourceUsage {
+    fn is_empty(&self) -> bool {
+        self.cpu_total_ms.is_none()
+            && self.cpu_median_ms.is_none()
+            && self.peak_memory_kb.is_none()
+            && self.total_pss_kb.is_none()
+            && self.private_dirty_kb.is_none()
+            && self.native_heap_kb.is_none()
+            && self.java_heap_kb.is_none()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3299,6 +3331,10 @@ fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
 
     if let Some(results) = &run_summary.benchmark_results {
         for (device, entries) in results {
+            let perf_metrics = run_summary
+                .performance_metrics
+                .as_ref()
+                .and_then(|perf_metrics| perf_metrics.get(device));
             let mut benchmarks = Vec::new();
             for entry in entries {
                 let function = entry
@@ -3308,6 +3344,15 @@ fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
                     .to_string();
                 let samples = extract_samples(entry);
                 let stats = compute_sample_stats(&samples);
+                let sample_count = if samples.is_empty() {
+                    entry
+                        .get("samples")
+                        .and_then(|value| value.as_u64())
+                        .map(|value| value as usize)
+                        .unwrap_or(0)
+                } else {
+                    samples.len()
+                };
                 let mean_ns = stats
                     .as_ref()
                     .map(|s| s.mean_ns)
@@ -3315,12 +3360,25 @@ fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
 
                 benchmarks.push(BenchmarkStats {
                     function,
-                    samples: samples.len(),
+                    samples: sample_count,
                     mean_ns,
-                    median_ns: stats.as_ref().map(|s| s.median_ns),
-                    p95_ns: stats.as_ref().map(|s| s.p95_ns),
-                    min_ns: stats.as_ref().map(|s| s.min_ns),
-                    max_ns: stats.as_ref().map(|s| s.max_ns),
+                    median_ns: stats
+                        .as_ref()
+                        .map(|s| s.median_ns)
+                        .or_else(|| entry.get("median_ns").and_then(|value| value.as_u64())),
+                    p95_ns: stats
+                        .as_ref()
+                        .map(|s| s.p95_ns)
+                        .or_else(|| entry.get("p95_ns").and_then(|value| value.as_u64())),
+                    min_ns: stats
+                        .as_ref()
+                        .map(|s| s.min_ns)
+                        .or_else(|| entry.get("min_ns").and_then(|value| value.as_u64())),
+                    max_ns: stats
+                        .as_ref()
+                        .map(|s| s.max_ns)
+                        .or_else(|| entry.get("max_ns").and_then(|value| value.as_u64())),
+                    resource_usage: extract_benchmark_resource_usage(entry, perf_metrics),
                 });
             }
 
@@ -3914,7 +3972,7 @@ fn render_compare_markdown(report: &CompareReport) -> String {
     let _ = writeln!(output);
     let _ = writeln!(
         output,
-        "| Device | Function | Median (base ms) | Median (cand ms) | Median Δ% | Median Label | P95 (base ms) | P95 (cand ms) | P95 Δ% | P95 Label |"
+        "| Device | Function | Median base | Median cand | Median Δ% | Median Label | P95 base | P95 cand | P95 Δ% | P95 Label |"
     );
     let _ = writeln!(
         output,
@@ -4119,6 +4177,7 @@ fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
             p95_ns: Some(stats.p95_ns),
             min_ns: Some(stats.min_ns),
             max_ns: Some(stats.max_ns),
+            resource_usage: extract_benchmark_resource_usage(&run_summary.local_report, None),
         }],
     })
 }
@@ -4190,6 +4249,142 @@ fn extract_samples(value: &Value) -> Vec<u64> {
     durations
 }
 
+fn extract_sample_metric_u64(value: &Value, key: &str) -> Vec<u64> {
+    value
+        .get("samples")
+        .and_then(|samples| samples.as_array())
+        .map(|samples| {
+            samples
+                .iter()
+                .filter_map(|sample| sample.get(key))
+                .filter_map(json_value_to_u64)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn json_value_to_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+        .or_else(|| {
+            value
+                .as_f64()
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map(|value| value.round() as u64)
+        })
+}
+
+fn median_u64(values: &[u64]) -> Option<u64> {
+    if values.is_empty() {
+        return None;
+    }
+
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let len = sorted.len();
+    Some(if len % 2 == 0 {
+        let lower = u128::from(sorted[(len / 2) - 1]);
+        let upper = u128::from(sorted[len / 2]);
+        ((lower + upper) / 2) as u64
+    } else {
+        sorted[len / 2]
+    })
+}
+
+fn raw_peak_memory_kb(
+    total_pss_kb: Option<u64>,
+    private_dirty_kb: Option<u64>,
+    native_heap_kb: Option<u64>,
+    java_heap_kb: Option<u64>,
+) -> Option<u64> {
+    total_pss_kb
+        .or(private_dirty_kb)
+        .or_else(|| match (native_heap_kb, java_heap_kb) {
+            (Some(native), Some(java)) => Some(native + java),
+            (Some(native), None) => Some(native),
+            (None, Some(java)) => Some(java),
+            (None, None) => None,
+        })
+}
+
+fn extract_benchmark_resource_usage(
+    entry: &Value,
+    perf_metrics: Option<&browserstack::PerformanceMetrics>,
+) -> Option<BenchmarkResourceUsage> {
+    let resources = entry
+        .get("resource_usage")
+        .or_else(|| entry.get("resources"))
+        .or(Some(entry));
+    let sample_cpu_ms = extract_sample_metric_u64(entry, "cpu_time_ms");
+    let sample_peak_memory_kb = extract_sample_metric_u64(entry, "peak_memory_kb");
+
+    let cpu_total_ms = resources
+        .and_then(|res| res.get("cpu_total_ms"))
+        .and_then(json_value_to_u64)
+        .or_else(|| {
+            resources
+                .and_then(|res| res.get("elapsed_cpu_ms"))
+                .and_then(json_value_to_u64)
+        })
+        .or_else(|| {
+            (!sample_cpu_ms.is_empty()).then(|| {
+                sample_cpu_ms
+                    .iter()
+                    .fold(0_u128, |sum, value| sum.saturating_add(u128::from(*value)))
+                    .min(u128::from(u64::MAX)) as u64
+            })
+        });
+    let cpu_median_ms = resources
+        .and_then(|res| res.get("cpu_median_ms"))
+        .and_then(json_value_to_u64)
+        .or_else(|| median_u64(&sample_cpu_ms));
+    let total_pss_kb = resources
+        .and_then(|res| res.get("total_pss_kb"))
+        .and_then(json_value_to_u64);
+    let private_dirty_kb = resources
+        .and_then(|res| res.get("private_dirty_kb"))
+        .and_then(json_value_to_u64);
+    let native_heap_kb = resources
+        .and_then(|res| res.get("native_heap_kb"))
+        .and_then(json_value_to_u64);
+    let java_heap_kb = resources
+        .and_then(|res| res.get("java_heap_kb"))
+        .and_then(json_value_to_u64);
+    let reported_peak_memory_kb = resources
+        .and_then(|res| res.get("peak_memory_kb"))
+        .and_then(json_value_to_u64)
+        .or_else(|| {
+            resources
+                .and_then(|res| res.get("ram_peak_mb"))
+                .and_then(|value| value.as_f64())
+                .map(|value| (value * 1024.0).round() as u64)
+        });
+
+    let peak_memory_kb = reported_peak_memory_kb
+        .or_else(|| sample_peak_memory_kb.iter().copied().max())
+        .or_else(|| {
+            perf_metrics
+                .and_then(|metrics| metrics.memory.as_ref())
+                .map(|memory| (memory.peak_mb * 1024.0).round() as u64)
+        })
+        .or_else(|| {
+            raw_peak_memory_kb(total_pss_kb, private_dirty_kb, native_heap_kb, java_heap_kb)
+        });
+
+    let resource_usage = BenchmarkResourceUsage {
+        cpu_total_ms,
+        cpu_median_ms,
+        peak_memory_kb,
+        total_pss_kb,
+        private_dirty_kb,
+        native_heap_kb,
+        java_heap_kb,
+    };
+
+    (!resource_usage.is_empty()).then_some(resource_usage)
+}
+
 fn render_markdown_summary(summary: &SummaryReport) -> String {
     let mut output = String::new();
     let devices = if summary.devices.is_empty() {
@@ -4219,23 +4414,59 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
     for device in &summary.device_summaries {
         let _ = writeln!(output, "## Device: {}", device.device);
         let _ = writeln!(output);
-        let _ = writeln!(
-            output,
-            "| Function | Samples | Mean (ms) | Median (ms) | P95 (ms) | Min (ms) | Max (ms) |"
-        );
-        let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
-        for bench in &device.benchmarks {
+        let has_resource_usage = device
+            .benchmarks
+            .iter()
+            .any(|bench| bench.resource_usage.is_some());
+        if has_resource_usage {
             let _ = writeln!(
                 output,
-                "| {} | {} | {} | {} | {} | {} | {} |",
-                bench.function,
-                bench.samples,
-                format_ms(bench.mean_ns),
-                format_ms(bench.median_ns),
-                format_ms(bench.p95_ns),
-                format_ms(bench.min_ns),
-                format_ms(bench.max_ns)
+                "| Function | Samples | Mean | Median | P95 | Min | Max | CPU | Peak memory |"
             );
+            let _ = writeln!(
+                output,
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+            );
+        } else {
+            let _ = writeln!(
+                output,
+                "| Function | Samples | Mean | Median | P95 | Min | Max |"
+            );
+            let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+        }
+        for bench in &device.benchmarks {
+            if has_resource_usage {
+                let _ = writeln!(
+                    output,
+                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    bench.function,
+                    bench.samples,
+                    format_ms(bench.mean_ns),
+                    format_ms(bench.median_ns),
+                    format_ms(bench.p95_ns),
+                    format_ms(bench.min_ns),
+                    format_ms(bench.max_ns),
+                    format_cpu_ms(bench.resource_usage.as_ref()),
+                    format_peak_memory(
+                        bench
+                            .resource_usage
+                            .as_ref()
+                            .and_then(|usage| usage.peak_memory_kb)
+                    )
+                );
+            } else {
+                let _ = writeln!(
+                    output,
+                    "| {} | {} | {} | {} | {} | {} | {} |",
+                    bench.function,
+                    bench.samples,
+                    format_ms(bench.mean_ns),
+                    format_ms(bench.median_ns),
+                    format_ms(bench.p95_ns),
+                    format_ms(bench.min_ns),
+                    format_ms(bench.max_ns)
+                );
+            }
         }
         let _ = writeln!(output);
     }
@@ -4247,13 +4478,13 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
-        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns"
+        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb"
     );
     for device in &summary.device_summaries {
         for bench in &device.benchmarks {
             let _ = writeln!(
                 output,
-                "{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{}",
                 device.device,
                 bench.function,
                 bench.samples,
@@ -4261,7 +4492,22 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
                 bench.median_ns.map_or(String::from(""), |v| v.to_string()),
                 bench.p95_ns.map_or(String::from(""), |v| v.to_string()),
                 bench.min_ns.map_or(String::from(""), |v| v.to_string()),
-                bench.max_ns.map_or(String::from(""), |v| v.to_string())
+                bench.max_ns.map_or(String::from(""), |v| v.to_string()),
+                bench
+                    .resource_usage
+                    .as_ref()
+                    .and_then(|usage| usage.cpu_total_ms)
+                    .map_or(String::new(), |v| v.to_string()),
+                bench
+                    .resource_usage
+                    .as_ref()
+                    .and_then(|usage| usage.cpu_median_ms)
+                    .map_or(String::new(), |v| v.to_string()),
+                bench
+                    .resource_usage
+                    .as_ref()
+                    .and_then(|usage| usage.peak_memory_kb)
+                    .map_or(String::new(), |v| v.to_string())
             );
         }
     }
@@ -4292,6 +4538,23 @@ fn format_duration_smart(ns: u64) -> String {
 fn format_ms(value: Option<u64>) -> String {
     value
         .map(format_duration_smart)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_cpu_ms(value: Option<&BenchmarkResourceUsage>) -> String {
+    value
+        .and_then(|usage| usage.cpu_median_ms.or(usage.cpu_total_ms))
+        .map(format_cpu_total_duration_ms)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_cpu_total_duration_ms(ms: u64) -> String {
+    format!("{:.3}s", ms as f64 / 1_000.0)
+}
+
+fn format_peak_memory(value_kb: Option<u64>) -> String {
+    value_kb
+        .map(|value| format!("{:.2} MB", value as f64 / 1024.0))
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -7256,10 +7519,283 @@ project = "proj"
             }],
         };
         let markdown = render_compare_markdown(&report);
+        assert!(markdown.contains("Median base"));
+        assert!(markdown.contains("Median cand"));
+        assert!(markdown.contains("P95 base"));
+        assert!(markdown.contains("P95 cand"));
+        assert!(!markdown.contains("Median (base ms)"));
+        assert!(!markdown.contains("Median (cand ms)"));
+        assert!(!markdown.contains("P95 (base ms)"));
+        assert!(!markdown.contains("P95 (cand ms)"));
         assert!(markdown.contains("Median Label"));
         assert!(markdown.contains("P95 Label"));
         assert!(markdown.contains("regressed"));
         assert!(markdown.contains("improved"));
+    }
+
+    #[test]
+    fn render_markdown_summary_includes_resource_usage_columns_when_present() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Google Pixel 8-14.0".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "sample_fns::fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(1_250_000_000),
+                    median_ns: Some(1_200_000_000),
+                    p95_ns: Some(1_300_000_000),
+                    min_ns: Some(1_100_000_000),
+                    max_ns: Some(1_350_000_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: Some(482),
+                        cpu_median_ms: Some(241),
+                        peak_memory_kb: Some(249_416),
+                        total_pss_kb: None,
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        });
+
+        assert!(markdown.contains(
+            "| Function | Samples | Mean | Median | P95 | Min | Max | CPU | Peak memory |"
+        ));
+        assert!(!markdown.contains("(ms)"));
+        assert!(!markdown.contains("CPU total"));
+        assert!(markdown.contains("0.241s"));
+        assert!(markdown.contains("243.57 MB"));
+    }
+
+    #[test]
+    fn render_csv_summary_includes_resource_usage_columns() {
+        let csv = render_csv_summary(&SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Google Pixel 8-14.0".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "sample_fns::fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(1_250_000_000),
+                    median_ns: Some(1_200_000_000),
+                    p95_ns: Some(1_300_000_000),
+                    min_ns: Some(1_100_000_000),
+                    max_ns: Some(1_350_000_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: Some(482),
+                        cpu_median_ms: Some(241),
+                        peak_memory_kb: Some(249_416),
+                        total_pss_kb: None,
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        });
+
+        assert!(
+            csv.starts_with(
+                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb\n"
+            )
+        );
+        assert!(csv.contains(",482,241,249416\n"));
+    }
+
+    #[test]
+    fn test_render_markdown_uses_cpu_total_and_peak_memory_columns() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Google Pixel 8-14.0".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "sample_fns::fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(1_250_000_000),
+                    median_ns: Some(1_200_000_000),
+                    p95_ns: Some(1_300_000_000),
+                    min_ns: Some(1_100_000_000),
+                    max_ns: Some(1_350_000_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: Some(482),
+                        cpu_median_ms: Some(241),
+                        peak_memory_kb: Some(654_321),
+                        total_pss_kb: Some(654_321),
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        });
+
+        assert!(markdown.contains("CPU"));
+        assert!(markdown.contains("Peak memory"));
+        assert!(!markdown.contains("(ms)"));
+        assert!(!markdown.contains("CPU total"));
+        assert!(markdown.contains("0.241s"));
+        assert!(markdown.contains("638.99 MB"));
+    }
+
+    #[test]
+    fn test_render_table_uses_cpu_total_and_peak_memory_columns() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Ios,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["iPhone 15-17.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "iPhone 15-17.0".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "sample_fns::fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(1_250_000_000),
+                    median_ns: Some(1_200_000_000),
+                    p95_ns: Some(1_300_000_000),
+                    min_ns: Some(1_100_000_000),
+                    max_ns: Some(1_350_000_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: Some(482),
+                        cpu_median_ms: Some(241),
+                        peak_memory_kb: Some(654_321),
+                        total_pss_kb: None,
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        });
+
+        assert!(markdown.contains("CPU"));
+        assert!(markdown.contains("Peak memory"));
+        assert!(!markdown.contains("(ms)"));
+        assert!(!markdown.contains("CPU total"));
+        assert!(markdown.contains("0.241s"));
+        assert!(markdown.contains("638.99 MB"));
+    }
+
+    #[test]
+    fn build_summary_preserves_resource_usage_from_benchmark_results() {
+        let spec = RunSpec {
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".into(),
+            iterations: 3,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".into()],
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let run_summary = RunSummary {
+            spec: spec.clone(),
+            artifacts: None,
+            local_report: json!({}),
+            remote_run: None,
+            summary: empty_summary(&spec),
+            benchmark_results: Some(BTreeMap::from([(
+                "Google Pixel 8-14.0".to_string(),
+                vec![json!({
+                    "function": "sample_fns::fibonacci",
+                    "samples": [
+                        { "duration_ns": 1000, "cpu_time_ms": 19, "peak_memory_kb": 48 },
+                        { "duration_ns": 2000, "cpu_time_ms": 7, "peak_memory_kb": 96 },
+                        { "duration_ns": 3000, "cpu_time_ms": 11, "peak_memory_kb": 64 }
+                    ]
+                })],
+            )])),
+            performance_metrics: None,
+        };
+
+        let summary = build_summary(&run_summary).expect("build summary");
+        let usage = summary.device_summaries[0].benchmarks[0]
+            .resource_usage
+            .as_ref()
+            .expect("resource usage");
+
+        assert_eq!(usage.cpu_total_ms, Some(37));
+        assert_eq!(usage.cpu_median_ms, Some(11));
+        assert_eq!(usage.peak_memory_kb, Some(96));
+    }
+
+    #[test]
+    fn build_summary_prefers_measured_peak_memory_over_browserstack_perf_memory() {
+        let spec = RunSpec {
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".into(),
+            iterations: 2,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".into()],
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let run_summary = RunSummary {
+            spec: spec.clone(),
+            artifacts: None,
+            local_report: json!({}),
+            remote_run: None,
+            summary: empty_summary(&spec),
+            benchmark_results: Some(BTreeMap::from([(
+                "Google Pixel 8-14.0".to_string(),
+                vec![json!({
+                    "function": "sample_fns::fibonacci",
+                    "samples": [
+                        { "duration_ns": 1000, "cpu_time_ms": 10, "peak_memory_kb": 64 },
+                        { "duration_ns": 2000, "cpu_time_ms": 12, "peak_memory_kb": 72 }
+                    ]
+                })],
+            )])),
+            performance_metrics: Some(BTreeMap::from([(
+                "Google Pixel 8-14.0".to_string(),
+                browserstack::PerformanceMetrics {
+                    memory: Some(browserstack::AggregateMemoryMetrics {
+                        peak_mb: 999.0,
+                        average_mb: 900.0,
+                        min_mb: 800.0,
+                    }),
+                    cpu: None,
+                    sample_count: 1,
+                    snapshots: vec![],
+                },
+            )])),
+        };
+
+        let summary = build_summary(&run_summary).expect("build summary");
+        let usage = summary.device_summaries[0].benchmarks[0]
+            .resource_usage
+            .as_ref()
+            .expect("resource usage");
+
+        assert_eq!(usage.peak_memory_kb, Some(72));
+    }
+
+    #[test]
+    fn format_cpu_total_duration_ms_uses_total_seconds() {
+        assert_eq!(format_cpu_total_duration_ms(482), "0.482s");
+        assert_eq!(format_cpu_total_duration_ms(114_248), "114.248s");
+        assert_eq!(format_cpu_total_duration_ms(515_822), "515.822s");
     }
 
     #[test]

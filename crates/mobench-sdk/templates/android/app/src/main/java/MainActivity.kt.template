@@ -2,8 +2,6 @@ package {{PACKAGE_NAME}}
 
 import android.os.Bundle
 import android.os.Debug
-import android.os.Process
-import android.os.SystemClock
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
@@ -64,10 +62,24 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<TextView>(R.id.result_text)?.text = display
 
-        // Keep the report on screen for at least 5 seconds so BrowserStack video captures it
-        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for video capture...")
+        // Keep the report visible briefly so local smoke runs and remote automation
+        // have a stable window to read the results.
+        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for capture output...")
         Thread.sleep(5000)
         android.util.Log.i("BenchRunner", "Display hold complete")
+    }
+
+    private fun median(values: List<Long>): Long {
+        val sorted = values.sorted()
+        if (sorted.isEmpty()) {
+            return 0L
+        }
+        val middle = sorted.size / 2
+        return if (sorted.size % 2 == 0) {
+            (sorted[middle - 1] + sorted[middle]) / 2
+        } else {
+            sorted[middle]
+        }
     }
 
     /**
@@ -117,15 +129,34 @@ class MainActivity : AppCompatActivity() {
         spec.put("warmup", report.spec.warmup.toInt())
         json.put("spec", spec)
 
-        val samples = report.samples.map { it.durationNs.toLong() }
-        val sampleArray = JSONArray()
-        samples.forEach { sampleArray.put(it) }
-        json.put("samples_ns", sampleArray)
+        val durationSamplesNs = report.samples.map { it.durationNs.toLong() }
+        val samplesNs = JSONArray()
+        durationSamplesNs.forEach { samplesNs.put(it) }
+        json.put("samples_ns", samplesNs)
 
-        if (samples.isNotEmpty()) {
-            val min = samples.minOrNull() ?: 0L
-            val max = samples.maxOrNull() ?: 0L
-            val avg = samples.sum().toDouble() / samples.size.toDouble()
+        val samples = JSONArray()
+        report.samples.forEach { sample ->
+            val sampleJson = JSONObject()
+            sampleJson.put("duration_ns", sample.durationNs.toLong())
+            sample.cpuTimeMs?.let { sampleJson.put("cpu_time_ms", it.toLong()) }
+            sample.peakMemoryKb?.let { sampleJson.put("peak_memory_kb", it.toLong()) }
+            samples.put(sampleJson)
+        }
+        json.put("samples", samples)
+
+        val phases = JSONArray()
+        report.phases.forEach { phase ->
+            val phaseJson = JSONObject()
+            phaseJson.put("name", phase.name)
+            phaseJson.put("duration_ns", phase.durationNs.toLong())
+            phases.put(phaseJson)
+        }
+        json.put("phases", phases)
+
+        if (durationSamplesNs.isNotEmpty()) {
+            val min = durationSamplesNs.minOrNull() ?: 0L
+            val max = durationSamplesNs.maxOrNull() ?: 0L
+            val avg = durationSamplesNs.sum().toDouble() / durationSamplesNs.size.toDouble()
             val stats = JSONObject()
             stats.put("min_ns", min)
             stats.put("max_ns", max)
@@ -133,11 +164,22 @@ class MainActivity : AppCompatActivity() {
             json.put("stats", stats)
         }
 
+        val cpuSamplesMs = report.samples.mapNotNull { it.cpuTimeMs?.toLong() }
+        val peakSamplesKb = report.samples.mapNotNull { it.peakMemoryKb?.toLong() }
         val memInfo = Debug.MemoryInfo()
         Debug.getMemoryInfo(memInfo)
         val resources = JSONObject()
-        resources.put("elapsed_cpu_ms", Process.getElapsedCpuTime())
-        resources.put("uptime_ms", SystemClock.elapsedRealtime())
+        resources.put("platform", "android")
+        resources.put("timestamp_ms", System.currentTimeMillis())
+        if (cpuSamplesMs.isNotEmpty()) {
+            val cpuTotalMs = cpuSamplesMs.sum()
+            resources.put("cpu_total_ms", cpuTotalMs)
+            resources.put("cpu_median_ms", median(cpuSamplesMs))
+            resources.put("elapsed_cpu_ms", cpuTotalMs)
+        }
+        if (peakSamplesKb.isNotEmpty()) {
+            resources.put("peak_memory_kb", peakSamplesKb.maxOrNull() ?: 0L)
+        }
         resources.put("total_pss_kb", memInfo.totalPss)
         resources.put("private_dirty_kb", memInfo.totalPrivateDirty)
         resources.put("native_heap_kb", Debug.getNativeHeapAllocatedSize() / 1024)
@@ -156,7 +198,7 @@ class MainActivity : AppCompatActivity() {
             DEFAULT_WARMUP
         )
 
-        // Check for intent extras (used for test automation and BrowserStack)
+        // Check for intent extras used by local automation, smoke tests, and provider-driven runs.
         val intentFunction = intent?.getStringExtra(FUNCTION_EXTRA)?.takeUnless { it.isBlank() }
         val intentIterations = intent?.let {
             val value = it.getIntExtra(ITERATIONS_EXTRA, -1)

@@ -40,6 +40,7 @@ inventory = { workspace = true, optional = true }
 # Serialization (always needed for BenchSpec/BenchReport)
 serde.workspace = true
 serde_json.workspace = true
+libc = "0.2"
 
 # Error handling
 thiserror.workspace = true
