@@ -6923,10 +6923,10 @@ fn builtin_device_for_profile(
     profile: &str,
 ) -> Option<ResolvedMatrixDevice> {
     let (name, os, os_version) = match (platform, profile) {
-        (DevicePlatform::Ios, "low-spec") => ("iPhone 13", "ios", "15"),
+        (DevicePlatform::Ios, "low-spec") => ("iPhone SE 2020", "ios", "16"),
         (DevicePlatform::Ios, "mid-spec") => ("iPhone 14", "ios", "16"),
         (DevicePlatform::Ios, "high-spec") => ("iPhone 16 Pro", "ios", "18"),
-        (DevicePlatform::Android, "low-spec") => ("Google Pixel 6", "android", "12.0"),
+        (DevicePlatform::Android, "low-spec") => ("Motorola Moto G9 Play", "android", "10.0"),
         (DevicePlatform::Android, "mid-spec") => ("Google Pixel 7", "android", "13.0"),
         (DevicePlatform::Android, "high-spec") => ("Samsung Galaxy S24", "android", "14.0"),
         _ => return None,
@@ -9089,13 +9089,23 @@ project = "proj"
     }
 
     #[test]
-    fn builtin_ios_low_spec_profile_matches_ci_deployment_target() {
+    fn builtin_ios_low_spec_profile_uses_iphone_se_2020() {
         let resolved = builtin_device_for_profile(DevicePlatform::Ios, "low-spec")
             .expect("built-in low-spec iOS profile");
 
-        assert_eq!(resolved.name, "iPhone 13");
-        assert_eq!(resolved.os_version, "15");
-        assert_eq!(resolved.identifier, "iPhone 13-15");
+        assert_eq!(resolved.name, "iPhone SE 2020");
+        assert_eq!(resolved.os_version, "16");
+        assert_eq!(resolved.identifier, "iPhone SE 2020-16");
+    }
+
+    #[test]
+    fn builtin_android_low_spec_profile_uses_moto_g9_play() {
+        let resolved = builtin_device_for_profile(DevicePlatform::Android, "low-spec")
+            .expect("built-in low-spec Android profile");
+
+        assert_eq!(resolved.name, "Motorola Moto G9 Play");
+        assert_eq!(resolved.os_version, "10.0");
+        assert_eq!(resolved.identifier, "Motorola Moto G9 Play-10.0");
     }
 
     #[test]
