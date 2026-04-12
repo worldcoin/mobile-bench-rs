@@ -5528,7 +5528,11 @@ fn format_cpu_ms(value: Option<&BenchmarkResourceUsage>) -> String {
 }
 
 fn format_cpu_total_duration_ms(ms: u64) -> String {
-    format!("{:.3}s", ms as f64 / 1_000.0)
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.3}s", ms as f64 / 1_000.0)
+    }
 }
 
 fn format_peak_memory(value_kb: Option<u64>) -> String {
@@ -9198,7 +9202,7 @@ project = "proj"
         ));
         assert!(!markdown.contains("(ms)"));
         assert!(!markdown.contains("CPU total"));
-        assert!(markdown.contains("0.241s"));
+        assert!(markdown.contains("241ms"));
         assert!(markdown.contains("243.57 MB"));
     }
 
@@ -9419,8 +9423,13 @@ project = "proj"
     }
 
     #[test]
-    fn format_cpu_total_duration_ms_uses_total_seconds() {
-        assert_eq!(format_cpu_total_duration_ms(482), "0.482s");
+    fn format_cpu_total_duration_ms_uses_milliseconds_below_one_second() {
+        assert_eq!(format_cpu_total_duration_ms(482), "482ms");
+    }
+
+    #[test]
+    fn format_cpu_total_duration_ms_uses_total_seconds_at_or_above_one_second() {
+        assert_eq!(format_cpu_total_duration_ms(1_000), "1.000s");
         assert_eq!(format_cpu_total_duration_ms(114_248), "114.248s");
         assert_eq!(format_cpu_total_duration_ms(515_822), "515.822s");
     }

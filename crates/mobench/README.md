@@ -263,7 +263,7 @@ cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 - `summary.md`
 - `results.csv`
 
-`summary.md` uses unit-neutral timing headers and renders `CPU` from measured-iteration `cpu_median_ms` in total seconds.
+`summary.md` uses unit-neutral timing headers and renders `CPU` from measured-iteration `cpu_median_ms` in milliseconds below one second and total seconds otherwise.
 
 `results.csv` includes:
 - `cpu_total_ms`

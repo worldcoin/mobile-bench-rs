@@ -49,7 +49,7 @@ We recursively download ALL URLs from session JSON, which typically includes:
 **Benchmark-scoped resource metrics (current default):**
 - Each measured iteration can emit `cpu_time_ms` and `peak_memory_kb`
 - `mobench` derives `cpu_median_ms` from measured iterations only
-- `summary.md` renders the default `CPU` column from `cpu_median_ms` in total seconds
+- `summary.md` renders the default `CPU` column from `cpu_median_ms` in milliseconds below one second and total seconds otherwise
 - `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
 - BrowserStack aggregate memory is only used as a fallback when benchmark-scoped peak memory is absent
 
