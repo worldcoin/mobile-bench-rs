@@ -92,3 +92,12 @@ jobs:
 
 Any change to required output files or metadata keys requires updating the
 versioned schemas and documenting the compatibility impact in `RELEASE_NOTES.md`.
+### Summary/CSV contract updates
+
+- `summary.md` now uses unit-neutral timing headers
+- the default human-readable CPU column is `CPU`, rendered from measured-iteration `cpu_median_ms` in total seconds
+- `results.csv` now includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
+- missing resource values are left blank in CSV output
+
+Any change to required output files or metadata keys requires updating the
+versioned schemas and documenting the compatibility impact in `RELEASE_NOTES.md`.
