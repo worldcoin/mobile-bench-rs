@@ -710,7 +710,13 @@ fn raw_peak_memory_kb(
 
 fn format_cpu_total_ms(value: Option<u64>) -> String {
     value
-        .map(|value| value.to_string())
+        .map(|value| {
+            if value >= 1_000 {
+                format!("{:.3}s", value as f64 / 1_000.0)
+            } else {
+                format!("{value}ms")
+            }
+        })
         .unwrap_or_else(|| "—".to_string())
 }
 
@@ -766,7 +772,7 @@ fn render_platform_table(platform: &PlatformReport) -> String {
 
     let mut headers = vec!["Benchmark", "Avg ms", "Best", "Worst", "Median", "P95"];
     if has_resource_usage {
-        headers.extend(["CPU total (ms)", "Peak memory"]);
+        headers.extend(["CPU total", "Peak memory"]);
     }
     table.set_header(
         headers
@@ -838,10 +844,10 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
 
         if has_ru {
             output.push_str(
-                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU total (ms) | Peak memory |\n",
+                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU total | Peak memory |\n",
             );
             output.push_str(
-                "|-----------|--------|------|-------|--------|-----|----------------|-------------|\n",
+                "|-----------|--------|------|-------|--------|-----|-----------|-------------|\n",
             );
         } else {
             output.push_str("| Benchmark | Avg ms | Best | Worst | Median | P95 |\n");
@@ -1352,7 +1358,7 @@ mod tests {
                         "min_ns": 1180200000_u64,
                         "max_ns": 1298100000_u64,
                         "resource_usage": {
-                            "cpu_total_ms": 482,
+                            "cpu_total_ms": 1482,
                             "peak_memory_kb": 654321,
                             "total_pss_kb": 654321
                         }
@@ -1364,9 +1370,10 @@ mod tests {
 
         let output = render_markdown(&report);
 
-        assert!(output.contains("CPU total (ms)"));
+        assert!(output.contains("CPU total"));
+        assert!(!output.contains("CPU total (ms)"));
         assert!(output.contains("Peak memory"));
-        assert!(output.contains("| 482 |"));
+        assert!(output.contains("| 1.482s |"));
         assert!(output.contains("638.99 MB"));
         assert!(!output.contains("CPU %"));
         assert!(!output.contains("RAM MB"));
@@ -1393,7 +1400,7 @@ mod tests {
                         "min_ns": 1180200000_u64,
                         "max_ns": 1298100000_u64,
                         "resource_usage": {
-                            "cpu_total_ms": 482,
+                            "cpu_total_ms": 1482,
                             "peak_memory_kb": 654321,
                             "total_pss_kb": 654321
                         }
@@ -1405,12 +1412,21 @@ mod tests {
 
         let output = render_table(&report);
 
-        assert!(output.contains("CPU total (ms)"));
+        assert!(output.contains("CPU total"));
+        assert!(!output.contains("CPU total (ms)"));
         assert!(output.contains("Peak memory"));
-        assert!(output.contains("482"));
+        assert!(output.contains("1.482s"));
         assert!(output.contains("638.99 MB"));
         assert!(!output.contains("CPU %"));
         assert!(!output.contains("RAM MB"));
+    }
+
+    #[test]
+    fn test_format_cpu_total_ms_uses_seconds_without_switching_to_minutes() {
+        assert_eq!(format_cpu_total_ms(Some(482)), "482ms");
+        assert_eq!(format_cpu_total_ms(Some(1_482)), "1.482s");
+        assert_eq!(format_cpu_total_ms(Some(125_000)), "125.000s");
+        assert_eq!(format_cpu_total_ms(None), "—");
     }
 
     #[test]

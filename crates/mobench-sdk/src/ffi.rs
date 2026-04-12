@@ -75,12 +75,18 @@ impl From<BenchSpecFfi> for crate::BenchSpec {
 pub struct BenchSampleFfi {
     /// Duration of the iteration in nanoseconds.
     pub duration_ns: u64,
+    /// CPU time consumed by the measured iteration in milliseconds.
+    pub cpu_time_ms: Option<u64>,
+    /// Peak memory growth during the measured iteration in kilobytes.
+    pub peak_memory_kb: Option<u64>,
 }
 
 impl From<crate::BenchSample> for BenchSampleFfi {
     fn from(sample: crate::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
         }
     }
 }
@@ -89,6 +95,8 @@ impl From<BenchSampleFfi> for crate::BenchSample {
     fn from(sample: BenchSampleFfi) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
         }
     }
 }
@@ -262,9 +270,15 @@ mod tests {
 
     #[test]
     fn test_bench_sample_ffi_conversion() {
-        let sdk_sample = crate::BenchSample { duration_ns: 12345 };
+        let sdk_sample = crate::BenchSample {
+            duration_ns: 12345,
+            cpu_time_ms: Some(12),
+            peak_memory_kb: Some(48),
+        };
         let ffi: BenchSampleFfi = sdk_sample.into();
         assert_eq!(ffi.duration_ns, 12345);
+        assert_eq!(ffi.cpu_time_ms, Some(12));
+        assert_eq!(ffi.peak_memory_kb, Some(48));
     }
 
     #[test]
@@ -276,8 +290,16 @@ mod tests {
                 warmup: 1,
             },
             samples: vec![
-                crate::BenchSample { duration_ns: 100 },
-                crate::BenchSample { duration_ns: 200 },
+                crate::BenchSample {
+                    duration_ns: 100,
+                    cpu_time_ms: Some(3),
+                    peak_memory_kb: Some(8),
+                },
+                crate::BenchSample {
+                    duration_ns: 200,
+                    cpu_time_ms: Some(5),
+                    peak_memory_kb: Some(13),
+                },
             ],
             phases: vec![crate::SemanticPhase {
                 name: "prove".to_string(),
@@ -295,6 +317,8 @@ mod tests {
         assert_eq!(ffi.spec.name, "test");
         assert_eq!(ffi.samples.len(), 2);
         assert_eq!(ffi.samples[0].duration_ns, 100);
+        assert_eq!(ffi.samples[0].cpu_time_ms, Some(3));
+        assert_eq!(ffi.samples[0].peak_memory_kb, Some(8));
         assert_eq!(ffi.phases.len(), 1);
         assert_eq!(ffi.phases[0].name, "prove");
         assert_eq!(ffi.timeline.len(), 1);

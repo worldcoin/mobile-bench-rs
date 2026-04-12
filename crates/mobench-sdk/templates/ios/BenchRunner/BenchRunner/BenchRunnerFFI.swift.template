@@ -116,7 +116,7 @@ struct BenchmarkResult {
 }
 
 enum {{PROJECT_NAME_PASCAL}}FFI {
-    static func runCurrentBenchmark() async -> BenchmarkResult {
+    static func runCurrentBenchmark() -> BenchmarkResult {
         let params = BenchParams.resolved()
         return run(params: params)
     }
@@ -167,7 +167,16 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         json["samples_ns"] = samplesNs
 
         // Also include samples in object format for compatibility
-        let samplesArray = report.samples.map { ["duration_ns": $0.durationNs] }
+        let samplesArray = report.samples.map { sample -> [String: Any] in
+            var sampleJson: [String: Any] = ["duration_ns": sample.durationNs]
+            if let cpuTimeMs = sample.cpuTimeMs {
+                sampleJson["cpu_time_ms"] = cpuTimeMs
+            }
+            if let peakMemoryKb = sample.peakMemoryKb {
+                sampleJson["peak_memory_kb"] = peakMemoryKb
+            }
+            return sampleJson
+        }
         json["samples"] = samplesArray
 
         let phases = report.phases.map { phase in
@@ -210,11 +219,32 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             json["max_ns"] = maxNs
         }
 
-        // Resource metrics (iOS-specific)
-        let resources: [String: Any] = [
+        let cpuSamplesMs = report.samples.compactMap(\.cpuTimeMs)
+        let peakSamplesKb = report.samples.compactMap(\.peakMemoryKb)
+
+        func median(_ values: [UInt64]) -> UInt64 {
+            let sorted = values.sorted()
+            if sorted.count % 2 == 0 {
+                return (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+            } else {
+                return sorted[sorted.count / 2]
+            }
+        }
+
+        // Resource metrics derived from the measured loop itself.
+        var resources: [String: Any] = [
             "platform": "ios",
             "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
         ]
+        if !cpuSamplesMs.isEmpty {
+            let cpuTotalMs = cpuSamplesMs.reduce(0, +)
+            resources["cpu_total_ms"] = cpuTotalMs
+            resources["cpu_median_ms"] = median(cpuSamplesMs)
+            resources["elapsed_cpu_ms"] = cpuTotalMs
+        }
+        if let peakMemoryKb = peakSamplesKb.max() {
+            resources["peak_memory_kb"] = peakMemoryKb
+        }
         json["resources"] = resources
 
         // Serialize to JSON string

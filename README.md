@@ -169,6 +169,15 @@ reuses the same resolution model as `devices resolve`:
 - `--profile high-spec`
 - `--profile high-spec --device-matrix device-matrix.yaml`
 
+`summary.md` uses unit-neutral headers (`Mean`, `Median`, `P95`, `Min`, `Max`) and renders the default `CPU` column from measured-iteration `cpu_median_ms` in milliseconds below one second and total seconds otherwise (for example `482ms`, `1.482s`).
+
+`results.csv` includes benchmark-scoped resource columns directly:
+- `cpu_total_ms`
+- `cpu_median_ms`
+- `peak_memory_kb`
+
+Missing resource metrics are emitted as blank CSV fields.
+
 ## Configuration
 
 mobench supports a `mobench.toml` configuration file for project settings:

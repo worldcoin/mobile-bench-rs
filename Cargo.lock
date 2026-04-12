@@ -1085,6 +1085,7 @@ dependencies = [
  "anyhow",
  "include_dir",
  "inventory",
+ "libc",
  "mobench-macros",
  "serde",
  "serde_json",
