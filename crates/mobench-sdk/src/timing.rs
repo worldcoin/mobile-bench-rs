@@ -67,6 +67,7 @@ use std::cell::RefCell;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
+    mpsc,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -638,6 +639,7 @@ fn current_thread_cpu_time_ns() -> Option<u64> {
 }
 
 const MEMORY_SAMPLER_INTERVAL: Duration = Duration::from_millis(1);
+type MemoryReader = Arc<dyn Fn() -> Option<u64> + Send + Sync + 'static>;
 
 struct MemoryPeakSampler {
     baseline_kb: u64,
@@ -648,27 +650,65 @@ struct MemoryPeakSampler {
 
 impl MemoryPeakSampler {
     fn start() -> Option<Self> {
-        let baseline_kb = current_process_memory_kb()?;
+        Self::start_with_reader(Arc::new(|| current_process_memory_kb()))
+    }
+
+    fn start_with_reader(reader: MemoryReader) -> Option<Self> {
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let peak_kb = Arc::new(AtomicU64::new(baseline_kb));
+        let peak_kb = Arc::new(AtomicU64::new(0));
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (baseline_tx, baseline_rx) = mpsc::sync_channel(1);
         let sampler_stop = Arc::clone(&stop_flag);
         let sampler_peak = Arc::clone(&peak_kb);
+        let sampler_reader = Arc::clone(&reader);
 
         let handle = thread::Builder::new()
             .name("mobench-memory-sampler".to_string())
             .spawn(move || {
+                // Touch the sampler thread's own stack and runtime state before the
+                // benchmark baseline is captured so its overhead is not reported as
+                // measured benchmark memory.
+                let _ = sampler_reader();
+                let _ = ready_tx.send(());
+
+                let Some(baseline_kb) = baseline_rx.recv().ok().flatten() else {
+                    return;
+                };
+                sampler_peak.store(baseline_kb, Ordering::Release);
+
                 while !sampler_stop.load(Ordering::Acquire) {
-                    if let Some(current_kb) = current_process_memory_kb() {
+                    if let Some(current_kb) = sampler_reader() {
                         update_atomic_max(&sampler_peak, current_kb);
                     }
                     thread::sleep(MEMORY_SAMPLER_INTERVAL);
                 }
 
-                if let Some(current_kb) = current_process_memory_kb() {
+                if let Some(current_kb) = sampler_reader() {
                     update_atomic_max(&sampler_peak, current_kb);
                 }
             })
             .ok()?;
+
+        if ready_rx.recv().is_err() {
+            stop_flag.store(true, Ordering::Release);
+            let _ = handle.join();
+            return None;
+        }
+
+        let baseline_kb = match reader() {
+            Some(value) => value,
+            None => {
+                let _ = baseline_tx.send(None);
+                stop_flag.store(true, Ordering::Release);
+                let _ = handle.join();
+                return None;
+            }
+        };
+        if baseline_tx.send(Some(baseline_kb)).is_err() {
+            stop_flag.store(true, Ordering::Release);
+            let _ = handle.join();
+            return None;
+        }
 
         Some(Self {
             baseline_kb,
@@ -1644,6 +1684,32 @@ mod tests {
             vec![Some(48), Some(96)]
         );
         assert_eq!(report.peak_memory_kb(), Some(96));
+    }
+
+    #[test]
+    fn memory_peak_sampler_uses_the_first_post_startup_sample_as_its_baseline() {
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+
+        let samples = Arc::new(Mutex::new(VecDeque::from([
+            Some(80_u64),
+            Some(100_u64),
+            Some(140_u64),
+            Some(120_u64),
+        ])));
+        let reader_samples = Arc::clone(&samples);
+        let reader = Arc::new(move || {
+            reader_samples
+                .lock()
+                .expect("sample queue")
+                .pop_front()
+                .unwrap_or(Some(120))
+        });
+
+        let sampler = MemoryPeakSampler::start_with_reader(reader).expect("sampler");
+        let peak_kb = sampler.stop().expect("peak memory");
+
+        assert_eq!(peak_kb, 40);
     }
 
     #[test]
