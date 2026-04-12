@@ -9294,7 +9294,7 @@ project = "proj"
         assert!(markdown.contains("Peak memory"));
         assert!(!markdown.contains("(ms)"));
         assert!(!markdown.contains("CPU total"));
-        assert!(markdown.contains("0.241s"));
+        assert!(markdown.contains("241ms"));
         assert!(markdown.contains("638.99 MB"));
     }
 
@@ -9335,7 +9335,7 @@ project = "proj"
         assert!(markdown.contains("Peak memory"));
         assert!(!markdown.contains("(ms)"));
         assert!(!markdown.contains("CPU total"));
-        assert!(markdown.contains("0.241s"));
+        assert!(markdown.contains("241ms"));
         assert!(markdown.contains("638.99 MB"));
     }
 

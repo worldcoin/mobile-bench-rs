@@ -13,9 +13,9 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.27` is the current supported release.
-- `v0.1.26` is the immediately previous supported release, superseded by
-  `v0.1.27`.
+- `v0.1.31` is the current supported release.
+- `v0.1.30` is the immediately previous supported release, superseded by
+  `v0.1.31`.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -24,8 +24,12 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.27` | 2026-04-01 | `mobench 0.1.27`, `mobench-sdk 0.1.27`, `mobench-macros 0.1.27` | Current supported release |
-| `v0.1.26` | 2026-03-28 | `mobench 0.1.26`, `mobench-sdk 0.1.26`, `mobench-macros 0.1.26` | Superseded by `v0.1.27` |
+| `v0.1.31` | 2026-04-12 | `mobench 0.1.31`, `mobench-sdk 0.1.31`, `mobench-macros 0.1.31` | Current supported release |
+| `v0.1.30` | 2026-04-12 | `mobench 0.1.30`, `mobench-sdk 0.1.30`, `mobench-macros 0.1.30` | Superseded by `v0.1.31` |
+| `v0.1.29` | 2026-04-04 | `mobench 0.1.29`, `mobench-sdk 0.1.29`, `mobench-macros 0.1.29` | Superseded by `v0.1.30` |
+| `v0.1.28` | 2026-04-02 | `mobench 0.1.28`, `mobench-sdk 0.1.28`, `mobench-macros 0.1.28` | Superseded by `v0.1.29` |
+| `v0.1.27` | 2026-04-01 | `mobench 0.1.27`, `mobench-sdk 0.1.27`, `mobench-macros 0.1.27` | Test build. Do not use. |
+| `v0.1.26` | 2026-03-28 | `mobench 0.1.26`, `mobench-sdk 0.1.26`, `mobench-macros 0.1.26` | Test build. Do not use. |
 | `v0.1.25` | 2026-03-26 | `mobench 0.1.25`, `mobench-sdk 0.1.25`, `mobench-macros 0.1.25` | Test build. Do not use. |
 | `v0.1.24` | 2026-03-26 | `mobench 0.1.24`, `mobench-sdk 0.1.24`, `mobench-macros 0.1.24` | Test build. Do not use. |
 | `v0.1.23` | 2026-03-26 | `mobench 0.1.23`, `mobench-sdk 0.1.23`, `mobench-macros 0.1.23` | Test build. Do not use. |
@@ -54,9 +58,99 @@ Crates.io release history:
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
 
-## v0.1.27
+## v0.1.31
 
 Status: current supported release.
+
+- Switched human-readable summary markdown to unit-neutral timing/resource
+  headers in both the CI summary path and compare markdown path, while keeping
+  unit-aware cell values.
+- Added `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb` directly to
+  standardized `results.csv`, with blank fields when resource data is absent.
+- Promoted measured-iteration CPU accounting to the default human-readable
+  `CPU` column, computed inside the measured closure and exported as
+  `cpu_median_ms`.
+- Rendered `CPU` in milliseconds below one second and total seconds otherwise,
+  without switching to decimal minutes or hours.
+- Scoped peak memory to measured work by taking the memory sampler baseline
+  after sampler startup so harness overhead is excluded from `peak_memory_kb`.
+- Updated the built-in low-spec benchmark profiles to `iPhone SE 2020` on iOS
+  and `Motorola Moto G9 Play` on Android, matching the validated CI device
+  matrix.
+- Validated the updated sticky benchmark comment and Sina plots with successful
+  Mobile Bench workflow run `24307665713`.
+
+## v0.1.30
+
+Status: superseded by `v0.1.31`.
+
+- Preserve `BenchRunner/Resources` when regenerating iOS projects so checked-in
+  `bench_spec.json` and `bench_meta.json` survive scaffold refreshes.
+- Add configurable iOS benchmark completion timeouts through
+  `--ios-completion-timeout-secs` and `[browserstack].ios_completion_timeout_secs`,
+  and thread that value into generated XCUITest harnesses.
+- Emit raw iOS benchmark resource metrics directly in the generated runner JSON,
+  including `resources.elapsed_cpu_ms` and `resources.peak_memory_kb`.
+- Prefer explicit raw `resources.peak_memory_kb` when building summaries, so
+  CI outputs still carry peak memory even when BrowserStack profiling data is
+  absent.
+- Fail BrowserStack fetch flows when timeout/error recovery produces no
+  benchmark payloads, instead of silently generating empty summaries.
+- Resolve config-relative `device_matrix` paths from the config file directory,
+  matching the checked-in config template contract.
+- Add regression coverage for iOS resource preservation, timeout templating,
+  raw iOS resource emission, config timeout parsing, config-relative device
+  matrices, and raw peak-memory summary extraction.
+
+## v0.1.29
+
+Status: superseded by `v0.1.30`.
+
+- Preserve `app/src/main/assets` when regenerating Android projects so checked-in
+  benchmark assets such as `bench_spec.json` and `bench_meta.json` are not
+  dropped during scaffold refreshes.
+- Default Android builds to `arm64-v8a` / `aarch64-linux-android` so BrowserStack
+  real-device CI no longer requires installing unused `armeabi-v7a` and
+  `x86_64` Rust/NDK targets.
+- Add configurable Android ABI selection via `[android].abis` in `mobench.toml`
+  for projects that still need multi-ABI builds.
+- Recover benchmark summaries from fetched BrowserStack artifacts after timeout
+  or partial completion by rehydrating results from `build.json` and
+  `session-*/bench-report.json` before generating summary outputs.
+- Surface `CPU total (ms)` and `Peak memory` in sticky PR comments whenever the
+  CI summary includes resource usage, matching the data already carried in the
+  standardized benchmark outputs.
+- Add regression coverage for preserved Android assets, configurable ABI
+  defaults, artifact-based summary recovery, and resource-aware PR comment
+  rendering.
+
+## v0.1.28
+
+Status: superseded by `v0.1.29`.
+
+- Added resource-aware markdown rendering to `report summarize`, so the
+  sticky-comment/report path now shows benchmark resource columns instead of
+  dropping them.
+- Switched summary CPU reporting to `CPU median (ms)` based on per-measured
+  iteration process CPU deltas instead of aggregate benchmark-invocation CPU.
+- Added native iOS benchmark resource collection and threaded it through the
+  existing CI summary/report model.
+- Scoped measured peak memory to the benchmark body by excluding warmup,
+  one-time setup/teardown, and per-iteration setup from the tracked baseline.
+- Fixed Android CI reuse of stale generated UniFFI bindings and stale generated
+  scaffolding from cached targets, which previously caused missing results or
+  stale resource fields.
+- Added direct Android process-memory sampling so Android emits measured
+  `peak_memory_kb` in raw benchmark reports instead of relying on summary-time
+  PSS/heap fallbacks.
+- Preserved measured `peak_memory_kb = 0` as a real result so summaries no
+  longer replace zero-delta runs with coarse fallback memory totals.
+- Validated the end-to-end CI path with successful both-platform runs
+  `23705449560` and `23706060742`.
+
+## v0.1.27
+
+Status: test build. Do not use.
 
 - Promoted `cargo mobench profile diff` from internal/demo-only code into the
   shipped CLI surface, including normalized diff manifests, summaries, SVGs,
@@ -78,7 +172,7 @@ Status: current supported release.
 
 ## v0.1.26
 
-Status: superseded by `v0.1.27`.
+Status: test build. Do not use.
 
 - Published a synchronized `mobench`, `mobench-sdk`, and `mobench-macros`
   release so the registry dependency graph matches the current profiling and
