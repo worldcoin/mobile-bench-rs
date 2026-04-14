@@ -102,7 +102,7 @@ pub struct AndroidConfig {
 
     /// Android ABIs to build for.
     ///
-    /// Defaults to ["arm64-v8a", "armeabi-v7a", "x86_64"].
+    /// Defaults to ["arm64-v8a"].
     pub abis: Option<Vec<String>>,
 }
 
@@ -358,8 +358,8 @@ min_sdk = 24
 # Target Android SDK version (default: 34 / Android 14)
 target_sdk = 34
 
-# Android ABIs to build for (optional, defaults to all supported ABIs)
-# abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
+# Android ABIs to build for (optional, defaults to arm64-v8a)
+# abis = ["arm64-v8a"]
 
 [ios]
 # iOS bundle identifier

@@ -193,6 +193,7 @@ pub struct InitConfig {
 ///     target: Target::Android,
 ///     profile: BuildProfile::Release,
 ///     incremental: true,
+///     android_abis: None,
 /// };
 ///
 /// // Debug build for iOS
@@ -200,6 +201,7 @@ pub struct InitConfig {
 ///     target: Target::Ios,
 ///     profile: BuildProfile::Debug,
 ///     incremental: false,  // Force rebuild
+///     android_abis: None,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -210,6 +212,8 @@ pub struct BuildConfig {
     pub profile: BuildProfile,
     /// If `true`, skip rebuilding if artifacts already exist.
     pub incremental: bool,
+    /// Optional Android ABIs to build/package. Defaults to `["arm64-v8a"]`.
+    pub android_abis: Option<Vec<String>>,
 }
 
 /// Build profile controlling optimization and debug info.
