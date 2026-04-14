@@ -14,7 +14,7 @@ targets:
     resources:
       - path: {{PROJECT_NAME_PASCAL}}/Resources
         optional: true
-      - path: ../../target/mobile-spec/ios
+      - path: ../../../mobile-spec/ios
         optional: true
     info:
       path: {{PROJECT_NAME_PASCAL}}/Info.plist
