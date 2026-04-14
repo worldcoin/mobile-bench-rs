@@ -12,6 +12,7 @@ use include_dir::{Dir, DirEntry, include_dir};
 
 const ANDROID_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/android");
 const IOS_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/ios");
+const DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS: u64 = 300;
 
 /// Template variable that can be replaced in template files
 #[derive(Debug, Clone)]
@@ -481,6 +482,29 @@ pub fn generate_ios_project(
     bundle_prefix: &str,
     default_function: &str,
 ) -> Result<(), BenchError> {
+    let ios_benchmark_timeout_secs = resolve_ios_benchmark_timeout_secs(
+        std::env::var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS")
+            .ok()
+            .as_deref(),
+    );
+    generate_ios_project_with_timeout(
+        output_dir,
+        project_slug,
+        project_pascal,
+        bundle_prefix,
+        default_function,
+        ios_benchmark_timeout_secs,
+    )
+}
+
+fn generate_ios_project_with_timeout(
+    output_dir: &Path,
+    project_slug: &str,
+    project_pascal: &str,
+    bundle_prefix: &str,
+    default_function: &str,
+    ios_benchmark_timeout_secs: u64,
+) -> Result<(), BenchError> {
     let target_dir = output_dir.join("ios");
     reset_generated_project_dir(&target_dir)?;
     // Sanitize bundle ID components to ensure they only contain alphanumeric characters
@@ -517,9 +541,20 @@ pub fn generate_ios_project(
             name: "LIBRARY_NAME",
             value: project_slug.replace('-', "_"),
         },
+        TemplateVar {
+            name: "IOS_BENCHMARK_TIMEOUT_SECS",
+            value: ios_benchmark_timeout_secs.to_string(),
+        },
     ];
     render_dir(&IOS_TEMPLATES, &target_dir, &vars)?;
     Ok(())
+}
+
+fn resolve_ios_benchmark_timeout_secs(value: Option<&str>) -> u64 {
+    value
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS)
 }
 
 /// Generates bench-config.toml configuration file
@@ -1570,6 +1605,81 @@ pub fn public_bench() {
         );
 
         fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_ios_project_refreshes_existing_ui_test_timeout_template() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-uitest-refresh-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        ensure_ios_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("initial iOS project generation should succeed");
+
+        let ui_test_path =
+            temp_dir.join("ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift");
+        assert!(
+            ui_test_path.exists(),
+            "BenchRunnerUITests.swift should exist"
+        );
+
+        fs::write(&ui_test_path, "stale generated content").unwrap();
+
+        ensure_ios_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("refreshing existing iOS project should succeed");
+
+        let refreshed = fs::read_to_string(&ui_test_path).unwrap();
+        assert!(
+            refreshed.contains("private let defaultBenchmarkTimeout: TimeInterval = 300.0"),
+            "refreshed BenchRunnerUITests.swift should include the default timeout, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains(
+                "ProcessInfo.processInfo.environment[\"MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS\"]"
+            ),
+            "refreshed BenchRunnerUITests.swift should honor runtime timeout overrides, got:\n{}",
+            refreshed
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_ios_project_uses_configured_benchmark_timeout() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-timeout-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let result = generate_ios_project_with_timeout(
+            &temp_dir,
+            "sample_fns",
+            "BenchRunner",
+            "dev.world.samplefns",
+            "sample_fns::example_benchmark",
+            1200,
+        );
+
+        assert!(result.is_ok(), "generate_ios_project should succeed");
+
+        let ui_test_path =
+            temp_dir.join("ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift");
+        let contents = fs::read_to_string(&ui_test_path).unwrap();
+        assert!(
+            contents.contains("private let defaultBenchmarkTimeout: TimeInterval = 1200.0"),
+            "generated BenchRunnerUITests.swift should embed the configured timeout, got:\n{}",
+            contents
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_resolve_ios_benchmark_timeout_secs_defaults_invalid_values() {
+        assert_eq!(resolve_ios_benchmark_timeout_secs(None), 300);
+        assert_eq!(resolve_ios_benchmark_timeout_secs(Some("900")), 900);
+        assert_eq!(resolve_ios_benchmark_timeout_secs(Some("0")), 300);
+        assert_eq!(resolve_ios_benchmark_timeout_secs(Some("bogus")), 300);
     }
 
     #[test]
