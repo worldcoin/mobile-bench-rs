@@ -1056,6 +1056,7 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) crate_name: String,
     pub(crate) library_name: String,
     pub(crate) android_abis: Option<Vec<String>>,
+    pub(crate) ios_completion_timeout_secs: Option<u64>,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) output_dir: PathBuf,
     pub(crate) default_function: Option<String>,
@@ -2165,6 +2166,9 @@ pub(crate) fn resolve_project_layout(
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
     let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
+    let ios_completion_timeout_secs = config
+        .as_ref()
+        .and_then(|cfg| cfg.browserstack.ios_completion_timeout_secs);
     let output_dir = config
         .as_ref()
         .and_then(|cfg| cfg.project.output_dir.clone())
@@ -2186,6 +2190,7 @@ pub(crate) fn resolve_project_layout(
         crate_name,
         library_name,
         android_abis,
+        ios_completion_timeout_secs,
         config_path,
         output_dir,
         default_function,
@@ -2219,6 +2224,13 @@ fn configured_android_abis(layout: &ResolvedProjectLayout) -> Vec<String> {
         .filter(|abis| !abis.is_empty())
         .cloned()
         .unwrap_or_else(|| vec!["arm64-v8a".to_string()])
+}
+
+fn configured_ios_completion_timeout_secs(
+    layout: &ResolvedProjectLayout,
+    ios_completion_timeout_secs: Option<u64>,
+) -> Option<u64> {
+    ios_completion_timeout_secs.or(layout.ios_completion_timeout_secs)
 }
 
 fn write_config_template(path: &Path, target: MobileTarget, overwrite: bool) -> Result<()> {
@@ -3436,8 +3448,9 @@ fn resolve_run_spec(
 ) -> Result<RunSpec> {
     if let Some(cfg_path) = config {
         let cfg = load_config(cfg_path)?;
-        let configured_ios_completion_timeout_secs =
-            ios_completion_timeout_secs.or(cfg.browserstack.ios_completion_timeout_secs);
+        let configured_ios_completion_timeout_secs = ios_completion_timeout_secs
+            .or(cfg.browserstack.ios_completion_timeout_secs)
+            .or(layout.ios_completion_timeout_secs);
         let matrix_path = device_matrix.map(Path::to_path_buf).unwrap_or_else(|| {
             resolve_project_relative_path(
                 cfg_path.parent().unwrap_or_else(|| Path::new(".")),
@@ -3519,7 +3532,10 @@ fn resolve_run_spec(
         iterations,
         warmup,
         devices: resolved_devices,
-        ios_completion_timeout_secs,
+        ios_completion_timeout_secs: configured_ios_completion_timeout_secs(
+            layout,
+            ios_completion_timeout_secs,
+        ),
         browserstack: None,
         ios_xcuitest,
     })
@@ -3619,6 +3635,8 @@ pub(crate) fn run_ios_build(
     dry_run: bool,
     ios_completion_timeout_secs: Option<u64>,
 ) -> Result<(PathBuf, PathBuf)> {
+    let ios_completion_timeout_secs =
+        configured_ios_completion_timeout_secs(layout, ios_completion_timeout_secs);
     let builder =
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
@@ -3650,6 +3668,8 @@ fn package_ios_xcuitest_artifacts(
     release: bool,
     ios_completion_timeout_secs: Option<u64>,
 ) -> Result<IosXcuitestArtifacts> {
+    let ios_completion_timeout_secs =
+        configured_ios_completion_timeout_secs(layout, ios_completion_timeout_secs);
     let builder =
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
@@ -5825,6 +5845,8 @@ fn cmd_build(
         config_path: None,
     })?;
     let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
+    let ios_completion_timeout_secs =
+        configured_ios_completion_timeout_secs(&layout, ios_completion_timeout_secs);
 
     // Progress mode: simplified output
     if progress {
@@ -5976,7 +5998,9 @@ fn cmd_build(
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
             .crate_dir(&layout.crate_dir);
-            let result = builder.build(&build_config)?;
+            let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
+                Ok(builder.build(&build_config)?)
+            })?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
@@ -8301,6 +8325,9 @@ abis = ["arm64-v8a", "x86_64"]
 
 [benchmarks]
 default_function = "zk_mobile_bench::bench_query_proof_generation"
+
+[browserstack]
+ios_completion_timeout_secs = 900
 "#,
         )
         .expect("write mobench config");
@@ -8542,6 +8569,7 @@ project = "proj"
             layout.android_abis,
             Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()])
         );
+        assert_eq!(layout.ios_completion_timeout_secs, Some(900));
         assert_eq!(
             layout.default_function.as_deref(),
             Some("zk_mobile_bench::bench_query_proof_generation")
@@ -8664,6 +8692,7 @@ project = "proj"
         let ios_xcuitest = spec
             .ios_xcuitest
             .expect("dry-run should prepare placeholder iOS artifacts");
+        assert_eq!(spec.ios_completion_timeout_secs, Some(900));
         assert!(
             ios_xcuitest.app.starts_with(&project_root),
             "app path should stay inside project root: {}",
