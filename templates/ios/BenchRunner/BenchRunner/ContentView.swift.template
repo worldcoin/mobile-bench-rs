@@ -89,7 +89,7 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            Task {
+            Task.detached(priority: .userInitiated) {
                 let options = ProfileLaunchOptions.resolved()
                 if options.benchDelayMs > 0 {
                     try? await Task.sleep(nanoseconds: options.benchDelayMs * 1_000_000)
@@ -103,9 +103,11 @@ struct ContentView: View {
                     result = await {{PROJECT_NAME_PASCAL}}FFI.runCurrentBenchmark()
                     repeatedRuns += 1
                 }
-                report = result.displayText
-                reportJSON = result.jsonReport
-                isCompleted = true
+                await MainActor.run {
+                    report = result.displayText
+                    reportJSON = result.jsonReport
+                    isCompleted = true
+                }
 
                 // Log the JSON report with stable markers so local profiling tools,
                 // XCUITest, and BrowserStack fetch paths can all recover the payload.

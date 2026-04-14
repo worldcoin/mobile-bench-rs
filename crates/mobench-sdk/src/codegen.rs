@@ -1558,6 +1558,16 @@ pub fn public_bench() {
             "refreshed ContentView.swift should contain repeat-until profiling support, got:\n{}",
             refreshed
         );
+        assert!(
+            refreshed.contains("Task.detached(priority: .userInitiated)"),
+            "refreshed ContentView.swift should run benchmarks off the main actor, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("await MainActor.run"),
+            "refreshed ContentView.swift should apply UI updates on the main actor, got:\n{}",
+            refreshed
+        );
 
         fs::remove_dir_all(&temp_dir).ok();
     }
