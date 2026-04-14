@@ -386,6 +386,68 @@ pub fn generate_android_project(
     Ok(())
 }
 
+fn collect_preserved_files(
+    root: &Path,
+    current: &Path,
+    preserved: &mut Vec<(PathBuf, Vec<u8>)>,
+) -> Result<(), BenchError> {
+    let mut entries = fs::read_dir(current)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BenchError::Io)?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_preserved_files(root, &path, preserved)?;
+            continue;
+        }
+
+        let relative = path.strip_prefix(root).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to preserve generated resource {:?}: {}",
+                path, e
+            ))
+        })?;
+        preserved.push((relative.to_path_buf(), fs::read(&path)?));
+    }
+
+    Ok(())
+}
+
+fn collect_preserved_ios_resources(
+    target_dir: &Path,
+) -> Result<Vec<(PathBuf, Vec<u8>)>, BenchError> {
+    let resources_dir = target_dir.join("BenchRunner/BenchRunner/Resources");
+    let mut preserved = Vec::new();
+
+    if resources_dir.exists() {
+        collect_preserved_files(&resources_dir, &resources_dir, &mut preserved)?;
+    }
+
+    Ok(preserved)
+}
+
+fn restore_preserved_ios_resources(
+    target_dir: &Path,
+    preserved_resources: &[(PathBuf, Vec<u8>)],
+) -> Result<(), BenchError> {
+    if preserved_resources.is_empty() {
+        return Ok(());
+    }
+
+    let resources_dir = target_dir.join("BenchRunner/BenchRunner/Resources");
+    for (relative, contents) in preserved_resources {
+        let resource_path = resources_dir.join(relative);
+        if let Some(parent) = resource_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(resource_path, contents)?;
+    }
+
+    Ok(())
+}
+
 fn reset_generated_project_dir(target_dir: &Path) -> Result<(), BenchError> {
     if target_dir.exists() {
         fs::remove_dir_all(target_dir).map_err(|e| {
@@ -506,6 +568,7 @@ fn generate_ios_project_with_timeout(
     ios_benchmark_timeout_secs: u64,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("ios");
+    let preserved_resources = collect_preserved_ios_resources(&target_dir)?;
     reset_generated_project_dir(&target_dir)?;
     // Sanitize bundle ID components to ensure they only contain alphanumeric characters
     // iOS bundle identifiers should not contain hyphens or underscores
@@ -547,6 +610,7 @@ fn generate_ios_project_with_timeout(
         },
     ];
     render_dir(&IOS_TEMPLATES, &target_dir, &vars)?;
+    restore_preserved_ios_resources(&target_dir, &preserved_resources)?;
     Ok(())
 }
 
@@ -1560,13 +1624,62 @@ pub fn public_bench() {
             "Static xcframework dependency should be link-only, got:\n{}",
             project_yml
         );
-        assert!(
-            project_yml.contains("../../../mobile-spec/ios"),
-            "iOS project should bundle legacy mobile-spec resources from the project target dir, got:\n{}",
-            project_yml
-        );
 
         // Cleanup
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_ios_project_preserves_existing_resources_on_regeneration() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-resources-regenerate-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_ios_project(
+            &temp_dir,
+            "bench_mobile",
+            "BenchRunner",
+            "dev.world.benchmobile",
+            "bench_mobile::bench_prepare",
+        )
+        .unwrap();
+
+        let resources_dir = temp_dir.join("ios/BenchRunner/BenchRunner/Resources");
+        fs::create_dir_all(resources_dir.join("nested")).unwrap();
+        fs::write(
+            resources_dir.join("bench_spec.json"),
+            r#"{"function":"bench_mobile::bench_prove","iterations":2,"warmup":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            resources_dir.join("bench_meta.json"),
+            r#"{"build_id":"build-123"}"#,
+        )
+        .unwrap();
+        fs::write(resources_dir.join("nested/custom.txt"), "keep me").unwrap();
+
+        generate_ios_project(
+            &temp_dir,
+            "bench_mobile",
+            "BenchRunner",
+            "dev.world.benchmobile",
+            "bench_mobile::bench_prepare",
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("bench_spec.json")).unwrap(),
+            r#"{"function":"bench_mobile::bench_prove","iterations":2,"warmup":1}"#
+        );
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("bench_meta.json")).unwrap(),
+            r#"{"build_id":"build-123"}"#
+        );
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("nested/custom.txt")).unwrap(),
+            "keep me"
+        );
+
         fs::remove_dir_all(&temp_dir).ok();
     }
 

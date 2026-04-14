@@ -66,7 +66,7 @@ on:
         description: "Mobench version to install"
         required: false
         type: string
-        default: "0.1.21"
+        default: "0.1.32"
       mobench_ref:
         description: "Git ref for mobile-bench-rs (overrides mobench_version when set)"
         required: false
@@ -176,23 +176,29 @@ jobs:
           MOBENCH_REF: ${{ inputs.mobench_ref }}
         run: |
           set -euo pipefail
-          if [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
-            cargo install --path caller/crates/mobench --locked --force
-          elif [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+          if [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            echo "Installing mobench from git revision ${MOBENCH_REF}"
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
               --rev "$MOBENCH_REF" \
               --locked
           elif [ -n "$MOBENCH_REF" ]; then
+            echo "Installing mobench from git branch ${MOBENCH_REF}"
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
               --branch "$MOBENCH_REF" \
               --locked
           elif [ -n "$MOBENCH_VERSION" ]; then
+            echo "Installing mobench ${MOBENCH_VERSION} from crates.io"
             cargo install mobench --version "$MOBENCH_VERSION" --locked
+          elif [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
+            echo "Installing mobench from caller/crates/mobench"
+            cargo install --path caller/crates/mobench --locked --force
           else
+            echo "Installing latest mobench from crates.io"
             cargo install mobench --locked
           fi
+          mobench --version
 
       - name: Install uniffi-bindgen
         shell: bash
@@ -426,23 +432,29 @@ jobs:
           MOBENCH_REF: ${{ inputs.mobench_ref }}
         run: |
           set -euo pipefail
-          if [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
-            cargo install --path caller/crates/mobench --locked --force
-          elif [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+          if [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            echo "Installing mobench from git revision ${MOBENCH_REF}"
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
               --rev "$MOBENCH_REF" \
               --locked
           elif [ -n "$MOBENCH_REF" ]; then
+            echo "Installing mobench from git branch ${MOBENCH_REF}"
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
               --branch "$MOBENCH_REF" \
               --locked
           elif [ -n "$MOBENCH_VERSION" ]; then
+            echo "Installing mobench ${MOBENCH_VERSION} from crates.io"
             cargo install mobench --version "$MOBENCH_VERSION" --locked
+          elif [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
+            echo "Installing mobench from caller/crates/mobench"
+            cargo install --path caller/crates/mobench --locked --force
           else
+            echo "Installing latest mobench from crates.io"
             cargo install mobench --locked
           fi
+          mobench --version
 
       - name: Install uniffi-bindgen
         shell: bash
@@ -578,23 +590,29 @@ jobs:
           MOBENCH_REF: ${{ inputs.mobench_ref }}
         run: |
           set -euo pipefail
-          if [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
-            cargo install --path caller/crates/mobench --locked --force
-          elif [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+          if [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            echo "Installing mobench from git revision ${MOBENCH_REF}"
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
               --rev "$MOBENCH_REF" \
               --locked
           elif [ -n "$MOBENCH_REF" ]; then
+            echo "Installing mobench from git branch ${MOBENCH_REF}"
             cargo install mobench \
               --git https://github.com/worldcoin/mobile-bench-rs \
               --branch "$MOBENCH_REF" \
               --locked
           elif [ -n "$MOBENCH_VERSION" ]; then
+            echo "Installing mobench ${MOBENCH_VERSION} from crates.io"
             cargo install mobench --version "$MOBENCH_VERSION" --locked
+          elif [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
+            echo "Installing mobench from caller/crates/mobench"
+            cargo install --path caller/crates/mobench --locked --force
           else
+            echo "Installing latest mobench from crates.io"
             cargo install mobench --locked
           fi
+          mobench --version
 
       - name: Download iOS results
         if: needs.ios.result == 'success'

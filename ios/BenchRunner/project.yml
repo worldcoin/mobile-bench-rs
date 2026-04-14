@@ -27,7 +27,7 @@ targets:
     resources:
       - path: BenchRunner/Resources
         optional: true
-      - path: ../../../mobile-spec/ios
+      - path: ../../target/mobile-spec/ios
         optional: true
     info:
       path: BenchRunner/Info.plist

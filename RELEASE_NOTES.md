@@ -13,9 +13,9 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.31` is the current supported release.
-- `v0.1.30` is the immediately previous supported release, superseded by
-  `v0.1.31`.
+- `v0.1.32` is the current supported release.
+- `v0.1.31` is the immediately previous supported release, superseded by
+  `v0.1.32`.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -24,7 +24,8 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.31` | 2026-04-12 | `mobench 0.1.31`, `mobench-sdk 0.1.31`, `mobench-macros 0.1.31` | Current supported release |
+| `v0.1.32` | 2026-04-14 | `mobench 0.1.32`, `mobench-sdk 0.1.32`, `mobench-macros 0.1.32` | Current supported release |
+| `v0.1.31` | 2026-04-12 | `mobench 0.1.31`, `mobench-sdk 0.1.31`, `mobench-macros 0.1.31` | Superseded by `v0.1.32` |
 | `v0.1.30` | 2026-04-12 | `mobench 0.1.30`, `mobench-sdk 0.1.30`, `mobench-macros 0.1.30` | Superseded by `v0.1.31` |
 | `v0.1.29` | 2026-04-04 | `mobench 0.1.29`, `mobench-sdk 0.1.29`, `mobench-macros 0.1.29` | Superseded by `v0.1.30` |
 | `v0.1.28` | 2026-04-02 | `mobench 0.1.28`, `mobench-sdk 0.1.28`, `mobench-macros 0.1.28` | Superseded by `v0.1.29` |
@@ -58,9 +59,31 @@ Crates.io release history:
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
 
-## v0.1.31
+## v0.1.32
 
 Status: current supported release.
+
+- Restored Android ABI selection end to end after the `0.1.31` regression, so
+  `[android].abis` now drives dry-run output, native builds, JNI library copy,
+  and validation instead of silently rebuilding unsupported defaults.
+- Restored `--ios-completion-timeout-secs` as a deprecated compatibility flag
+  and threaded `[browserstack].ios_completion_timeout_secs` from config into
+  generated iOS builds and the XCUITest harness wait logic.
+- Moved generated iOS benchmark execution off the main actor while keeping UI
+  updates on `MainActor`, preventing the runner from stalling during longer
+  benchmark sessions.
+- Preserved `BenchRunner/Resources` across generated iOS project refreshes so
+  `bench_spec.json` and companion metadata survive scaffold regeneration and
+  downstream CI runs execute the requested benchmark spec instead of falling
+  back to scaffold defaults.
+- Made reusable workflow installs prefer explicit `mobench_ref` or
+  `mobench_version` overrides before the repo-local path, and exposed those
+  knobs in the self-test workflow so release-candidate validation matches
+  downstream installation behavior.
+
+## v0.1.31
+
+Status: superseded by `v0.1.32`.
 
 - Switched human-readable summary markdown to unit-neutral timing/resource
   headers in both the CI summary path and compare markdown path, while keeping
