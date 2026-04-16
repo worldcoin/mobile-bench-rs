@@ -5507,65 +5507,38 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
         return output;
     }
 
+    let _ = writeln!(
+        output,
+        "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak memory |"
+    );
+    let _ = writeln!(
+        output,
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+    );
     for device in &summary.device_summaries {
-        let _ = writeln!(output, "### Device: {}", device.device);
-        let _ = writeln!(output);
-        let has_resource_usage = device
-            .benchmarks
-            .iter()
-            .any(|bench| bench.resource_usage.is_some());
-        if has_resource_usage {
-            let _ = writeln!(
-                output,
-                "| Function | Samples | Mean | Median | P95 | Min | Max | CPU | Peak memory |"
-            );
-            let _ = writeln!(
-                output,
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-            );
-        } else {
-            let _ = writeln!(
-                output,
-                "| Function | Samples | Mean | Median | P95 | Min | Max |"
-            );
-            let _ = writeln!(output, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
-        }
         for bench in &device.benchmarks {
-            if has_resource_usage {
-                let _ = writeln!(
-                    output,
-                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                    bench.function,
-                    bench.samples,
-                    format_ms(bench.mean_ns),
-                    format_ms(bench.median_ns),
-                    format_ms(bench.p95_ns),
-                    format_ms(bench.min_ns),
-                    format_ms(bench.max_ns),
-                    format_cpu_ms(bench.resource_usage.as_ref()),
-                    format_peak_memory(
-                        bench
-                            .resource_usage
-                            .as_ref()
-                            .and_then(|usage| usage.peak_memory_kb)
-                    )
-                );
-            } else {
-                let _ = writeln!(
-                    output,
-                    "| {} | {} | {} | {} | {} | {} | {} |",
-                    bench.function,
-                    bench.samples,
-                    format_ms(bench.mean_ns),
-                    format_ms(bench.median_ns),
-                    format_ms(bench.p95_ns),
-                    format_ms(bench.min_ns),
-                    format_ms(bench.max_ns)
-                );
-            }
+            let _ = writeln!(
+                output,
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                device.device,
+                bench.function,
+                bench.samples,
+                summary.warmup,
+                format_ms(bench.mean_ns),
+                format_wall_total(bench.mean_ns, bench.samples),
+                format_cpu_median_ms(bench.resource_usage.as_ref()),
+                format_cpu_total_ms(bench.resource_usage.as_ref()),
+                format_cpu_wall_ratio(bench.mean_ns, bench.samples, bench.resource_usage.as_ref()),
+                format_peak_memory(
+                    bench
+                        .resource_usage
+                        .as_ref()
+                        .and_then(|usage| usage.peak_memory_kb)
+                )
+            );
         }
-        let _ = writeln!(output);
     }
+    let _ = writeln!(output);
 
     output
 }
@@ -5637,11 +5610,45 @@ fn format_ms(value: Option<u64>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn format_cpu_ms(value: Option<&BenchmarkResourceUsage>) -> String {
+fn wall_total_ns(mean_ns: Option<u64>, samples: usize) -> Option<u64> {
+    let mean_ns = u128::from(mean_ns?);
+    let samples = u128::try_from(samples).ok()?;
+    Some(mean_ns.saturating_mul(samples).min(u128::from(u64::MAX)) as u64)
+}
+
+fn format_wall_total(mean_ns: Option<u64>, samples: usize) -> String {
+    wall_total_ns(mean_ns, samples)
+        .map(format_duration_smart)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_cpu_median_ms(value: Option<&BenchmarkResourceUsage>) -> String {
     value
-        .and_then(|usage| usage.cpu_median_ms.or(usage.cpu_total_ms))
+        .and_then(|usage| usage.cpu_median_ms)
         .map(format_cpu_total_duration_ms)
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_cpu_total_ms(value: Option<&BenchmarkResourceUsage>) -> String {
+    value
+        .and_then(|usage| usage.cpu_total_ms)
+        .map(format_cpu_total_duration_ms)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_cpu_wall_ratio(
+    mean_ns: Option<u64>,
+    samples: usize,
+    value: Option<&BenchmarkResourceUsage>,
+) -> String {
+    let cpu_total_ms = value.and_then(|usage| usage.cpu_total_ms);
+    match (wall_total_ns(mean_ns, samples), cpu_total_ms) {
+        (Some(wall_total_ns), Some(cpu_total_ms)) if wall_total_ns > 0 => {
+            let ratio = (cpu_total_ms as f64) / (wall_total_ns as f64 / 1_000_000.0) * 100.0;
+            format!("{ratio:.1}%")
+        }
+        _ => "-".to_string(),
+    }
 }
 
 fn format_cpu_total_duration_ms(ms: u64) -> String {
@@ -9478,12 +9485,56 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         });
 
         assert!(markdown.contains(
-            "| Function | Samples | Mean | Median | P95 | Min | Max | CPU | Peak memory |"
+            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak memory |"
         ));
-        assert!(!markdown.contains("(ms)"));
-        assert!(!markdown.contains("CPU total"));
+        assert!(markdown.contains("1.250s"));
+        assert!(markdown.contains("6.250s"));
         assert!(markdown.contains("241ms"));
+        assert!(markdown.contains("482ms"));
+        assert!(markdown.contains("7.7%"));
         assert!(markdown.contains("243.57 MB"));
+    }
+
+    #[test]
+    fn render_markdown_summary_uses_explicit_wall_and_cpu_columns() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 4,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Google Pixel 8-14.0".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "sample_fns::fibonacci".to_string(),
+                    samples: 4,
+                    mean_ns: Some(1_000_000_000),
+                    median_ns: Some(950_000_000),
+                    p95_ns: Some(1_100_000_000),
+                    min_ns: Some(900_000_000),
+                    max_ns: Some(1_200_000_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: Some(800),
+                        cpu_median_ms: Some(200),
+                        peak_memory_kb: Some(1_024),
+                        total_pss_kb: None,
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        });
+
+        assert!(markdown.contains(
+            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak memory |"
+        ));
+        assert!(markdown.contains(
+            "| Google Pixel 8-14.0 | sample_fns::fibonacci | 4 | 1 | 1.000s | 4.000s | 200ms | 800ms | 20.0% | 1.00 MB |"
+        ));
+        assert!(!markdown.contains("### Device:"));
     }
 
     #[test]
@@ -9560,11 +9611,13 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
             }],
         });
 
-        assert!(markdown.contains("CPU"));
+        assert!(markdown.contains("CPU median / iter"));
+        assert!(markdown.contains("CPU total"));
+        assert!(markdown.contains("CPU / wall"));
         assert!(markdown.contains("Peak memory"));
-        assert!(!markdown.contains("(ms)"));
-        assert!(!markdown.contains("CPU total"));
         assert!(markdown.contains("241ms"));
+        assert!(markdown.contains("482ms"));
+        assert!(markdown.contains("7.7%"));
         assert!(markdown.contains("638.99 MB"));
     }
 
@@ -9601,11 +9654,16 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
             }],
         });
 
-        assert!(markdown.contains("CPU"));
+        assert!(markdown.contains("Device"));
+        assert!(markdown.contains("Wall mean / iter"));
+        assert!(markdown.contains("Wall total"));
+        assert!(markdown.contains("CPU median / iter"));
+        assert!(markdown.contains("CPU total"));
+        assert!(markdown.contains("CPU / wall"));
         assert!(markdown.contains("Peak memory"));
-        assert!(!markdown.contains("(ms)"));
-        assert!(!markdown.contains("CPU total"));
         assert!(markdown.contains("241ms"));
+        assert!(markdown.contains("482ms"));
+        assert!(markdown.contains("7.7%"));
         assert!(markdown.contains("638.99 MB"));
     }
 
@@ -10171,7 +10229,9 @@ mod ci_merge_tests {
 
         assert!(markdown.starts_with("### Benchmark Summary\n"));
         assert!(markdown.contains("- Target: iOS"));
-        assert!(markdown.contains("### Device: iPhone 13"));
+        assert!(markdown.contains("| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak memory |"));
+        assert!(markdown.contains("| iPhone 13 | ffi_benchmark::bench_fibonacci | 5 | 1 | 0.017ms | 0.085ms | - | - | - | - |"));
+        assert!(!markdown.contains("### Device:"));
     }
 
     #[cfg(unix)]
