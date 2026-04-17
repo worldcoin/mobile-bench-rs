@@ -37,6 +37,16 @@ on:
         required: false
         type: string
         default: "5"
+      mobench_version:
+        description: "Mobench version to install from crates.io when mobench_ref is unset"
+        required: false
+        type: string
+        default: ""
+      mobench_ref:
+        description: "Git ref for mobile-bench-rs to install instead of the caller path or crates.io version"
+        required: false
+        type: string
+        default: ""
       pr_number:
         description: "PR number for sticky comment publishing"
         required: false
@@ -77,6 +87,8 @@ jobs:
       device_profile: ${{ inputs.device_profile }}
       iterations: ${{ inputs.iterations }}
       warmup: ${{ inputs.warmup }}
+      mobench_version: ${{ inputs.mobench_version }}
+      mobench_ref: ${{ inputs.mobench_ref }}
       build_release: true
       pr_number: ${{ inputs.pr_number }}
       requested_by: ${{ inputs.requested_by }}

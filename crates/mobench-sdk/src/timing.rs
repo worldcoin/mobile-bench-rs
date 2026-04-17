@@ -582,8 +582,28 @@ trait ResourceMonitor {
 #[derive(Default)]
 struct DefaultResourceMonitor;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessCpuTimeSnapshot {
+    user_ns: u64,
+    system_ns: u64,
+}
+
+impl ProcessCpuTimeSnapshot {
+    #[cfg(unix)]
+    fn from_rusage_timevals(user: libc::timeval, system: libc::timeval) -> Option<Self> {
+        Some(Self {
+            user_ns: timeval_to_ns(user)?,
+            system_ns: timeval_to_ns(system)?,
+        })
+    }
+
+    fn total_ns(self) -> u64 {
+        self.user_ns.saturating_add(self.system_ns)
+    }
+}
+
 struct DefaultResourceToken {
-    cpu_time_start_ns: Option<u64>,
+    cpu_time_start: Option<ProcessCpuTimeSnapshot>,
     memory_sampler: Option<MemoryPeakSampler>,
 }
 
@@ -592,18 +612,16 @@ impl ResourceMonitor for DefaultResourceMonitor {
 
     fn start(&mut self) -> Self::Token {
         Self::Token {
-            cpu_time_start_ns: current_thread_cpu_time_ns(),
+            cpu_time_start: current_process_cpu_time(),
             memory_sampler: MemoryPeakSampler::start(),
         }
     }
 
     fn finish(&mut self, token: Self::Token) -> IterationResourceUsage {
-        let cpu_time_ms = match (token.cpu_time_start_ns, current_thread_cpu_time_ns()) {
-            (Some(start_ns), Some(end_ns)) if end_ns >= start_ns => {
-                Some(round_ns_to_ms(end_ns - start_ns))
-            }
-            _ => None,
-        };
+        let cpu_time_ms = token
+            .cpu_time_start
+            .zip(current_process_cpu_time())
+            .and_then(|(start, end)| process_cpu_delta_ms(start, end));
 
         IterationResourceUsage {
             cpu_time_ms,
@@ -620,21 +638,44 @@ fn round_ns_to_ms(ns: u64) -> u64 {
 }
 
 #[cfg(unix)]
-fn current_thread_cpu_time_ns() -> Option<u64> {
-    let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
-    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, ts.as_mut_ptr()) };
+fn process_cpu_delta_ms(start: ProcessCpuTimeSnapshot, end: ProcessCpuTimeSnapshot) -> Option<u64> {
+    Some(round_ns_to_ms(
+        end.total_ns().checked_sub(start.total_ns())?,
+    ))
+}
+
+#[cfg(not(unix))]
+fn process_cpu_delta_ms(
+    _start: ProcessCpuTimeSnapshot,
+    _end: ProcessCpuTimeSnapshot,
+) -> Option<u64> {
+    None
+}
+
+#[cfg(unix)]
+fn timeval_to_ns(value: libc::timeval) -> Option<u64> {
+    let secs = u64::try_from(value.tv_sec).ok()?;
+    let micros = u64::try_from(value.tv_usec).ok()?;
+    Some(
+        secs.saturating_mul(1_000_000_000)
+            .saturating_add(micros.saturating_mul(1_000)),
+    )
+}
+
+#[cfg(unix)]
+fn current_process_cpu_time() -> Option<ProcessCpuTimeSnapshot> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
     if rc != 0 {
         return None;
     }
 
-    let ts = unsafe { ts.assume_init() };
-    let secs = u64::try_from(ts.tv_sec).ok()?;
-    let nanos = u64::try_from(ts.tv_nsec).ok()?;
-    Some(secs.saturating_mul(1_000_000_000).saturating_add(nanos))
+    let usage = unsafe { usage.assume_init() };
+    ProcessCpuTimeSnapshot::from_rusage_timevals(usage.ru_utime, usage.ru_stime)
 }
 
 #[cfg(not(unix))]
-fn current_thread_cpu_time_ns() -> Option<u64> {
+fn current_process_cpu_time() -> Option<ProcessCpuTimeSnapshot> {
     None
 }
 
@@ -1426,6 +1467,53 @@ mod tests {
                 .cloned()
                 .expect("resource usage for measured iteration")
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_cpu_time_snapshot_sums_user_and_kernel_time() {
+        let snapshot = ProcessCpuTimeSnapshot::from_rusage_timevals(
+            libc::timeval {
+                tv_sec: 1,
+                tv_usec: 250_000,
+            },
+            libc::timeval {
+                tv_sec: 0,
+                tv_usec: 750_000,
+            },
+        )
+        .expect("valid snapshot");
+
+        assert_eq!(snapshot.total_ns(), 2_000_000_000);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_cpu_time_delta_ms_uses_user_and_kernel_time() {
+        let start = ProcessCpuTimeSnapshot::from_rusage_timevals(
+            libc::timeval {
+                tv_sec: 1,
+                tv_usec: 250_000,
+            },
+            libc::timeval {
+                tv_sec: 0,
+                tv_usec: 750_000,
+            },
+        )
+        .expect("valid start snapshot");
+        let end = ProcessCpuTimeSnapshot::from_rusage_timevals(
+            libc::timeval {
+                tv_sec: 1,
+                tv_usec: 900_000,
+            },
+            libc::timeval {
+                tv_sec: 1,
+                tv_usec: 400_600,
+            },
+        )
+        .expect("valid end snapshot");
+
+        assert_eq!(process_cpu_delta_ms(start, end), Some(1_301));
     }
 
     #[test]

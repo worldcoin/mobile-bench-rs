@@ -18,7 +18,8 @@
 //!
 //! - Android NDK (set `ANDROID_NDK_HOME` environment variable)
 //! - `cargo-ndk` (`cargo install cargo-ndk`)
-//! - Rust targets: `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`
+//! - Rust targets: `aarch64-linux-android` by default
+//! - Optional extra targets can be enabled via `BuildConfig::android_abis`
 //! - Java JDK (for Gradle)
 //!
 //! ## Example
@@ -35,6 +36,7 @@
 //!     target: Target::Android,
 //!     profile: BuildProfile::Release,
 //!     incremental: true,
+//!     android_abis: None,
 //! };
 //!
 //! let result = builder.build(&config)?;
@@ -84,6 +86,7 @@ use std::process::Command;
 ///     target: Target::Android,
 ///     profile: BuildProfile::Release,
 ///     incremental: true,
+///     android_abis: None,
 /// };
 ///
 /// let result = builder.build(&config)?;
@@ -103,6 +106,8 @@ pub struct AndroidBuilder {
     /// Whether to run in dry-run mode (print what would be done without making changes)
     dry_run: bool,
 }
+
+const DEFAULT_ANDROID_ABIS: &[&str] = &["arm64-v8a"];
 
 impl AndroidBuilder {
     /// Creates a new Android builder
@@ -185,6 +190,7 @@ impl AndroidBuilder {
             BuildProfile::Debug => "debug",
             BuildProfile::Release => "release",
         };
+        let android_abis = self.resolve_android_abis(config)?;
 
         if self.dry_run {
             println!("\n[dry-run] Android build plan:");
@@ -194,7 +200,8 @@ impl AndroidBuilder {
             );
             println!("  Step 0.5: Ensure Gradle wrapper exists (run 'gradle wrapper' if needed)");
             println!(
-                "  Step 1: Build Rust libraries for Android ABIs (arm64-v8a, armeabi-v7a, x86_64)"
+                "  Step 1: Build Rust libraries for Android ABIs ({})",
+                android_abis.join(", ")
             );
             println!(
                 "    Command: cargo ndk --target <abi> --platform 24 build {}",
@@ -326,7 +333,7 @@ impl AndroidBuilder {
         // Check that at least one native library exists in jniLibs
         let jni_libs_dir = self.output_dir.join("android/app/src/main/jniLibs");
         let lib_name = format!("lib{}.so", self.crate_name.replace("-", "_"));
-        let required_abis = ["arm64-v8a", "armeabi-v7a", "x86_64"];
+        let required_abis = self.resolve_android_abis(config)?;
         let mut found_libs = 0;
         for abi in &required_abis {
             let lib_path = jni_libs_dir.join(abi).join(&lib_name);
@@ -369,6 +376,34 @@ impl AndroidBuilder {
         }
 
         Ok(())
+    }
+
+    fn resolve_android_abis(&self, config: &BuildConfig) -> Result<Vec<String>, BenchError> {
+        let requested = config
+            .android_abis
+            .as_ref()
+            .filter(|abis| !abis.is_empty())
+            .cloned()
+            .unwrap_or_else(|| {
+                DEFAULT_ANDROID_ABIS
+                    .iter()
+                    .map(|abi| (*abi).to_string())
+                    .collect()
+            });
+
+        let mut resolved = Vec::new();
+        for abi in requested {
+            if android_abi_to_rust_target(&abi).is_none() {
+                return Err(BenchError::Build(format!(
+                    "Unsupported Android ABI '{abi}'. Supported values: arm64-v8a, armeabi-v7a, x86_64"
+                )));
+            }
+            if !resolved.contains(&abi) {
+                resolved.push(abi);
+            }
+        }
+
+        Ok(resolved)
     }
 
     /// Finds the benchmark crate directory.
@@ -457,8 +492,7 @@ impl AndroidBuilder {
         // Check if cargo-ndk is installed
         self.check_cargo_ndk()?;
 
-        // Android ABIs to build for
-        let abis = vec!["arm64-v8a", "armeabi-v7a", "x86_64"];
+        let abis = self.resolve_android_abis(config)?;
         let release_flag = if matches!(config.profile, BuildProfile::Release) {
             "--release"
         } else {
@@ -473,7 +507,7 @@ impl AndroidBuilder {
             let mut cmd = Command::new("cargo");
             cmd.arg("ndk")
                 .arg("--target")
-                .arg(abi)
+                .arg(&abi)
                 .arg("--platform")
                 .arg("24") // minSdk
                 .arg("build");
@@ -519,12 +553,7 @@ impl AndroidBuilder {
                 } else {
                     "debug"
                 };
-                let rust_target = match abi {
-                    "arm64-v8a" => "aarch64-linux-android",
-                    "armeabi-v7a" => "armv7-linux-androideabi",
-                    "x86_64" => "x86_64-linux-android",
-                    _ => abi,
-                };
+                let rust_target = android_abi_to_rust_target(&abi).unwrap_or(abi.as_str());
                 return Err(BenchError::Build(format!(
                     "cargo-ndk build failed for {} ({} profile).\n\n\
                      Command: {}\n\
@@ -704,22 +733,21 @@ impl AndroidBuilder {
             ))
         })?;
 
-        // Map cargo-ndk ABIs to Android jniLibs ABIs
-        let abi_mappings = vec![
-            ("aarch64-linux-android", "arm64-v8a"),
-            ("armv7-linux-androideabi", "armeabi-v7a"),
-            ("x86_64-linux-android", "x86_64"),
-        ];
         let mut native_libraries = Vec::new();
 
-        for (rust_target, android_abi) in abi_mappings {
+        for android_abi in self.resolve_android_abis(config)? {
+            let rust_target = android_abi_to_rust_target(&android_abi).ok_or_else(|| {
+                BenchError::Build(format!(
+                    "Unsupported Android ABI '{android_abi}'. Supported values: arm64-v8a, armeabi-v7a, x86_64"
+                ))
+            })?;
             let library_name = format!("lib{}.so", self.crate_name.replace("-", "_"));
             let src = target_dir
                 .join(rust_target)
                 .join(profile_dir)
                 .join(&library_name);
 
-            let dest_dir = jni_libs_dir.join(android_abi);
+            let dest_dir = jni_libs_dir.join(&android_abi);
             std::fs::create_dir_all(&dest_dir).map_err(|e| {
                 BenchError::Build(format!(
                     "Failed to create ABI directory {} at {}: {}. Check output directory permissions.",
@@ -747,7 +775,7 @@ impl AndroidBuilder {
                 }
 
                 native_libraries.push(NativeLibraryArtifact {
-                    abi: android_abi.to_string(),
+                    abi: android_abi.clone(),
                     library_name: library_name.clone(),
                     unstripped_path: src,
                     packaged_path: dest,
@@ -1262,6 +1290,15 @@ impl AndroidBuilder {
     }
 }
 
+fn android_abi_to_rust_target(abi: &str) -> Option<&'static str> {
+    match abi {
+        "arm64-v8a" => Some("aarch64-linux-android"),
+        "armeabi-v7a" => Some("armv7-linux-androideabi"),
+        "x86_64" => Some("x86_64-linux-android"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AndroidStackSymbolization {
     pub line: String,
@@ -1482,6 +1519,38 @@ mod tests {
         let metadata = "not valid json";
         let result = builder.parse_output_metadata(metadata);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_android_builder_defaults_to_arm64_only() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let config = BuildConfig {
+            target: Target::Android,
+            profile: BuildProfile::Debug,
+            incremental: true,
+            android_abis: None,
+        };
+
+        let abis = builder
+            .resolve_android_abis(&config)
+            .expect("resolve default ABIs");
+        assert_eq!(abis, vec!["arm64-v8a".to_string()]);
+    }
+
+    #[test]
+    fn test_android_builder_uses_explicit_abis_when_configured() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let config = BuildConfig {
+            target: Target::Android,
+            profile: BuildProfile::Release,
+            incremental: true,
+            android_abis: Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()]),
+        };
+
+        let abis = builder
+            .resolve_android_abis(&config)
+            .expect("resolve configured ABIs");
+        assert_eq!(abis, vec!["arm64-v8a".to_string(), "x86_64".to_string()]);
     }
 
     #[test]
