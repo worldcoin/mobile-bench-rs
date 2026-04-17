@@ -13,9 +13,9 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.32` is the current supported release.
-- `v0.1.31` is the immediately previous supported release, superseded by
-  `v0.1.32`.
+- `v0.1.33` is the current supported release.
+- `v0.1.32` is the immediately previous supported release, superseded by
+  `v0.1.33`.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -24,7 +24,8 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.32` | 2026-04-14 | `mobench 0.1.32`, `mobench-sdk 0.1.32`, `mobench-macros 0.1.32` | Current supported release |
+| `v0.1.33` | 2026-04-17 | `mobench 0.1.33`, `mobench-sdk 0.1.33`, `mobench-macros 0.1.33` | Current supported release |
+| `v0.1.32` | 2026-04-14 | `mobench 0.1.32`, `mobench-sdk 0.1.32`, `mobench-macros 0.1.32` | Superseded by `v0.1.33` |
 | `v0.1.31` | 2026-04-12 | `mobench 0.1.31`, `mobench-sdk 0.1.31`, `mobench-macros 0.1.31` | Superseded by `v0.1.32` |
 | `v0.1.30` | 2026-04-12 | `mobench 0.1.30`, `mobench-sdk 0.1.30`, `mobench-macros 0.1.30` | Superseded by `v0.1.31` |
 | `v0.1.29` | 2026-04-04 | `mobench 0.1.29`, `mobench-sdk 0.1.29`, `mobench-macros 0.1.29` | Superseded by `v0.1.30` |
@@ -59,9 +60,25 @@ Crates.io release history:
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
 
-## v0.1.32
+## v0.1.33
 
 Status: current supported release.
+
+- Measured benchmark CPU time as process CPU time under the standard
+  user-plus-kernel definition across all threads, then exported both median
+  per-iteration CPU and total CPU in the summary output.
+- Reworked rendered CI summaries into one top-level table with explicit wall
+  mean, wall total, CPU median, CPU total, CPU-to-wall ratio, and peak memory
+  columns so the first view of a run is directly comparable across devices.
+- Exposed `mobench_ref` and `mobench_version` on the manual `Mobile Bench`
+  workflow so full BrowserStack validation can exercise a branch or release
+  candidate instead of only the last published crates.io build.
+- Validated the new summary layout and branch-pinned workflow path with
+  successful Mobile Bench workflow run `24543140161`.
+
+## v0.1.32
+
+Status: superseded by `v0.1.33`.
 
 - Restored Android ABI selection end to end after the `0.1.31` regression, so
   `[android].abis` now drives dry-run output, native builds, JNI library copy,
