@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: aarch64-linux-android
       - uses: ./.github/actions/mobench
         with:
           command: cargo mobench ci run
@@ -81,7 +81,7 @@ jobs:
 
 - `summary.json`, `summary.md`, and `results.csv` remain the stable required outputs.
 - `plots/*.svg` is additive and only appears when local plot rendering is enabled and a Python + Matplotlib runtime is available, or when `--plots require` is used successfully.
-- Local markdown summaries now include `cpu_total_ms` and `peak_memory_kb` instead of percentage/average-RAM columns.
+- `summary.md` now renders a single top-level CI table with `Wall mean / iter`, `Wall total`, `CPU median / iter`, `CPU total`, `CPU / wall`, and `Peak memory`.
 - The reusable workflow attempts to compare against the latest successful default-branch run by downloading its per-platform `summary.json` artifacts before calling `ci check-run`.
 
 ## Compatibility Notes
@@ -94,8 +94,8 @@ Any change to required output files or metadata keys requires updating the
 versioned schemas and documenting the compatibility impact in `RELEASE_NOTES.md`.
 ### Summary/CSV contract updates
 
-- `summary.md` now uses unit-neutral timing headers
-- the default human-readable CPU column is `CPU`, rendered from measured-iteration `cpu_median_ms` in milliseconds below one second and total seconds otherwise
+- `summary.md` now renders a flat per-device table instead of per-device sections
+- CPU values in that table are shown as `CPU median / iter`, `CPU total`, and `CPU / wall`
 - `results.csv` now includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
 - missing resource values are left blank in CSV output
 

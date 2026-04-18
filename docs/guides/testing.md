@@ -39,8 +39,11 @@ The check command will identify missing tools and provide installation instructi
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # https://www.rust-lang.org/tools/install
 
-# Install required targets
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+# Install the default Android target
+rustup target add aarch64-linux-android
+
+# Optional: add extra Android targets only when android.abis enables them
+# rustup target add armv7-linux-androideabi x86_64-linux-android
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 # https://doc.rust-lang.org/rustup/targets.html
 

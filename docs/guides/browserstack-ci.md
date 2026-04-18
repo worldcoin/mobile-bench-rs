@@ -89,7 +89,7 @@ cargo mobench report summarize --summary target/mobench/ci/summary.json
 ```
 
 Standard CI outputs now carry benchmark-scoped resource metrics directly:
-- `summary.md` shows `CPU` (measured-iteration `cpu_median_ms`) and `Peak memory` with unit-neutral headers
+- `summary.md` renders one top-level table with `Wall mean / iter`, `Wall total`, `CPU median / iter`, `CPU total`, `CPU / wall`, and `Peak memory`
 - `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
 - missing resource data is emitted as blank CSV fields rather than placeholder strings
 

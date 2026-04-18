@@ -434,7 +434,7 @@ cargo mobench build --target android
 
 This automatically:
 
-- Builds Rust libraries for all Android ABIs (arm64-v8a, armeabi-v7a, x86_64)
+- Builds Rust libraries for the configured Android ABIs (default: arm64-v8a)
 - Generates UniFFI Kotlin bindings
 - Copies .so files to jniLibs
 - Runs Gradle to create the APK

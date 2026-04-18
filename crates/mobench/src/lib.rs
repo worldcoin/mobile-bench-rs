@@ -7874,12 +7874,7 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
     match target {
         SdkTarget::Android => {
             println!("Checking prerequisites for Android...\n");
-            checks.push(check_android_ndk_home());
-            checks.push(check_cargo_ndk());
-            checks.push(check_rust_target("aarch64-linux-android"));
-            checks.push(check_rust_target("armv7-linux-androideabi"));
-            checks.push(check_rust_target("x86_64-linux-android"));
-            checks.push(check_jdk());
+            extend_android_prereq_checks(&mut checks);
         }
         SdkTarget::Ios => {
             println!("Checking prerequisites for iOS...\n");
@@ -7891,12 +7886,7 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
         }
         SdkTarget::Both => {
             println!("Checking prerequisites for Android and iOS...\n");
-            checks.push(check_android_ndk_home());
-            checks.push(check_cargo_ndk());
-            checks.push(check_rust_target("aarch64-linux-android"));
-            checks.push(check_rust_target("armv7-linux-androideabi"));
-            checks.push(check_rust_target("x86_64-linux-android"));
-            checks.push(check_jdk());
+            extend_android_prereq_checks(&mut checks);
             checks.push(check_xcode());
             checks.push(check_xcodegen());
             checks.push(check_rust_target("aarch64-apple-ios"));
@@ -7906,6 +7896,17 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
     }
 
     checks
+}
+
+const DEFAULT_ANDROID_DOCTOR_RUST_TARGETS: &[&str] = &["aarch64-linux-android"];
+
+fn extend_android_prereq_checks(checks: &mut Vec<PrereqCheck>) {
+    checks.push(check_android_ndk_home());
+    checks.push(check_cargo_ndk());
+    for target in DEFAULT_ANDROID_DOCTOR_RUST_TARGETS {
+        checks.push(check_rust_target(target));
+    }
+    checks.push(check_jdk());
 }
 
 fn collect_issues(checks: &[PrereqCheck]) -> Vec<ValidationIssue> {
@@ -8875,6 +8876,14 @@ project = "proj"
             Command::Doctor { browserstack, .. } => assert!(!browserstack),
             _ => panic!("expected doctor command"),
         }
+    }
+
+    #[test]
+    fn doctor_android_prereqs_default_to_arm64_only() {
+        assert_eq!(
+            DEFAULT_ANDROID_DOCTOR_RUST_TARGETS,
+            &["aarch64-linux-android"]
+        );
     }
 
     #[test]
