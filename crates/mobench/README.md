@@ -264,12 +264,15 @@ cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 - `results.csv`
 
 `summary.md` renders one top-level table with `Wall mean / iter`, `Wall total`,
-`CPU median / iter`, `CPU total`, `CPU / wall`, and `Peak memory`.
+`CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, and
+`Absolute peak`.
 
 `results.csv` includes:
 - `cpu_total_ms`
 - `cpu_median_ms`
-- `peak_memory_kb`
+- `peak_memory_kb` (legacy alias for peak growth)
+- `peak_memory_growth_kb`
+- `absolute_peak_memory_kb`
 
 Blank fields indicate that a resource metric was not available for that benchmark/device row.
 

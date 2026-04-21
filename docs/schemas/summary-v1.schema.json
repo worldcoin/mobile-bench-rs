@@ -54,6 +54,8 @@
                         "cpu_total_ms": { "type": ["integer", "null"] },
                         "cpu_median_ms": { "type": ["integer", "null"] },
                         "peak_memory_kb": { "type": ["integer", "null"] },
+                        "peak_memory_growth_kb": { "type": ["integer", "null"] },
+                        "absolute_peak_memory_kb": { "type": ["integer", "null"] },
                         "total_pss_kb": { "type": ["integer", "null"] },
                         "private_dirty_kb": { "type": ["integer", "null"] },
                         "native_heap_kb": { "type": ["integer", "null"] },

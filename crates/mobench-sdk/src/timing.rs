@@ -204,8 +204,9 @@ pub struct BenchSample {
 
     /// Peak memory growth during the measured iteration in kilobytes.
     ///
-    /// Values are baseline-adjusted immediately before the measured closure
-    /// enters so harness footprint is not counted.
+    /// This legacy wire field is baseline-adjusted immediately before the
+    /// measured closure enters. It reports growth during the measured
+    /// iteration, not absolute process or device peak memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_memory_kb: Option<u64>,
 }
@@ -394,12 +395,24 @@ impl BenchReport {
     }
 
     /// Returns the maximum baseline-adjusted peak memory growth in kilobytes.
+    ///
+    /// This is the legacy accessor for the serialized `peak_memory_kb` sample
+    /// field. It does not report absolute process or device peak memory.
     #[must_use]
     pub fn peak_memory_kb(&self) -> Option<u64> {
         self.samples
             .iter()
             .filter_map(|sample| sample.peak_memory_kb)
             .max()
+    }
+
+    /// Returns the maximum baseline-adjusted peak memory growth in kilobytes.
+    ///
+    /// This is an explicit alias for [`BenchReport::peak_memory_kb`] to make the
+    /// growth semantics clear while preserving the legacy wire field.
+    #[must_use]
+    pub fn peak_memory_growth_kb(&self) -> Option<u64> {
+        self.peak_memory_kb()
     }
 
     /// Returns a statistical summary of the benchmark results.
@@ -1566,6 +1579,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"peak_memory_kb\""));
+        assert!(!json.contains("peak_memory_growth_kb"));
         let restored: BenchReport = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.spec.name, "test");
@@ -1772,6 +1787,7 @@ mod tests {
             vec![Some(48), Some(96)]
         );
         assert_eq!(report.peak_memory_kb(), Some(96));
+        assert_eq!(report.peak_memory_growth_kb(), report.peak_memory_kb());
     }
 
     #[test]

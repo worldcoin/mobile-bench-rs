@@ -78,6 +78,9 @@ pub struct BenchSampleFfi {
     /// CPU time consumed by the measured iteration in milliseconds.
     pub cpu_time_ms: Option<u64>,
     /// Peak memory growth during the measured iteration in kilobytes.
+    ///
+    /// This is the legacy wire field for baseline-adjusted growth, not
+    /// absolute process or device peak memory.
     pub peak_memory_kb: Option<u64>,
 }
 

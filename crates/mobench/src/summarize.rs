@@ -56,13 +56,18 @@ pub struct TimingStats {
     pub std_dev_ms: Option<f64>,
 }
 
-/// Resource usage metrics from BrowserStack session.
+/// Resource usage metrics from SDK reports and provider sessions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_total_ms: Option<u64>,
+    /// Legacy alias for `peak_memory_growth_kb`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_memory_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_memory_growth_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub absolute_peak_memory_kb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_pss_kb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -608,6 +613,8 @@ impl ResourceUsage {
     fn is_empty(&self) -> bool {
         self.cpu_total_ms.is_none()
             && self.peak_memory_kb.is_none()
+            && self.peak_memory_growth_kb.is_none()
+            && self.absolute_peak_memory_kb.is_none()
             && self.total_pss_kb.is_none()
             && self.private_dirty_kb.is_none()
             && self.native_heap_kb.is_none()
@@ -620,6 +627,12 @@ impl ResourceUsage {
         }
         if self.peak_memory_kb.is_none() {
             self.peak_memory_kb = other.peak_memory_kb;
+        }
+        if self.peak_memory_growth_kb.is_none() {
+            self.peak_memory_growth_kb = other.peak_memory_growth_kb;
+        }
+        if self.absolute_peak_memory_kb.is_none() {
+            self.absolute_peak_memory_kb = other.absolute_peak_memory_kb;
         }
         if self.total_pss_kb.is_none() {
             self.total_pss_kb = other.total_pss_kb;
@@ -655,22 +668,27 @@ fn parse_resource_usage_object(value: &serde_json::Value) -> Option<ResourceUsag
     let native_heap_kb = object.get("native_heap_kb").and_then(json_value_to_u64);
     let java_heap_kb = object.get("java_heap_kb").and_then(json_value_to_u64);
 
-    let peak_memory_kb = object
-        .get("peak_memory_kb")
+    let explicit_peak_memory_growth_kb = object
+        .get("peak_memory_growth_kb")
+        .and_then(json_value_to_u64);
+    let legacy_peak_memory_kb = object.get("peak_memory_kb").and_then(json_value_to_u64);
+    let peak_memory_growth_kb = explicit_peak_memory_growth_kb.or(legacy_peak_memory_kb);
+    let peak_memory_kb = peak_memory_growth_kb;
+    let absolute_peak_memory_kb = object
+        .get("absolute_peak_memory_kb")
         .and_then(json_value_to_u64)
         .or_else(|| {
             object
                 .get("ram_peak_mb")
                 .and_then(|value| value.as_f64())
-                .map(|value| (value * 1024.0).round() as u64)
-        })
-        .or_else(|| {
-            raw_peak_memory_kb(total_pss_kb, private_dirty_kb, native_heap_kb, java_heap_kb)
+                .and_then(mb_to_kb)
         });
 
     let resource_usage = ResourceUsage {
         cpu_total_ms,
         peak_memory_kb,
+        peak_memory_growth_kb,
+        absolute_peak_memory_kb,
         total_pss_kb,
         private_dirty_kb,
         native_heap_kb,
@@ -692,20 +710,12 @@ fn json_value_to_u64(value: &serde_json::Value) -> Option<u64> {
         })
 }
 
-fn raw_peak_memory_kb(
-    total_pss_kb: Option<u64>,
-    private_dirty_kb: Option<u64>,
-    native_heap_kb: Option<u64>,
-    java_heap_kb: Option<u64>,
-) -> Option<u64> {
-    total_pss_kb
-        .or(private_dirty_kb)
-        .or_else(|| match (native_heap_kb, java_heap_kb) {
-            (Some(native), Some(java)) => Some(native + java),
-            (Some(native), None) => Some(native),
-            (None, Some(java)) => Some(java),
-            (None, None) => None,
-        })
+fn mb_to_kb(value: f64) -> Option<u64> {
+    value
+        .is_finite()
+        .then_some(value)
+        .filter(|value| *value >= 0.0)
+        .map(|value| (value * 1024.0).round() as u64)
 }
 
 fn format_cpu_total_ms(value: Option<u64>) -> String {
@@ -718,6 +728,30 @@ fn format_cpu_total_ms(value: Option<u64>) -> String {
             }
         })
         .unwrap_or_else(|| "—".to_string())
+}
+
+const MEMORY_BASELINE_GAP_MIN_DIFF_KB: u64 = 256 * 1024;
+const MEMORY_BASELINE_GAP_RATIO: u64 = 4;
+const MEMORY_BASELINE_GAP_NOTE: &str =
+    "memory growth excludes warmup/baseline retained before the measured iteration.";
+
+fn platform_has_memory_baseline_gap(platform: &PlatformReport) -> bool {
+    platform.benchmarks.iter().any(|benchmark| {
+        benchmark
+            .resource_usage
+            .as_ref()
+            .is_some_and(resource_usage_has_memory_baseline_gap)
+    })
+}
+
+fn resource_usage_has_memory_baseline_gap(usage: &ResourceUsage) -> bool {
+    match (usage.peak_memory_growth_kb, usage.absolute_peak_memory_kb) {
+        (Some(growth), Some(absolute)) if absolute > growth => {
+            absolute.saturating_sub(growth) >= MEMORY_BASELINE_GAP_MIN_DIFF_KB
+                && absolute >= growth.saturating_mul(MEMORY_BASELINE_GAP_RATIO)
+        }
+        _ => false,
+    }
 }
 
 fn format_peak_memory(value_kb: Option<u64>) -> String {
@@ -772,7 +806,7 @@ fn render_platform_table(platform: &PlatformReport) -> String {
 
     let mut headers = vec!["Benchmark", "Avg ms", "Best", "Worst", "Median", "P95"];
     if has_resource_usage {
-        headers.extend(["CPU total", "Peak memory"]);
+        headers.extend(["CPU total", "Peak growth", "Absolute peak"]);
     }
     table.set_header(
         headers
@@ -793,8 +827,10 @@ fn render_platform_table(platform: &PlatformReport) -> String {
         if has_resource_usage {
             if let Some(ru) = &bench.resource_usage {
                 row.push(Cell::new(format_cpu_total_ms(ru.cpu_total_ms)));
-                row.push(Cell::new(format_peak_memory(ru.peak_memory_kb)));
+                row.push(Cell::new(format_peak_memory(ru.peak_memory_growth_kb)));
+                row.push(Cell::new(format_peak_memory(ru.absolute_peak_memory_kb)));
             } else {
+                row.push(Cell::new("—"));
                 row.push(Cell::new("—"));
                 row.push(Cell::new("—"));
             }
@@ -808,6 +844,9 @@ fn render_platform_table(platform: &PlatformReport) -> String {
         "\n  {} iterations · {} warmup · avg is primary metric\n",
         platform.iterations, platform.warmup
     ));
+    if platform_has_memory_baseline_gap(platform) {
+        output.push_str(&format!("  Note: {MEMORY_BASELINE_GAP_NOTE}\n"));
+    }
 
     output
 }
@@ -844,10 +883,10 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
 
         if has_ru {
             output.push_str(
-                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU total | Peak memory |\n",
+                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU total | Peak growth | Absolute peak |\n",
             );
             output.push_str(
-                "|-----------|--------|------|-------|--------|-----|-----------|-------------|\n",
+                "|-----------|--------|------|-------|--------|-----|-----------|-------------|---------------|\n",
             );
         } else {
             output.push_str("| Benchmark | Avg ms | Best | Worst | Median | P95 |\n");
@@ -868,12 +907,13 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
             if has_ru {
                 if let Some(ru) = &bench.resource_usage {
                     row.push_str(&format!(
-                        " {} | {} |",
+                        " {} | {} | {} |",
                         format_cpu_total_ms(ru.cpu_total_ms),
-                        format_peak_memory(ru.peak_memory_kb),
+                        format_peak_memory(ru.peak_memory_growth_kb),
+                        format_peak_memory(ru.absolute_peak_memory_kb),
                     ));
                 } else {
-                    row.push_str(" — | — |");
+                    row.push_str(" — | — | — |");
                 }
             }
 
@@ -885,6 +925,9 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
             "\n*{} iterations · {} warmup · avg is primary metric*\n",
             platform.iterations, platform.warmup
         ));
+        if platform_has_memory_baseline_gap(platform) {
+            output.push_str(&format!("\n_Note: {MEMORY_BASELINE_GAP_NOTE}_\n"));
+        }
     }
 
     output
@@ -912,22 +955,24 @@ pub fn enrich_with_browserstack(
             // Enrich benchmarks with performance metrics
             if let Some(perf) = &session.performance {
                 for bench in &mut platform.benchmarks {
-                    let peak_memory_kb = perf
+                    let absolute_peak_memory_kb = perf
                         .memory
                         .as_ref()
-                        .map(|memory| (memory.peak_mb * 1024.0).round() as u64);
-                    if peak_memory_kb.is_none() {
+                        .and_then(|memory| mb_to_kb(memory.peak_mb));
+                    if absolute_peak_memory_kb.is_none() {
                         continue;
                     }
                     let resource_usage = bench.resource_usage.get_or_insert(ResourceUsage {
                         cpu_total_ms: None,
                         peak_memory_kb: None,
+                        peak_memory_growth_kb: None,
+                        absolute_peak_memory_kb: None,
                         total_pss_kb: None,
                         private_dirty_kb: None,
                         native_heap_kb: None,
                         java_heap_kb: None,
                     });
-                    resource_usage.peak_memory_kb = peak_memory_kb;
+                    resource_usage.absolute_peak_memory_kb = absolute_peak_memory_kb;
                 }
             }
         }
@@ -1158,6 +1203,13 @@ mod tests {
                 .resource_usage
                 .as_ref()
                 .and_then(|usage| usage.peak_memory_kb),
+            None
+        );
+        assert_eq!(
+            alpha
+                .resource_usage
+                .as_ref()
+                .and_then(|usage| usage.total_pss_kb),
             Some(222222)
         );
         assert_eq!(
@@ -1170,6 +1222,12 @@ mod tests {
             beta.resource_usage
                 .as_ref()
                 .and_then(|usage| usage.peak_memory_kb),
+            None
+        );
+        assert_eq!(
+            beta.resource_usage
+                .as_ref()
+                .and_then(|usage| usage.total_pss_kb),
             Some(444444)
         );
     }
@@ -1285,6 +1343,8 @@ mod tests {
                     resource_usage: Some(ResourceUsage {
                         cpu_total_ms: Some(482),
                         peak_memory_kb: Some(654321),
+                        peak_memory_growth_kb: Some(654321),
+                        absolute_peak_memory_kb: None,
                         total_pss_kb: Some(654321),
                         private_dirty_kb: Some(321000),
                         native_heap_kb: Some(120000),
@@ -1372,7 +1432,9 @@ mod tests {
 
         assert!(output.contains("CPU total"));
         assert!(!output.contains("CPU total (ms)"));
-        assert!(output.contains("Peak memory"));
+        assert!(output.contains("Peak growth"));
+        assert!(output.contains("Absolute peak"));
+        assert!(!output.contains("Peak memory"));
         assert!(output.contains("| 1.482s |"));
         assert!(output.contains("638.99 MB"));
         assert!(!output.contains("CPU %"));
@@ -1414,11 +1476,54 @@ mod tests {
 
         assert!(output.contains("CPU total"));
         assert!(!output.contains("CPU total (ms)"));
-        assert!(output.contains("Peak memory"));
+        assert!(output.contains("Peak growth"));
+        assert!(output.contains("Absolute peak"));
+        assert!(!output.contains("Peak memory"));
         assert!(output.contains("1.482s"));
         assert!(output.contains("638.99 MB"));
         assert!(!output.contains("CPU %"));
         assert!(!output.contains("RAM MB"));
+    }
+
+    #[test]
+    fn test_render_markdown_notes_large_absolute_memory_baseline_gap() {
+        let report = parse_summary_value(&json!({
+            "summary": {
+                "generated_at": "2026-02-26T12:00:00Z",
+                "target": "android",
+                "function": "bench_nullifier_proving_only",
+                "iterations": 30,
+                "warmup": 5,
+                "devices": ["Motorola Moto G9 Play-11.0"],
+                "device_summaries": [{
+                    "device": "Motorola Moto G9 Play-11.0",
+                    "benchmarks": [{
+                        "function": "bench_nullifier_proving_only",
+                        "samples": 30,
+                        "mean_ns": 1204500000_u64,
+                        "median_ns": 1198000000_u64,
+                        "p95_ns": 1290000000_u64,
+                        "min_ns": 1180200000_u64,
+                        "max_ns": 1298100000_u64,
+                        "resource_usage": {
+                            "peak_memory_kb": 171556,
+                            "peak_memory_growth_kb": 171556,
+                            "absolute_peak_memory_kb": 1680026,
+                            "total_pss_kb": 1477787,
+                            "private_dirty_kb": 1462460
+                        }
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        let output = render_markdown(&report);
+
+        assert!(output.contains("Peak growth"));
+        assert!(output.contains("Absolute peak"));
+        assert!(output.contains(MEMORY_BASELINE_GAP_NOTE));
+        assert!(!output.contains("Peak memory"));
     }
 
     #[test]
@@ -1554,11 +1659,11 @@ mod tests {
         let pixel_memory = report.platforms[0].benchmarks[0]
             .resource_usage
             .as_ref()
-            .and_then(|usage| usage.peak_memory_kb);
+            .and_then(|usage| usage.absolute_peak_memory_kb);
         let samsung_memory = report.platforms[1].benchmarks[0]
             .resource_usage
             .as_ref()
-            .and_then(|usage| usage.peak_memory_kb);
+            .and_then(|usage| usage.absolute_peak_memory_kb);
 
         assert_eq!(pixel_memory, Some(102_400));
         assert_eq!(samsung_memory, Some(204_800));

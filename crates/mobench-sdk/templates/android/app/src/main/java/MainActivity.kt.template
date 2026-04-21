@@ -178,7 +178,9 @@ class MainActivity : AppCompatActivity() {
             resources.put("elapsed_cpu_ms", cpuTotalMs)
         }
         if (peakSamplesKb.isNotEmpty()) {
-            resources.put("peak_memory_kb", peakSamplesKb.maxOrNull() ?: 0L)
+            val peakGrowthKb = peakSamplesKb.maxOrNull() ?: 0L
+            resources.put("peak_memory_kb", peakGrowthKb)
+            resources.put("peak_memory_growth_kb", peakGrowthKb)
         }
         resources.put("total_pss_kb", memInfo.totalPss)
         resources.put("private_dirty_kb", memInfo.totalPrivateDirty)
