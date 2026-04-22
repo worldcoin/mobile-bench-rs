@@ -1125,6 +1125,8 @@ struct BenchmarkResourceUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     peak_memory_growth_kb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    process_peak_memory_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     absolute_peak_memory_kb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_pss_kb: Option<u64>,
@@ -5277,6 +5279,7 @@ impl BenchmarkResourceUsage {
             && self.cpu_median_ms.is_none()
             && self.peak_memory_kb.is_none()
             && self.peak_memory_growth_kb.is_none()
+            && self.process_peak_memory_kb.is_none()
             && self.absolute_peak_memory_kb.is_none()
             && self.total_pss_kb.is_none()
             && self.private_dirty_kb.is_none()
@@ -5421,6 +5424,7 @@ fn extract_benchmark_resource_usage(
         .or(Some(entry));
     let sample_cpu_ms = extract_sample_metric_u64(entry, "cpu_time_ms");
     let sample_peak_memory_kb = extract_sample_metric_u64(entry, "peak_memory_kb");
+    let sample_process_peak_memory_kb = extract_sample_metric_u64(entry, "process_peak_memory_kb");
 
     let cpu_total_ms = resources
         .and_then(|res| res.get("cpu_total_ms"))
@@ -5464,6 +5468,10 @@ fn extract_benchmark_resource_usage(
         .or(legacy_peak_memory_kb)
         .or_else(|| sample_peak_memory_kb.iter().copied().max());
     let peak_memory_kb = peak_memory_growth_kb;
+    let process_peak_memory_kb = resources
+        .and_then(|res| res.get("process_peak_memory_kb"))
+        .and_then(json_value_to_u64)
+        .or_else(|| sample_process_peak_memory_kb.iter().copied().max());
     let absolute_peak_memory_kb = resources
         .and_then(|res| res.get("absolute_peak_memory_kb"))
         .and_then(json_value_to_u64)
@@ -5480,6 +5488,7 @@ fn extract_benchmark_resource_usage(
         cpu_median_ms,
         peak_memory_kb,
         peak_memory_growth_kb,
+        process_peak_memory_kb,
         absolute_peak_memory_kb,
         total_pss_kb,
         private_dirty_kb,
@@ -5518,17 +5527,17 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
 
     let _ = writeln!(
         output,
-        "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Absolute peak |"
+        "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak | Provider peak |"
     );
     let _ = writeln!(
         output,
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
     );
     for device in &summary.device_summaries {
         for bench in &device.benchmarks {
             let _ = writeln!(
                 output,
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 device.device,
                 bench.function,
                 bench.samples,
@@ -5543,6 +5552,12 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
                         .resource_usage
                         .as_ref()
                         .and_then(|usage| usage.peak_memory_growth_kb)
+                ),
+                format_peak_memory(
+                    bench
+                        .resource_usage
+                        .as_ref()
+                        .and_then(|usage| usage.process_peak_memory_kb)
                 ),
                 format_peak_memory(
                     bench
@@ -5566,13 +5581,13 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
-        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,absolute_peak_memory_kb"
+        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb,absolute_peak_memory_kb"
     );
     for device in &summary.device_summaries {
         for bench in &device.benchmarks {
             let _ = writeln!(
                 output,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 device.device,
                 bench.function,
                 bench.samples,
@@ -5600,6 +5615,11 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
                     .resource_usage
                     .as_ref()
                     .and_then(|usage| usage.peak_memory_growth_kb)
+                    .map_or(String::new(), |v| v.to_string()),
+                bench
+                    .resource_usage
+                    .as_ref()
+                    .and_then(|usage| usage.process_peak_memory_kb)
                     .map_or(String::new(), |v| v.to_string()),
                 bench
                     .resource_usage
@@ -5705,10 +5725,13 @@ fn summary_has_memory_baseline_gap(summary: &SummaryReport) -> bool {
 }
 
 fn resource_usage_has_memory_baseline_gap(usage: &BenchmarkResourceUsage) -> bool {
-    match (usage.peak_memory_growth_kb, usage.absolute_peak_memory_kb) {
-        (Some(growth), Some(absolute)) if absolute > growth => {
-            absolute.saturating_sub(growth) >= MEMORY_BASELINE_GAP_MIN_DIFF_KB
-                && absolute >= growth.saturating_mul(MEMORY_BASELINE_GAP_RATIO)
+    let peak = usage
+        .process_peak_memory_kb
+        .or(usage.absolute_peak_memory_kb);
+    match (usage.peak_memory_growth_kb, peak) {
+        (Some(growth), Some(peak)) if peak > growth => {
+            peak.saturating_sub(growth) >= MEMORY_BASELINE_GAP_MIN_DIFF_KB
+                && peak >= growth.saturating_mul(MEMORY_BASELINE_GAP_RATIO)
         }
         _ => false,
     }
@@ -9540,6 +9563,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_median_ms: Some(241),
                         peak_memory_kb: Some(249_416),
                         peak_memory_growth_kb: Some(249_416),
+                        process_peak_memory_kb: Some(1_477_787),
                         absolute_peak_memory_kb: None,
                         total_pss_kb: None,
                         private_dirty_kb: None,
@@ -9551,7 +9575,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         });
 
         assert!(markdown.contains(
-            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Absolute peak |"
+            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak | Provider peak |"
         ));
         assert!(markdown.contains("1.250s"));
         assert!(markdown.contains("6.250s"));
@@ -9586,6 +9610,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_median_ms: Some(200),
                         peak_memory_kb: Some(1_024),
                         peak_memory_growth_kb: Some(1_024),
+                        process_peak_memory_kb: None,
                         absolute_peak_memory_kb: None,
                         total_pss_kb: None,
                         private_dirty_kb: None,
@@ -9597,10 +9622,10 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         });
 
         assert!(markdown.contains(
-            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Absolute peak |"
+            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak | Provider peak |"
         ));
         assert!(markdown.contains(
-            "| Google Pixel 8-14.0 | sample_fns::fibonacci | 4 | 1 | 1.000s | 4.000s | 200ms | 800ms | 20.0% | 1.00 MB | - |"
+            "| Google Pixel 8-14.0 | sample_fns::fibonacci | 4 | 1 | 1.000s | 4.000s | 200ms | 800ms | 20.0% | 1.00 MB | - | - |"
         ));
         assert!(!markdown.contains("### Device:"));
     }
@@ -9630,6 +9655,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_median_ms: Some(241),
                         peak_memory_kb: Some(249_416),
                         peak_memory_growth_kb: Some(249_416),
+                        process_peak_memory_kb: Some(1_477_787),
                         absolute_peak_memory_kb: Some(1_680_026),
                         total_pss_kb: None,
                         private_dirty_kb: None,
@@ -9642,10 +9668,10 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
 
         assert!(
             csv.starts_with(
-                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,absolute_peak_memory_kb\n"
+                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb,absolute_peak_memory_kb\n"
             )
         );
-        assert!(csv.contains(",482,241,249416,249416,1680026\n"));
+        assert!(csv.contains(",482,241,249416,249416,1477787,1680026\n"));
     }
 
     #[test]
@@ -9673,6 +9699,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_median_ms: Some(241),
                         peak_memory_kb: Some(654_321),
                         peak_memory_growth_kb: Some(654_321),
+                        process_peak_memory_kb: Some(1_477_787),
                         absolute_peak_memory_kb: None,
                         total_pss_kb: Some(654_321),
                         private_dirty_kb: None,
@@ -9687,7 +9714,9 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         assert!(markdown.contains("CPU total"));
         assert!(markdown.contains("CPU / wall"));
         assert!(markdown.contains("Peak growth"));
-        assert!(markdown.contains("Absolute peak"));
+        assert!(markdown.contains("Process peak"));
+        assert!(markdown.contains("Provider peak"));
+        assert!(!markdown.contains("Absolute peak"));
         assert!(!markdown.contains("Peak memory"));
         assert!(markdown.contains("241ms"));
         assert!(markdown.contains("482ms"));
@@ -9720,6 +9749,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_median_ms: Some(241),
                         peak_memory_kb: Some(654_321),
                         peak_memory_growth_kb: Some(654_321),
+                        process_peak_memory_kb: Some(1_477_787),
                         absolute_peak_memory_kb: None,
                         total_pss_kb: None,
                         private_dirty_kb: None,
@@ -9737,7 +9767,9 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         assert!(markdown.contains("CPU total"));
         assert!(markdown.contains("CPU / wall"));
         assert!(markdown.contains("Peak growth"));
-        assert!(markdown.contains("Absolute peak"));
+        assert!(markdown.contains("Process peak"));
+        assert!(markdown.contains("Provider peak"));
+        assert!(!markdown.contains("Absolute peak"));
         assert!(!markdown.contains("Peak memory"));
         assert!(markdown.contains("241ms"));
         assert!(markdown.contains("482ms"));
@@ -9770,6 +9802,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_median_ms: None,
                         peak_memory_kb: Some(171_556),
                         peak_memory_growth_kb: Some(171_556),
+                        process_peak_memory_kb: Some(1_477_787),
                         absolute_peak_memory_kb: Some(1_680_026),
                         total_pss_kb: Some(1_477_787),
                         private_dirty_kb: Some(1_462_460),
@@ -9781,7 +9814,9 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         });
 
         assert!(markdown.contains("Peak growth"));
-        assert!(markdown.contains("Absolute peak"));
+        assert!(markdown.contains("Process peak"));
+        assert!(markdown.contains("Provider peak"));
+        assert!(!markdown.contains("Absolute peak"));
         assert!(markdown.contains(MEMORY_BASELINE_GAP_NOTE));
         assert!(!markdown.contains("Peak memory"));
     }
@@ -9809,9 +9844,9 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                 vec![json!({
                     "function": "sample_fns::fibonacci",
                     "samples": [
-                        { "duration_ns": 1000, "cpu_time_ms": 19, "peak_memory_kb": 48 },
-                        { "duration_ns": 2000, "cpu_time_ms": 7, "peak_memory_kb": 96 },
-                        { "duration_ns": 3000, "cpu_time_ms": 11, "peak_memory_kb": 64 }
+                        { "duration_ns": 1000, "cpu_time_ms": 19, "peak_memory_kb": 48, "process_peak_memory_kb": 1048 },
+                        { "duration_ns": 2000, "cpu_time_ms": 7, "peak_memory_kb": 96, "process_peak_memory_kb": 1096 },
+                        { "duration_ns": 3000, "cpu_time_ms": 11, "peak_memory_kb": 64, "process_peak_memory_kb": 1064 }
                     ]
                 })],
             )])),
@@ -9828,6 +9863,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         assert_eq!(usage.cpu_median_ms, Some(11));
         assert_eq!(usage.peak_memory_kb, Some(96));
         assert_eq!(usage.peak_memory_growth_kb, Some(96));
+        assert_eq!(usage.process_peak_memory_kb, Some(1_096));
         assert_eq!(usage.absolute_peak_memory_kb, None);
     }
 
@@ -9854,8 +9890,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                 vec![json!({
                     "function": "sample_fns::fibonacci",
                     "samples": [
-                        { "duration_ns": 1000, "cpu_time_ms": 10, "peak_memory_kb": 64 },
-                        { "duration_ns": 2000, "cpu_time_ms": 12, "peak_memory_kb": 72 }
+                        { "duration_ns": 1000, "cpu_time_ms": 10, "peak_memory_kb": 64, "process_peak_memory_kb": 1064 },
+                        { "duration_ns": 2000, "cpu_time_ms": 12, "peak_memory_kb": 72, "process_peak_memory_kb": 1072 }
                     ]
                 })],
             )])),
@@ -9882,6 +9918,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
 
         assert_eq!(usage.peak_memory_kb, Some(72));
         assert_eq!(usage.peak_memory_growth_kb, Some(72));
+        assert_eq!(usage.process_peak_memory_kb, Some(1_072));
         assert_eq!(usage.absolute_peak_memory_kb, Some(1_022_976));
     }
 
@@ -10352,8 +10389,8 @@ mod ci_merge_tests {
 
         assert!(markdown.starts_with("### Benchmark Summary\n"));
         assert!(markdown.contains("- Target: iOS"));
-        assert!(markdown.contains("| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Absolute peak |"));
-        assert!(markdown.contains("| iPhone 13 | ffi_benchmark::bench_fibonacci | 5 | 1 | 0.017ms | 0.085ms | - | - | - | - | - |"));
+        assert!(markdown.contains("| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak | Provider peak |"));
+        assert!(markdown.contains("| iPhone 13 | ffi_benchmark::bench_fibonacci | 5 | 1 | 0.017ms | 0.085ms | - | - | - | - | - | - |"));
         assert!(!markdown.contains("### Device:"));
     }
 
@@ -10604,6 +10641,7 @@ mod ci_merge_tests {
         assert_eq!(resource_usage["cpu_total_ms"], 482);
         assert_eq!(resource_usage["peak_memory_kb"], Value::Null);
         assert_eq!(resource_usage["peak_memory_growth_kb"], Value::Null);
+        assert_eq!(resource_usage["process_peak_memory_kb"], Value::Null);
         assert_eq!(resource_usage["absolute_peak_memory_kb"], Value::Null);
         assert_eq!(resource_usage["total_pss_kb"], 654321);
         assert_eq!(resource_usage["private_dirty_kb"], 321000);
@@ -10668,6 +10706,7 @@ mod ci_merge_tests {
 
         assert_eq!(resource_usage["peak_memory_kb"], Value::Null);
         assert_eq!(resource_usage["peak_memory_growth_kb"], Value::Null);
+        assert_eq!(resource_usage["process_peak_memory_kb"], Value::Null);
         assert_eq!(resource_usage["absolute_peak_memory_kb"], 249416);
         assert_eq!(resource_usage["cpu_total_ms"], Value::Null);
     }
@@ -10763,6 +10802,7 @@ mod resource_usage_tests {
         assert_eq!(usage.java_heap_kb, Some(512));
         assert_eq!(usage.peak_memory_kb, None);
         assert_eq!(usage.peak_memory_growth_kb, None);
+        assert_eq!(usage.process_peak_memory_kb, None);
         assert_eq!(usage.absolute_peak_memory_kb, None);
     }
 
@@ -10787,6 +10827,7 @@ mod resource_usage_tests {
         let usage = extract_benchmark_resource_usage(&entry, Some(&perf)).unwrap();
         assert_eq!(usage.peak_memory_kb, None);
         assert_eq!(usage.peak_memory_growth_kb, None);
+        assert_eq!(usage.process_peak_memory_kb, None);
         assert_eq!(usage.absolute_peak_memory_kb, Some(10240));
         assert_eq!(usage.total_pss_kb, Some(4096));
     }
@@ -10796,6 +10837,7 @@ mod resource_usage_tests {
         let entry = json!({
             "resources": {
                 "peak_memory_kb": 171556,
+                "process_peak_memory_kb": 1477787,
                 "total_pss_kb": 1477787,
                 "private_dirty_kb": 1462460,
                 "native_heap_kb": 532000,
@@ -10817,6 +10859,7 @@ mod resource_usage_tests {
 
         assert_eq!(usage.peak_memory_growth_kb, Some(171_556));
         assert_eq!(usage.peak_memory_kb, Some(171_556));
+        assert_eq!(usage.process_peak_memory_kb, Some(1_477_787));
         assert_eq!(usage.absolute_peak_memory_kb, Some(1_680_026));
         assert_eq!(usage.total_pss_kb, Some(1_477_787));
         assert_eq!(usage.private_dirty_kb, Some(1_462_460));
@@ -10838,6 +10881,7 @@ mod resource_usage_tests {
             cpu_median_ms: Some(125),
             peak_memory_kb: Some(8192),
             peak_memory_growth_kb: Some(8192),
+            process_peak_memory_kb: Some(12288),
             absolute_peak_memory_kb: Some(16384),
             total_pss_kb: Some(4096),
             private_dirty_kb: Some(2048),
@@ -10852,6 +10896,7 @@ mod resource_usage_tests {
         assert_eq!(deserialized.cpu_median_ms, Some(125));
         assert_eq!(deserialized.peak_memory_kb, Some(8192));
         assert_eq!(deserialized.peak_memory_growth_kb, Some(8192));
+        assert_eq!(deserialized.process_peak_memory_kb, Some(12288));
         assert_eq!(deserialized.absolute_peak_memory_kb, Some(16384));
         assert_eq!(deserialized.total_pss_kb, Some(4096));
         assert_eq!(deserialized.private_dirty_kb, Some(2048));
@@ -10862,6 +10907,7 @@ mod resource_usage_tests {
         assert!(!json_str.contains("java_heap_kb"));
         assert!(json_str.contains("peak_memory_kb"));
         assert!(json_str.contains("peak_memory_growth_kb"));
+        assert!(json_str.contains("process_peak_memory_kb"));
         assert!(json_str.contains("absolute_peak_memory_kb"));
     }
 }

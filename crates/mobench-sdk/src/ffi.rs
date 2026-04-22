@@ -82,6 +82,8 @@ pub struct BenchSampleFfi {
     /// This is the legacy wire field for baseline-adjusted growth, not
     /// absolute process or device peak memory.
     pub peak_memory_kb: Option<u64>,
+    /// Peak resident memory of the benchmark process during the measured iteration.
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 impl From<crate::BenchSample> for BenchSampleFfi {
@@ -90,6 +92,7 @@ impl From<crate::BenchSample> for BenchSampleFfi {
             duration_ns: sample.duration_ns,
             cpu_time_ms: sample.cpu_time_ms,
             peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -100,6 +103,7 @@ impl From<BenchSampleFfi> for crate::BenchSample {
             duration_ns: sample.duration_ns,
             cpu_time_ms: sample.cpu_time_ms,
             peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -277,11 +281,13 @@ mod tests {
             duration_ns: 12345,
             cpu_time_ms: Some(12),
             peak_memory_kb: Some(48),
+            process_peak_memory_kb: Some(1024),
         };
         let ffi: BenchSampleFfi = sdk_sample.into();
         assert_eq!(ffi.duration_ns, 12345);
         assert_eq!(ffi.cpu_time_ms, Some(12));
         assert_eq!(ffi.peak_memory_kb, Some(48));
+        assert_eq!(ffi.process_peak_memory_kb, Some(1024));
     }
 
     #[test]
@@ -297,11 +303,13 @@ mod tests {
                     duration_ns: 100,
                     cpu_time_ms: Some(3),
                     peak_memory_kb: Some(8),
+                    process_peak_memory_kb: Some(108),
                 },
                 crate::BenchSample {
                     duration_ns: 200,
                     cpu_time_ms: Some(5),
                     peak_memory_kb: Some(13),
+                    process_peak_memory_kb: Some(113),
                 },
             ],
             phases: vec![crate::SemanticPhase {
@@ -322,6 +330,7 @@ mod tests {
         assert_eq!(ffi.samples[0].duration_ns, 100);
         assert_eq!(ffi.samples[0].cpu_time_ms, Some(3));
         assert_eq!(ffi.samples[0].peak_memory_kb, Some(8));
+        assert_eq!(ffi.samples[0].process_peak_memory_kb, Some(108));
         assert_eq!(ffi.phases.len(), 1);
         assert_eq!(ffi.phases[0].name, "prove");
         assert_eq!(ffi.timeline.len(), 1);

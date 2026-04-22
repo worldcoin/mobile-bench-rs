@@ -175,6 +175,9 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             if let peakMemoryKb = sample.peakMemoryKb {
                 sampleJson["peak_memory_kb"] = peakMemoryKb
             }
+            if let processPeakMemoryKb = sample.processPeakMemoryKb {
+                sampleJson["process_peak_memory_kb"] = processPeakMemoryKb
+            }
             return sampleJson
         }
         json["samples"] = samplesArray
@@ -221,6 +224,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
 
         let cpuSamplesMs = report.samples.compactMap(\.cpuTimeMs)
         let peakSamplesKb = report.samples.compactMap(\.peakMemoryKb)
+        let processPeakSamplesKb = report.samples.compactMap(\.processPeakMemoryKb)
 
         func median(_ values: [UInt64]) -> UInt64 {
             let sorted = values.sorted()
@@ -244,6 +248,10 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         }
         if let peakMemoryKb = peakSamplesKb.max() {
             resources["peak_memory_kb"] = peakMemoryKb
+            resources["peak_memory_growth_kb"] = peakMemoryKb
+        }
+        if let processPeakMemoryKb = processPeakSamplesKb.max() {
+            resources["process_peak_memory_kb"] = processPeakMemoryKb
         }
         json["resources"] = resources
 

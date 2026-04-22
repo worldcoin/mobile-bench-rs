@@ -140,6 +140,7 @@ class MainActivity : AppCompatActivity() {
             sampleJson.put("duration_ns", sample.durationNs.toLong())
             sample.cpuTimeMs?.let { sampleJson.put("cpu_time_ms", it.toLong()) }
             sample.peakMemoryKb?.let { sampleJson.put("peak_memory_kb", it.toLong()) }
+            sample.processPeakMemoryKb?.let { sampleJson.put("process_peak_memory_kb", it.toLong()) }
             samples.put(sampleJson)
         }
         json.put("samples", samples)
@@ -166,6 +167,7 @@ class MainActivity : AppCompatActivity() {
 
         val cpuSamplesMs = report.samples.mapNotNull { it.cpuTimeMs?.toLong() }
         val peakSamplesKb = report.samples.mapNotNull { it.peakMemoryKb?.toLong() }
+        val processPeakSamplesKb = report.samples.mapNotNull { it.processPeakMemoryKb?.toLong() }
         val memInfo = Debug.MemoryInfo()
         Debug.getMemoryInfo(memInfo)
         val resources = JSONObject()
@@ -181,6 +183,9 @@ class MainActivity : AppCompatActivity() {
             val peakGrowthKb = peakSamplesKb.maxOrNull() ?: 0L
             resources.put("peak_memory_kb", peakGrowthKb)
             resources.put("peak_memory_growth_kb", peakGrowthKb)
+        }
+        if (processPeakSamplesKb.isNotEmpty()) {
+            resources.put("process_peak_memory_kb", processPeakSamplesKb.maxOrNull() ?: 0L)
         }
         resources.put("total_pss_kb", memInfo.totalPss)
         resources.put("private_dirty_kb", memInfo.totalPrivateDirty)

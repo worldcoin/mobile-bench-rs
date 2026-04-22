@@ -18,6 +18,7 @@ pub struct BenchSample {
     pub duration_ns: u64,
     pub cpu_time_ms: Option<u64>,
     pub peak_memory_kb: Option<u64>,
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 /// Flat semantic phase timing captured during measured iterations.
@@ -79,6 +80,7 @@ impl From<mobench_sdk::timing::BenchSample> for BenchSample {
             duration_ns: sample.duration_ns,
             cpu_time_ms: sample.cpu_time_ms,
             peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }

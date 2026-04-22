@@ -265,14 +265,15 @@ cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 
 `summary.md` renders one top-level table with `Wall mean / iter`, `Wall total`,
 `CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, and
-`Absolute peak`.
+`Process peak`, plus `Provider peak` when provider/session telemetry is present.
 
 `results.csv` includes:
 - `cpu_total_ms`
 - `cpu_median_ms`
 - `peak_memory_kb` (legacy alias for peak growth)
 - `peak_memory_growth_kb`
-- `absolute_peak_memory_kb`
+- `process_peak_memory_kb` (sampled from the benchmark process)
+- `absolute_peak_memory_kb` (provider/session peak, for example BrowserStack)
 
 Blank fields indicate that a resource metric was not available for that benchmark/device row.
 

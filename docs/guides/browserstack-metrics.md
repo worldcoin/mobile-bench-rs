@@ -44,14 +44,14 @@ We recursively download ALL URLs from session JSON, which typically includes:
 - CPU usage (usage_percent)
   - Aggregate statistics: peak, average, min
 - Normalized into run summaries and CI summaries when using `--fetch`
-- Surfaced as summary resource fields such as `cpu_total_ms` and `peak_memory_kb`
+- Surfaced as provider/session resource fields such as `absolute_peak_memory_kb`
 
 **Benchmark-scoped resource metrics (current default):**
-- Each measured iteration can emit `cpu_time_ms` and `peak_memory_kb`
+- Each measured iteration can emit `cpu_time_ms`, `peak_memory_kb`, and `process_peak_memory_kb`
 - `mobench` derives `cpu_median_ms` from measured iterations only
-- `summary.md` renders `CPU median / iter`, `CPU total`, `CPU / wall`, and `Peak memory` in the top-level CI table
-- `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
-- BrowserStack aggregate memory is only used as a fallback when benchmark-scoped peak memory is absent
+- `summary.md` renders `CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, `Process peak`, and `Provider peak` in the top-level CI table
+- `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`, `peak_memory_growth_kb`, `process_peak_memory_kb`, and `absolute_peak_memory_kb`
+- BrowserStack aggregate memory is preserved separately as provider/session telemetry and does not override benchmark process memory
 
 ### ⚠️ What We do not currently capture
 

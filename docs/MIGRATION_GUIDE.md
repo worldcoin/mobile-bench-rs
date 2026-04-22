@@ -81,7 +81,7 @@ jobs:
 
 - `summary.json`, `summary.md`, and `results.csv` remain the stable required outputs.
 - `plots/*.svg` is additive and only appears when local plot rendering is enabled and a Python + Matplotlib runtime is available, or when `--plots require` is used successfully.
-- `summary.md` now renders a single top-level CI table with `Wall mean / iter`, `Wall total`, `CPU median / iter`, `CPU total`, `CPU / wall`, and `Peak memory`.
+- `summary.md` now renders a single top-level CI table with `Wall mean / iter`, `Wall total`, `CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, `Process peak`, and `Provider peak`.
 - The reusable workflow attempts to compare against the latest successful default-branch run by downloading its per-platform `summary.json` artifacts before calling `ci check-run`.
 
 ## Compatibility Notes
@@ -96,7 +96,8 @@ versioned schemas and documenting the compatibility impact in `RELEASE_NOTES.md`
 
 - `summary.md` now renders a flat per-device table instead of per-device sections
 - CPU values in that table are shown as `CPU median / iter`, `CPU total`, and `CPU / wall`
-- `results.csv` now includes `cpu_total_ms`, `cpu_median_ms`, and `peak_memory_kb`
+- `peak_memory_kb` remains the legacy baseline-adjusted growth field
+- `results.csv` now includes `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`, `peak_memory_growth_kb`, `process_peak_memory_kb`, and `absolute_peak_memory_kb`
 - missing resource values are left blank in CSV output
 
 Any change to required output files or metadata keys requires updating the

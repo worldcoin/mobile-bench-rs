@@ -209,6 +209,13 @@ pub struct BenchSample {
     /// iteration, not absolute process or device peak memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_memory_kb: Option<u64>,
+
+    /// Peak resident memory of the benchmark process during the measured iteration.
+    ///
+    /// This is sampled from the current process while the measured closure is
+    /// running. Unlike `peak_memory_kb`, it is not baseline-adjusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 impl BenchSample {
@@ -217,6 +224,7 @@ impl BenchSample {
             duration_ns: duration.as_nanos() as u64,
             cpu_time_ms: resources.cpu_time_ms,
             peak_memory_kb: resources.peak_memory_kb,
+            process_peak_memory_kb: resources.process_peak_memory_kb,
         }
     }
 }
@@ -415,6 +423,18 @@ impl BenchReport {
         self.peak_memory_kb()
     }
 
+    /// Returns the maximum process resident memory peak in kilobytes.
+    ///
+    /// This reports the current benchmark process peak sampled during measured
+    /// iterations. It excludes BrowserStack/session-level provider memory.
+    #[must_use]
+    pub fn process_peak_memory_kb(&self) -> Option<u64> {
+        self.samples
+            .iter()
+            .filter_map(|sample| sample.process_peak_memory_kb)
+            .max()
+    }
+
     /// Returns a statistical summary of the benchmark results.
     #[must_use]
     pub fn summary(&self) -> BenchSummary {
@@ -437,6 +457,7 @@ impl BenchReport {
 struct IterationResourceUsage {
     cpu_time_ms: Option<u64>,
     peak_memory_kb: Option<u64>,
+    process_peak_memory_kb: Option<u64>,
 }
 
 fn instant_offset_ns(origin: Instant, instant: Instant) -> u64 {
@@ -636,12 +657,14 @@ impl ResourceMonitor for DefaultResourceMonitor {
             .zip(current_process_cpu_time())
             .and_then(|(start, end)| process_cpu_delta_ms(start, end));
 
+        let memory_peak = token.memory_sampler.and_then(MemoryPeakSampler::stop);
+
         IterationResourceUsage {
             cpu_time_ms,
-            peak_memory_kb: token
-                .memory_sampler
-                .and_then(MemoryPeakSampler::stop)
-                .filter(|value| *value > 0),
+            peak_memory_kb: memory_peak
+                .and_then(|peak| (peak.growth_kb > 0).then_some(peak.growth_kb)),
+            process_peak_memory_kb: memory_peak
+                .and_then(|peak| (peak.process_peak_kb > 0).then_some(peak.process_peak_kb)),
         }
     }
 }
@@ -694,6 +717,12 @@ fn current_process_cpu_time() -> Option<ProcessCpuTimeSnapshot> {
 
 const MEMORY_SAMPLER_INTERVAL: Duration = Duration::from_millis(1);
 type MemoryReader = Arc<dyn Fn() -> Option<u64> + Send + Sync + 'static>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessMemoryPeak {
+    growth_kb: u64,
+    process_peak_kb: u64,
+}
 
 struct MemoryPeakSampler {
     baseline_kb: u64,
@@ -772,11 +801,14 @@ impl MemoryPeakSampler {
         })
     }
 
-    fn stop(self) -> Option<u64> {
+    fn stop(self) -> Option<ProcessMemoryPeak> {
         self.stop_flag.store(true, Ordering::Release);
         let _ = self.handle.join();
         let peak_kb = self.peak_kb.load(Ordering::Acquire);
-        Some(peak_kb.saturating_sub(self.baseline_kb))
+        Some(ProcessMemoryPeak {
+            growth_kb: peak_kb.saturating_sub(self.baseline_kb),
+            process_peak_kb: peak_kb,
+        })
     }
 }
 
@@ -1565,6 +1597,7 @@ mod tests {
                 duration_ns: 1_000_000,
                 cpu_time_ms: Some(42),
                 peak_memory_kb: Some(512),
+                process_peak_memory_kb: Some(1536),
             }],
             phases: vec![SemanticPhase {
                 name: "prove".to_string(),
@@ -1580,6 +1613,7 @@ mod tests {
 
         let json = serde_json::to_string(&report).unwrap();
         assert!(json.contains("\"peak_memory_kb\""));
+        assert!(json.contains("\"process_peak_memory_kb\""));
         assert!(!json.contains("peak_memory_growth_kb"));
         let restored: BenchReport = serde_json::from_str(&json).unwrap();
 
@@ -1587,6 +1621,7 @@ mod tests {
         assert_eq!(restored.samples.len(), 1);
         assert_eq!(restored.samples[0].cpu_time_ms, Some(42));
         assert_eq!(restored.samples[0].peak_memory_kb, Some(512));
+        assert_eq!(restored.samples[0].process_peak_memory_kb, Some(1536));
         assert_eq!(restored.phases.len(), 1);
         assert_eq!(restored.phases[0].name, "prove");
         assert!(restored.phases[0].duration_ns > 0);
@@ -1649,10 +1684,12 @@ mod tests {
             IterationResourceUsage {
                 cpu_time_ms: Some(11),
                 peak_memory_kb: Some(32),
+                ..Default::default()
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(17),
                 peak_memory_kb: Some(64),
+                ..Default::default()
             },
         ]);
         let mut calls = 0_u32;
@@ -1684,10 +1721,12 @@ mod tests {
             IterationResourceUsage {
                 cpu_time_ms: Some(5),
                 peak_memory_kb: Some(12),
+                ..Default::default()
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(7),
                 peak_memory_kb: Some(18),
+                ..Default::default()
             },
         ]);
 
@@ -1722,6 +1761,7 @@ mod tests {
         let mut monitor = FakeResourceMonitor::new(vec![IterationResourceUsage {
             cpu_time_ms: Some(42),
             peak_memory_kb: Some(24),
+            ..Default::default()
         }]);
 
         let report = run_closure_with_monitor(spec, &mut monitor, || Ok(())).unwrap();
@@ -1738,14 +1778,17 @@ mod tests {
             IterationResourceUsage {
                 cpu_time_ms: Some(19),
                 peak_memory_kb: Some(10),
+                ..Default::default()
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(7),
                 peak_memory_kb: Some(30),
+                ..Default::default()
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(11),
                 peak_memory_kb: Some(20),
+                ..Default::default()
             },
         ]);
 
@@ -1762,10 +1805,12 @@ mod tests {
             IterationResourceUsage {
                 cpu_time_ms: Some(3),
                 peak_memory_kb: Some(48),
+                process_peak_memory_kb: Some(1_048),
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(4),
                 peak_memory_kb: Some(96),
+                process_peak_memory_kb: Some(1_096),
             },
         ]);
 
@@ -1788,6 +1833,7 @@ mod tests {
         );
         assert_eq!(report.peak_memory_kb(), Some(96));
         assert_eq!(report.peak_memory_growth_kb(), report.peak_memory_kb());
+        assert_eq!(report.process_peak_memory_kb(), Some(1_096));
     }
 
     #[test]
@@ -1811,9 +1857,15 @@ mod tests {
         });
 
         let sampler = MemoryPeakSampler::start_with_reader(reader).expect("sampler");
-        let peak_kb = sampler.stop().expect("peak memory");
+        let peak = sampler.stop().expect("peak memory");
 
-        assert_eq!(peak_kb, 40);
+        assert_eq!(
+            peak,
+            ProcessMemoryPeak {
+                growth_kb: 40,
+                process_peak_kb: 140,
+            }
+        );
     }
 
     #[test]

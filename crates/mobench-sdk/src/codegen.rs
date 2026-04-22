@@ -166,6 +166,9 @@ pub struct BenchSpec {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchSample {
     pub duration_ns: u64,
+    pub cpu_time_ms: Option<u64>,
+    pub peak_memory_kb: Option<u64>,
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -228,6 +231,9 @@ impl From<mobench_sdk::BenchSample> for BenchSample {
     fn from(sample: mobench_sdk::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
