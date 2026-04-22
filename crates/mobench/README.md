@@ -272,7 +272,7 @@ cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 - `cpu_median_ms`
 - `peak_memory_kb` (legacy alias for peak growth)
 - `peak_memory_growth_kb`
-- `process_peak_memory_kb` (benchmark app/process peak, with Android harness sampling as a fallback)
+- `process_peak_memory_kb` (Android uses an isolated benchmark worker process; other targets use the benchmark app process)
 - `absolute_peak_memory_kb` (provider/session peak, for example BrowserStack)
 
 Blank fields indicate that a resource metric was not available for that benchmark/device row.

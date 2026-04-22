@@ -1463,6 +1463,13 @@ mod tests {
         );
         assert!(android.contains("optionalProcessPeakMemoryKb(sample)"));
         assert!(android.contains("ProcessMemorySampler"));
+        assert!(android.contains("class BenchmarkWorkerService : Service()"));
+        assert!(android.contains("memory_process\", \"isolated_worker\""));
+
+        let android_manifest =
+            include_str!("../templates/android/app/src/main/AndroidManifest.xml");
+        assert!(android_manifest.contains("android:name=\".BenchmarkWorkerService\""));
+        assert!(android_manifest.contains("android:process=\":mobench_worker\""));
 
         let ios =
             include_str!("../templates/ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift.template");
