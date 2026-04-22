@@ -48,6 +48,7 @@ We recursively download ALL URLs from session JSON, which typically includes:
 
 **Benchmark-scoped resource metrics (current default):**
 - Each measured iteration can emit `cpu_time_ms`, `peak_memory_kb`, and `process_peak_memory_kb`
+- Android runs also sample the benchmark app process PSS around `runBenchmark` as a fallback when older UniFFI bindings do not expose per-sample process peaks
 - `mobench` derives `cpu_median_ms` from measured iterations only
 - `summary.md` renders `CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, `Process peak`, and `Provider peak` in the top-level CI table
 - `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`, `peak_memory_growth_kb`, `process_peak_memory_kb`, and `absolute_peak_memory_kb`

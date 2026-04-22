@@ -44,12 +44,19 @@ class MainActivity : AppCompatActivity() {
                 iterations = params.iterations,
                 warmup = params.warmup
             )
-            val report = runBenchmark(spec)
+            val processMemorySampler = ProcessMemorySampler()
+            var runProcessPeakMemoryKb: Long?
+            processMemorySampler.start()
+            val report = try {
+                runBenchmark(spec)
+            } finally {
+                runProcessPeakMemoryKb = processMemorySampler.stop()
+            }
             // Debug: Log first sample's raw nanoseconds
             if (report.samples.isNotEmpty()) {
                 android.util.Log.d("MainActivity", "First sample duration_ns: ${report.samples[0].durationNs}")
             }
-            logBenchReport(report)
+            logBenchReport(report, runProcessPeakMemoryKb)
             formatBenchReport(report)
         } catch (e: BenchException) {
             // Generic handler for all benchmark errors (InvalidIterations, UnknownFunction, etc.)
@@ -67,6 +74,63 @@ class MainActivity : AppCompatActivity() {
         android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for capture output...")
         Thread.sleep(5000)
         android.util.Log.i("BenchRunner", "Display hold complete")
+    }
+
+    private inner class ProcessMemorySampler(private val sampleIntervalMs: Long = 10L) {
+        @Volatile private var running = false
+        @Volatile private var peakKb = 0L
+        private var samplerThread: Thread? = null
+
+        fun start() {
+            if (running) {
+                return
+            }
+
+            running = true
+            recordCurrent()
+            samplerThread = Thread {
+                while (running) {
+                    recordCurrent()
+                    try {
+                        Thread.sleep(sampleIntervalMs)
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+                recordCurrent()
+            }.apply {
+                name = "mobench-process-memory-sampler"
+                isDaemon = true
+                start()
+            }
+        }
+
+        fun stop(): Long? {
+            running = false
+            try {
+                samplerThread?.join(sampleIntervalMs * 2)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            recordCurrent()
+            return peakKb.takeIf { it > 0L }
+        }
+
+        @Synchronized
+        private fun recordCurrent() {
+            currentProcessPssKb()?.let { observedKb ->
+                if (observedKb > peakKb) {
+                    peakKb = observedKb
+                }
+            }
+        }
+    }
+
+    private fun currentProcessPssKb(): Long? {
+        val memInfo = Debug.MemoryInfo()
+        Debug.getMemoryInfo(memInfo)
+        return memInfo.totalPss.toLong().takeIf { it > 0L }
     }
 
     private fun median(values: List<Long>): Long {
@@ -121,7 +185,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun logBenchReport(report: BenchReport) {
+    private fun logBenchReport(report: BenchReport, runProcessPeakMemoryKb: Long?) {
         val json = JSONObject()
         val spec = JSONObject()
         spec.put("name", report.spec.name)
@@ -140,7 +204,7 @@ class MainActivity : AppCompatActivity() {
             sampleJson.put("duration_ns", sample.durationNs.toLong())
             sample.cpuTimeMs?.let { sampleJson.put("cpu_time_ms", it.toLong()) }
             sample.peakMemoryKb?.let { sampleJson.put("peak_memory_kb", it.toLong()) }
-            sample.processPeakMemoryKb?.let { sampleJson.put("process_peak_memory_kb", it.toLong()) }
+            optionalProcessPeakMemoryKb(sample)?.let { sampleJson.put("process_peak_memory_kb", it) }
             samples.put(sampleJson)
         }
         json.put("samples", samples)
@@ -167,7 +231,7 @@ class MainActivity : AppCompatActivity() {
 
         val cpuSamplesMs = report.samples.mapNotNull { it.cpuTimeMs?.toLong() }
         val peakSamplesKb = report.samples.mapNotNull { it.peakMemoryKb?.toLong() }
-        val processPeakSamplesKb = report.samples.mapNotNull { it.processPeakMemoryKb?.toLong() }
+        val processPeakSamplesKb = report.samples.mapNotNull { optionalProcessPeakMemoryKb(it) }
         val memInfo = Debug.MemoryInfo()
         Debug.getMemoryInfo(memInfo)
         val resources = JSONObject()
@@ -184,8 +248,9 @@ class MainActivity : AppCompatActivity() {
             resources.put("peak_memory_kb", peakGrowthKb)
             resources.put("peak_memory_growth_kb", peakGrowthKb)
         }
-        if (processPeakSamplesKb.isNotEmpty()) {
-            resources.put("process_peak_memory_kb", processPeakSamplesKb.maxOrNull() ?: 0L)
+        val processPeakMemoryKb = processPeakSamplesKb.maxOrNull() ?: runProcessPeakMemoryKb
+        processPeakMemoryKb?.let {
+            resources.put("process_peak_memory_kb", it)
         }
         resources.put("total_pss_kb", memInfo.totalPss)
         resources.put("private_dirty_kb", memInfo.totalPrivateDirty)
@@ -195,6 +260,45 @@ class MainActivity : AppCompatActivity() {
         json.put("resources", resources)
 
         android.util.Log.i("BenchRunner", "BENCH_JSON ${json}")
+    }
+
+    private fun optionalProcessPeakMemoryKb(sample: Any): Long? {
+        return optionalNumericProperty(sample, "processPeakMemoryKb", "getProcessPeakMemoryKb")
+    }
+
+    private fun optionalNumericProperty(instance: Any, propertyName: String, getterName: String): Long? {
+        try {
+            val getter = instance.javaClass.methods.firstOrNull {
+                it.name == getterName && it.parameterTypes.isEmpty()
+            }
+            coerceToLong(getter?.invoke(instance))?.let { return it }
+        } catch (e: Exception) {
+            android.util.Log.d("BenchRunner", "Optional property getter unavailable: $propertyName")
+        }
+
+        try {
+            val field = instance.javaClass.declaredFields.firstOrNull { it.name == propertyName }
+            if (field != null) {
+                field.isAccessible = true
+                coerceToLong(field.get(instance))?.let { return it }
+            }
+        } catch (e: Exception) {
+            android.util.Log.d("BenchRunner", "Optional property field unavailable: $propertyName")
+        }
+
+        return null
+    }
+
+    private fun coerceToLong(value: Any?): Long? {
+        return when (value) {
+            null -> null
+            is Long -> value
+            is Int -> value.toLong()
+            is Short -> value.toLong()
+            is Byte -> value.toLong()
+            is Number -> value.toLong()
+            else -> value.toString().toLongOrNull()
+        }
     }
 
     private fun resolveBenchParams(): BenchParams {

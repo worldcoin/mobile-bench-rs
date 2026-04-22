@@ -1450,6 +1450,35 @@ mod tests {
     }
 
     #[test]
+    fn test_mobile_templates_read_process_peak_memory_compatibly() {
+        let android =
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template");
+        assert!(
+            !android.contains("sample.processPeakMemoryKb"),
+            "Android template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(
+            !android.contains("it.processPeakMemoryKb"),
+            "Android template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(android.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(android.contains("ProcessMemorySampler"));
+
+        let ios =
+            include_str!("../templates/ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift.template");
+        assert!(
+            !ios.contains("sample.processPeakMemoryKb"),
+            "iOS template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(
+            !ios.contains(r"\.processPeakMemoryKb"),
+            "iOS template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(ios.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(ios.contains("compactMap { optionalProcessPeakMemoryKb($0) }"));
+    }
+
+    #[test]
     fn test_validate_no_unreplaced_placeholders() {
         // Should pass with no placeholders
         assert!(validate_no_unreplaced_placeholders("hello world", Path::new("test.txt")).is_ok());

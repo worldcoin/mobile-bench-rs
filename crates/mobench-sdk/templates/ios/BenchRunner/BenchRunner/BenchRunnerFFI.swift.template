@@ -175,7 +175,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             if let peakMemoryKb = sample.peakMemoryKb {
                 sampleJson["peak_memory_kb"] = peakMemoryKb
             }
-            if let processPeakMemoryKb = sample.processPeakMemoryKb {
+            if let processPeakMemoryKb = optionalProcessPeakMemoryKb(sample) {
                 sampleJson["process_peak_memory_kb"] = processPeakMemoryKb
             }
             return sampleJson
@@ -224,7 +224,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
 
         let cpuSamplesMs = report.samples.compactMap(\.cpuTimeMs)
         let peakSamplesKb = report.samples.compactMap(\.peakMemoryKb)
-        let processPeakSamplesKb = report.samples.compactMap(\.processPeakMemoryKb)
+        let processPeakSamplesKb = report.samples.compactMap { optionalProcessPeakMemoryKb($0) }
 
         func median(_ values: [UInt64]) -> UInt64 {
             let sorted = values.sorted()
@@ -263,6 +263,44 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             print("[BenchRunner] ERROR: Failed to serialize JSON report: \(error)")
             return "{}"
         }
+    }
+
+    private static func optionalProcessPeakMemoryKb(_ sample: Any) -> UInt64? {
+        return optionalUInt64Property(sample, named: "processPeakMemoryKb")
+    }
+
+    private static func optionalUInt64Property(_ instance: Any, named propertyName: String) -> UInt64? {
+        for child in Mirror(reflecting: instance).children where child.label == propertyName {
+            return coerceToUInt64(child.value)
+        }
+        return nil
+    }
+
+    private static func coerceToUInt64(_ value: Any) -> UInt64? {
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            guard let child = mirror.children.first else {
+                return nil
+            }
+            return coerceToUInt64(child.value)
+        }
+
+        if let value = value as? UInt64 {
+            return value
+        }
+        if let value = value as? UInt32 {
+            return UInt64(value)
+        }
+        if let value = value as? UInt {
+            return UInt64(value)
+        }
+        if let value = value as? Int64, value >= 0 {
+            return UInt64(value)
+        }
+        if let value = value as? Int, value >= 0 {
+            return UInt64(value)
+        }
+        return nil
     }
 
     /// Generates a JSON error report
