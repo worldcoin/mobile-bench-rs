@@ -1,17 +1,19 @@
 package {{PACKAGE_NAME}}
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Debug
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.ResultReceiver
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.{{UNIFFI_NAMESPACE}}.BenchException
@@ -32,8 +34,13 @@ private const val RESULT_DISPLAY_EXTRA = "bench_display"
 private const val RESULT_ERROR_EXTRA = "bench_error"
 private const val RESULT_OK = 1
 private const val RESULT_ERROR = 2
+private const val FOREGROUND_NOTIFICATION_ID = 1001
+private const val FOREGROUND_CHANNEL_ID = "mobench_benchmark"
+private const val FOREGROUND_CHANNEL_NAME = "Mobench benchmark"
 
 class MainActivity : AppCompatActivity() {
+
+    @Volatile private var benchmarkComplete = false
 
     private data class BenchParams(
         val function: String,
@@ -49,25 +56,23 @@ class MainActivity : AppCompatActivity() {
         resultText?.text = "Running benchmark..."
 
         val params = resolveBenchParams()
-        val resultDisplay = AtomicReference("Benchmark worker returned no result")
-        val resultLatch = CountDownLatch(1)
-        val resultReceiver = object : ResultReceiver(null) {
+        val resultReceiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
                     ?: resultData?.getString(RESULT_ERROR_EXTRA)
                     ?: "Benchmark worker returned no result"
-                resultDisplay.set(display)
+                resultText?.text = display
+                benchmarkComplete = true
 
                 if (resultCode == RESULT_OK) {
                     android.util.Log.i("BenchRunner", "Benchmark worker completed")
                 } else {
                     android.util.Log.e("BenchRunner", display)
                 }
-                resultLatch.countDown()
             }
         }
 
-        val display = try {
+        try {
             val intent = Intent(this, BenchmarkWorkerService::class.java).apply {
                 action = RUN_BENCHMARK_ACTION
                 putExtra(FUNCTION_EXTRA, params.function)
@@ -75,31 +80,20 @@ class MainActivity : AppCompatActivity() {
                 putExtra(WARMUP_EXTRA, params.warmup.toInt())
                 putExtra(RESULT_RECEIVER_EXTRA, resultReceiver)
             }
-            startService(intent)
-
-            val completed = resultLatch.await(30, TimeUnit.MINUTES)
-            if (completed) {
-                resultDisplay.get()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
             } else {
-                android.util.Log.e("BenchRunner", "Timed out waiting for benchmark worker result")
-                "Timed out waiting for benchmark worker result"
+                startService(intent)
             }
         } catch (e: Exception) {
             android.util.Log.e("BenchRunner", "Failed to run benchmark worker", e)
-            "Failed to run benchmark worker: ${e.message}"
+            resultText?.text = "Failed to run benchmark worker: ${e.message}"
+            benchmarkComplete = true
         }
+    }
 
-        resultText?.text = display
-
-        // Keep the report visible briefly so local smoke runs and remote automation
-        // have a stable window to read the results.
-        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for capture output...")
-        try {
-            Thread.sleep(5000)
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
-        android.util.Log.i("BenchRunner", "Display hold complete")
+    fun isBenchmarkComplete(): Boolean {
+        return benchmarkComplete
     }
 
     private fun resolveBenchParams(): BenchParams {
@@ -222,20 +216,70 @@ class BenchmarkWorkerService : Service() {
             warmup = intent.getIntExtra(WARMUP_EXTRA, DEFAULT_WARMUP.toInt()).toUInt(),
         )
 
+        startBenchmarkForeground()
+
         Thread {
-            val result = runBenchmarkInWorker(params)
-            val bundle = Bundle().apply {
-                putString(RESULT_DISPLAY_EXTRA, result.displayText)
-                result.errorMessage?.let { putString(RESULT_ERROR_EXTRA, it) }
+            try {
+                val result = runBenchmarkInWorker(params)
+                val bundle = Bundle().apply {
+                    putString(RESULT_DISPLAY_EXTRA, result.displayText)
+                    result.errorMessage?.let { putString(RESULT_ERROR_EXTRA, it) }
+                }
+                resultReceiver?.send(if (result.errorMessage == null) RESULT_OK else RESULT_ERROR, bundle)
+            } finally {
+                stopBenchmarkForeground()
+                stopSelf(startId)
             }
-            resultReceiver?.send(if (result.errorMessage == null) RESULT_OK else RESULT_ERROR, bundle)
-            stopSelf(startId)
         }.apply {
             name = "mobench-benchmark-worker"
             start()
         }
 
         return START_NOT_STICKY
+    }
+
+    private fun startBenchmarkForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(
+                NotificationChannel(
+                    FOREGROUND_CHANNEL_ID,
+                    FOREGROUND_CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
+        }
+
+        startForeground(FOREGROUND_NOTIFICATION_ID, buildBenchmarkNotification())
+    }
+
+    @Suppress("DEPRECATION")
+    private fun stopBenchmarkForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        } else {
+            stopForeground(true)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun buildBenchmarkNotification(): Notification {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, FOREGROUND_CHANNEL_ID)
+        } else {
+            Notification.Builder(this)
+                .setPriority(Notification.PRIORITY_LOW)
+        }
+
+        return builder
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("Running benchmark")
+            .setContentText("Mobench isolated worker is measuring this run")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .build()
     }
 
     private fun runBenchmarkInWorker(params: BenchParams): WorkerBenchmarkResult {
@@ -301,7 +345,7 @@ private fun Intent.resultReceiverExtra(): ResultReceiver? {
     }
 }
 
-private class ProcessMemorySampler(private val sampleIntervalMs: Long = 250L) {
+private class ProcessMemorySampler(private val sampleIntervalMs: Long = 1000L) {
     @Volatile private var running = false
     @Volatile private var peakKb = 0L
     private var samplerThread: Thread? = null

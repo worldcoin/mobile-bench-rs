@@ -1463,23 +1463,27 @@ mod tests {
         );
         assert!(android.contains("optionalProcessPeakMemoryKb(sample)"));
         assert!(android.contains("ProcessMemorySampler"));
-        assert!(android.contains("sampleIntervalMs: Long = 250L"));
+        assert!(android.contains("sampleIntervalMs: Long = 1000L"));
         assert!(android.contains("/proc/self/smaps_rollup"));
         assert!(android.contains("class BenchmarkWorkerService : Service()"));
-        assert!(android.contains("ResultReceiver(null)"));
-        assert!(android.contains("resultLatch.await(30, TimeUnit.MINUTES)"));
-        assert!(!android.contains("Handler("));
-        assert!(!android.contains("Looper.getMainLooper"));
+        assert!(android.contains("ResultReceiver(Handler(Looper.getMainLooper()))"));
+        assert!(android.contains("startForegroundService(intent)"));
+        assert!(android.contains("startForeground(FOREGROUND_NOTIFICATION_ID"));
+        assert!(android.contains("fun isBenchmarkComplete()"));
+        assert!(!android.contains("resultLatch.await"));
         assert!(android.contains("memory_process\", \"isolated_worker\""));
 
         let android_test = include_str!(
             "../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
         );
-        assert!(!android_test.contains("Thread.sleep"));
-        assert!(!android_test.contains("while ("));
+        assert!(android_test.contains("Log.i(\"BenchRunnerTest\""));
+        assert!(android_test.contains("Thread.sleep(heartbeatMs)"));
+        assert!(android_test.contains("TimeUnit.SECONDS.toMillis(10)"));
+        assert!(android_test.contains("activity.isBenchmarkComplete()"));
 
         let android_manifest =
             include_str!("../templates/android/app/src/main/AndroidManifest.xml");
+        assert!(android_manifest.contains("android.permission.FOREGROUND_SERVICE"));
         assert!(android_manifest.contains("android:name=\".BenchmarkWorkerService\""));
         assert!(android_manifest.contains("android:process=\":mobench_worker\""));
 

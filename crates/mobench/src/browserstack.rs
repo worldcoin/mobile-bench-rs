@@ -69,6 +69,7 @@ pub struct DeviceValidationError {
 }
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
+const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
 
 #[derive(Debug, Clone)]
@@ -242,6 +243,7 @@ impl BrowserStackClient {
             device_logs: true,
             disable_animations: true,
             app_profiling: true,
+            idle_timeout: ESPRESSO_IDLE_TIMEOUT_SECS,
             build_name: self.project.clone(),
         };
 
@@ -1583,6 +1585,7 @@ struct BuildRequest {
     device_logs: bool,
     disable_animations: bool,
     app_profiling: bool,
+    idle_timeout: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
 }
@@ -2589,10 +2592,12 @@ Test completed
             disable_animations: true,
             build_name: Some("mobench".into()),
             app_profiling: true,
+            idle_timeout: ESPRESSO_IDLE_TIMEOUT_SECS,
         };
 
         let value = serde_json::to_value(&request).expect("serialize build request");
         assert_eq!(value["appProfiling"], true);
+        assert_eq!(value["idleTimeout"], ESPRESSO_IDLE_TIMEOUT_SECS);
     }
 
     #[test]
