@@ -277,7 +277,7 @@ private fun Intent.resultReceiverExtra(): ResultReceiver? {
     }
 }
 
-private class ProcessMemorySampler(private val sampleIntervalMs: Long = 10L) {
+private class ProcessMemorySampler(private val sampleIntervalMs: Long = 250L) {
     @Volatile private var running = false
     @Volatile private var peakKb = 0L
     private var samplerThread: Thread? = null
@@ -329,9 +329,44 @@ private class ProcessMemorySampler(private val sampleIntervalMs: Long = 10L) {
 }
 
 private fun currentProcessPssKb(): Long? {
+    readProcMemoryKb("/proc/self/smaps_rollup", "Pss:")?.let { return it }
+    readProcMemoryKb("/proc/self/status", "VmHWM:")?.let { return it }
+    readProcMemoryKb("/proc/self/status", "VmRSS:")?.let { return it }
+
     val memInfo = Debug.MemoryInfo()
-    Debug.getMemoryInfo(memInfo)
-    return memInfo.totalPss.toLong().takeIf { it > 0L }
+    return try {
+        Debug.getMemoryInfo(memInfo)
+        memInfo.totalPss.toLong().takeIf { it > 0L }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Unable to read process memory from Debug.getMemoryInfo", e)
+        null
+    }
+}
+
+private fun readProcMemoryKb(path: String, label: String): Long? {
+    return try {
+        java.io.File(path).bufferedReader().use { reader ->
+            var line: String? = reader.readLine()
+            while (line != null) {
+                if (line.startsWith(label)) {
+                    return@use parseMemoryKb(line)
+                }
+                line = reader.readLine()
+            }
+            null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private fun parseMemoryKb(line: String): Long? {
+    val value = line
+        .substringAfter(':', "")
+        .trim()
+        .split(' ')
+        .firstOrNull { it.isNotBlank() }
+    return value?.toLongOrNull()?.takeIf { it > 0L }
 }
 
 private fun median(values: List<Long>): Long {

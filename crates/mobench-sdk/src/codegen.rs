@@ -1463,6 +1463,8 @@ mod tests {
         );
         assert!(android.contains("optionalProcessPeakMemoryKb(sample)"));
         assert!(android.contains("ProcessMemorySampler"));
+        assert!(android.contains("sampleIntervalMs: Long = 250L"));
+        assert!(android.contains("/proc/self/smaps_rollup"));
         assert!(android.contains("class BenchmarkWorkerService : Service()"));
         assert!(android.contains("memory_process\", \"isolated_worker\""));
 
