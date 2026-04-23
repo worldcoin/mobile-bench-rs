@@ -1466,7 +1466,17 @@ mod tests {
         assert!(android.contains("sampleIntervalMs: Long = 250L"));
         assert!(android.contains("/proc/self/smaps_rollup"));
         assert!(android.contains("class BenchmarkWorkerService : Service()"));
+        assert!(android.contains("ResultReceiver(null)"));
+        assert!(android.contains("resultLatch.await(30, TimeUnit.MINUTES)"));
+        assert!(!android.contains("Handler("));
+        assert!(!android.contains("Looper.getMainLooper"));
         assert!(android.contains("memory_process\", \"isolated_worker\""));
+
+        let android_test = include_str!(
+            "../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
+        );
+        assert!(!android_test.contains("Thread.sleep"));
+        assert!(!android_test.contains("while ("));
 
         let android_manifest =
             include_str!("../templates/android/app/src/main/AndroidManifest.xml");

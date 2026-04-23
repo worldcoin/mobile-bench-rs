@@ -7,7 +7,6 @@ import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.espresso.matcher.ViewMatchers.withText
 import org.hamcrest.Matchers.containsString
-import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -20,20 +19,7 @@ class MainActivityTest {
 
     @Test
     fun showsBenchOutput() {
-        val deadline = System.currentTimeMillis() + 30 * 60 * 1000L
-        var lastError: Throwable? = null
-
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                onView(withId(R.id.result_text))
-                    .check(matches(withText(containsString("Samples"))))
-                return
-            } catch (error: Throwable) {
-                lastError = error
-                Thread.sleep(500)
-            }
-        }
-
-        fail("Timed out waiting for benchmark output containing 'Samples': ${lastError?.message}")
+        onView(withId(R.id.result_text))
+            .check(matches(withText(containsString("Samples"))))
     }
 }

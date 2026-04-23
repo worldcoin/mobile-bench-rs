@@ -5,12 +5,13 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Debug
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.ResultReceiver
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.{{UNIFFI_NAMESPACE}}.BenchException
@@ -48,22 +49,25 @@ class MainActivity : AppCompatActivity() {
         resultText?.text = "Running benchmark..."
 
         val params = resolveBenchParams()
-        val resultReceiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+        val resultDisplay = AtomicReference("Benchmark worker returned no result")
+        val resultLatch = CountDownLatch(1)
+        val resultReceiver = object : ResultReceiver(null) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
                     ?: resultData?.getString(RESULT_ERROR_EXTRA)
                     ?: "Benchmark worker returned no result"
-                resultText?.text = display
+                resultDisplay.set(display)
 
                 if (resultCode == RESULT_OK) {
                     android.util.Log.i("BenchRunner", "Benchmark worker completed")
                 } else {
                     android.util.Log.e("BenchRunner", display)
                 }
+                resultLatch.countDown()
             }
         }
 
-        try {
+        val display = try {
             val intent = Intent(this, BenchmarkWorkerService::class.java).apply {
                 action = RUN_BENCHMARK_ACTION
                 putExtra(FUNCTION_EXTRA, params.function)
@@ -72,10 +76,30 @@ class MainActivity : AppCompatActivity() {
                 putExtra(RESULT_RECEIVER_EXTRA, resultReceiver)
             }
             startService(intent)
+
+            val completed = resultLatch.await(30, TimeUnit.MINUTES)
+            if (completed) {
+                resultDisplay.get()
+            } else {
+                android.util.Log.e("BenchRunner", "Timed out waiting for benchmark worker result")
+                "Timed out waiting for benchmark worker result"
+            }
         } catch (e: Exception) {
-            android.util.Log.e("BenchRunner", "Failed to start benchmark worker", e)
-            resultText?.text = "Failed to start benchmark worker: ${e.message}"
+            android.util.Log.e("BenchRunner", "Failed to run benchmark worker", e)
+            "Failed to run benchmark worker: ${e.message}"
         }
+
+        resultText?.text = display
+
+        // Keep the report visible briefly so local smoke runs and remote automation
+        // have a stable window to read the results.
+        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for capture output...")
+        try {
+            Thread.sleep(5000)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        android.util.Log.i("BenchRunner", "Display hold complete")
     }
 
     private fun resolveBenchParams(): BenchParams {
