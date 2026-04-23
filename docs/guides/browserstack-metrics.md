@@ -38,21 +38,20 @@ We recursively download ALL URLs from session JSON, which typically includes:
 
 **Performance Metrics:**
 - Extracted from device logs (JSON output with `"type": "performance"` or `memory`/`cpu` fields)
-- Enriched from BrowserStack App Profiling v2 when that API returns additional session data
+- Available from BrowserStack App Profiling v2 when that API returns additional session data
 - Memory usage (used_mb, max_mb, available_mb, total_mb)
   - Aggregate statistics: peak, average, min
 - CPU usage (usage_percent)
   - Aggregate statistics: peak, average, min
-- Normalized into run summaries and CI summaries when using `--fetch`
-- Surfaced as provider/session resource fields such as `absolute_peak_memory_kb`
+- Kept out of benchmark resource summaries because it can describe harness/session memory rather than the isolated benchmark worker process
 
 **Benchmark-scoped resource metrics (current default):**
 - Each measured iteration can emit `cpu_time_ms`, `peak_memory_kb`, and `process_peak_memory_kb`
 - Android runs execute the benchmark in an isolated `:mobench_worker` process and report that worker process peak through `process_peak_memory_kb`
 - `mobench` derives `cpu_median_ms` from measured iterations only
-- `summary.md` renders `CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, `Process peak`, and `Provider peak` in the top-level CI table
-- `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`, `peak_memory_growth_kb`, `process_peak_memory_kb`, and `absolute_peak_memory_kb`
-- BrowserStack aggregate memory is preserved separately as provider/session telemetry and does not override benchmark process memory
+- `summary.md` renders `CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, and `Process peak` in the top-level CI table
+- `results.csv` includes `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`, `peak_memory_growth_kb`, and `process_peak_memory_kb`
+- BrowserStack aggregate memory does not override or supplement benchmark process memory
 
 ### ⚠️ What We do not currently capture
 
@@ -76,7 +75,7 @@ JSON payloads. mobench therefore combines two sources when you use `--fetch`:
 
 2. **Log to device logs** in JSON format (see example below)
 
-3. **mobench automatically extracts** them alongside benchmark results and merges in BrowserStack App Profiling v2 data when available
+3. **mobench automatically extracts** benchmark-scoped metrics alongside benchmark results. BrowserStack App Profiling v2 memory is not merged into benchmark resource metrics.
 
 ## BrowserStack limitations
 
