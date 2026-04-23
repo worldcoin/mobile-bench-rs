@@ -610,6 +610,10 @@ fn default_device_info(platform: &str) -> DeviceInfo {
 }
 
 impl ResourceUsage {
+    fn peak_memory_growth_or_legacy_kb(&self) -> Option<u64> {
+        self.peak_memory_growth_kb.or(self.peak_memory_kb)
+    }
+
     fn is_empty(&self) -> bool {
         self.cpu_total_ms.is_none()
             && self.peak_memory_kb.is_none()
@@ -732,7 +736,7 @@ fn platform_has_memory_baseline_gap(platform: &PlatformReport) -> bool {
 
 fn resource_usage_has_memory_baseline_gap(usage: &ResourceUsage) -> bool {
     let peak = usage.process_peak_memory_kb;
-    match (usage.peak_memory_growth_kb, peak) {
+    match (usage.peak_memory_growth_or_legacy_kb(), peak) {
         (Some(growth), Some(peak)) if peak > growth => {
             peak.saturating_sub(growth) >= MEMORY_BASELINE_GAP_MIN_DIFF_KB
                 && peak >= growth.saturating_mul(MEMORY_BASELINE_GAP_RATIO)
@@ -814,7 +818,9 @@ fn render_platform_table(platform: &PlatformReport) -> String {
         if has_resource_usage {
             if let Some(ru) = &bench.resource_usage {
                 row.push(Cell::new(format_cpu_total_ms(ru.cpu_total_ms)));
-                row.push(Cell::new(format_peak_memory(ru.peak_memory_growth_kb)));
+                row.push(Cell::new(format_peak_memory(
+                    ru.peak_memory_growth_or_legacy_kb(),
+                )));
                 row.push(Cell::new(format_peak_memory(ru.process_peak_memory_kb)));
             } else {
                 row.push(Cell::new("—"));
@@ -896,7 +902,7 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
                     row.push_str(&format!(
                         " {} | {} | {} |",
                         format_cpu_total_ms(ru.cpu_total_ms),
-                        format_peak_memory(ru.peak_memory_growth_kb),
+                        format_peak_memory(ru.peak_memory_growth_or_legacy_kb()),
                         format_peak_memory(ru.process_peak_memory_kb),
                     ));
                 } else {
@@ -1408,6 +1414,45 @@ mod tests {
         assert!(output.contains("638.99 MB"));
         assert!(!output.contains("CPU %"));
         assert!(!output.contains("RAM MB"));
+    }
+
+    #[test]
+    fn test_render_markdown_uses_legacy_peak_memory_as_growth_fallback() {
+        let report: SummarizeReport = serde_json::from_value(json!({
+            "platforms": [{
+                "platform": "android",
+                "device": {
+                    "name": "Google Pixel 8",
+                    "os": "Android",
+                    "os_version": "14"
+                },
+                "benchmarks": [{
+                    "name": "bench_nullifier_proving_only",
+                    "label": "bench nullifier proving only",
+                    "timing": {
+                        "avg_ms": 1204.5,
+                        "median_ms": 1198.0,
+                        "best_ms": 1180.2,
+                        "worst_ms": 1298.1,
+                        "p95_ms": 1290.0
+                    },
+                    "resource_usage": {
+                        "cpu_total_ms": 1482,
+                        "peak_memory_kb": 654321,
+                        "process_peak_memory_kb": 1477787
+                    }
+                }],
+                "iterations": 30,
+                "warmup": 5
+            }]
+        }))
+        .unwrap();
+
+        let output = render_markdown(&report);
+
+        assert!(output.contains("Peak growth"));
+        assert!(output.contains("638.99 MB"));
+        assert!(output.contains("1443.15 MB"));
     }
 
     #[test]

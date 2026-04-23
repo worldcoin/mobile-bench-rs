@@ -1484,7 +1484,9 @@ mod tests {
         let android_manifest =
             include_str!("../templates/android/app/src/main/AndroidManifest.xml");
         assert!(android_manifest.contains("android.permission.FOREGROUND_SERVICE"));
+        assert!(android_manifest.contains("android.permission.FOREGROUND_SERVICE_DATA_SYNC"));
         assert!(android_manifest.contains("android:name=\".BenchmarkWorkerService\""));
+        assert!(android_manifest.contains("android:foregroundServiceType=\"dataSync\""));
         assert!(android_manifest.contains("android:process=\":mobench_worker\""));
 
         let ios =

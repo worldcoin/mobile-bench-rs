@@ -5272,6 +5272,10 @@ fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
 }
 
 impl BenchmarkResourceUsage {
+    fn peak_memory_growth_or_legacy_kb(&self) -> Option<u64> {
+        self.peak_memory_growth_kb.or(self.peak_memory_kb)
+    }
+
     fn is_empty(&self) -> bool {
         self.cpu_total_ms.is_none()
             && self.cpu_median_ms.is_none()
@@ -5521,7 +5525,7 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
                     bench
                         .resource_usage
                         .as_ref()
-                        .and_then(|usage| usage.peak_memory_growth_kb)
+                        .and_then(BenchmarkResourceUsage::peak_memory_growth_or_legacy_kb)
                 ),
                 format_peak_memory(
                     bench
@@ -5578,7 +5582,7 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
                 bench
                     .resource_usage
                     .as_ref()
-                    .and_then(|usage| usage.peak_memory_growth_kb)
+                    .and_then(BenchmarkResourceUsage::peak_memory_growth_or_legacy_kb)
                     .map_or(String::new(), |v| v.to_string()),
                 bench
                     .resource_usage
@@ -5685,7 +5689,7 @@ fn summary_has_memory_baseline_gap(summary: &SummaryReport) -> bool {
 
 fn resource_usage_has_memory_baseline_gap(usage: &BenchmarkResourceUsage) -> bool {
     let peak = usage.process_peak_memory_kb;
-    match (usage.peak_memory_growth_kb, peak) {
+    match (usage.peak_memory_growth_or_legacy_kb(), peak) {
         (Some(growth), Some(peak)) if peak > growth => {
             peak.saturating_sub(growth) >= MEMORY_BASELINE_GAP_MIN_DIFF_KB
                 && peak >= growth.saturating_mul(MEMORY_BASELINE_GAP_RATIO)
@@ -9625,6 +9629,48 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                 "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb\n"
             )
         );
+        assert!(csv.contains(",482,241,249416,249416,1477787\n"));
+    }
+
+    #[test]
+    fn render_summary_uses_legacy_peak_memory_as_growth_fallback() {
+        let summary = SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Google Pixel 8-14.0".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "sample_fns::fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(1_250_000_000),
+                    median_ns: Some(1_200_000_000),
+                    p95_ns: Some(1_300_000_000),
+                    min_ns: Some(1_100_000_000),
+                    max_ns: Some(1_350_000_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: Some(482),
+                        cpu_median_ms: Some(241),
+                        peak_memory_kb: Some(249_416),
+                        peak_memory_growth_kb: None,
+                        process_peak_memory_kb: Some(1_477_787),
+                        total_pss_kb: None,
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        };
+
+        let markdown = render_markdown_summary(&summary);
+        let csv = render_csv_summary(&summary);
+
+        assert!(markdown.contains("243.57 MB"));
         assert!(csv.contains(",482,241,249416,249416,1477787\n"));
     }
 
