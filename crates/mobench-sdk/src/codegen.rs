@@ -1501,6 +1501,12 @@ mod tests {
         );
         assert!(ios.contains("optionalProcessPeakMemoryKb(sample)"));
         assert!(ios.contains("compactMap { optionalProcessPeakMemoryKb($0) }"));
+        assert!(ios.contains("ProcessMemorySampler"));
+        assert!(ios.contains("currentProcessResidentMemoryKb"));
+        assert!(ios.contains("task_info("));
+        assert!(ios.contains("\"memory_process\": \"benchmark_app\""));
+        assert!(ios.contains("generateJSONReport(report, runProcessPeakMemoryKb:"));
+        assert!(ios.contains("processPeakSamplesKb.max() ?? runProcessPeakMemoryKb"));
     }
 
     #[test]

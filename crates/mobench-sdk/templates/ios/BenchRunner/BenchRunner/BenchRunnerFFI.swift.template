@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 private let defaultFunction = "{{DEFAULT_FUNCTION}}"
 private let defaultIterations: UInt32 = 20
@@ -129,9 +130,18 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         )
 
         do {
-            let report = try runBenchmark(spec: spec)
+            let processMemorySampler = ProcessMemorySampler()
+            processMemorySampler.start()
+            let report: BenchReport
+            do {
+                report = try runBenchmark(spec: spec)
+            } catch {
+                _ = processMemorySampler.stop()
+                throw error
+            }
+            let runProcessPeakMemoryKb = processMemorySampler.stop()
             let displayText = formatBenchReport(report)
-            let jsonReport = generateJSONReport(report)
+            let jsonReport = generateJSONReport(report, runProcessPeakMemoryKb: runProcessPeakMemoryKb)
             return BenchmarkResult(displayText: displayText, jsonReport: jsonReport)
         } catch let error as BenchError {
             print("[BenchRunner] ERROR: Benchmark failed: \(error)")
@@ -148,7 +158,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
 
     /// Generates a JSON report that matches the Android BENCH_JSON-style payload
     /// consumed by mobench so cross-platform parsers can stay aligned.
-    private static func generateJSONReport(_ report: BenchReport) -> String {
+    private static func generateJSONReport(_ report: BenchReport, runProcessPeakMemoryKb: UInt64?) -> String {
         var json: [String: Any] = [:]
 
         // Spec section
@@ -238,6 +248,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         // Resource metrics derived from the measured loop itself.
         var resources: [String: Any] = [
             "platform": "ios",
+            "memory_process": "benchmark_app",
             "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
         ]
         if !cpuSamplesMs.isEmpty {
@@ -250,7 +261,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             resources["peak_memory_kb"] = peakMemoryKb
             resources["peak_memory_growth_kb"] = peakMemoryKb
         }
-        if let processPeakMemoryKb = processPeakSamplesKb.max() {
+        if let processPeakMemoryKb = processPeakSamplesKb.max() ?? runProcessPeakMemoryKb {
             resources["process_peak_memory_kb"] = processPeakMemoryKb
         }
         json["resources"] = resources
@@ -361,4 +372,68 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         // This avoids hardcoding specific error cases that may not exist in all schemas
         return "Benchmark error: \(error.localizedDescription)"
     }
+}
+
+private final class ProcessMemorySampler {
+    private let sampleInterval: TimeInterval
+    private let queue = DispatchQueue(label: "mobench-process-memory-sampler")
+    private var timer: DispatchSourceTimer?
+    private var peakKb: UInt64 = 0
+
+    init(sampleInterval: TimeInterval = 0.01) {
+        self.sampleInterval = sampleInterval
+    }
+
+    func start() {
+        queue.sync {
+            guard timer == nil else {
+                return
+            }
+
+            recordCurrentLocked()
+            let source = DispatchSource.makeTimerSource(queue: queue)
+            source.schedule(deadline: .now(), repeating: sampleInterval)
+            source.setEventHandler { [weak self] in
+                self?.recordCurrentLocked()
+            }
+            source.resume()
+            timer = source
+        }
+    }
+
+    func stop() -> UInt64? {
+        queue.sync {
+            timer?.cancel()
+            timer = nil
+            recordCurrentLocked()
+            return peakKb > 0 ? peakKb : nil
+        }
+    }
+
+    private func recordCurrentLocked() {
+        if let currentKb = currentProcessResidentMemoryKb(), currentKb > peakKb {
+            peakKb = currentKb
+        }
+    }
+}
+
+private func currentProcessResidentMemoryKb() -> UInt64? {
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+    let result = withUnsafeMutablePointer(to: &info) { infoPointer in
+        infoPointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPointer in
+            task_info(
+                mach_task_self_,
+                task_flavor_t(MACH_TASK_BASIC_INFO),
+                reboundPointer,
+                &count
+            )
+        }
+    }
+
+    guard result == KERN_SUCCESS else {
+        return nil
+    }
+
+    return UInt64(info.resident_size) / 1024
 }
