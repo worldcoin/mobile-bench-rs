@@ -14,7 +14,7 @@ Before diving into the full guide, ensure your project meets these requirements:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.34"
+mobench-sdk = "0.1.35"
 inventory = "0.3"  # Required for benchmark registration
 
 [lib]
@@ -112,7 +112,7 @@ In your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.34"
+mobench-sdk = "0.1.35"
 ```
 
 ## 3) Annotate benchmark functions

@@ -13,9 +13,9 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.34` is the current supported release.
-- `v0.1.33` is the immediately previous supported release, superseded by
-  `v0.1.34`.
+- `v0.1.35` is the current supported release.
+- `v0.1.34` is the immediately previous supported release, superseded by
+  `v0.1.35`.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -24,7 +24,8 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.34` | 2026-04-23 | `mobench 0.1.34`, `mobench-sdk 0.1.34`, `mobench-macros 0.1.34` | Current supported release |
+| `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Current supported release |
+| `v0.1.34` | 2026-04-23 | `mobench 0.1.34`, `mobench-sdk 0.1.34`, `mobench-macros 0.1.34` | Superseded by `v0.1.35` |
 | `v0.1.33` | 2026-04-17 | `mobench 0.1.33`, `mobench-sdk 0.1.33`, `mobench-macros 0.1.33` | Superseded by `v0.1.34` |
 | `v0.1.32` | 2026-04-14 | `mobench 0.1.32`, `mobench-sdk 0.1.32`, `mobench-macros 0.1.32` | Superseded by `v0.1.33` |
 | `v0.1.31` | 2026-04-12 | `mobench 0.1.31`, `mobench-sdk 0.1.31`, `mobench-macros 0.1.31` | Superseded by `v0.1.32` |
@@ -61,9 +62,22 @@ Crates.io release history:
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
 
-## v0.1.34
+## v0.1.35
 
 Status: current supported release.
+
+- Added iOS benchmark app process peak memory reporting using Mach
+  `task_info`, so iOS summaries now expose `process_peak_memory_kb` alongside
+  measured-iteration memory growth.
+- Marked iOS process peak resources with `memory_process = "benchmark_app"` to
+  match the Android summary contract while reflecting that iOS runs still
+  execute inside the generated benchmark app process.
+- Validated the release candidate with successful ProveKit iOS Mobile Bench
+  workflow run `24886057115`.
+
+## v0.1.34
+
+Status: superseded by `v0.1.35`.
 
 - Reported Android memory with explicit measured-iteration peak growth and an
   isolated benchmark worker process peak, while keeping legacy
