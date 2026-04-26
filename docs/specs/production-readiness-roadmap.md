@@ -46,21 +46,21 @@ automate around.
 Audience: CLI users, CI adopters, maintainers.
 
 Checklist:
-- [ ] Add schema validation tests for `summary.json`.
-- [ ] Add schema validation tests for the CI contract.
-- [ ] Add golden fixture tests for Markdown summaries.
-- [ ] Add golden fixture tests for CSV outputs.
-- [ ] Add golden fixture tests for plots where practical.
-- [ ] Add golden fixture tests for profile summaries.
-- [ ] Add CLI snapshot tests for high-value command output.
-- [ ] Add BrowserStack response normalization regression tests.
-- [ ] Test resource metric contracts: `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`.
-- [ ] Test baseline and regression comparison behavior.
-- [ ] Test profile manifest sections: `native_capture`, `semantic_profile`, `capture_metadata`.
-- [ ] Test Android and iOS template generation invariants.
-- [ ] Test setup, teardown, and per-iteration macro behavior.
-- [ ] Keep fixture verification wired into CI.
-- [ ] Label tests that require Android, iOS, BrowserStack, or profiling tools separately from pure host tests.
+- [x] Add schema validation tests for `summary.json`.
+- [x] Add schema validation tests for the CI contract.
+- [x] Add golden fixture tests for Markdown summaries.
+- [x] Add golden fixture tests for CSV outputs.
+- [x] Add golden fixture tests for plots where practical.
+- [x] Add golden fixture tests for profile summaries.
+- [x] Add CLI snapshot tests for high-value command output.
+- [x] Add BrowserStack response normalization regression tests.
+- [x] Test resource metric contracts: `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`.
+- [x] Test baseline and regression comparison behavior.
+- [x] Test profile manifest sections: `native_capture`, `semantic_profile`, `capture_metadata`.
+- [x] Test Android and iOS template generation invariants.
+- [x] Test setup, teardown, and per-iteration macro behavior.
+- [x] Keep fixture verification wired into CI.
+- [x] Label tests that require Android, iOS, BrowserStack, or profiling tools separately from pure host tests.
 
 Verification signals:
 - Host-only tests run without mobile toolchains.

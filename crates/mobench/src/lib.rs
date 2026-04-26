@@ -10046,6 +10046,84 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
     }
 
     #[test]
+    fn example_summary_fixtures_validate_against_summary_schema() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let summary_schema_path = root.join("docs/schemas/summary-v1.schema.json");
+        let summary_schema: Value = serde_json::from_str(
+            &fs::read_to_string(&summary_schema_path).expect("read summary schema"),
+        )
+        .expect("parse summary schema");
+        let validator = JSONSchema::options()
+            .compile(&summary_schema)
+            .expect("compile summary schema");
+
+        for fixture in [
+            "examples/fixtures/basic/summary.json",
+            "examples/fixtures/ffi/summary.json",
+            "crates/mobench/tests/fixtures/ci-artifact-root/android/summary.json",
+        ] {
+            let fixture_path = root.join(fixture);
+            let value: Value = serde_json::from_str(
+                &fs::read_to_string(&fixture_path).expect("read summary fixture"),
+            )
+            .expect("parse summary fixture");
+
+            if let Err(errors) = validator.validate(&value) {
+                let messages: Vec<String> = errors.map(|e| e.to_string()).collect();
+                panic!(
+                    "{} failed summary schema validation: {}",
+                    fixture_path.display(),
+                    messages.join(" | ")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn basic_example_fixture_renders_stable_markdown_and_csv() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixture_path = root.join("examples/fixtures/basic/summary.json");
+        let value: Value =
+            serde_json::from_str(&fs::read_to_string(&fixture_path).expect("read fixture"))
+                .expect("parse fixture");
+        let summary = summary_report_from_value(&value).expect("parse summary report");
+
+        let markdown = render_markdown_summary(&summary);
+        assert_eq!(
+            markdown,
+            "\
+### Benchmark Summary
+
+- Generated: 2026-03-26T00:00:00Z
+- Target: Android
+- Function: multiple
+- Iterations/Warmup: 5 / 1
+- Devices: Google Pixel 8-14.0, Samsung Galaxy S23-14.0
+
+| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Google Pixel 8-14.0 | basic_benchmark::bench_fibonacci | 5 | 1 | 100.000ms | 500.000ms | - | - | - | - | - |
+| Google Pixel 8-14.0 | basic_benchmark::bench_checksum | 5 | 1 | 145.000ms | 725.000ms | - | - | - | - | - |
+| Samsung Galaxy S23-14.0 | basic_benchmark::bench_fibonacci | 5 | 1 | 94.000ms | 470.000ms | - | - | - | - | - |
+| Samsung Galaxy S23-14.0 | basic_benchmark::bench_checksum | 5 | 1 | 136.000ms | 680.000ms | - | - | - | - | - |
+
+"
+        );
+
+        let csv = render_csv_summary(&summary);
+        assert_eq!(
+            csv,
+            "\
+device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb
+Google Pixel 8-14.0,basic_benchmark::bench_fibonacci,5,100000000,100000000,105000000,95000000,105000000,,,,,
+Google Pixel 8-14.0,basic_benchmark::bench_checksum,5,145000000,145000000,151000000,140000000,151000000,,,,,
+Samsung Galaxy S23-14.0,basic_benchmark::bench_fibonacci,5,94000000,94000000,98000000,90000000,98000000,,,,,
+Samsung Galaxy S23-14.0,basic_benchmark::bench_checksum,5,136000000,136000000,140000000,132000000,140000000,,,,,
+"
+        );
+    }
+
+    #[test]
     fn ci_function_slug_distinguishes_ambiguous_paths() {
         assert_ne!(ci_function_slug("a::b_c"), ci_function_slug("a_b::c"));
     }
