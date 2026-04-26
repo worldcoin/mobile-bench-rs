@@ -506,18 +506,20 @@ private fun buildBenchReportJson(report: BenchReport, runProcessPeakMemoryKb: Lo
     report.samples.forEach { sample ->
         val sampleJson = JSONObject()
         sampleJson.put("duration_ns", sample.durationNs.toLong())
-        sample.cpuTimeMs?.let { sampleJson.put("cpu_time_ms", it.toLong()) }
-        sample.peakMemoryKb?.let { sampleJson.put("peak_memory_kb", it.toLong()) }
+        optionalCpuTimeMs(sample)?.let { sampleJson.put("cpu_time_ms", it) }
+        optionalPeakMemoryKb(sample)?.let { sampleJson.put("peak_memory_kb", it) }
         optionalProcessPeakMemoryKb(sample)?.let { sampleJson.put("process_peak_memory_kb", it) }
         samples.put(sampleJson)
     }
     json.put("samples", samples)
 
     val phases = JSONArray()
-    report.phases.forEach { phase ->
+    optionalPhases(report).forEach { phase ->
         val phaseJson = JSONObject()
-        phaseJson.put("name", phase.name)
-        phaseJson.put("duration_ns", phase.durationNs.toLong())
+        optionalStringProperty(phase, "name", "getName")?.let { phaseJson.put("name", it) }
+        optionalNumericProperty(phase, "durationNs", "getDurationNs")?.let {
+            phaseJson.put("duration_ns", it)
+        }
         phases.put(phaseJson)
     }
     json.put("phases", phases)
@@ -533,8 +535,8 @@ private fun buildBenchReportJson(report: BenchReport, runProcessPeakMemoryKb: Lo
         json.put("stats", stats)
     }
 
-    val cpuSamplesMs = report.samples.mapNotNull { it.cpuTimeMs?.toLong() }
-    val peakSamplesKb = report.samples.mapNotNull { it.peakMemoryKb?.toLong() }
+    val cpuSamplesMs = report.samples.mapNotNull { optionalCpuTimeMs(it) }
+    val peakSamplesKb = report.samples.mapNotNull { optionalPeakMemoryKb(it) }
     val processPeakSamplesKb = report.samples.mapNotNull { optionalProcessPeakMemoryKb(it) }
     val memInfo = Debug.MemoryInfo()
     Debug.getMemoryInfo(memInfo)
@@ -572,6 +574,50 @@ private fun optionalProcessPeakMemoryKb(sample: Any): Long? {
     return optionalNumericProperty(sample, "processPeakMemoryKb", "getProcessPeakMemoryKb")
 }
 
+private fun optionalCpuTimeMs(sample: Any): Long? {
+    return optionalNumericProperty(sample, "cpuTimeMs", "getCpuTimeMs")
+}
+
+private fun optionalPeakMemoryKb(sample: Any): Long? {
+    return optionalNumericProperty(sample, "peakMemoryKb", "getPeakMemoryKb")
+}
+
+private fun optionalPhases(report: Any): List<Any> {
+    return optionalCollectionProperty(report, "phases", "getPhases")
+}
+
+private fun optionalCollectionProperty(instance: Any, propertyName: String, getterName: String): List<Any> {
+    try {
+        val getter = instance.javaClass.methods.firstOrNull {
+            it.name == getterName && it.parameterTypes.isEmpty()
+        }
+        coerceToList(getter?.invoke(instance))?.let { return it }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional collection getter unavailable: $propertyName")
+    }
+
+    try {
+        val field = instance.javaClass.declaredFields.firstOrNull { it.name == propertyName }
+        if (field != null) {
+            field.isAccessible = true
+            coerceToList(field.get(instance))?.let { return it }
+        }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional collection field unavailable: $propertyName")
+    }
+
+    return emptyList()
+}
+
+private fun coerceToList(value: Any?): List<Any>? {
+    return when (value) {
+        null -> null
+        is Iterable<*> -> value.filterNotNull()
+        is Array<*> -> value.filterNotNull()
+        else -> null
+    }
+}
+
 private fun optionalNumericProperty(instance: Any, propertyName: String, getterName: String): Long? {
     try {
         val getter = instance.javaClass.methods.firstOrNull {
@@ -590,6 +636,29 @@ private fun optionalNumericProperty(instance: Any, propertyName: String, getterN
         }
     } catch (e: Exception) {
         android.util.Log.d("BenchRunner", "Optional property field unavailable: $propertyName")
+    }
+
+    return null
+}
+
+private fun optionalStringProperty(instance: Any, propertyName: String, getterName: String): String? {
+    try {
+        val getter = instance.javaClass.methods.firstOrNull {
+            it.name == getterName && it.parameterTypes.isEmpty()
+        }
+        getter?.invoke(instance)?.toString()?.let { return it }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional string getter unavailable: $propertyName")
+    }
+
+    try {
+        val field = instance.javaClass.declaredFields.firstOrNull { it.name == propertyName }
+        if (field != null) {
+            field.isAccessible = true
+            field.get(instance)?.toString()?.let { return it }
+        }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional string field unavailable: $propertyName")
     }
 
     return null

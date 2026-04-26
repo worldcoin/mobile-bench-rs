@@ -802,14 +802,17 @@ pub fn run() -> Result<()> {
                         run_summary.performance_metrics = Some(perf_metrics.into_iter().collect());
                     }
                     Err(e) => {
-                        println!("\nWarning: Failed to fetch results: {}", e);
-                        println!("Build may still be accessible at: {}", dashboard_url);
+                        bail!(
+                            "failed to fetch BrowserStack benchmark results: {}. Build may still be accessible at: {}",
+                            e,
+                            dashboard_url
+                        );
                     }
                 }
 
                 // Also save detailed artifacts to separate directory
                 let output_root = fetch_output_dir.join(build_id);
-                if let Err(e) = fetch_browserstack_artifacts(
+                fetch_browserstack_artifacts(
                     &client,
                     run_summary.spec.target,
                     build_id,
@@ -817,9 +820,13 @@ pub fn run() -> Result<()> {
                     false, // Don't wait again, we already did
                     fetch_poll_interval_secs,
                     fetch_timeout_secs,
-                ) {
-                    println!("Warning: Failed to fetch detailed artifacts: {}", e);
-                }
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to fetch detailed BrowserStack artifacts for build {}",
+                        build_id
+                    )
+                })?;
             } else if fetch {
                 println!("No BrowserStack run to fetch (devices not provided?)");
             }
@@ -2731,10 +2738,10 @@ fn shorten_html_error(message: &str) -> String {
 
 #[allow(clippy::too_many_arguments)]
 fn resolve_run_spec(
-    target: MobileTarget,
-    function: String,
-    iterations: u32,
-    warmup: u32,
+    target: Option<MobileTarget>,
+    function: Option<String>,
+    iterations: Option<u32>,
+    warmup: Option<u32>,
     devices: Vec<String>,
     layout: &ResolvedProjectLayout,
     config: Option<&Path>,
@@ -2752,33 +2759,55 @@ fn resolve_run_spec(
         let configured_ios_completion_timeout_secs = ios_completion_timeout_secs
             .or(cfg.browserstack.ios_completion_timeout_secs)
             .or(layout.ios_completion_timeout_secs);
+        if device_matrix.is_some() && !devices.is_empty() {
+            bail!(
+                "--device-matrix cannot be combined with --devices; choose one source for devices"
+            );
+        }
         let matrix_path = device_matrix.map(Path::to_path_buf).unwrap_or_else(|| {
             resolve_project_relative_path(
                 cfg_path.parent().unwrap_or_else(|| Path::new(".")),
                 cfg.device_matrix.as_path(),
             )
         });
-        let matrix = load_device_matrix(&matrix_path)?;
         let resolved_tags = if !device_tags.is_empty() {
             Some(device_tags)
         } else {
             cfg.device_tags.clone()
         };
-        let device_names = match resolved_tags.as_ref() {
-            Some(tags) if !tags.is_empty() => filter_devices_by_tags(matrix.devices, tags)?,
-            _ => matrix.devices.into_iter().map(|d| d.name).collect(),
+        let device_names = if !devices.is_empty() {
+            devices
+        } else {
+            let matrix = load_device_matrix(&matrix_path)?;
+            match resolved_tags.as_ref() {
+                Some(tags) if !tags.is_empty() => filter_devices_by_tags(matrix.devices, tags)?,
+                _ => matrix.devices.into_iter().map(|d| d.name).collect(),
+            }
+        };
+        let ios_xcuitest = match (ios_app, ios_test_suite) {
+            (Some(app), Some(test_suite)) => Some(IosXcuitestArtifacts { app, test_suite }),
+            (None, None) => cfg.ios_xcuitest,
+            _ => bail!(
+                "both --ios-app and --ios-test-suite must be provided together; omit both to use config-managed iOS artifacts"
+            ),
         };
         return Ok(RunSpec {
-            target: cfg.target,
-            function: cfg.function,
-            iterations: cfg.iterations,
-            warmup: cfg.warmup,
+            target: target.unwrap_or(cfg.target),
+            function: function.unwrap_or(cfg.function),
+            iterations: iterations.unwrap_or(cfg.iterations),
+            warmup: warmup.unwrap_or(cfg.warmup),
             devices: device_names,
             ios_completion_timeout_secs: configured_ios_completion_timeout_secs,
             browserstack: Some(cfg.browserstack),
-            ios_xcuitest: cfg.ios_xcuitest,
+            ios_xcuitest,
         });
     }
+
+    let target =
+        target.context("target must be provided with --target or set in the config file")?;
+    let function = function.unwrap_or_default();
+    let iterations = iterations.unwrap_or(100);
+    let warmup = warmup.unwrap_or(10);
 
     if function.trim().is_empty() {
         bail!(
@@ -5059,7 +5088,7 @@ fn ensure_android_home() {
 fn load_dotenv_global() {
     if let Ok(root) = repo_root() {
         let _ = dotenvy::from_path(root.join(".env"));
-        let _ = dotenvy::from_path_override(root.join(".env.local"));
+        let _ = dotenvy::from_path(root.join(".env.local"));
     }
 }
 
@@ -5074,7 +5103,7 @@ pub(crate) fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
 
     for dir in directories {
         let _ = dotenvy::from_path(dir.join(".env"));
-        let _ = dotenvy::from_path_override(dir.join(".env.local"));
+        let _ = dotenvy::from_path(dir.join(".env.local"));
     }
 }
 
@@ -7049,10 +7078,10 @@ pub fn bench_query_proof_generation() {}
         })
         .unwrap();
         let spec = resolve_run_spec(
-            MobileTarget::Android,
-            "sample_fns::fibonacci".into(),
-            5,
-            1,
+            Some(MobileTarget::Android),
+            Some("sample_fns::fibonacci".into()),
+            Some(5),
+            Some(1),
             vec!["pixel".into()],
             &layout,
             None,
@@ -7124,10 +7153,10 @@ project = "proj"
         })
         .unwrap();
         let spec = resolve_run_spec(
-            MobileTarget::Android,
-            "ignored::value".into(),
-            1,
-            0,
+            Some(MobileTarget::Android),
+            Some("ignored::value".into()),
+            Some(1),
+            Some(0),
             Vec::new(),
             &layout,
             Some(config_path.as_path()),
@@ -7143,6 +7172,74 @@ project = "proj"
         .expect("resolve spec");
 
         assert_eq!(spec.devices, vec!["CLI Device".to_string()]);
+    }
+
+    #[test]
+    fn run_accepts_config_without_target_or_function_flags() {
+        assert!(Cli::try_parse_from(["mobench", "run", "--config", "bench-config.toml"]).is_ok());
+    }
+
+    #[test]
+    fn resolve_run_spec_lets_cli_values_override_config_values() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let matrix_path = temp_dir.path().join("matrix.yml");
+        let config_path = temp_dir.path().join("bench-config.toml");
+
+        write_file(
+            &matrix_path,
+            br#"devices:
+  - name: Config Device
+    os: android
+    os_version: "14"
+"#,
+        )
+        .expect("write matrix");
+        let config_toml = format!(
+            r#"target = "android"
+function = "config::function"
+iterations = 10
+warmup = 2
+device_matrix = "{}"
+
+[browserstack]
+app_automate_username = "user"
+app_automate_access_key = "key"
+project = "proj"
+"#,
+            matrix_path.display()
+        );
+        write_file(&config_path, config_toml.as_bytes()).expect("write config");
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: None,
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .unwrap();
+        let spec = resolve_run_spec(
+            Some(MobileTarget::Ios),
+            Some("cli::function".into()),
+            Some(3),
+            Some(1),
+            Vec::new(),
+            &layout,
+            Some(config_path.as_path()),
+            None,
+            Vec::new(),
+            None,
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .expect("resolve spec");
+
+        assert_eq!(spec.target, MobileTarget::Ios);
+        assert_eq!(spec.function, "cli::function");
+        assert_eq!(spec.iterations, 3);
+        assert_eq!(spec.warmup, 1);
     }
 
     #[test]
@@ -7348,10 +7445,10 @@ project = "proj"
         })
         .expect("resolve layout");
         let spec = resolve_run_spec(
-            MobileTarget::Ios,
-            "zk_mobile_bench::bench_query_proof_generation".into(),
-            1,
-            0,
+            Some(MobileTarget::Ios),
+            Some("zk_mobile_bench::bench_query_proof_generation".into()),
+            Some(1),
+            Some(0),
             vec!["iPhone 15".into()],
             &layout,
             None,
@@ -7438,10 +7535,10 @@ project = "proj"
         })
         .expect("resolve layout");
         let spec = resolve_run_spec(
-            MobileTarget::Ios,
-            "zk_mobile_bench::bench_query_proof_generation".into(),
-            1,
-            0,
+            Some(MobileTarget::Ios),
+            Some("zk_mobile_bench::bench_query_proof_generation".into()),
+            Some(1),
+            Some(0),
             vec!["iPhone 15".into()],
             &layout,
             None,
@@ -7703,10 +7800,10 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         })
         .unwrap();
         let spec = resolve_run_spec(
-            MobileTarget::Ios,
-            "ignored::value".into(),
-            1,
-            0,
+            Some(MobileTarget::Ios),
+            Some("ignored::value".into()),
+            Some(1),
+            Some(0),
             Vec::new(),
             &layout,
             Some(config_path.as_path()),

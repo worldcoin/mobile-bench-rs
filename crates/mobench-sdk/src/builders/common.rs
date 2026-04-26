@@ -330,6 +330,30 @@ pub fn embed_bench_spec<S: serde::Serialize>(
     let spec_json = serde_json::to_string_pretty(spec)
         .map_err(|e| BenchError::Build(format!("Failed to serialize bench spec: {}", e)))?;
 
+    // Generated Android/iOS projects include these output-local resources even
+    // before their app scaffolds exist, which keeps clean first runs deterministic.
+    for spec_path in [
+        output_dir.join("target/mobile-spec/android/bench_spec.json"),
+        output_dir.join("target/mobile-spec/ios/bench_spec.json"),
+    ] {
+        if let Some(parent) = spec_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to create bench spec directory at {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+        std::fs::write(&spec_path, &spec_json).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to write bench spec to {}: {}",
+                spec_path.display(),
+                e
+            ))
+        })?;
+    }
+
     // Android: Write to assets directory
     let android_assets_dir = output_dir.join("android/app/src/main/assets");
     if output_dir.join("android").exists() {
@@ -758,6 +782,38 @@ members = ["crates/*"]
         // Build time should be in RFC3339 format (roughly YYYY-MM-DDTHH:MM:SSZ)
         assert!(meta.build_time.contains('T'));
         assert!(meta.build_time.ends_with('Z'));
+    }
+
+    #[test]
+    fn embed_bench_spec_writes_first_run_mobile_spec_locations() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("mobench-test-embed-spec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let spec = EmbeddedBenchSpec {
+            function: "test_crate::first_run".to_string(),
+            iterations: 7,
+            warmup: 1,
+        };
+
+        embed_bench_spec(&temp_dir, &spec).expect("embed spec");
+
+        let android_spec = temp_dir.join("target/mobile-spec/android/bench_spec.json");
+        let ios_spec = temp_dir.join("target/mobile-spec/ios/bench_spec.json");
+        assert!(
+            android_spec.exists(),
+            "Android Gradle templates read this first-run spec path"
+        );
+        assert!(
+            ios_spec.exists(),
+            "iOS project templates read this first-run spec path"
+        );
+
+        let contents = std::fs::read_to_string(android_spec).unwrap();
+        assert!(contents.contains("test_crate::first_run"));
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
     }
 
     #[test]

@@ -43,9 +43,9 @@ pub(crate) enum Command {
     /// you provide --ios-app and --ios-test-suite to override.
     Run {
         #[arg(long, value_enum)]
-        target: MobileTarget,
+        target: Option<MobileTarget>,
         #[arg(long, help = "Fully-qualified Rust function to benchmark")]
-        function: String,
+        function: Option<String>,
         #[arg(
             long,
             help = "Project root containing mobench.toml or the Cargo workspace"
@@ -56,10 +56,10 @@ pub(crate) enum Command {
             help = "Path to the benchmark crate directory containing Cargo.toml"
         )]
         crate_path: Option<PathBuf>,
-        #[arg(long, default_value_t = 100)]
-        iterations: u32,
-        #[arg(long, default_value_t = 10)]
-        warmup: u32,
+        #[arg(long)]
+        iterations: Option<u32>,
+        #[arg(long)]
+        warmup: Option<u32>,
         #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
         devices: Vec<String>,
         #[arg(long, help = "Device matrix YAML file to load device names from")]

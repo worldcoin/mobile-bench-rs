@@ -179,10 +179,10 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         // Also include samples in object format for compatibility
         let samplesArray = report.samples.map { sample -> [String: Any] in
             var sampleJson: [String: Any] = ["duration_ns": sample.durationNs]
-            if let cpuTimeMs = sample.cpuTimeMs {
+            if let cpuTimeMs = optionalCpuTimeMs(sample) {
                 sampleJson["cpu_time_ms"] = cpuTimeMs
             }
-            if let peakMemoryKb = sample.peakMemoryKb {
+            if let peakMemoryKb = optionalPeakMemoryKb(sample) {
                 sampleJson["peak_memory_kb"] = peakMemoryKb
             }
             if let processPeakMemoryKb = optionalProcessPeakMemoryKb(sample) {
@@ -192,10 +192,14 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         }
         json["samples"] = samplesArray
 
-        let phases = report.phases.map { phase in
+        let phases = optionalPhases(report).compactMap { phase -> [String: Any]? in
+            guard let name = optionalStringProperty(phase, named: "name"),
+                  let durationNs = optionalUInt64Property(phase, named: "durationNs") else {
+                return nil
+            }
             [
-                "name": phase.name,
-                "duration_ns": phase.durationNs
+                "name": name,
+                "duration_ns": durationNs
             ] as [String: Any]
         }
         json["phases"] = phases
@@ -232,8 +236,8 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             json["max_ns"] = maxNs
         }
 
-        let cpuSamplesMs = report.samples.compactMap(\.cpuTimeMs)
-        let peakSamplesKb = report.samples.compactMap(\.peakMemoryKb)
+        let cpuSamplesMs = report.samples.compactMap { optionalCpuTimeMs($0) }
+        let peakSamplesKb = report.samples.compactMap { optionalPeakMemoryKb($0) }
         let processPeakSamplesKb = report.samples.compactMap { optionalProcessPeakMemoryKb($0) }
 
         func median(_ values: [UInt64]) -> UInt64 {
@@ -280,9 +284,48 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         return optionalUInt64Property(sample, named: "processPeakMemoryKb")
     }
 
+    private static func optionalCpuTimeMs(_ sample: Any) -> UInt64? {
+        return optionalUInt64Property(sample, named: "cpuTimeMs")
+    }
+
+    private static func optionalPeakMemoryKb(_ sample: Any) -> UInt64? {
+        return optionalUInt64Property(sample, named: "peakMemoryKb")
+    }
+
+    private static func optionalPhases(_ report: Any) -> [Any] {
+        for child in Mirror(reflecting: report).children where child.label == "phases" {
+            return coerceToArray(child.value)
+        }
+        return []
+    }
+
+    private static func coerceToArray(_ value: Any) -> [Any] {
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            guard let child = mirror.children.first else {
+                return []
+            }
+            return coerceToArray(child.value)
+        }
+        if let array = value as? [Any] {
+            return array
+        }
+        if mirror.displayStyle == .collection {
+            return mirror.children.map { $0.value }
+        }
+        return []
+    }
+
     private static func optionalUInt64Property(_ instance: Any, named propertyName: String) -> UInt64? {
         for child in Mirror(reflecting: instance).children where child.label == propertyName {
             return coerceToUInt64(child.value)
+        }
+        return nil
+    }
+
+    private static func optionalStringProperty(_ instance: Any, named propertyName: String) -> String? {
+        for child in Mirror(reflecting: instance).children where child.label == propertyName {
+            return String(describing: child.value)
         }
         return nil
     }

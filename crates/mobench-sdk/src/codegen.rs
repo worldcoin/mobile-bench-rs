@@ -1350,6 +1350,14 @@ mod tests {
             build_gradle.contains("dev.world.mybenchproject"),
             "build.gradle should contain sanitized package name 'dev.world.mybenchproject'"
         );
+        assert!(
+            !build_gradle.contains("testBuildType \"release\""),
+            "debug builds should be able to produce assembleDebugAndroidTest"
+        );
+        assert!(
+            build_gradle.contains("mobenchTestBuildType"),
+            "release builds should be able to request assembleReleaseAndroidTest"
+        );
 
         let manifest =
             fs::read_to_string(android_dir.join("app/src/main/AndroidManifest.xml")).unwrap();
@@ -1461,6 +1469,18 @@ mod tests {
             "Android template should not require generated bindings to expose processPeakMemoryKb"
         );
         assert!(android.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(
+            !android.contains("sample.cpuTimeMs"),
+            "Android template should tolerate BenchSample without cpuTimeMs"
+        );
+        assert!(
+            !android.contains("sample.peakMemoryKb"),
+            "Android template should tolerate BenchSample without peakMemoryKb"
+        );
+        assert!(
+            !android.contains("report.phases"),
+            "Android template should tolerate BenchReport without phases"
+        );
         assert!(android.contains("ProcessMemorySampler"));
         assert!(android.contains("sampleIntervalMs: Long = 1000L"));
         assert!(android.contains("/proc/self/smaps_rollup"));
@@ -1479,6 +1499,14 @@ mod tests {
         assert!(android_test.contains("Thread.sleep(heartbeatMs)"));
         assert!(android_test.contains("TimeUnit.SECONDS.toMillis(10)"));
         assert!(android_test.contains("activity.isBenchmarkComplete()"));
+
+        let ios_test = include_str!(
+            "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+        );
+        assert!(
+            ios_test.contains("\\\"error\\\""),
+            "iOS XCUITest template should fail when the benchmark report is an error payload"
+        );
 
         let android_manifest =
             include_str!("../templates/android/app/src/main/AndroidManifest.xml");
@@ -1499,6 +1527,18 @@ mod tests {
             "iOS template should not require generated bindings to expose processPeakMemoryKb"
         );
         assert!(ios.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(
+            !ios.contains("sample.cpuTimeMs"),
+            "iOS template should tolerate BenchSample without cpuTimeMs"
+        );
+        assert!(
+            !ios.contains("sample.peakMemoryKb"),
+            "iOS template should tolerate BenchSample without peakMemoryKb"
+        );
+        assert!(
+            !ios.contains("report.phases"),
+            "iOS template should tolerate BenchReport without phases"
+        );
         assert!(ios.contains("compactMap { optionalProcessPeakMemoryKb($0) }"));
         assert!(ios.contains("ProcessMemorySampler"));
         assert!(ios.contains("currentProcessResidentMemoryKb"));

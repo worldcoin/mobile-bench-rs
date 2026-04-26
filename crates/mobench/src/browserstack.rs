@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow};
+use reqwest::Url;
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -326,9 +327,7 @@ impl BrowserStackClient {
 
     pub fn download_url(&self, url: &str, dest: &Path) -> Result<()> {
         let resp = self
-            .http
-            .get(url)
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
+            .asset_request(url)
             .send()
             .with_context(|| format!("downloading BrowserStack asset {}", url))?;
         let status = resp.status();
@@ -525,9 +524,7 @@ impl BrowserStackClient {
 
     fn download_text_url(&self, url: &str) -> Result<String> {
         let resp = self
-            .http
-            .get(url)
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
+            .asset_request(url)
             .send()
             .with_context(|| format!("downloading BrowserStack asset {}", url))?;
         let status = resp.status();
@@ -543,6 +540,15 @@ impl BrowserStackClient {
         }
 
         Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn asset_request(&self, url: &str) -> reqwest::blocking::RequestBuilder {
+        let request = self.http.get(url);
+        if should_authenticate_asset_url(url) {
+            request.basic_auth(&self.auth.username, Some(&self.auth.access_key))
+        } else {
+            request
+        }
     }
 
     /// Extract benchmark results from device logs
@@ -1630,6 +1636,20 @@ fn parse_response<T: DeserializeOwned>(resp: Response, context: &str) -> Result<
         .with_context(|| format!("parsing BrowserStack API response for {}", context))
 }
 
+fn should_authenticate_asset_url(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+
+    host == "browserstack.com" || host.ends_with(".browserstack.com")
+}
+
 /// Parse a device list response from BrowserStack API.
 fn parse_device_list(json: Value, context: &str) -> Result<Vec<BrowserStackDevice>> {
     // BrowserStack returns an array of device objects
@@ -2006,6 +2026,22 @@ mod tests {
         .with_base_url("https://test.example.com");
 
         assert_eq!(client.base_url, "https://test.example.com");
+    }
+
+    #[test]
+    fn authenticated_asset_downloads_are_limited_to_browserstack_https_hosts() {
+        assert!(should_authenticate_asset_url(
+            "https://api-cloud.browserstack.com/app-automate/logs/123"
+        ));
+        assert!(should_authenticate_asset_url(
+            "https://app-automate.browserstack.com/sessions/123/logs"
+        ));
+        assert!(!should_authenticate_asset_url(
+            "http://api-cloud.browserstack.com/app-automate/logs/123"
+        ));
+        assert!(!should_authenticate_asset_url(
+            "https://evil.example.com/browserstack/logs"
+        ));
     }
 
     #[test]
