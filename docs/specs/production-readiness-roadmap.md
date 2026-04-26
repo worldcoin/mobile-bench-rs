@@ -107,10 +107,10 @@ announcement unless they expose real launch risk.
 - [ ] Profile CLI hot paths.
 - [ ] Improve APK/IPA build caching.
 - [ ] Parallelize independent build, fetch, and report steps.
-- [ ] Add host benchmarks for parser, reporting, and profile code.
+- [x] Add host benchmarks for parser, reporting, and profile code.
 - [ ] Add fuzz or property tests for config and device matrix parsing.
-- [ ] Add public API compatibility checks with `cargo-semver-checks`.
-- [ ] Add dependency and license policy checks with `cargo-deny`.
+- [x] Add public API compatibility checks with `cargo-semver-checks`.
+- [x] Add dependency and license policy checks with `cargo-deny`.
 - [ ] Consider narrower crate features to reduce dependency footprint.
 - [ ] Add machine-readable trace/event output for CI debugging.
 - [ ] Prepare landing-page-specific assets from README diagrams.
@@ -125,13 +125,16 @@ but no dedicated `benches/`, fuzz target, `cargo-semver-checks`, or
 `cargo-deny` policy yet.
 
 P0 after first public promotion:
-- Add `cargo-semver-checks` for `mobench-sdk` and `mobench-macros`.
-  This protects the library-facing surface that adopters will depend on first.
-- Add `cargo-deny` with explicit license/advisory/source policy.
-  This is low product risk but high trust value before broader third-party use.
-- Add host benchmarks for parser, reporting, profile manifest rendering, and
-  BrowserStack log extraction. These give a baseline before tuning or
-  parallelizing anything.
+- Completed: add `cargo-semver-checks` for `mobench-sdk` and `mobench`.
+  `mobench-macros` is a proc-macro target, so `cargo-semver-checks` does not
+  treat it as a normal library API surface; keep it covered by rustdoc, clippy,
+  tests, and publish dry-runs.
+- Completed: add `cargo-deny` with explicit license/advisory/source policy.
+  Current policy denies vulnerable and yanked crates, restricts registries, and
+  documents the direct Inferno `CDDL-1.0` license exception.
+- Completed: add host benchmarks for parser, reporting, profile manifest
+  rendering, and BrowserStack log extraction. These give a baseline before
+  tuning or parallelizing anything.
 
 P1 once adoption feedback identifies slow paths:
 - Profile CLI hot paths with real examples: config resolution, template
@@ -156,9 +159,9 @@ P2 launch-asset and dependency-footprint follow-up:
   enough for near-term human debugging.
 
 Recommended first hardening PR:
-1. Add `cargo-semver-checks`, `cargo-deny`, and their CI jobs.
-2. Add a small Criterion suite for config parsing, summary rendering, CSV
-   rendering, profile manifest loading, and BrowserStack log extraction.
+1. Run the new CI policy checks and host benchmark smoke on a fresh PR.
+2. Review duplicate dependency warnings from `cargo-deny`, especially `toml`,
+   `getrandom`, and Windows support crates.
 3. Use the benchmark results to decide whether build caching or parallelization
    should come next.
 

@@ -24,6 +24,9 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 default-run = "mobench"
 
+[features]
+bench-support = []
+
 # Dual binary targets allow the tool to work as both:
 # - `mobench run ...` (direct invocation)
 # - `cargo mobench run ...` (cargo subcommand)
@@ -55,6 +58,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+criterion = "0.5"
 inventory = "0.3"
 sample-fns = { path = "../sample-fns" }
 jsonschema = "0.18"
+
+[[bench]]
+name = "host_contracts"
+harness = false
+required-features = ["bench-support"]

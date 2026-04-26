@@ -32,11 +32,28 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Dependency policy
+        run: cargo deny check advisories bans licenses sources
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@cargo-semver-checks
+
+      - name: Public API compatibility
+        run: |
+          cargo semver-checks check-release --package mobench-sdk --baseline-version 0.1.35
+          cargo semver-checks check-release --package mobench --baseline-version 0.1.35
+
       - name: Rustdoc
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
       - name: Test
         run: cargo test --workspace
+
+      - name: Host benchmark smoke
+        run: cargo bench -p mobench --features bench-support --bench host_contracts -- --test
 
       - name: Publish dry run
         run: |
