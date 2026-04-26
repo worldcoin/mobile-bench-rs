@@ -986,15 +986,8 @@ fn parse_device_string(s: &str) -> (String, String) {
     }
 }
 
-fn infer_device_from_path(path: &Path) -> (String, String) {
-    let lower_path = path.to_string_lossy().to_ascii_lowercase();
-    if lower_path.contains("/ios/") || lower_path.contains("\\ios\\") {
-        ("unknown".to_string(), "unknown".to_string())
-    } else if lower_path.contains("/android/") || lower_path.contains("\\android\\") {
-        ("unknown".to_string(), "unknown".to_string())
-    } else {
-        ("unknown".to_string(), "unknown".to_string())
-    }
+fn infer_device_from_path(_path: &Path) -> (String, String) {
+    ("unknown".to_string(), "unknown".to_string())
 }
 
 fn infer_target_from_path(path: &Path) -> String {

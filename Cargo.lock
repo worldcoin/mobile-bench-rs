@@ -1082,7 +1082,6 @@ dependencies = [
 name = "mobench-sdk"
 version = "0.1.35"
 dependencies = [
- "anyhow",
  "include_dir",
  "inventory",
  "libc",

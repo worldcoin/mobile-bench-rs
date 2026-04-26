@@ -768,13 +768,11 @@ fn render_dir(dir: &Dir, out_root: &Path, vars: &[TemplateVar]) -> Result<(), Be
                     relative.set_extension("");
                 }
 
-                if should_render {
-                    if let Ok(text) = std::str::from_utf8(&contents) {
-                        let rendered = render_template(text, vars);
-                        // Validate that all template variables were replaced
-                        validate_no_unreplaced_placeholders(&rendered, &relative)?;
-                        contents = rendered.into_bytes();
-                    }
+                if should_render && let Ok(text) = std::str::from_utf8(&contents) {
+                    let rendered = render_template(text, vars);
+                    // Validate that all template variables were replaced
+                    validate_no_unreplaced_placeholders(&rendered, &relative)?;
+                    contents = rendered.into_bytes();
                 }
 
                 let out_path = out_root.join(relative);
@@ -804,10 +802,10 @@ fn is_template_file(path: &Path) -> bool {
     // Also check the filename without the .template extension
     if let Some(stem) = path.file_stem() {
         let stem_path = Path::new(stem);
-        if let Some(ext) = stem_path.extension() {
-            if let Some(ext_str) = ext.to_str() {
-                return TEMPLATE_EXTENSIONS.contains(&ext_str);
-            }
+        if let Some(ext) = stem_path.extension()
+            && let Some(ext_str) = ext.to_str()
+        {
+            return TEMPLATE_EXTENSIONS.contains(&ext_str);
         }
     }
     false
@@ -1126,10 +1124,10 @@ pub fn resolve_default_function(
 
     // Try to detect benchmarks from each potential location
     for dir in &search_dirs {
-        if dir.join("Cargo.toml").exists() {
-            if let Some(detected) = detect_default_function(dir, &crate_name_normalized) {
-                return detected;
-            }
+        if dir.join("Cargo.toml").exists()
+            && let Some(detected) = detect_default_function(dir, &crate_name_normalized)
+        {
+            return detected;
         }
     }
 
@@ -1326,7 +1324,8 @@ mod tests {
 
         for file in files_to_check {
             let path = android_dir.join(file);
-            let contents = fs::read_to_string(&path).expect(&format!("Failed to read {}", file));
+            let contents =
+                fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read {}", file));
 
             // Check for unreplaced placeholders
             let has_placeholder = contents.contains("{{") && contents.contains("}}");

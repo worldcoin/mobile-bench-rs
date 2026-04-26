@@ -27,8 +27,8 @@ For programmatic CI integrations, `mobench` exposes typed request/result types (
 - `crates/mobench-sdk` ([mobench-sdk](https://crates.io/crates/mobench-sdk)): core SDK with timing harness, builders, registry, and codegen
 - `crates/mobench-macros` ([mobench-macros](https://crates.io/crates/mobench-macros)): `#[benchmark]` proc macro
 - `crates/sample-fns`: sample benchmarks and UniFFI bindings
-- `examples/basic-benchmark`: minimal SDK integration example
-- `examples/ffi-benchmark`: full UniFFI/FFI surface example
+- `examples/basic-benchmark`: minimal SDK integration example with a local README
+- `examples/ffi-benchmark`: full UniFFI/FFI surface example with a local README
 
 ## Quick start
 
@@ -220,6 +220,7 @@ CLI flags override config file values when provided.
 - `docs/guides/browserstack-metrics.md`: BrowserStack metric normalization and limits
 - `docs/guides/fetch-results.md`: fetching and summarizing results
 - `docs/codebase/README.md`: current codebase reference map
+- `docs/codebase/PUBLIC_API.md`: public API, semver, feature flag, MSRV, and release-readiness boundaries
 - `docs/MIGRATION_GUIDE.md`: migration notes for CI and reporting changes
 - `docs/specs/production-readiness-roadmap.md`: production-readiness launch gates for crate quality, output contracts, diagnostics, examples, docs, and public launch assets
 - `docs/specs/dx-improvement-spec.md`: historical DX design spec, kept for context only

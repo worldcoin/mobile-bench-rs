@@ -672,10 +672,11 @@ impl BrowserStackClient {
     fn extract_json_from_ios_log_section(section: &str) -> Option<Value> {
         // First, try the whole section as-is (trimmed)
         let trimmed = section.trim();
-        if trimmed.starts_with('{') && trimmed.ends_with('}') {
-            if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-                return Some(json);
-            }
+        if trimmed.starts_with('{')
+            && trimmed.ends_with('}')
+            && let Ok(json) = serde_json::from_str::<Value>(trimmed)
+        {
+            return Some(json);
         }
 
         // Look for JSON on individual lines, stripping iOS log prefixes
@@ -688,10 +689,10 @@ impl BrowserStackClient {
             // Look for JSON starting with {
             if let Some(json_start) = line.find('{') {
                 let potential_json = &line[json_start..];
-                if let Some(json) = Self::extract_balanced_json(potential_json) {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&json) {
-                        return Some(parsed);
-                    }
+                if let Some(json) = Self::extract_balanced_json(potential_json)
+                    && let Ok(parsed) = serde_json::from_str::<Value>(&json)
+                {
+                    return Some(parsed);
                 }
             }
         }
@@ -713,10 +714,10 @@ impl BrowserStackClient {
 
         if let Some(json_start) = all_content.find('{') {
             let potential_json = &all_content[json_start..];
-            if let Some(json) = Self::extract_balanced_json(potential_json) {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&json) {
-                    return Some(parsed);
-                }
+            if let Some(json) = Self::extract_balanced_json(potential_json)
+                && let Ok(parsed) = serde_json::from_str::<Value>(&json)
+            {
+                return Some(parsed);
             }
         }
 
@@ -906,15 +907,15 @@ impl BrowserStackClient {
                 }
             }
 
-            if let Ok(app_profiling_v2) = self.get_app_profiling_v2(build_id, &device.session_id) {
-                if app_profiling_v2.sample_count > 0 {
-                    println!("    Found App Profiling v2 metrics");
-                    device_performance_metrics = merge_performance_metrics(
-                        Some(device_performance_metrics),
-                        Some(app_profiling_v2),
-                    )
-                    .unwrap_or_default();
-                }
+            if let Ok(app_profiling_v2) = self.get_app_profiling_v2(build_id, &device.session_id)
+                && app_profiling_v2.sample_count > 0
+            {
+                println!("    Found App Profiling v2 metrics");
+                device_performance_metrics = merge_performance_metrics(
+                    Some(device_performance_metrics),
+                    Some(app_profiling_v2),
+                )
+                .unwrap_or_default();
             }
 
             if let Some(results) = device_benchmark_results {

@@ -19,17 +19,17 @@ production Rust crates.
 Audience: library adopters, CLI users, maintainers.
 
 Checklist:
-- [ ] Audit public APIs exported from `mobench-sdk`.
-- [ ] Document semver and stability boundaries.
-- [ ] Review feature flags, especially `full` and `runner-only`.
-- [ ] Replace reusable-library `anyhow` surfaces with typed errors where appropriate.
-- [ ] Improve docs.rs module docs and examples.
-- [ ] Add compile-tested doc examples for core SDK usage.
-- [ ] Add or refine minimal library adopter examples.
-- [ ] Audit crate metadata, badges, readmes, categories, and keywords.
-- [ ] Document MSRV policy.
-- [ ] Enforce rustfmt, clippy, and rustdoc warnings in CI.
-- [ ] Run `cargo publish --dry-run` for all published crates before release.
+- [x] Audit public APIs exported from `mobench-sdk`.
+- [x] Document semver and stability boundaries.
+- [x] Review feature flags, especially `full` and `runner-only`.
+- [x] Replace reusable-library `anyhow` surfaces with typed errors where appropriate.
+- [x] Improve docs.rs module docs and examples.
+- [x] Add compile-tested doc examples for core SDK usage.
+- [x] Add or refine minimal library adopter examples.
+- [x] Audit crate metadata, badges, readmes, categories, and keywords.
+- [x] Document MSRV policy.
+- [x] Enforce rustfmt, clippy, and rustdoc warnings in CI.
+- [x] Run `cargo publish --dry-run` for all published crates before release.
 
 Verification signals:
 - `cargo test --workspace` passes.

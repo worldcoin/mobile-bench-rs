@@ -3,6 +3,7 @@ name = "sample-fns"
 version.workspace = true
 edition = "2021"  # UniFFI 0.28 generates code for edition 2021
 license.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "sample_fns"

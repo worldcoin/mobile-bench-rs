@@ -481,12 +481,11 @@ impl IosBuilder {
         // Check if the current directory (project_root) IS the crate
         // This handles the case where user runs `cargo mobench build` from within the crate directory
         let root_cargo_toml = self.project_root.join("Cargo.toml");
-        if root_cargo_toml.exists() {
-            if let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml) {
-                if pkg_name == self.crate_name {
-                    return Ok(self.project_root.clone());
-                }
-            }
+        if root_cargo_toml.exists()
+            && let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml)
+            && pkg_name == self.crate_name
+        {
+            return Ok(self.project_root.clone());
         }
 
         // Try bench-mobile/ (SDK projects)

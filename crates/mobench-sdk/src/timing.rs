@@ -733,7 +733,7 @@ struct MemoryPeakSampler {
 
 impl MemoryPeakSampler {
     fn start() -> Option<Self> {
-        Self::start_with_reader(Arc::new(|| current_process_memory_kb()))
+        Self::start_with_reader(Arc::new(current_process_memory_kb))
     }
 
     fn start_with_reader(reader: MemoryReader) -> Option<Self> {
@@ -855,7 +855,7 @@ fn current_process_memory_kb() -> Option<u64> {
     }
 
     let info = unsafe { info.assume_init() };
-    Some((info.resident_size / 1024) as u64)
+    Some(info.resident_size / 1024)
 }
 
 #[cfg(not(any(
@@ -1007,12 +1007,12 @@ pub enum TimingError {
 ///
 /// Uses [`std::time::Instant`] for timing, which provides monotonic,
 /// nanosecond-resolution measurements on most platforms.
-pub fn run_closure<F>(spec: BenchSpec, mut f: F) -> Result<BenchReport, TimingError>
+pub fn run_closure<F>(spec: BenchSpec, f: F) -> Result<BenchReport, TimingError>
 where
     F: FnMut() -> Result<(), TimingError>,
 {
     let mut monitor = DefaultResourceMonitor;
-    run_closure_with_monitor(spec, &mut monitor, move || f())
+    run_closure_with_monitor(spec, &mut monitor, f)
 }
 
 fn run_closure_with_monitor<F, M>(
@@ -1052,7 +1052,7 @@ where
     begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
     for iteration in 0..spec.iterations {
-        let (sample, start, end) = match measure_iteration(monitor, || f()) {
+        let (sample, start, end) = match measure_iteration(monitor, &mut f) {
             Ok(measurement) => measurement,
             Err(err) => {
                 let _ = finish_semantic_phase_collection();
@@ -1227,20 +1227,15 @@ where
 /// ```
 pub fn run_closure_with_setup_per_iter<S, T, F>(
     spec: BenchSpec,
-    mut setup: S,
-    mut f: F,
+    setup: S,
+    f: F,
 ) -> Result<BenchReport, TimingError>
 where
     S: FnMut() -> T,
     F: FnMut(T) -> Result<(), TimingError>,
 {
     let mut monitor = DefaultResourceMonitor;
-    run_closure_with_setup_per_iter_with_monitor(
-        spec,
-        &mut monitor,
-        move || setup(),
-        move |input| f(input),
-    )
+    run_closure_with_setup_per_iter_with_monitor(spec, &mut monitor, setup, f)
 }
 
 fn run_closure_with_setup_per_iter_with_monitor<S, T, F, M>(

@@ -539,6 +539,7 @@ enum Command {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum CiCommand {
     /// Generate GitHub Actions workflow + local action wrapper.
     Init {
@@ -1607,17 +1608,17 @@ pub fn run() -> Result<()> {
             let mut compare_report = None;
             let mut regression_findings: Vec<RegressionFinding> = Vec::new();
             if let Some(baseline_path) = baseline_compare_path.as_deref() {
-                let report = compare_summaries(&baseline_path, &summary_paths.json)?;
+                let report = compare_summaries(baseline_path, &summary_paths.json)?;
                 regression_findings = detect_regressions(&report, regression_threshold_pct);
                 compare_report = Some(report);
             }
-            if let Some(snapshot_path) = baseline_snapshot_path {
-                if let Err(err) = fs::remove_file(&snapshot_path) {
-                    eprintln!(
-                        "Warning: failed to remove baseline snapshot {}: {err}",
-                        snapshot_path.display()
-                    );
-                }
+            if let Some(snapshot_path) = baseline_snapshot_path
+                && let Err(err) = fs::remove_file(&snapshot_path)
+            {
+                eprintln!(
+                    "Warning: failed to remove baseline snapshot {}: {err}",
+                    snapshot_path.display()
+                );
             }
             if let Some(report) = &compare_report {
                 inject_compare_into_summary(
@@ -1634,12 +1635,11 @@ pub fn run() -> Result<()> {
                 }
                 if let Some(report) = &compare_report {
                     let compare_markdown = render_compare_markdown(report);
-                    if let Ok(summary_path) = env::var("GITHUB_STEP_SUMMARY") {
-                        if let Err(err) =
+                    if let Ok(summary_path) = env::var("GITHUB_STEP_SUMMARY")
+                        && let Err(err) =
                             append_github_step_summary(&compare_markdown, &summary_path)
-                        {
-                            eprintln!("Warning: failed to append comparison report: {err}");
-                        }
+                    {
+                        eprintln!("Warning: failed to append comparison report: {err}");
                     }
                 }
             } else if let Some(report) = &compare_report {
@@ -2536,19 +2536,19 @@ fn resolve_ci_functions(args: &CiRunArgs) -> Result<Vec<String>> {
     let mut funcs = args.functions.clone();
 
     // --function (singular) is sugar for a single-element list
-    if let Some(ref f) = args.function {
-        if !funcs.contains(f) {
-            funcs.insert(0, f.clone());
-        }
+    if let Some(ref f) = args.function
+        && !funcs.contains(f)
+    {
+        funcs.insert(0, f.clone());
     }
 
     // Support JSON array passed as a single element: '["a","b"]'
     if funcs.len() == 1 {
         let trimmed = funcs[0].trim();
-        if trimmed.starts_with('[') {
-            if let Ok(parsed) = serde_json::from_str::<Vec<String>>(trimmed) {
-                return Ok(parsed);
-            }
+        if trimmed.starts_with('[')
+            && let Ok(parsed) = serde_json::from_str::<Vec<String>>(trimmed)
+        {
+            return Ok(parsed);
         }
     }
 
@@ -3021,26 +3021,26 @@ fn cmd_ci_check_run(args: CiCheckRunArgs) -> Result<()> {
                     &bench.name,
                 );
 
-                if let Some(base) = baseline_bench {
-                    if base.timing.avg_ms > 0.0 {
-                        let pct_change =
-                            (bench.timing.avg_ms - base.timing.avg_ms) / base.timing.avg_ms * 100.0;
+                if let Some(base) = baseline_bench
+                    && base.timing.avg_ms > 0.0
+                {
+                    let pct_change =
+                        (bench.timing.avg_ms - base.timing.avg_ms) / base.timing.avg_ms * 100.0;
 
-                        if pct_change > args.regression_threshold_pct {
-                            has_regression = true;
-                            let line = annotations.len() as u32 + 1;
-                            annotations.push(github::CheckRunAnnotation {
-                                path: args.annotation_path.clone(),
-                                start_line: line,
-                                end_line: line,
-                                annotation_level: "warning".to_string(),
-                                message: format!(
-                                    "{} regressed {pct_change:+.1}% ({:.1}ms \u{2192} {:.1}ms)",
-                                    bench.label, base.timing.avg_ms, bench.timing.avg_ms
-                                ),
-                                title: format!("Regression: {}", bench.label),
-                            });
-                        }
+                    if pct_change > args.regression_threshold_pct {
+                        has_regression = true;
+                        let line = annotations.len() as u32 + 1;
+                        annotations.push(github::CheckRunAnnotation {
+                            path: args.annotation_path.clone(),
+                            start_line: line,
+                            end_line: line,
+                            annotation_level: "warning".to_string(),
+                            message: format!(
+                                "{} regressed {pct_change:+.1}% ({:.1}ms \u{2192} {:.1}ms)",
+                                bench.label, base.timing.avg_ms, bench.timing.avg_ms
+                            ),
+                            title: format!("Regression: {}", bench.label),
+                        });
                     }
                 }
             }
@@ -3804,15 +3804,15 @@ fn validate_artifacts_for_browserstack(
 
     match target {
         MobileTarget::Android => {
-            if let Some(apk_path) = apk {
-                if !apk_path.exists() {
-                    missing.push(("Android APK".to_string(), apk_path.to_path_buf()));
-                }
+            if let Some(apk_path) = apk
+                && !apk_path.exists()
+            {
+                missing.push(("Android APK".to_string(), apk_path.to_path_buf()));
             }
-            if let Some(test_apk_path) = test_apk {
-                if !test_apk_path.exists() {
-                    missing.push(("Android test APK".to_string(), test_apk_path.to_path_buf()));
-                }
+            if let Some(test_apk_path) = test_apk
+                && !test_apk_path.exists()
+            {
+                missing.push(("Android test APK".to_string(), test_apk_path.to_path_buf()));
             }
         }
         MobileTarget::Ios => {
@@ -4419,25 +4419,25 @@ struct RegressionFinding {
 fn detect_regressions(report: &CompareReport, threshold_pct: f64) -> Vec<RegressionFinding> {
     let mut findings = Vec::new();
     for row in &report.rows {
-        if let Some(delta) = row.median_delta_pct {
-            if delta > threshold_pct {
-                findings.push(RegressionFinding {
-                    device: row.device.clone(),
-                    function: row.function.clone(),
-                    metric: "median".to_string(),
-                    delta_pct: delta,
-                });
-            }
+        if let Some(delta) = row.median_delta_pct
+            && delta > threshold_pct
+        {
+            findings.push(RegressionFinding {
+                device: row.device.clone(),
+                function: row.function.clone(),
+                metric: "median".to_string(),
+                delta_pct: delta,
+            });
         }
-        if let Some(delta) = row.p95_delta_pct {
-            if delta > threshold_pct {
-                findings.push(RegressionFinding {
-                    device: row.device.clone(),
-                    function: row.function.clone(),
-                    metric: "p95".to_string(),
-                    delta_pct: delta,
-                });
-            }
+        if let Some(delta) = row.p95_delta_pct
+            && delta > threshold_pct
+        {
+            findings.push(RegressionFinding {
+                device: row.device.clone(),
+                function: row.function.clone(),
+                metric: "p95".to_string(),
+                delta_pct: delta,
+            });
         }
     }
     findings
@@ -5744,18 +5744,17 @@ fn ensure_android_home() {
     if let Ok(ndk_home) = std::env::var("ANDROID_NDK_HOME") {
         // ANDROID_NDK_HOME is typically $ANDROID_HOME/ndk/<version>
         let ndk_path = std::path::Path::new(&ndk_home);
-        if let Some(ndk_dir) = ndk_path.parent() {
-            if ndk_dir.file_name().is_some_and(|n| n == "ndk") {
-                if let Some(sdk_root) = ndk_dir.parent() {
-                    eprintln!(
-                        "Inferred ANDROID_HOME={} from ANDROID_NDK_HOME",
-                        sdk_root.display()
-                    );
-                    // SAFETY: called early in single-threaded CLI init, before
-                    // any threads are spawned.
-                    unsafe { std::env::set_var("ANDROID_HOME", sdk_root) };
-                }
-            }
+        if let Some(ndk_dir) = ndk_path.parent()
+            && ndk_dir.file_name().is_some_and(|n| n == "ndk")
+            && let Some(sdk_root) = ndk_dir.parent()
+        {
+            eprintln!(
+                "Inferred ANDROID_HOME={} from ANDROID_NDK_HOME",
+                sdk_root.display()
+            );
+            // SAFETY: called early in single-threaded CLI init, before
+            // any threads are spawned.
+            unsafe { std::env::set_var("ANDROID_HOME", sdk_root) };
         }
     }
 }
@@ -5873,6 +5872,7 @@ fn cmd_init_sdk(
 }
 
 /// Build mobile artifacts using `mobench-sdk`.
+#[allow(clippy::too_many_arguments)]
 fn cmd_build(
     target: SdkTarget,
     release: bool,
@@ -6243,6 +6243,7 @@ fn cmd_package_xcuitest(
 }
 
 /// Verify benchmark setup: registry, spec, artifacts, and optional smoke test
+#[allow(clippy::too_many_arguments)]
 fn cmd_verify(
     project_root: Option<PathBuf>,
     crate_path: Option<PathBuf>,
@@ -7951,15 +7952,15 @@ fn extend_android_prereq_checks(checks: &mut Vec<PrereqCheck>) {
 fn collect_issues(checks: &[PrereqCheck]) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     for check in checks {
-        if !check.passed {
-            if let Some(ref fix) = check.fix_hint {
-                issues.push(ValidationIssue {
-                    category: issue_category_for_check(check),
-                    check: check.name.clone(),
-                    detail: check.detail.clone(),
-                    fix_hint: fix.clone(),
-                });
-            }
+        if !check.passed
+            && let Some(ref fix) = check.fix_hint
+        {
+            issues.push(ValidationIssue {
+                category: issue_category_for_check(check),
+                check: check.name.clone(),
+                detail: check.detail.clone(),
+                fix_hint: fix.clone(),
+            });
         }
     }
     issues

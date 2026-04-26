@@ -3,12 +3,14 @@ name = "mobench-macros"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Procedural macros for mobench benchmarks with setup, teardown, and per-iteration support"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
 documentation = "https://docs.rs/mobench-macros"
 readme = "README.md"
 keywords = ["benchmark", "mobile", "macro", "procedural"]
+categories = ["development-tools::procedural-macro-helpers"]
 
 [badges]
 maintenance = { status = "actively-developed" }
