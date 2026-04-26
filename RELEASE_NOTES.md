@@ -11,6 +11,18 @@ Crates.io release history:
 - [mobench-sdk](https://crates.io/crates/mobench-sdk)
 - [mobench-macros](https://crates.io/crates/mobench-macros)
 
+## Unreleased
+
+- Added production-readiness documentation for public API boundaries, semver
+  expectations, feature flags, MSRV, release checks, examples, and launch
+  diagrams.
+- Added Rust quality CI covering rustfmt, clippy, rustdoc, tests, and publish
+  dry-runs for the published crates.
+- Added opt-in structured CLI tracing through `--verbose` or `MOBENCH_LOG`, plus
+  an explicit `doctor` MSRV check.
+- Added host-only fixture contract coverage for example summary schemas and
+  stable Markdown/CSV rendering.
+
 ## Support Policy
 
 - `v0.1.35` is the current supported release.

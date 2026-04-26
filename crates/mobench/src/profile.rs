@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::info;
 
 use crate::{
     DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
@@ -586,13 +587,25 @@ where
     let run_id = build_run_id(args.target, &args.function);
     let run_output_dir = args.output_dir.join(&run_id);
     let mut manifest = build_capture_plan(args, &target, &run_output_dir)?;
+    let profile_span = tracing::info_span!(
+        "profile_run",
+        target = ?args.target,
+        provider = ?args.provider,
+        backend = ?target.backend,
+        function = %args.function,
+        dry_run
+    );
+    let _profile_span = profile_span.enter();
+    info!(output_dir = %run_output_dir.display(), "resolved profile run");
     let execution_result = if dry_run {
+        info!("planning profile capture only");
         manifest.capture_metadata.warnings.push(
             "dry-run enabled; capture planning stopped before execution and recorded the planned artifact contract only"
                 .into(),
         );
         Ok(())
     } else {
+        info!("executing profile capture");
         execute(args, &target, &mut manifest)
     };
 
@@ -603,6 +616,7 @@ where
         || manifest.semantic_profile.status != SemanticCaptureStatus::Planned;
 
     if should_persist_outputs {
+        info!("writing profile session outputs");
         write_profile_session_outputs(args, &run_output_dir, &manifest)?;
     }
     execution_result?;
@@ -1702,6 +1716,11 @@ pub fn cmd_profile_diff(args: &ProfileDiffArgs) -> Result<()> {
     let diff_run_dir = args.output_dir.join(&diff_run_id);
     let processed_root = diff_run_dir.join("artifacts/processed");
     std::fs::create_dir_all(&processed_root)?;
+    info!(
+        output_dir = %diff_run_dir.display(),
+        normalize = args.normalize,
+        "building profile diff"
+    );
 
     let full_mode = build_profile_diff_mode(
         baseline_run_dir,

@@ -75,23 +75,23 @@ Goal: make mobench easy to adopt, debug, explain, and promote publicly.
 Audience: CLI users, library adopters, public launch readers.
 
 Checklist:
-- [ ] Add structured tracing/logging to CLI flows.
-- [ ] Add progress spans for build, package, upload, poll, fetch, summarize, and profile steps.
-- [ ] Improve human-readable diagnostics with likely fixes.
-- [ ] Expand `doctor` coverage for Android, iOS, BrowserStack, and profile prerequisites.
-- [ ] Add examples for minimal benchmark usage.
-- [ ] Add examples for setup/teardown benchmarks.
-- [ ] Add examples for FFI/custom type benchmarks.
-- [ ] Add examples for CI-only benchmark workflows.
-- [ ] Add examples for profiling workflows.
-- [ ] Add examples for programmatic SDK usage.
-- [ ] Add README graphics for crate architecture.
-- [ ] Add README graphics for benchmark execution lifecycle.
-- [ ] Add README graphics for BrowserStack CI lifecycle.
-- [ ] Add README graphics for local profiling artifact lifecycle.
-- [ ] Add README graphics for SDK versus CLI responsibility boundaries.
-- [ ] Write concise launch copy explaining why mobench exists.
-- [ ] Keep release notes and migration notes current.
+- [x] Add structured tracing/logging to CLI flows.
+- [x] Add progress spans for build, package, upload, poll, fetch, summarize, and profile steps.
+- [x] Improve human-readable diagnostics with likely fixes.
+- [x] Expand `doctor` coverage for Android, iOS, BrowserStack, and profile prerequisites.
+- [x] Add examples for minimal benchmark usage.
+- [x] Add examples for setup/teardown benchmarks.
+- [x] Add examples for FFI/custom type benchmarks.
+- [x] Add examples for CI-only benchmark workflows.
+- [x] Add examples for profiling workflows.
+- [x] Add examples for programmatic SDK usage.
+- [x] Add README graphics for crate architecture.
+- [x] Add README graphics for benchmark execution lifecycle.
+- [x] Add README graphics for BrowserStack CI lifecycle.
+- [x] Add README graphics for local profiling artifact lifecycle.
+- [x] Add README graphics for SDK versus CLI responsibility boundaries.
+- [x] Write concise launch copy explaining why mobench exists.
+- [x] Keep release notes and migration notes current.
 
 Verification signals:
 - A new user can follow the README from install to first result.

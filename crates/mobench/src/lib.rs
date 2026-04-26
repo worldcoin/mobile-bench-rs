@@ -135,6 +135,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tracing::{debug, info};
+use tracing_subscriber::EnvFilter;
 
 use browserstack::{BrowserStackAuth, BrowserStackClient};
 
@@ -1151,11 +1153,34 @@ enum RemoteRun {
     },
 }
 
+fn init_tracing(verbose: bool) {
+    let filter = env::var("MOBENCH_LOG").unwrap_or_else(|_| {
+        if verbose {
+            "mobench=debug".to_string()
+        } else {
+            "warn".to_string()
+        }
+    });
+    let filter = EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new("warn"));
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .without_time()
+        .try_init();
+}
+
 pub fn run() -> Result<()> {
     // Load dotenv globally as a baseline for commands that don't resolve a layout
     // (e.g. fetch, doctor, ci run). Layout-aware commands reload from the resolved root.
     load_dotenv_global();
     let cli = Cli::parse();
+    init_tracing(cli.verbose);
+    debug!(
+        dry_run = cli.dry_run,
+        non_interactive = cli.non_interactive,
+        "parsed CLI arguments"
+    );
     match cli.command {
         Command::Run {
             target,
@@ -1211,9 +1236,26 @@ pub fn run() -> Result<()> {
             )?;
             let summary_paths = resolve_summary_paths(output.as_deref())?;
             let output_dir = layout.output_dir.clone();
+            let run_span = tracing::info_span!(
+                "benchmark_run",
+                target = ?spec.target,
+                function = %spec.function,
+                iterations = spec.iterations,
+                warmup = spec.warmup,
+                devices = spec.devices.len(),
+                local_only,
+                release
+            );
+            let _run_span = run_span.enter();
+            info!(
+                output_dir = %output_dir.display(),
+                summary_json = %summary_paths.json.display(),
+                "resolved benchmark run"
+            );
 
             // Validate device specs early to catch errors before building (C2: Device validation)
             if !spec.devices.is_empty() && !local_only {
+                info!(device_count = spec.devices.len(), "validating device specs");
                 if cli.dry_run {
                     println!("[dry-run] Skipping BrowserStack device validation");
                 } else if let Ok(creds) =
@@ -1354,6 +1396,7 @@ pub fn run() -> Result<()> {
             } else {
                 match spec.target {
                     MobileTarget::Android => {
+                        info!("building Android artifacts");
                         if progress {
                             println!("[2/4] Building Android APK...");
                         } else {
@@ -1379,6 +1422,7 @@ pub fn run() -> Result<()> {
                             }
                             Some(MobileArtifacts::Android { apk })
                         } else {
+                            info!("uploading Android artifacts to BrowserStack");
                             if progress {
                                 println!("[3/4] Uploading to BrowserStack...");
                             }
@@ -1391,6 +1435,7 @@ pub fn run() -> Result<()> {
                         }
                     }
                     MobileTarget::Ios => {
+                        info!("building iOS artifacts");
                         if progress {
                             println!("[2/4] Building iOS xcframework...");
                         } else {
@@ -1417,6 +1462,7 @@ pub fn run() -> Result<()> {
                                 println!("[dry-run] Skipping BrowserStack upload/run for iOS");
                             }
                         } else {
+                            info!("uploading iOS artifacts to BrowserStack");
                             if ios_xcuitest.as_ref().is_some_and(|artifacts| {
                                 uses_managed_ios_xcuitest_artifacts(&layout, artifacts)
                             }) {
@@ -1598,6 +1644,7 @@ pub fn run() -> Result<()> {
             }
 
             run_summary.summary = build_summary(&run_summary)?;
+            info!("writing benchmark summaries");
             write_summary(
                 &run_summary,
                 &summary_paths,
@@ -7910,6 +7957,7 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
     let mut checks: Vec<PrereqCheck> = Vec::new();
     checks.push(check_cargo());
     checks.push(check_rustup());
+    checks.push(check_rustc_msrv());
 
     match target {
         SdkTarget::Android => {
@@ -7939,6 +7987,7 @@ fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
 }
 
 const DEFAULT_ANDROID_DOCTOR_RUST_TARGETS: &[&str] = &["aarch64-linux-android"];
+const WORKSPACE_MSRV: &str = "1.85";
 
 fn extend_android_prereq_checks(checks: &mut Vec<PrereqCheck>) {
     checks.push(check_android_ndk_home());
@@ -8110,6 +8159,57 @@ fn check_rustup() -> PrereqCheck {
             fix_hint: Some("Install rustup: https://rustup.rs".to_string()),
         },
     }
+}
+
+fn check_rustc_msrv() -> PrereqCheck {
+    match command_version_line("rustc", &["--version"]) {
+        Some(version) if rustc_version_meets_msrv(&version, WORKSPACE_MSRV) => PrereqCheck {
+            name: "rustc MSRV".to_string(),
+            passed: true,
+            detail: Some(format!("{version} (requires >= {WORKSPACE_MSRV})")),
+            fix_hint: None,
+        },
+        Some(version) => PrereqCheck {
+            name: "rustc MSRV".to_string(),
+            passed: false,
+            detail: Some(format!("{version} (requires >= {WORKSPACE_MSRV})")),
+            fix_hint: Some(format!(
+                "Update Rust: rustup update stable (MSRV {WORKSPACE_MSRV})"
+            )),
+        },
+        None => PrereqCheck {
+            name: "rustc MSRV".to_string(),
+            passed: false,
+            detail: Some("could not run rustc --version".to_string()),
+            fix_hint: Some("Install Rust: https://rustup.rs".to_string()),
+        },
+    }
+}
+
+fn rustc_version_meets_msrv(version_line: &str, msrv: &str) -> bool {
+    let Some(actual) = parse_rust_version(version_line) else {
+        return false;
+    };
+    let Some(required) = parse_rust_version(msrv) else {
+        return false;
+    };
+    actual >= required
+}
+
+fn parse_rust_version(input: &str) -> Option<(u32, u32, u32)> {
+    let version = input
+        .split_whitespace()
+        .find(|part| part.chars().next().is_some_and(|ch| ch.is_ascii_digit()))?;
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts
+        .next()
+        .and_then(|part| part.split('-').next())
+        .unwrap_or("0")
+        .parse()
+        .ok()?;
+    Some((major, minor, patch))
 }
 
 fn check_android_ndk_home() -> PrereqCheck {
@@ -8924,6 +9024,21 @@ project = "proj"
             DEFAULT_ANDROID_DOCTOR_RUST_TARGETS,
             &["aarch64-linux-android"]
         );
+    }
+
+    #[test]
+    fn rustc_msrv_parser_handles_stable_and_prerelease_versions() {
+        assert_eq!(
+            parse_rust_version("rustc 1.95.0 (59807616e 2026-04-14)"),
+            Some((1, 95, 0))
+        );
+        assert_eq!(
+            parse_rust_version("rustc 1.85.0-beta.1 (example)"),
+            Some((1, 85, 0))
+        );
+        assert!(rustc_version_meets_msrv("rustc 1.85.0", WORKSPACE_MSRV));
+        assert!(rustc_version_meets_msrv("rustc 1.95.0", WORKSPACE_MSRV));
+        assert!(!rustc_version_meets_msrv("rustc 1.84.1", WORKSPACE_MSRV));
     }
 
     #[test]
