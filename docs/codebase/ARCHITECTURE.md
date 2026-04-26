@@ -28,17 +28,19 @@ The workspace still centers on three published crates:
 Location: `crates/mobench/src/`
 
 Responsibilities:
-- parse commands and resolve project layout
+- dispatch parsed commands and resolve project layout
 - build/package Android and iOS artifacts
 - dispatch benchmark runs locally or to BrowserStack
 - fetch BrowserStack artifacts and enrich results
-- manage fixture CI flows and report rendering
+- manage CI orchestration and report rendering
 - run local native profiling and summarize profile sessions
 
 Important modules:
 - `lib.rs`: crate facade, command dispatch, benchmark/CI orchestration, and shared report helpers
 - `cli.rs`: clap command surface and target/value enums
 - `doctor.rs`: prerequisite checks, config validation, and machine-readable validation issue rendering
+- `devices.rs`: BrowserStack device listing/validation plus matrix/profile resolution
+- `fixtures.rs`: fixture init/build/verify/cache-key command implementations
 - `profile.rs`: target resolution, capture planning, capture execution, manifest/summary writing
 - `flamegraph_viewer.rs`: focused/full folded-stack derivation, SVG retinting, and interactive viewer document generation
 - `flamegraph_viewer_template.html`: browser-side flamegraph shell, timeline interactions, legend/fullscreen UX, and metadata layout

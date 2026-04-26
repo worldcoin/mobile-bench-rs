@@ -35,6 +35,8 @@ mobile-bench-rs/
 - `crates/mobench/src/lib.rs`: crate facade, command dispatch, benchmark/CI orchestration, and shared report helpers
 - `crates/mobench/src/cli.rs`: clap command surface, CLI argument structs, and target value enums
 - `crates/mobench/src/doctor.rs`: prerequisite, `doctor`, `check`, and config validation checks
+- `crates/mobench/src/devices.rs`: BrowserStack device listing/validation and matrix/profile resolution
+- `crates/mobench/src/fixtures.rs`: fixture init/build/verify/cache-key commands
 - `crates/mobench/src/profile.rs`: local native profiling flow, manifests, summaries, artifact contracts
 - `crates/mobench/src/flamegraph_viewer.rs`: focused/full flamegraph generation, SVG retinting, and HTML viewer assembly
 - `crates/mobench/src/flamegraph_viewer_template.html`: interactive flamegraph shell, timeline mode, and keyboard/fullscreen controls
@@ -89,6 +91,8 @@ target/mobench/profile/<run-id>/
 
 - new CLI arguments: `crates/mobench/src/cli.rs`
 - new prerequisite/config validation behavior: `crates/mobench/src/doctor.rs`
+- new device matrix/profile behavior: `crates/mobench/src/devices.rs`
+- new fixture lifecycle behavior: `crates/mobench/src/fixtures.rs`
 - new CLI orchestration, report, or profile behavior: `crates/mobench/src/`
 - new SDK/runtime/build/codegen behavior: `crates/mobench-sdk/src/`
 - benchmark registration semantics: `crates/mobench-macros/src/lib.rs`
