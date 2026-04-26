@@ -115,6 +115,53 @@ announcement unless they expose real launch risk.
 - [ ] Add machine-readable trace/event output for CI debugging.
 - [ ] Prepare landing-page-specific assets from README diagrams.
 
+### Later Hardening Evaluation
+
+Updated: 2026-04-26
+
+This bucket should be sequenced by launch risk rather than implemented as one
+large polish pass. The current repository has CI caching and fixture cache keys,
+but no dedicated `benches/`, fuzz target, `cargo-semver-checks`, or
+`cargo-deny` policy yet.
+
+P0 after first public promotion:
+- Add `cargo-semver-checks` for `mobench-sdk` and `mobench-macros`.
+  This protects the library-facing surface that adopters will depend on first.
+- Add `cargo-deny` with explicit license/advisory/source policy.
+  This is low product risk but high trust value before broader third-party use.
+- Add host benchmarks for parser, reporting, profile manifest rendering, and
+  BrowserStack log extraction. These give a baseline before tuning or
+  parallelizing anything.
+
+P1 once adoption feedback identifies slow paths:
+- Profile CLI hot paths with real examples: config resolution, template
+  generation, report rendering, profile diff generation, and BrowserStack
+  artifact normalization.
+- Improve APK/IPA build caching where profiling shows repeated template,
+  binding, or packaging work dominates local iteration time.
+- Parallelize independent build, fetch, and report steps only after benchmarks
+  make the current bottlenecks visible.
+- Add fuzz or property tests for config and device matrix parsing after the
+  host benchmark harness exists, so parser behavior and parser cost are both
+  tracked.
+
+P2 launch-asset and dependency-footprint follow-up:
+- Prepare landing-page-specific assets from README diagrams once the landing
+  page visual direction is chosen.
+- Consider narrower crate features after `cargo-deny` and host benchmarks show
+  which dependencies materially affect compile time, binary size, or policy
+  surface.
+- Add machine-readable trace/event output for CI debugging when there is a
+  concrete downstream consumer for it; the current `MOBENCH_LOG` tracing is
+  enough for near-term human debugging.
+
+Recommended first hardening PR:
+1. Add `cargo-semver-checks`, `cargo-deny`, and their CI jobs.
+2. Add a small Criterion suite for config parsing, summary rendering, CSV
+   rendering, profile manifest loading, and BrowserStack log extraction.
+3. Use the benchmark results to decide whether build caching or parallelization
+   should come next.
+
 ## Recommended Order
 
 1. Gate 1 crate hygiene, because this reduces adoption risk.
