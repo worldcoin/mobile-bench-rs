@@ -4,6 +4,8 @@ use serde_json::Value;
 use crate::reports::{extract_benchmark_resource_usage, extract_samples};
 use crate::{BenchmarkStats, DeviceSummary, MobileTarget, SummaryReport, compute_sample_stats};
 
+pub(crate) const ANDROID_BENCH_LOG_MARKER: &str = "BENCH_JSON";
+
 #[derive(Debug, Clone)]
 pub(crate) struct BenchmarkOutput {
     sections: Vec<BenchmarkOutputSection>,
@@ -239,5 +241,151 @@ fn raw_benchmark_target(value: &Value, device: &str) -> MobileTarget {
         MobileTarget::Ios
     } else {
         MobileTarget::Android
+    }
+}
+
+pub(crate) fn extract_benchmark_reports_from_logs(logs: &str) -> Vec<Value> {
+    let mut results = Vec::new();
+    if let Some(json) = extract_ios_benchmark_json(logs) {
+        results.push(json);
+    }
+
+    let marker = "BENCH_JSON ";
+    for line in logs.lines() {
+        if let Some(index) = line.find(marker) {
+            let json_part = &line[index + marker.len()..];
+            if let Ok(parsed) = serde_json::from_str::<Value>(json_part) {
+                results.push(parsed);
+            }
+        }
+    }
+
+    results
+}
+
+pub(crate) fn extract_ios_benchmark_json(logs: &str) -> Option<Value> {
+    let start_marker = "BENCH_REPORT_JSON_START";
+    let end_marker = "BENCH_REPORT_JSON_END";
+    let start_pos = logs.rfind(start_marker)?;
+    let after_start = &logs[start_pos + start_marker.len()..];
+    let end_pos = after_start.find(end_marker)?;
+    extract_ios_json_from_log_section(&after_start[..end_pos])
+}
+
+fn extract_ios_json_from_log_section(section: &str) -> Option<Value> {
+    let trimmed = section.trim();
+    if trimmed.starts_with('{')
+        && trimmed.ends_with('}')
+        && let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
+    {
+        return Some(parsed);
+    }
+
+    for line in section.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(json_start) = line.find('{')
+            && let Some(json) = extract_balanced_json(&line[json_start..])
+            && let Ok(parsed) = serde_json::from_str::<Value>(&json)
+        {
+            return Some(parsed);
+        }
+    }
+
+    let collapsed: String = section
+        .lines()
+        .map(|line| {
+            if let Some(prefix_end) = line.find("] ") {
+                &line[prefix_end + 2..]
+            } else {
+                line.trim()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let json_start = collapsed.find('{')?;
+    let json = extract_balanced_json(&collapsed[json_start..])?;
+    serde_json::from_str(&json).ok()
+}
+
+fn extract_balanced_json(input: &str) -> Option<String> {
+    if !input.starts_with('{') {
+        return None;
+    }
+
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+    for (index, ch) in input.char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(input[..=index].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+pub(crate) fn benchmark_value_function(value: &Value) -> Option<&str> {
+    value.get("function").and_then(Value::as_str).or_else(|| {
+        value
+            .get("spec")
+            .and_then(|spec| spec.get("name"))
+            .and_then(Value::as_str)
+    })
+}
+
+pub(crate) fn select_benchmark_value_for_function<'a>(
+    values: &'a [Value],
+    function: &str,
+) -> Option<&'a Value> {
+    let simple_name = function.split("::").last().unwrap_or(function);
+    values
+        .iter()
+        .rev()
+        .find(|value| {
+            benchmark_value_function(value).is_some_and(|name| {
+                name == function
+                    || name == simple_name
+                    || name.ends_with(&format!("::{simple_name}"))
+                    || function.ends_with(&format!("::{name}"))
+            })
+        })
+        .or_else(|| values.last())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_reports_select_requested_benchmark_function() {
+        let reports = extract_benchmark_reports_from_logs(
+            "03-26 19:00:00.000 BenchRunner I BENCH_JSON {\"function\":\"sample_fns::checksum\",\"samples_ns\":[1]}\n\
+             03-26 19:00:01.000 BenchRunner I BENCH_JSON {\"function\":\"sample_fns::fibonacci\",\"samples_ns\":[2]}",
+        );
+
+        let selected = select_benchmark_value_for_function(&reports, "sample_fns::fibonacci")
+            .expect("selected benchmark report");
+
+        assert_eq!(
+            benchmark_value_function(selected),
+            Some("sample_fns::fibonacci")
+        );
     }
 }
