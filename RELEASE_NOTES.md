@@ -16,8 +16,8 @@ Crates.io release history:
 - Added production-readiness documentation for public API boundaries, semver
   expectations, feature flags, MSRV, release checks, examples, and launch
   diagrams.
-- Added Rust quality CI covering rustfmt, clippy, rustdoc, tests, and publish
-  dry-runs for the published crates.
+- Added Rust quality CI covering rustfmt, clippy, rustdoc, tests, and
+  manually-triggered publish dry-runs for the published crates.
 - Added opt-in structured CLI tracing through `--verbose` or `MOBENCH_LOG`, plus
   an explicit `doctor` MSRV check.
 - Added host-only fixture contract coverage for example summary schemas and
@@ -25,8 +25,9 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.36` is the next production release candidate.
-- `v0.1.35` is the current published supported release.
+- `v0.1.36` is the current published supported release.
+- `v0.1.35` is the immediately previous supported release, superseded by
+  `v0.1.36`.
 - `v0.1.34` is the immediately previous supported release, superseded by
   `v0.1.35`.
 - Every earlier published version is a historical test build and should not be
@@ -37,8 +38,8 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.36` | Pending | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Release candidate |
-| `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Current supported release |
+| `v0.1.36` | 2026-04-27 | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Current supported release |
+| `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Superseded by `v0.1.36` |
 | `v0.1.34` | 2026-04-23 | `mobench 0.1.34`, `mobench-sdk 0.1.34`, `mobench-macros 0.1.34` | Superseded by `v0.1.35` |
 | `v0.1.33` | 2026-04-17 | `mobench 0.1.33`, `mobench-sdk 0.1.33`, `mobench-macros 0.1.33` | Superseded by `v0.1.34` |
 | `v0.1.32` | 2026-04-14 | `mobench 0.1.32`, `mobench-sdk 0.1.32`, `mobench-macros 0.1.32` | Superseded by `v0.1.33` |
@@ -78,7 +79,7 @@ Crates.io release history:
 
 ## v0.1.36
 
-Status: release candidate.
+Status: current supported release.
 
 ### Release hardening
 
