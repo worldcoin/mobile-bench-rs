@@ -835,7 +835,6 @@ impl PersistentMemorySampler {
                         Some(v) => v,
                         None => {
                             let _ = ack_tx.send(false);
-                            let _ = result_tx.send(None);
                             continue;
                         }
                     };
@@ -1987,6 +1986,44 @@ mod tests {
             ProcessMemoryPeak {
                 growth_kb: 40,
                 process_peak_kb: 140,
+            }
+        );
+    }
+
+    #[test]
+    fn persistent_memory_sampler_does_not_queue_result_when_begin_fails() {
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+
+        // Queue: [80=startup warmup, None=failed first baseline,
+        // 100=second baseline, 130=final sample].
+        let samples = Arc::new(Mutex::new(VecDeque::from([
+            Some(80_u64),
+            None,
+            Some(100_u64),
+            Some(130_u64),
+        ])));
+        let reader_samples = Arc::clone(&samples);
+        let reader = Arc::new(move || {
+            reader_samples
+                .lock()
+                .expect("sample queue")
+                .pop_front()
+                .unwrap_or(Some(130))
+        });
+
+        let sampler = PersistentMemorySampler::start_with_reader(reader).expect("sampler");
+        assert!(!sampler.begin_window());
+        assert!(sampler.begin_window());
+        let peak = sampler
+            .end_window()
+            .expect("second window should receive its own result");
+
+        assert_eq!(
+            peak,
+            ProcessMemoryPeak {
+                growth_kb: 30,
+                process_peak_kb: 130,
             }
         );
     }

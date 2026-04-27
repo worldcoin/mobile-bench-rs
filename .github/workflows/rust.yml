@@ -1,6 +1,7 @@
 name: Rust
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -56,6 +57,7 @@ jobs:
         run: cargo bench -p mobench --features bench-support --bench host_contracts -- --test
 
       - name: Publish dry run
+        if: github.event_name == 'workflow_dispatch'
         run: |
           cargo publish --dry-run -p mobench-macros
           cargo publish --dry-run -p mobench-sdk
