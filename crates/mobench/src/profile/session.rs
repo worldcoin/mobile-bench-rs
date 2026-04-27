@@ -6,8 +6,7 @@ use super::{
     ArtifactRecord, CaptureMetadataRecord, CaptureStatus, CaptureWarmupMode, NativeCaptureRecord,
     ProfileBackend, ProfileFormat, ProfileManifest, ProfileProvider, ProfileRunArgs,
     ResolvedProfileTarget, SemanticCaptureStatus, SemanticProfileRecord, SymbolizationRecord,
-    build_run_id, resolve_profile_target, validate_format_capabilities,
-    write_profile_session_outputs,
+    build_run_id, output, resolve_profile_target, validate_format_capabilities,
 };
 
 pub(super) struct ProfileSession {
@@ -57,7 +56,7 @@ impl ProfileSession {
     }
 
     pub(super) fn persist(&self, args: &ProfileRunArgs) -> Result<()> {
-        write_profile_session_outputs(args, &self.run_output_dir, &self.manifest)
+        output::persist_session_outputs(args, &self.run_output_dir, &self.manifest)
     }
 }
 
