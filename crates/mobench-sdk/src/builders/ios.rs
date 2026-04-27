@@ -2064,6 +2064,7 @@ impl IosBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
     use std::io::Write;
 
     #[test]
