@@ -321,6 +321,7 @@ CLI flags override config file values when provided.
 - `docs/guides/browserstack-ci.md`: BrowserStack benchmark CI setup
 - `docs/guides/browserstack-metrics.md`: BrowserStack metric normalization and limits
 - `docs/guides/fetch-results.md`: fetching and summarizing results
+- `docs/guides/release.md`: preflight and publish checklist
 - `docs/codebase/README.md`: current codebase reference map
 - `docs/codebase/PUBLIC_API.md`: public API, semver, feature flag, MSRV, and release-readiness boundaries
 - `docs/MIGRATION_GUIDE.md`: migration notes for CI and reporting changes

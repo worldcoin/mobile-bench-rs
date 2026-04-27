@@ -44,6 +44,7 @@ on:
         default: "5"
 
 permissions:
+  actions: write
   contents: read
   pull-requests: read
   checks: read
@@ -83,6 +84,13 @@ jobs:
               echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+          fi
+
+          PR_HEAD_REPO=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')
+          if [ "$PR_HEAD_REPO" != "$REPO" ]; then
+            echo "::warning::PR #${PR_NUMBER} comes from ${PR_HEAD_REPO}; skipping secret-bearing BrowserStack dispatch"
+            echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           # Check if bench label is present

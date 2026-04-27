@@ -41,7 +41,7 @@ path = "src/bin/cargo-mobench.rs"
 
 [dependencies]
 anyhow.workspace = true
-mobench-sdk = { version = "0.1.35", path = "../mobench-sdk" }
+mobench-sdk = { workspace = true, features = ["full"] }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

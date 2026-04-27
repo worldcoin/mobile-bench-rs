@@ -133,8 +133,8 @@ Run these before publishing the published crates:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-cargo test --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --all-features --no-deps
+cargo test --workspace --locked
 cargo publish --dry-run -p mobench-macros
 cargo publish --dry-run -p mobench-sdk
 cargo publish --dry-run -p mobench

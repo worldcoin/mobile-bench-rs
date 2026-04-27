@@ -25,7 +25,8 @@ Crates.io release history:
 
 ## Support Policy
 
-- `v0.1.35` is the current supported release.
+- `v0.1.36` is the next production release candidate.
+- `v0.1.35` is the current published supported release.
 - `v0.1.34` is the immediately previous supported release, superseded by
   `v0.1.35`.
 - Every earlier published version is a historical test build and should not be
@@ -36,6 +37,7 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
+| `v0.1.36` | Pending | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Release candidate |
 | `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Current supported release |
 | `v0.1.34` | 2026-04-23 | `mobench 0.1.34`, `mobench-sdk 0.1.34`, `mobench-macros 0.1.34` | Superseded by `v0.1.35` |
 | `v0.1.33` | 2026-04-17 | `mobench 0.1.33`, `mobench-sdk 0.1.33`, `mobench-macros 0.1.33` | Superseded by `v0.1.34` |
@@ -73,6 +75,19 @@ Crates.io release history:
 | `v0.1.2` | 2026-01-14 | `mobench 0.1.2`, `mobench-sdk 0.1.2`, `mobench-macros 0.1.2` | Yanked test build. Do not use. |
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
+
+## v0.1.36
+
+Status: release candidate.
+
+### Release hardening
+
+- Hardened clean first-run spec embedding for generated Android and iOS projects.
+- Restricted authenticated BrowserStack artifact downloads to BrowserStack HTTPS hosts.
+- Made config-file runs work without duplicate `--target` / `--function` flags and restored CLI-over-config precedence.
+- Tightened generated mobile template compatibility with minimal UniFFI report types.
+- Added compile-fail coverage for async benchmark functions and ensured setup teardown runs on benchmark errors.
+- Added release hygiene: locked CI gates, publish protections for examples, release checklist, security reporting policy, and BrowserStack secret-bearing workflow guards.
 
 ## v0.1.35
 

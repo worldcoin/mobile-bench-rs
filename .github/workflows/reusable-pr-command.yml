@@ -35,6 +35,7 @@ on:
         default: "5"
 
 permissions:
+  actions: write
   contents: read
   pull-requests: read
 
@@ -118,12 +119,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.issue.pull_request.url }}
+          REPO: ${{ github.repository }}
         run: |
           head_sha=$(gh api "$PR_URL" --jq '.head.sha')
+          head_repo=$(gh api "$PR_URL" --jq '.head.repo.full_name')
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "::warning::PR #${{ github.event.issue.number }} comes from ${head_repo}; skipping secret-bearing BrowserStack dispatch"
+            echo "trusted_head=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "trusted_head=true" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch benchmark workflow
-        if: steps.trust.outputs.trusted == 'true'
+        if: steps.trust.outputs.trusted == 'true' && steps.pr.outputs.trusted_head == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW: ${{ inputs.benchmark_workflow }}

@@ -815,8 +815,8 @@ cargo mobench package-ipa --method adhoc
 Verify credentials:
 
 ```bash
-echo $BROWSERSTACK_USERNAME
-echo $BROWSERSTACK_ACCESS_KEY
+test -n "$BROWSERSTACK_USERNAME" && echo "BROWSERSTACK_USERNAME is set"
+test -n "$BROWSERSTACK_ACCESS_KEY" && echo "BROWSERSTACK_ACCESS_KEY is set"
 ```
 
 Or check `.env.local` file exists and contains valid credentials.

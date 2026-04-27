@@ -1,0 +1,5 @@
+error: #[benchmark] does not support async fn. Move async work into a synchronous runtime boundary so the benchmark measures execution instead of future creation.
+ --> tests/ui/async_benchmark.rs:4:1
+  |
+4 | async fn async_work_is_not_a_benchmark() {}
+  | ^^^^^

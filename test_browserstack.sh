@@ -3,13 +3,18 @@ set -e
 
 # Load credentials
 export $(cat .env.local | xargs)
+NETRC_FILE=$(mktemp)
+trap 'rm -f "$NETRC_FILE"' EXIT
+chmod 600 "$NETRC_FILE"
+printf 'machine api-cloud.browserstack.com login %s password %s\n' \
+  "$BROWSERSTACK_USERNAME" "$BROWSERSTACK_ACCESS_KEY" > "$NETRC_FILE"
 
 echo "=== BrowserStack Manual Test Run ==="
 echo ""
 
 # Upload Android APK
 echo "1. Uploading Android APK..."
-ANDROID_APP_URL=$(curl -s -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+ANDROID_APP_URL=$(curl -s --netrc-file "$NETRC_FILE" \
   -X POST "https://api-cloud.browserstack.com/app-automate/upload" \
   -F "file=@android/app/build/outputs/apk/debug/app-debug.apk" \
   | jq -r '.app_url')
@@ -18,7 +23,7 @@ echo ""
 
 # Upload Android test APK
 echo "2. Uploading Android test APK..."
-ANDROID_TEST_URL=$(curl -s -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+ANDROID_TEST_URL=$(curl -s --netrc-file "$NETRC_FILE" \
   -X POST "https://api-cloud.browserstack.com/app-automate/espresso/v2/test-suite" \
   -F "file=@android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk" \
   | jq -r '.test_suite_url')
@@ -27,7 +32,7 @@ echo ""
 
 # Trigger Android Espresso run
 echo "3. Triggering Android test on Pixel 7..."
-ANDROID_BUILD=$(curl -s -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+ANDROID_BUILD=$(curl -s --netrc-file "$NETRC_FILE" \
   -X POST "https://api-cloud.browserstack.com/app-automate/espresso/v2/build" \
   -d "{\"app\": \"$ANDROID_APP_URL\", \"testSuite\": \"$ANDROID_TEST_URL\", \"devices\": [\"Google Pixel 7-13.0\"], \"project\": \"mobench-test\", \"deviceLogs\": true}" \
   -H "Content-Type: application/json")
@@ -38,7 +43,7 @@ echo ""
 
 # Upload iOS app
 echo "4. Uploading iOS app..."
-IOS_APP_URL=$(curl -s -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+IOS_APP_URL=$(curl -s --netrc-file "$NETRC_FILE" \
   -X POST "https://api-cloud.browserstack.com/app-automate/xcuitest/v2/app" \
   -F "file=@target/ios/BenchRunner.zip" \
   | jq -r '.app_url')
@@ -47,7 +52,7 @@ echo ""
 
 # Upload iOS test suite
 echo "5. Uploading iOS test suite..."
-IOS_TEST_URL=$(curl -s -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+IOS_TEST_URL=$(curl -s --netrc-file "$NETRC_FILE" \
   -X POST "https://api-cloud.browserstack.com/app-automate/xcuitest/v2/test-suite" \
   -F "file=@target/ios/BenchRunnerUITests.zip" \
   | jq -r '.test_suite_url')
@@ -56,7 +61,7 @@ echo ""
 
 # Trigger iOS XCUITest run
 echo "6. Triggering iOS test on iPhone 14..."
-IOS_BUILD=$(curl -s -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY" \
+IOS_BUILD=$(curl -s --netrc-file "$NETRC_FILE" \
   -X POST "https://api-cloud.browserstack.com/app-automate/xcuitest/v2/build" \
   -d "{\"app\": \"$IOS_APP_URL\", \"testSuite\": \"$IOS_TEST_URL\", \"devices\": [\"iPhone 14-16\"], \"project\": \"mobench-test\", \"deviceLogs\": true}" \
   -H "Content-Type: application/json")

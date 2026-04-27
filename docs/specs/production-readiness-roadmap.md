@@ -4,7 +4,7 @@ Updated: 2026-04-25
 
 ## Purpose
 
-mobench v0.1.35 is feature-ready for production use. This roadmap tracks the
+mobench v0.1.36 is feature-ready for production use. This roadmap tracks the
 quality, maintainability, documentation, and launch-readiness work needed before
 broader public promotion, including tweets, landing pages, and wider crates.io
 adoption.

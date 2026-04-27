@@ -1174,9 +1174,15 @@ impl AndroidBuilder {
             BuildProfile::Debug => "assembleDebugAndroidTest",
             BuildProfile::Release => "assembleReleaseAndroidTest",
         };
+        let profile_name = match config.profile {
+            BuildProfile::Debug => "debug",
+            BuildProfile::Release => "release",
+        };
 
         let mut cmd = Command::new("./gradlew");
-        cmd.arg(gradle_task).current_dir(&android_dir);
+        cmd.arg(format!("-PmobenchTestBuildType={profile_name}"))
+            .arg(gradle_task)
+            .current_dir(&android_dir);
 
         if self.verbose {
             cmd.arg("--info");
@@ -1218,11 +1224,6 @@ impl AndroidBuilder {
                 gradle_task,
             )));
         }
-
-        let profile_name = match config.profile {
-            BuildProfile::Debug => "debug",
-            BuildProfile::Release => "release",
-        };
 
         let test_apk_dir = android_dir
             .join("app/build/outputs/apk/androidTest")

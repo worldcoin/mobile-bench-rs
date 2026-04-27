@@ -4,13 +4,14 @@ version = "0.1.0"
 edition = "2021"
 license.workspace = true
 rust-version.workspace = true
+publish = false
 
 [lib]
 name = "ffi_benchmark"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-mobench-sdk = { path = "../../crates/mobench-sdk" }
+mobench-sdk = { workspace = true, features = ["full"] }
 inventory.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
