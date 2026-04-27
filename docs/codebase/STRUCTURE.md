@@ -32,8 +32,11 @@ mobile-bench-rs/
 
 ### CLI
 
-- `crates/mobench/src/lib.rs`: crate facade, command dispatch, benchmark/CI orchestration, and shared report helpers
+- `crates/mobench/src/lib.rs`: crate facade, command dispatch, project layout, build/package commands, and run orchestration
 - `crates/mobench/src/cli.rs`: clap command surface, CLI argument structs, and target value enums
+- `crates/mobench/src/ci.rs`: CI contract types, `ci` subcommands, programmatic `run_request`, and BrowserStack artifact fetch helpers
+- `crates/mobench/src/reports.rs`: summary construction, markdown/CSV rendering, GitHub report commands, and summary CLI output
+- `crates/mobench/src/compare.rs`: baseline resolution, summary comparison, regression detection, and JUnit/markdown compare output
 - `crates/mobench/src/doctor.rs`: prerequisite, `doctor`, `check`, and config validation checks
 - `crates/mobench/src/devices.rs`: BrowserStack device listing/validation and matrix/profile resolution
 - `crates/mobench/src/fixtures.rs`: fixture init/build/verify/cache-key commands
@@ -93,7 +96,10 @@ target/mobench/profile/<run-id>/
 - new prerequisite/config validation behavior: `crates/mobench/src/doctor.rs`
 - new device matrix/profile behavior: `crates/mobench/src/devices.rs`
 - new fixture lifecycle behavior: `crates/mobench/src/fixtures.rs`
-- new CLI orchestration, report, or profile behavior: `crates/mobench/src/`
+- new CI contract behavior: `crates/mobench/src/ci.rs`
+- new report rendering or summary output behavior: `crates/mobench/src/reports.rs`
+- new baseline comparison behavior: `crates/mobench/src/compare.rs`
+- new top-level run orchestration or build/package behavior: `crates/mobench/src/lib.rs`
 - new SDK/runtime/build/codegen behavior: `crates/mobench-sdk/src/`
 - benchmark registration semantics: `crates/mobench-macros/src/lib.rs`
 - template/runtime UX changes: `templates/` first, then mirror into `crates/mobench-sdk/templates/`

@@ -36,8 +36,11 @@ Responsibilities:
 - run local native profiling and summarize profile sessions
 
 Important modules:
-- `lib.rs`: crate facade, command dispatch, benchmark/CI orchestration, and shared report helpers
+- `lib.rs`: crate facade, command dispatch, project layout, build/package commands, and run orchestration
 - `cli.rs`: clap command surface and target/value enums
+- `ci.rs`: CI contract types, `ci` subcommands, programmatic `run_request`, and BrowserStack artifact fetch helpers
+- `reports.rs`: summary construction, markdown/CSV rendering, GitHub report commands, and summary CLI output
+- `compare.rs`: baseline resolution, summary comparison, regression detection, and JUnit/markdown compare output
 - `doctor.rs`: prerequisite checks, config validation, and machine-readable validation issue rendering
 - `devices.rs`: BrowserStack device listing/validation plus matrix/profile resolution
 - `fixtures.rs`: fixture init/build/verify/cache-key command implementations
