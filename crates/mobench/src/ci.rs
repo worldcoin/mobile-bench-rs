@@ -172,8 +172,14 @@ pub mod bench_support {
 ///
 /// Returns [`RunResult`] containing file paths and process exit semantics.
 pub fn run_request(request: &RunRequest) -> Result<RunResult> {
-    fs::create_dir_all(&request.output_dir)
-        .with_context(|| format!("creating output dir {}", request.output_dir.display()))?;
+    run_request_with_mode(request, false)
+}
+
+fn run_request_with_mode(request: &RunRequest, dry_run: bool) -> Result<RunResult> {
+    if !dry_run {
+        fs::create_dir_all(&request.output_dir)
+            .with_context(|| format!("creating output dir {}", request.output_dir.display()))?;
+    }
 
     let summary_json = request.output_dir.join("summary.json");
     let summary_md = request.output_dir.join("summary.md");
@@ -246,6 +252,9 @@ pub fn run_request(request: &RunRequest) -> Result<RunResult> {
     if request.progress {
         cmd.arg("--progress");
     }
+    if dry_run {
+        cmd.arg("--dry-run");
+    }
 
     let status = cmd.status().with_context(|| {
         format!(
@@ -256,6 +265,18 @@ pub fn run_request(request: &RunRequest) -> Result<RunResult> {
     let exit_code = status.code().unwrap_or(1);
     if !status.success() && status.code().is_none() {
         bail!("`cargo mobench run` terminated unexpectedly");
+    }
+    if dry_run {
+        return Ok(RunResult {
+            target: request.target,
+            report: Report {
+                summary_json,
+                summary_md,
+                results_csv,
+            },
+            exit_code,
+            regression_detected: exit_code == EXIT_REGRESSION,
+        });
     }
 
     if !summary_json.exists() {
@@ -491,11 +512,13 @@ pub(crate) fn root_summary_from_merged_targets(targets: &BTreeMap<String, Value>
         .and_then(|entry| entry.get("summary").cloned())
 }
 
-pub(crate) fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
+pub(crate) fn cmd_ci_run(args: CiRunArgs, dry_run: bool) -> Result<()> {
     let all_functions = resolve_ci_functions(&args)?;
 
-    fs::create_dir_all(&args.output_dir)
-        .with_context(|| format!("creating ci output dir {}", args.output_dir.display()))?;
+    if !dry_run {
+        fs::create_dir_all(&args.output_dir)
+            .with_context(|| format!("creating ci output dir {}", args.output_dir.display()))?;
+    }
     let metadata = ci_metadata_from_args(&args);
     let targets = args.target.targets();
 
@@ -504,7 +527,15 @@ pub(crate) fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
         let target = targets[0];
         let mut single_args = args.clone();
         single_args.function = Some(all_functions[0].clone());
-        let exit_code = cmd_ci_run_single(&single_args, target, &args.output_dir, &metadata)?;
+        let exit_code =
+            cmd_ci_run_single(&single_args, target, &args.output_dir, &metadata, dry_run)?;
+        if dry_run {
+            println!("CI dry run complete; no outputs written.");
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            return Ok(());
+        }
 
         let summary_json = args.output_dir.join("summary.json");
         let summary_md = args.output_dir.join("summary.md");
@@ -536,15 +567,22 @@ pub(crate) fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
             } else {
                 args.output_dir.join(target_value.as_str()).join(&slug)
             };
-            fs::create_dir_all(&target_dir)
-                .with_context(|| format!("creating target output dir {}", target_dir.display()))?;
+            if !dry_run {
+                fs::create_dir_all(&target_dir).with_context(|| {
+                    format!("creating target output dir {}", target_dir.display())
+                })?;
+            }
             let mut func_args = args.clone();
             func_args.function = Some(func.clone());
-            let exit_code = cmd_ci_run_single(&func_args, target_value, &target_dir, &metadata)?;
+            let exit_code =
+                cmd_ci_run_single(&func_args, target_value, &target_dir, &metadata, dry_run)?;
             if exit_code == EXIT_REGRESSION {
                 regression_detected = true;
             } else if exit_code != 0 {
                 std::process::exit(exit_code);
+            }
+            if dry_run {
+                continue;
             }
 
             let summary_json = target_dir.join("summary.json");
@@ -572,6 +610,11 @@ pub(crate) fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
                 );
         } // end for func
     } // end for target
+
+    if dry_run {
+        println!("CI dry run complete; no outputs written.");
+        return Ok(());
+    }
 
     let mut merged_targets = BTreeMap::new();
     for target in targets {
@@ -873,6 +916,7 @@ fn cmd_ci_run_single(
     target: MobileTarget,
     output_dir: &Path,
     metadata: &CiContractMetadata,
+    dry_run: bool,
 ) -> Result<i32> {
     let default_baseline_path = previous_baseline_path(output_dir);
     let baseline_source = args.baseline.clone().or_else(|| {
@@ -883,7 +927,7 @@ fn cmd_ci_run_single(
         }
     });
 
-    let result = run_request(&RunRequest {
+    let request = RunRequest {
         target,
         function: args.function.clone().unwrap_or_default(),
         crate_path: args.crate_path.clone(),
@@ -910,7 +954,12 @@ fn cmd_ci_run_single(
         progress: args.progress,
         output_dir: output_dir.to_path_buf(),
         plots: args.plots,
-    })?;
+    };
+    let result = run_request_with_mode(&request, dry_run)?;
+
+    if dry_run {
+        return Ok(result.exit_code);
+    }
 
     let summary_json = result.report.summary_json;
     let summary_md = result.report.summary_md;

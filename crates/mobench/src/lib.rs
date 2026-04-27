@@ -1014,7 +1014,7 @@ pub fn run() -> Result<()> {
                 cmd_ci_init(&workflow, &action_dir, cli.yes)?;
             }
             CiCommand::Run(args) => {
-                cmd_ci_run(args)?;
+                cmd_ci_run(args, cli.dry_run)?;
             }
             CiCommand::Summarize(args) => {
                 cmd_ci_summarize(args)?;
