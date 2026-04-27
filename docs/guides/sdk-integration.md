@@ -14,7 +14,7 @@ Before diving into the full guide, ensure your project meets these requirements:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.36"
+mobench-sdk = "0.1.37"
 inventory = "0.3"  # Required for benchmark registration
 
 [lib]
@@ -112,7 +112,15 @@ In your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.36"
+mobench-sdk = "0.1.37"
+```
+
+If the crate only needs benchmark registration and runtime execution, and does
+not call SDK builders or project generators directly, use:
+
+```toml
+[dependencies]
+mobench-sdk = { version = "0.1.37", default-features = false, features = ["registry"] }
 ```
 
 ## 3) Annotate benchmark functions

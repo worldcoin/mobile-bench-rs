@@ -13,7 +13,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1.36"
+//! mobench-sdk = "0.1.37"
 //! uniffi = { version = "0.28", features = ["cli"] }
 //!
 //! [build-dependencies]
@@ -321,7 +321,7 @@ impl From<crate::timing::TimingError> for BenchErrorVariant {
 ///     }
 /// }
 /// ```
-#[cfg(feature = "full")]
+#[cfg(feature = "registry")]
 pub fn run_benchmark_template(
     spec: crate::BenchSpec,
 ) -> Result<BenchReportTemplate, BenchErrorVariant> {

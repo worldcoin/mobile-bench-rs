@@ -19,8 +19,8 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mobench-macros = "0.1.36"
-mobench-sdk = "0.1.36"  # For the runtime
+mobench-macros = "0.1.37"
+mobench-sdk = "0.1.37"  # For the runtime
 ```
 
 ### Basic Example

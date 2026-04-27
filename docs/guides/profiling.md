@@ -12,15 +12,15 @@ Supported today:
 
 | Provider | Backend | What you get |
 |----------|---------|--------------|
-| `local` | `android-native` | `simpleperf` capture, symbolized folded stacks, `native-report.txt`, optional `frame-locations.json`, full/focused flamegraph SVGs, `flamegraph.html`, and optional semantic phase summaries |
-| `local` | `ios-instruments` | simulator-host `sample` capture, collapsed folded stacks, `native-report.txt`, full/focused flamegraph SVGs, `flamegraph.html`, and optional semantic phase summaries |
+| `local` | `android-native` | `simpleperf` capture, symbolized folded stacks, `native-report.txt`, optional `frame-locations.json`, full/focused flamegraph SVGs, `flamegraph.html`, optional semantic phase summaries, and optional machine-readable trace/event JSON |
+| `local` | `ios-instruments` | simulator-host `sample` capture, collapsed folded stacks, `native-report.txt`, full/focused flamegraph SVGs, `flamegraph.html`, optional semantic phase summaries, and optional machine-readable trace/event JSON |
 
 Not supported today:
 
 | Provider | Backend | Why |
 |----------|---------|-----|
 | `browserstack` | `android-native` / `ios-instruments` | BrowserStack benchmark runs can return timing and resource data, but not retrievable native-stack artifacts in the mobench session contract |
-| `local` | `rust-tracing` | the backend is planned, but structured trace-event output is not implemented yet |
+| `local` | `rust-tracing` | native rust-tracing capture is planned; use `--trace-events-output` on supported profile runs when a downstream consumer needs mobench's harness event contract |
 
 ## Quick start
 
@@ -31,7 +31,8 @@ cargo mobench profile run \
   --target android \
   --provider local \
   --backend android-native \
-  --function sample_fns::fibonacci
+  --function sample_fns::fibonacci \
+  --trace-events-output target/mobench/profile/trace-events.json
 ```
 
 ### iOS

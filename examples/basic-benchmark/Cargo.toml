@@ -11,7 +11,7 @@ name = "basic_benchmark"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-mobench-sdk = { workspace = true, features = ["full"] }
+mobench-sdk = { workspace = true, default-features = false, features = ["registry"] }
 inventory.workspace = true
 serde.workspace = true
 thiserror.workspace = true

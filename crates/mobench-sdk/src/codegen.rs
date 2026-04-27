@@ -112,7 +112,7 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-mobench-sdk = {{ path = ".." }}
+mobench-sdk = {{ path = "..", default-features = false, features = ["registry"] }}
 uniffi = "0.28"
 {} = {{ path = ".." }}
 
@@ -1273,6 +1273,14 @@ mod tests {
         assert!(temp_dir.join("bench-mobile/Cargo.toml").exists());
         assert!(temp_dir.join("bench-mobile/src/lib.rs").exists());
         assert!(temp_dir.join("bench-mobile/build.rs").exists());
+        let cargo_toml =
+            fs::read_to_string(temp_dir.join("bench-mobile/Cargo.toml")).expect("read Cargo.toml");
+        assert!(
+            cargo_toml.contains(
+                r#"mobench-sdk = { path = "..", default-features = false, features = ["registry"] }"#
+            ),
+            "generated FFI wrapper should depend on the narrow registry feature, got:\n{cargo_toml}"
+        );
 
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();

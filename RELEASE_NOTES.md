@@ -13,12 +13,26 @@ Crates.io release history:
 
 ## Unreleased
 
-- No user-facing unreleased changes yet.
+No user-facing unreleased changes yet.
+
+## v0.1.37
+
+Status: current supported release.
+
+- Added `mobench profile run --trace-events-output <path>` for downstream
+  consumers that need machine-readable harness trace/event JSON.
+- Added `mobench-sdk`'s `registry` feature for benchmark macro, inventory
+  discovery, and runtime execution without builder/template dependencies.
+- Generated FFI wrapper crates and example benchmark crates now use the
+  narrower `registry` feature instead of the full SDK build-tooling feature set.
+- Added property-test coverage for run config and device matrix parsing.
 
 ## Support Policy
 
-- `v0.1.36` is the current published supported release.
-- `v0.1.35` is the immediately previous supported release, superseded by
+- `v0.1.37` is the current published supported release.
+- `v0.1.36` is the immediately previous supported release, superseded by
+  `v0.1.37`.
+- `v0.1.35` is superseded by
   `v0.1.36`.
 - `v0.1.34` is superseded by `v0.1.35`.
 - Every earlier published version is a historical test build and should not be
@@ -29,7 +43,8 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.36` | 2026-04-27 | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Current supported release |
+| `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Current supported release |
+| `v0.1.36` | 2026-04-27 | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Superseded by `v0.1.37` |
 | `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Superseded by `v0.1.36` |
 | `v0.1.34` | 2026-04-23 | `mobench 0.1.34`, `mobench-sdk 0.1.34`, `mobench-macros 0.1.34` | Superseded by `v0.1.35` |
 | `v0.1.33` | 2026-04-17 | `mobench 0.1.33`, `mobench-sdk 0.1.33`, `mobench-macros 0.1.33` | Superseded by `v0.1.34` |

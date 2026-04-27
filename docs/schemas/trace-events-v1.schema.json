@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://world.org/mobench/schemas/trace-events-v1.schema.json",
+  "title": "Mobench Trace Events v1",
+  "type": "object",
+  "required": ["source", "total_duration_ns", "lanes"],
+  "properties": {
+    "source": {
+      "type": "object",
+      "required": ["kind", "profiler", "origin"],
+      "properties": {
+        "kind": { "type": "string" },
+        "profiler": { "type": "string" },
+        "origin": { "type": "string", "enum": ["local", "browserstack"] }
+      },
+      "additionalProperties": false
+    },
+    "total_duration_ns": { "type": "integer", "minimum": 0 },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "events"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "event_kind",
+                "start_offset_ns",
+                "end_offset_ns",
+                "frames",
+                "phase",
+                "iteration"
+              ],
+              "properties": {
+                "event_kind": { "type": "string" },
+                "start_offset_ns": { "type": "integer", "minimum": 0 },
+                "end_offset_ns": { "type": ["integer", "null"], "minimum": 0 },
+                "frames": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "phase": { "type": ["string", "null"] },
+                "iteration": { "type": ["integer", "null"], "minimum": 0 }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

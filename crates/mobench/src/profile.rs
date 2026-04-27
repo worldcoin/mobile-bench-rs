@@ -104,6 +104,11 @@ pub struct ProfileRunArgs {
     pub output_dir: PathBuf,
     #[arg(
         long,
+        help = "Write machine-readable trace/event JSON to this path for downstream consumers"
+    )]
+    pub trace_events_output: Option<PathBuf>,
+    #[arg(
+        long,
         help = "Explicit BrowserStack device name to resolve for this profiling request",
         requires = "os_version",
         conflicts_with_all = ["profile", "device_matrix"]
@@ -657,6 +662,7 @@ fn write_profile_session_outputs(
     let run_summary_path = run_output_dir.join("summary.md");
     write_semantic_phase_sidecar(manifest)?;
     write_harness_timeline_sidecar(manifest)?;
+    write_requested_trace_events_output(args, manifest)?;
     refresh_flamegraph_viewer_from_manifest(run_output_dir, manifest)?;
     write_profile_manifest(&run_profile_path, manifest)?;
     std::fs::write(&run_summary_path, rendered_summary.as_bytes())?;
@@ -665,6 +671,29 @@ fn write_profile_session_outputs(
     let latest_summary_path = args.output_dir.join("summary.md");
     write_profile_manifest(&latest_profile_path, manifest)?;
     std::fs::write(&latest_summary_path, rendered_summary.as_bytes())?;
+    Ok(())
+}
+
+fn write_requested_trace_events_output(
+    args: &ProfileRunArgs,
+    manifest: &ProfileManifest,
+) -> Result<()> {
+    let Some(trace_path) = args.trace_events_output.as_ref() else {
+        return Ok(());
+    };
+
+    let lanes = build_harness_only_viewer_timeline_lanes(manifest);
+    let total_duration_ns = compute_timeline_total_duration_ns(
+        &build_viewer_harness_timeline(manifest),
+        manifest.capture_metadata.sample_duration_secs,
+    );
+    write_trace_events_contract(
+        trace_path,
+        manifest,
+        &lanes,
+        total_duration_ns.unwrap_or(0),
+        "mobench-trace-events",
+    )?;
     Ok(())
 }
 
@@ -1451,7 +1480,38 @@ fn write_chronological_trace_sidecar(
         return Ok(None);
     }
 
-    let trace = ChronologicalTraceRecord {
+    let trace = chronological_trace_record(manifest, lanes, total_duration_ns, source_kind);
+    if let Some(parent) = trace_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(trace_path, serde_json::to_vec_pretty(&trace)?)
+        .with_context(|| format!("writing {}", trace_path.display()))?;
+    Ok(Some(trace_path.to_path_buf()))
+}
+
+fn write_trace_events_contract(
+    trace_path: &Path,
+    manifest: &ProfileManifest,
+    lanes: &[ViewerTraceLane],
+    total_duration_ns: u64,
+    source_kind: &str,
+) -> Result<()> {
+    let trace = chronological_trace_record(manifest, lanes, total_duration_ns, source_kind);
+    if let Some(parent) = trace_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(trace_path, serde_json::to_vec_pretty(&trace)?)
+        .with_context(|| format!("writing {}", trace_path.display()))?;
+    Ok(())
+}
+
+fn chronological_trace_record(
+    manifest: &ProfileManifest,
+    lanes: &[ViewerTraceLane],
+    total_duration_ns: u64,
+    source_kind: &str,
+) -> ChronologicalTraceRecord {
+    ChronologicalTraceRecord {
         source: ChronologicalTraceSourceRecord {
             kind: source_kind.into(),
             profiler: manifest
@@ -1471,13 +1531,7 @@ fn write_chronological_trace_sidecar(
         },
         total_duration_ns,
         lanes: lanes.to_vec(),
-    };
-    if let Some(parent) = trace_path.parent() {
-        std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(trace_path, serde_json::to_vec_pretty(&trace)?)
-        .with_context(|| format!("writing {}", trace_path.display()))?;
-    Ok(Some(trace_path.to_path_buf()))
 }
 
 fn build_viewer_artifact_links(
@@ -4482,6 +4536,7 @@ mod tests {
             crate_path: None,
             config: None,
             output_dir: PathBuf::from("target/mobench/profile"),
+            trace_events_output: None,
             device: None,
             os_version: None,
             profile: None,
@@ -4662,6 +4717,7 @@ mod tests {
             backend: ProfileBackend::AndroidNative,
             format: ProfileFormat::Both,
             output_dir: dir.path().to_path_buf(),
+            trace_events_output: None,
             crate_path: None,
             device: None,
             os_version: None,
@@ -4843,6 +4899,7 @@ mod tests {
             backend: ProfileBackend::IosInstruments,
             format: ProfileFormat::Both,
             output_dir: output_dir.to_path_buf(),
+            trace_events_output: None,
             crate_path: None,
             device: None,
             os_version: None,
@@ -6013,6 +6070,73 @@ mod tests {
             load_profile_manifest(&dir.path().join("profile.json")).expect("load latest manifest");
         assert_eq!(latest_manifest.target, MobileTarget::Ios);
         assert_eq!(latest_manifest.function, "sample_fns::checksum");
+    }
+
+    #[test]
+    fn profile_run_writes_requested_machine_readable_trace_events() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let trace_path = dir.path().join("consumer/trace-events.json");
+        let mut args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        args.output_dir = dir.path().join("profiles");
+        args.trace_events_output = Some(trace_path.clone());
+
+        run_profile_session_with_executor(&args, false, |_args, _target, manifest| {
+            manifest.semantic_profile.status = SemanticCaptureStatus::Captured;
+            manifest.semantic_profile.harness_timeline = vec![HarnessTimelineSpanRecord {
+                phase: "measured-benchmark".into(),
+                start_offset_ns: 100,
+                end_offset_ns: 900,
+                iteration: Some(0),
+            }];
+            Ok(())
+        })
+        .expect("write profile session");
+
+        let trace: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&trace_path).expect("read downstream trace event output"),
+        )
+        .expect("parse downstream trace event output");
+
+        assert_eq!(trace["source"]["kind"], "mobench-trace-events");
+        assert_eq!(trace["source"]["origin"], "local");
+        assert_eq!(trace["source"]["profiler"], "simpleperf");
+        assert_eq!(trace["total_duration_ns"], 900);
+        assert_eq!(trace["lanes"][0]["id"], "harness");
+        assert_eq!(
+            trace["lanes"][0]["events"][0]["phase"],
+            "measured-benchmark"
+        );
+        assert_eq!(trace["lanes"][0]["events"][0]["iteration"], 0);
+    }
+
+    #[test]
+    fn profile_dry_run_writes_empty_requested_trace_event_contract() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let trace_path = dir.path().join("consumer/trace-events.json");
+        let mut args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        args.output_dir = dir.path().join("profiles");
+        args.trace_events_output = Some(trace_path.clone());
+
+        cmd_profile_run(&args, true).expect("write dry-run profile session");
+
+        let trace: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&trace_path).expect("read downstream trace event output"),
+        )
+        .expect("parse downstream trace event output");
+
+        assert_eq!(trace["source"]["kind"], "mobench-trace-events");
+        assert_eq!(trace["total_duration_ns"], 0);
+        assert_eq!(trace["lanes"].as_array().expect("lanes array").len(), 0);
     }
 
     #[test]

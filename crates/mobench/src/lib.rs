@@ -6955,6 +6955,7 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
     use jsonschema::JSONSchema;
+    use proptest::prelude::*;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -8155,6 +8156,95 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         assert_eq!(ids, vec!["Pixel 6-12.0", "Pixel 7-13.0"]);
     }
 
+    fn safe_config_string() -> impl Strategy<Value = String> {
+        "[A-Za-z0-9_. -]{1,32}".prop_map(|s| s.trim().to_string())
+    }
+
+    fn safe_path_string() -> impl Strategy<Value = PathBuf> {
+        "[a-z0-9_/-]{1,32}".prop_map(PathBuf::from)
+    }
+
+    fn generated_bench_config() -> impl Strategy<Value = BenchConfig> {
+        (
+            prop_oneof![Just(MobileTarget::Android), Just(MobileTarget::Ios)],
+            safe_config_string(),
+            1_u32..10_000,
+            0_u32..1_000,
+            safe_path_string(),
+            prop::collection::vec(safe_config_string(), 0..5),
+            safe_config_string(),
+            safe_config_string(),
+            prop::option::of(safe_config_string()),
+        )
+            .prop_map(
+                |(
+                    target,
+                    function,
+                    iterations,
+                    warmup,
+                    device_matrix,
+                    device_tags,
+                    username,
+                    access_key,
+                    project,
+                )| BenchConfig {
+                    target,
+                    function,
+                    iterations,
+                    warmup,
+                    device_matrix,
+                    device_tags: Some(device_tags).filter(|tags| !tags.is_empty()),
+                    browserstack: BrowserStackConfig {
+                        app_automate_username: username,
+                        app_automate_access_key: access_key,
+                        project,
+                        ios_completion_timeout_secs: None,
+                    },
+                    ios_xcuitest: None,
+                },
+            )
+    }
+
+    fn generated_device_entry() -> impl Strategy<Value = DeviceEntry> {
+        (
+            safe_config_string(),
+            prop_oneof![Just("android".to_string()), Just("ios".to_string())],
+            "[0-9.]{1,8}",
+            prop::collection::vec(safe_config_string(), 0..5),
+        )
+            .prop_map(|(name, os, os_version, tags)| DeviceEntry {
+                name,
+                os,
+                os_version,
+                tags: Some(tags).filter(|tags| !tags.is_empty()),
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn generated_valid_run_configs_parse(config in generated_bench_config()) {
+            let encoded = toml::to_string(&config).expect("serialize generated run config");
+            let parsed: BenchConfig = toml::from_str(&encoded).expect("parse generated run config");
+
+            prop_assert_eq!(parsed.target, config.target);
+            prop_assert_eq!(parsed.function, config.function);
+            prop_assert_eq!(parsed.iterations, config.iterations);
+            prop_assert_eq!(parsed.warmup, config.warmup);
+            prop_assert_eq!(parsed.device_matrix, config.device_matrix);
+        }
+
+        #[test]
+        fn generated_valid_device_matrices_parse(
+            devices in prop::collection::vec(generated_device_entry(), 0..20)
+        ) {
+            let matrix = DeviceMatrix { devices };
+            let encoded = serde_yaml::to_string(&matrix).expect("serialize generated device matrix");
+            let parsed: DeviceMatrix = serde_yaml::from_str(&encoded).expect("parse generated device matrix");
+
+            prop_assert_eq!(parsed.devices.len(), matrix.devices.len());
+        }
+    }
+
     #[test]
     fn builtin_ios_low_spec_profile_uses_iphone_se_2020() {
         let resolved = builtin_device_for_profile(DevicePlatform::Ios, "low-spec")
@@ -8685,6 +8775,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let summary_schema_path = root.join("docs/schemas/summary-v1.schema.json");
         let ci_schema_path = root.join("docs/schemas/ci-contract-v1.schema.json");
+        let trace_schema_path = root.join("docs/schemas/trace-events-v1.schema.json");
 
         let summary_schema: Value = serde_json::from_str(
             &fs::read_to_string(&summary_schema_path).expect("read summary schema"),
@@ -8693,6 +8784,10 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         let ci_schema: Value =
             serde_json::from_str(&fs::read_to_string(&ci_schema_path).expect("read ci schema"))
                 .expect("parse ci schema");
+        let trace_schema: Value = serde_json::from_str(
+            &fs::read_to_string(&trace_schema_path).expect("read trace schema"),
+        )
+        .expect("parse trace schema");
 
         JSONSchema::options()
             .compile(&summary_schema)
@@ -8700,6 +8795,9 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         JSONSchema::options()
             .compile(&ci_schema)
             .expect("compile ci schema");
+        JSONSchema::options()
+            .compile(&trace_schema)
+            .expect("compile trace schema");
     }
 
     #[test]
@@ -8817,6 +8915,33 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                     messages.join(" | ")
                 );
             }
+        }
+    }
+
+    #[test]
+    fn example_trace_events_fixture_validates_against_trace_schema() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let trace_schema_path = root.join("docs/schemas/trace-events-v1.schema.json");
+        let trace_schema: Value = serde_json::from_str(
+            &fs::read_to_string(&trace_schema_path).expect("read trace schema"),
+        )
+        .expect("parse trace schema");
+        let validator = JSONSchema::options()
+            .compile(&trace_schema)
+            .expect("compile trace schema");
+
+        let fixture_path = root.join("examples/fixtures/profile/trace-events.json");
+        let value: Value =
+            serde_json::from_str(&fs::read_to_string(&fixture_path).expect("read trace fixture"))
+                .expect("parse trace fixture");
+
+        if let Err(errors) = validator.validate(&value) {
+            let messages: Vec<String> = errors.map(|e| e.to_string()).collect();
+            panic!(
+                "{} failed trace schema validation: {}",
+                fixture_path.display(),
+                messages.join(" | ")
+            );
         }
     }
 

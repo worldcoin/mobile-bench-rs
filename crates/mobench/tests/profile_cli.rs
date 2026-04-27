@@ -110,6 +110,10 @@ fn profile_run_help_mentions_planned_only_or_execution_scope() {
         stdout.contains("--warmup-mode"),
         "expected help to expose warm/cold capture mode, got:\n{stdout}"
     );
+    assert!(
+        stdout.contains("--trace-events-output"),
+        "expected help to expose downstream machine-readable trace output, got:\n{stdout}"
+    );
 }
 
 #[test]
@@ -125,6 +129,52 @@ fn profile_run_cli_surface_exposes_or_explicitly_omits_device_selection() {
             || stdout.contains("device selection is unavailable"),
         "expected help to expose device selection or explicitly document its absence, got:\n{stdout}"
     );
+}
+
+#[test]
+fn profile_run_dry_run_writes_trace_events_output_for_downstream_consumers() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let output_dir = temp_dir.path().join("profiles");
+    let trace_events_path = temp_dir.path().join("consumer/trace-events.json");
+    let output = run_mobench([
+        "--dry-run",
+        "profile",
+        "run",
+        "--target",
+        "android",
+        "--backend",
+        "android-native",
+        "--provider",
+        "local",
+        "--function",
+        "sample_fns::fibonacci",
+        "--output-dir",
+        output_dir.to_str().expect("utf-8 output dir"),
+        "--trace-events-output",
+        trace_events_path.to_str().expect("utf-8 trace path"),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "expected dry-run profile to succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        trace_events_path.exists(),
+        "expected trace events output at {}",
+        trace_events_path.display()
+    );
+
+    let trace: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&trace_events_path).expect("read trace events output"),
+    )
+    .expect("parse trace events output");
+    assert_eq!(trace["source"]["kind"], "mobench-trace-events");
+    assert_eq!(trace["source"]["origin"], "local");
+    assert_eq!(trace["source"]["profiler"], "simpleperf");
+    assert_eq!(trace["total_duration_ns"], 0);
+    assert_eq!(trace["lanes"].as_array().expect("lanes array").len(), 0);
 }
 
 #[test]

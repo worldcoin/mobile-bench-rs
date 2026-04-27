@@ -246,7 +246,7 @@ where
 /// Run a benchmark and return FFI-ready result.
 ///
 /// This is a convenience function that wraps `run_benchmark` with FFI type conversions.
-#[cfg(feature = "full")]
+#[cfg(feature = "registry")]
 pub fn run_benchmark_ffi(spec: BenchSpecFfi) -> Result<BenchReportFfi, BenchErrorFfi> {
     let sdk_spec: crate::BenchSpec = spec.into();
     crate::run_benchmark(sdk_spec)

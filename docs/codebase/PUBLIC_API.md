@@ -69,15 +69,22 @@ Stable public surface:
 
 ## Feature Flags
 
-`mobench-sdk` currently exposes two features:
+`mobench-sdk` currently exposes four feature groups:
 
-- `full`: default feature. Enables the benchmark macro, inventory registry,
-  builders, embedded templates, codegen, and TOML-backed build automation.
+- `full`: default feature. Enables benchmark registration/runtime plus builders,
+  embedded templates, codegen, and TOML-backed build automation.
+- `registry`: enables `#[benchmark]`, inventory-backed discovery, and
+  `run_benchmark` without builder/template dependencies.
+- `builders`: enables Android/iOS build automation and the codegen it depends on.
+- `codegen`: enables project and mobile template generation.
 - `runner-only`: minimal mobile-runtime mode for generated/mobile benchmark
-  binaries where build automation is not needed.
+  binaries that manually dispatch timing closures and do not use registry
+  discovery.
 
 Feature policy:
 - keep `runner-only` free of build tooling dependencies
+- prefer `registry` for generated/mobile crates that need benchmark discovery
+  but not build automation
 - keep default features convenient for normal SDK users
 - add narrower optional features only when they measurably reduce dependency
   footprint or clarify platform support

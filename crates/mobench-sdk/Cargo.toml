@@ -27,7 +27,13 @@ crate-type = ["lib"]
 [features]
 default = ["full"]
 # Full SDK with build automation, templates, and registry
-full = ["dep:mobench-macros", "dep:inventory", "dep:include_dir", "dep:toml"]
+full = ["registry", "builders", "codegen"]
+# Benchmark macro, inventory registry, and runtime execution without build tooling
+registry = ["dep:mobench-macros", "dep:inventory"]
+# Mobile build automation; depends on codegen because builders refresh app templates
+builders = ["codegen", "dep:toml"]
+# Project and mobile template generation
+codegen = ["dep:include_dir", "dep:toml"]
 # Minimal timing-only mode for mobile binaries (small footprint)
 runner-only = []
 

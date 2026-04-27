@@ -186,7 +186,8 @@ cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json
 
 # Local native profiling
 cargo mobench profile run --target android --function sample_fns::fibonacci \
-  --provider local --backend android-native
+  --provider local --backend android-native \
+  --trace-events-output target/mobench/profile/trace-events.json
 cargo mobench profile summarize --profile target/mobench/profile/profile.json
 cargo mobench profile diff \
   --baseline target/mobench/profile/android-sample_fns--fibonacci/profile.json \
@@ -209,6 +210,9 @@ writes its current manifest and summary under
 the latest run. Differential comparisons write to
 `target/mobench/profile/diff/<baseline-run-id>--vs--<candidate-run-id>/` and
 refresh top-level `profile-diff.json` / `summary.md` under the diff root.
+Use `--trace-events-output <path>` when a downstream consumer needs stable
+machine-readable harness event JSON; dry runs still write an empty trace
+contract so CI can validate the integration path without native profilers.
 
 The manifest is split into three explicit sections:
 

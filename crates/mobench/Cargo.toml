@@ -62,6 +62,7 @@ criterion = "0.5"
 inventory = "0.3"
 sample-fns = { path = "../sample-fns" }
 jsonschema = "0.18"
+proptest = "1"
 
 [[bench]]
 name = "host_contracts"
