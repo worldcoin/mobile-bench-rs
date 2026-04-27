@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow};
+use reqwest::Url;
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -69,6 +70,7 @@ pub struct DeviceValidationError {
 }
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
+const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
 
 #[derive(Debug, Clone)]
@@ -242,6 +244,7 @@ impl BrowserStackClient {
             device_logs: true,
             disable_animations: true,
             app_profiling: true,
+            idle_timeout: ESPRESSO_IDLE_TIMEOUT_SECS,
             build_name: self.project.clone(),
         };
 
@@ -324,9 +327,7 @@ impl BrowserStackClient {
 
     pub fn download_url(&self, url: &str, dest: &Path) -> Result<()> {
         let resp = self
-            .http
-            .get(url)
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
+            .asset_request(url)
             .send()
             .with_context(|| format!("downloading BrowserStack asset {}", url))?;
         let status = resp.status();
@@ -523,9 +524,7 @@ impl BrowserStackClient {
 
     fn download_text_url(&self, url: &str) -> Result<String> {
         let resp = self
-            .http
-            .get(url)
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
+            .asset_request(url)
             .send()
             .with_context(|| format!("downloading BrowserStack asset {}", url))?;
         let status = resp.status();
@@ -541,6 +540,15 @@ impl BrowserStackClient {
         }
 
         Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn asset_request(&self, url: &str) -> reqwest::blocking::RequestBuilder {
+        let request = self.http.get(url);
+        if should_authenticate_asset_url(url) {
+            request.basic_auth(&self.auth.username, Some(&self.auth.access_key))
+        } else {
+            request
+        }
     }
 
     /// Extract benchmark results from device logs
@@ -670,10 +678,11 @@ impl BrowserStackClient {
     fn extract_json_from_ios_log_section(section: &str) -> Option<Value> {
         // First, try the whole section as-is (trimmed)
         let trimmed = section.trim();
-        if trimmed.starts_with('{') && trimmed.ends_with('}') {
-            if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-                return Some(json);
-            }
+        if trimmed.starts_with('{')
+            && trimmed.ends_with('}')
+            && let Ok(json) = serde_json::from_str::<Value>(trimmed)
+        {
+            return Some(json);
         }
 
         // Look for JSON on individual lines, stripping iOS log prefixes
@@ -686,10 +695,10 @@ impl BrowserStackClient {
             // Look for JSON starting with {
             if let Some(json_start) = line.find('{') {
                 let potential_json = &line[json_start..];
-                if let Some(json) = Self::extract_balanced_json(potential_json) {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&json) {
-                        return Some(parsed);
-                    }
+                if let Some(json) = Self::extract_balanced_json(potential_json)
+                    && let Ok(parsed) = serde_json::from_str::<Value>(&json)
+                {
+                    return Some(parsed);
                 }
             }
         }
@@ -711,10 +720,10 @@ impl BrowserStackClient {
 
         if let Some(json_start) = all_content.find('{') {
             let potential_json = &all_content[json_start..];
-            if let Some(json) = Self::extract_balanced_json(potential_json) {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&json) {
-                    return Some(parsed);
-                }
+            if let Some(json) = Self::extract_balanced_json(potential_json)
+                && let Ok(parsed) = serde_json::from_str::<Value>(&json)
+            {
+                return Some(parsed);
             }
         }
 
@@ -904,15 +913,15 @@ impl BrowserStackClient {
                 }
             }
 
-            if let Ok(app_profiling_v2) = self.get_app_profiling_v2(build_id, &device.session_id) {
-                if app_profiling_v2.sample_count > 0 {
-                    println!("    Found App Profiling v2 metrics");
-                    device_performance_metrics = merge_performance_metrics(
-                        Some(device_performance_metrics),
-                        Some(app_profiling_v2),
-                    )
-                    .unwrap_or_default();
-                }
+            if let Ok(app_profiling_v2) = self.get_app_profiling_v2(build_id, &device.session_id)
+                && app_profiling_v2.sample_count > 0
+            {
+                println!("    Found App Profiling v2 metrics");
+                device_performance_metrics = merge_performance_metrics(
+                    Some(device_performance_metrics),
+                    Some(app_profiling_v2),
+                )
+                .unwrap_or_default();
             }
 
             if let Some(results) = device_benchmark_results {
@@ -1583,6 +1592,7 @@ struct BuildRequest {
     device_logs: bool,
     disable_animations: bool,
     app_profiling: bool,
+    idle_timeout: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
 }
@@ -1624,6 +1634,20 @@ fn parse_response<T: DeserializeOwned>(resp: Response, context: &str) -> Result<
 
     serde_json::from_str(&text)
         .with_context(|| format!("parsing BrowserStack API response for {}", context))
+}
+
+fn should_authenticate_asset_url(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+
+    host == "browserstack.com" || host.ends_with(".browserstack.com")
 }
 
 /// Parse a device list response from BrowserStack API.
@@ -2002,6 +2026,22 @@ mod tests {
         .with_base_url("https://test.example.com");
 
         assert_eq!(client.base_url, "https://test.example.com");
+    }
+
+    #[test]
+    fn authenticated_asset_downloads_are_limited_to_browserstack_https_hosts() {
+        assert!(should_authenticate_asset_url(
+            "https://api-cloud.browserstack.com/app-automate/logs/123"
+        ));
+        assert!(should_authenticate_asset_url(
+            "https://app-automate.browserstack.com/sessions/123/logs"
+        ));
+        assert!(!should_authenticate_asset_url(
+            "http://api-cloud.browserstack.com/app-automate/logs/123"
+        ));
+        assert!(!should_authenticate_asset_url(
+            "https://evil.example.com/browserstack/logs"
+        ));
     }
 
     #[test]
@@ -2589,10 +2629,12 @@ Test completed
             disable_animations: true,
             build_name: Some("mobench".into()),
             app_profiling: true,
+            idle_timeout: ESPRESSO_IDLE_TIMEOUT_SECS,
         };
 
         let value = serde_json::to_value(&request).expect("serialize build request");
         assert_eq!(value["appProfiling"], true);
+        assert_eq!(value["idleTimeout"], ESPRESSO_IDLE_TIMEOUT_SECS);
     }
 
     #[test]

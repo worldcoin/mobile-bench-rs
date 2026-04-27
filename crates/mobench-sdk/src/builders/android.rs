@@ -324,10 +324,10 @@ impl AndroidBuilder {
         }
 
         // Check test APK
-        if let Some(ref test_path) = result.test_suite_path {
-            if !test_path.exists() {
-                missing.push(format!("Test APK: {}", test_path.display()));
-            }
+        if let Some(ref test_path) = result.test_suite_path
+            && !test_path.exists()
+        {
+            missing.push(format!("Test APK: {}", test_path.display()));
         }
 
         // Check that at least one native library exists in jniLibs
@@ -429,12 +429,11 @@ impl AndroidBuilder {
         // Check if the current directory (project_root) IS the crate
         // This handles the case where user runs `cargo mobench build` from within the crate directory
         let root_cargo_toml = self.project_root.join("Cargo.toml");
-        if root_cargo_toml.exists() {
-            if let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml) {
-                if pkg_name == self.crate_name {
-                    return Ok(self.project_root.clone());
-                }
-            }
+        if root_cargo_toml.exists()
+            && let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml)
+            && pkg_name == self.crate_name
+        {
+            return Ok(self.project_root.clone());
         }
 
         // Try bench-mobile/ (SDK projects)
@@ -1064,21 +1063,21 @@ impl AndroidBuilder {
     ) -> Result<PathBuf, BenchError> {
         // First, try to read output-metadata.json for the actual APK name
         let metadata_path = apk_dir.join("output-metadata.json");
-        if metadata_path.exists() {
-            if let Ok(metadata_content) = fs::read_to_string(&metadata_path) {
-                // Parse the JSON to find the outputFile
-                // Format: {"elements":[{"outputFile":"app-release-unsigned.apk",...}]}
-                if let Some(apk_name) = self.parse_output_metadata(&metadata_content) {
-                    let apk_path = apk_dir.join(&apk_name);
-                    if apk_path.exists() {
-                        if self.verbose {
-                            println!(
-                                "  Found APK from output-metadata.json: {}",
-                                apk_path.display()
-                            );
-                        }
-                        return Ok(apk_path);
+        if metadata_path.exists()
+            && let Ok(metadata_content) = fs::read_to_string(&metadata_path)
+        {
+            // Parse the JSON to find the outputFile
+            // Format: {"elements":[{"outputFile":"app-release-unsigned.apk",...}]}
+            if let Some(apk_name) = self.parse_output_metadata(&metadata_content) {
+                let apk_path = apk_dir.join(&apk_name);
+                if apk_path.exists() {
+                    if self.verbose {
+                        println!(
+                            "  Found APK from output-metadata.json: {}",
+                            apk_path.display()
+                        );
                     }
+                    return Ok(apk_path);
                 }
             }
         }
@@ -1146,13 +1145,12 @@ impl AndroidBuilder {
             let after_colon = after_key.trim_start().strip_prefix(':')?;
             let after_ws = after_colon.trim_start();
             // Extract the string value
-            if after_ws.starts_with('"') {
-                let value_start = &after_ws[1..];
-                if let Some(end_quote) = value_start.find('"') {
-                    let filename = &value_start[..end_quote];
-                    if filename.ends_with(".apk") {
-                        return Some(filename.to_string());
-                    }
+            if let Some(value_start) = after_ws.strip_prefix('"')
+                && let Some(end_quote) = value_start.find('"')
+            {
+                let filename = &value_start[..end_quote];
+                if filename.ends_with(".apk") {
+                    return Some(filename.to_string());
                 }
             }
         }
@@ -1176,9 +1174,15 @@ impl AndroidBuilder {
             BuildProfile::Debug => "assembleDebugAndroidTest",
             BuildProfile::Release => "assembleReleaseAndroidTest",
         };
+        let profile_name = match config.profile {
+            BuildProfile::Debug => "debug",
+            BuildProfile::Release => "release",
+        };
 
         let mut cmd = Command::new("./gradlew");
-        cmd.arg(gradle_task).current_dir(&android_dir);
+        cmd.arg(format!("-PmobenchTestBuildType={profile_name}"))
+            .arg(gradle_task)
+            .current_dir(&android_dir);
 
         if self.verbose {
             cmd.arg("--info");
@@ -1221,11 +1225,6 @@ impl AndroidBuilder {
             )));
         }
 
-        let profile_name = match config.profile {
-            BuildProfile::Debug => "debug",
-            BuildProfile::Release => "release",
-        };
-
         let test_apk_dir = android_dir
             .join("app/build/outputs/apk/androidTest")
             .join(profile_name);
@@ -1249,20 +1248,19 @@ impl AndroidBuilder {
     ) -> Result<PathBuf, BenchError> {
         // First, try to read output-metadata.json for the actual APK name
         let metadata_path = apk_dir.join("output-metadata.json");
-        if metadata_path.exists() {
-            if let Ok(metadata_content) = fs::read_to_string(&metadata_path) {
-                if let Some(apk_name) = self.parse_output_metadata(&metadata_content) {
-                    let apk_path = apk_dir.join(&apk_name);
-                    if apk_path.exists() {
-                        if self.verbose {
-                            println!(
-                                "  Found test APK from output-metadata.json: {}",
-                                apk_path.display()
-                            );
-                        }
-                        return Ok(apk_path);
-                    }
+        if metadata_path.exists()
+            && let Ok(metadata_content) = fs::read_to_string(&metadata_path)
+            && let Some(apk_name) = self.parse_output_metadata(&metadata_content)
+        {
+            let apk_path = apk_dir.join(&apk_name);
+            if apk_path.exists() {
+                if self.verbose {
+                    println!(
+                        "  Found test APK from output-metadata.json: {}",
+                        apk_path.display()
+                    );
                 }
+                return Ok(apk_path);
             }
         }
 

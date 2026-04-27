@@ -1,6 +1,6 @@
 # Architecture
 
-Updated: 2026-04-01
+Updated: 2026-04-26
 
 ## System shape
 
@@ -36,7 +36,9 @@ Responsibilities:
 - run local native profiling and summarize profile sessions
 
 Important modules:
-- `lib.rs`: command parsing and benchmark/CI orchestration
+- `lib.rs`: crate facade, command dispatch, benchmark/CI orchestration, and shared report helpers
+- `cli.rs`: clap command surface and target/value enums
+- `doctor.rs`: prerequisite checks, config validation, and machine-readable validation issue rendering
 - `profile.rs`: target resolution, capture planning, capture execution, manifest/summary writing
 - `flamegraph_viewer.rs`: focused/full folded-stack derivation, SVG retinting, and interactive viewer document generation
 - `flamegraph_viewer_template.html`: browser-side flamegraph shell, timeline interactions, legend/fullscreen UX, and metadata layout

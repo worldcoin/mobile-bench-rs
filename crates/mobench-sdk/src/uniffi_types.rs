@@ -40,6 +40,7 @@
 //!     pub duration_ns: u64,
 //!     pub cpu_time_ms: Option<u64>,
 //!     pub peak_memory_kb: Option<u64>,
+//!     pub process_peak_memory_kb: Option<u64>,
 //! }
 //!
 //! #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -186,7 +187,12 @@ pub struct BenchSampleTemplate {
     /// CPU time consumed by the measured iteration in milliseconds.
     pub cpu_time_ms: Option<u64>,
     /// Peak memory growth during the measured iteration in kilobytes.
+    ///
+    /// This is the legacy wire field for baseline-adjusted growth, not
+    /// absolute process or device peak memory.
     pub peak_memory_kb: Option<u64>,
+    /// Peak resident memory of the benchmark process during the measured iteration.
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 impl From<crate::BenchSample> for BenchSampleTemplate {
@@ -195,6 +201,7 @@ impl From<crate::BenchSample> for BenchSampleTemplate {
             duration_ns: sample.duration_ns,
             cpu_time_ms: sample.cpu_time_ms,
             peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -205,6 +212,7 @@ impl From<BenchSampleTemplate> for crate::BenchSample {
             duration_ns: sample.duration_ns,
             cpu_time_ms: sample.cpu_time_ms,
             peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -351,11 +359,13 @@ mod tests {
             duration_ns: 12345,
             cpu_time_ms: Some(12),
             peak_memory_kb: Some(48),
+            process_peak_memory_kb: Some(1024),
         };
         let template: BenchSampleTemplate = sdk_sample.into();
         assert_eq!(template.duration_ns, 12345);
         assert_eq!(template.cpu_time_ms, Some(12));
         assert_eq!(template.peak_memory_kb, Some(48));
+        assert_eq!(template.process_peak_memory_kb, Some(1024));
     }
 
     #[test]

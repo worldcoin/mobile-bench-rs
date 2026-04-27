@@ -264,12 +264,15 @@ cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 - `results.csv`
 
 `summary.md` renders one top-level table with `Wall mean / iter`, `Wall total`,
-`CPU median / iter`, `CPU total`, `CPU / wall`, and `Peak memory`.
+`CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, and
+`Process peak`.
 
 `results.csv` includes:
 - `cpu_total_ms`
 - `cpu_median_ms`
-- `peak_memory_kb`
+- `peak_memory_kb` (legacy alias for peak growth)
+- `peak_memory_growth_kb`
+- `process_peak_memory_kb` (Android uses an isolated benchmark worker process; other targets use the benchmark app process)
 
 Blank fields indicate that a resource metric was not available for that benchmark/device row.
 
@@ -812,8 +815,8 @@ cargo mobench package-ipa --method adhoc
 Verify credentials:
 
 ```bash
-echo $BROWSERSTACK_USERNAME
-echo $BROWSERSTACK_ACCESS_KEY
+test -n "$BROWSERSTACK_USERNAME" && echo "BROWSERSTACK_USERNAME is set"
+test -n "$BROWSERSTACK_ACCESS_KEY" && echo "BROWSERSTACK_ACCESS_KEY is set"
 ```
 
 Or check `.env.local` file exists and contains valid credentials.

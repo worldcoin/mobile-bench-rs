@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::info;
 
 use crate::{
     DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
@@ -586,13 +587,25 @@ where
     let run_id = build_run_id(args.target, &args.function);
     let run_output_dir = args.output_dir.join(&run_id);
     let mut manifest = build_capture_plan(args, &target, &run_output_dir)?;
+    let profile_span = tracing::info_span!(
+        "profile_run",
+        target = ?args.target,
+        provider = ?args.provider,
+        backend = ?target.backend,
+        function = %args.function,
+        dry_run
+    );
+    let _profile_span = profile_span.enter();
+    info!(output_dir = %run_output_dir.display(), "resolved profile run");
     let execution_result = if dry_run {
+        info!("planning profile capture only");
         manifest.capture_metadata.warnings.push(
             "dry-run enabled; capture planning stopped before execution and recorded the planned artifact contract only"
                 .into(),
         );
         Ok(())
     } else {
+        info!("executing profile capture");
         execute(args, &target, &mut manifest)
     };
 
@@ -603,6 +616,7 @@ where
         || manifest.semantic_profile.status != SemanticCaptureStatus::Planned;
 
     if should_persist_outputs {
+        info!("writing profile session outputs");
         write_profile_session_outputs(args, &run_output_dir, &manifest)?;
     }
     execution_result?;
@@ -632,24 +646,24 @@ fn write_profile_session_outputs(
     manifest: &ProfileManifest,
 ) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)?;
-    std::fs::create_dir_all(&run_output_dir)?;
+    std::fs::create_dir_all(run_output_dir)?;
     create_selected_artifact_roots(
         &manifest.native_capture.raw_artifacts,
         &manifest.native_capture.processed_artifacts,
     )?;
-    let rendered_summary = render_profile_markdown(&manifest);
+    let rendered_summary = render_profile_markdown(manifest);
 
     let run_profile_path = run_output_dir.join("profile.json");
     let run_summary_path = run_output_dir.join("summary.md");
     write_semantic_phase_sidecar(manifest)?;
     write_harness_timeline_sidecar(manifest)?;
     refresh_flamegraph_viewer_from_manifest(run_output_dir, manifest)?;
-    write_profile_manifest(&run_profile_path, &manifest)?;
+    write_profile_manifest(&run_profile_path, manifest)?;
     std::fs::write(&run_summary_path, rendered_summary.as_bytes())?;
 
     let latest_profile_path = args.output_dir.join("profile.json");
     let latest_summary_path = args.output_dir.join("summary.md");
-    write_profile_manifest(&latest_profile_path, &manifest)?;
+    write_profile_manifest(&latest_profile_path, manifest)?;
     std::fs::write(&latest_summary_path, rendered_summary.as_bytes())?;
     Ok(())
 }
@@ -1059,35 +1073,36 @@ fn build_differential_viewer_run_metadata(
     baseline_manifest: &ProfileManifest,
     candidate_manifest: &ProfileManifest,
 ) -> Vec<ViewerMetadataItem> {
-    let mut metadata = Vec::new();
-    metadata.push(ViewerMetadataItem {
-        label: "Baseline Run".into(),
-        value: baseline_manifest.run_id.clone(),
-    });
-    metadata.push(ViewerMetadataItem {
-        label: "Candidate Run".into(),
-        value: candidate_manifest.run_id.clone(),
-    });
-    metadata.push(ViewerMetadataItem {
-        label: "Target".into(),
-        value: match candidate_manifest.target {
-            MobileTarget::Android => "android".into(),
-            MobileTarget::Ios => "ios".into(),
+    let mut metadata = vec![
+        ViewerMetadataItem {
+            label: "Baseline Run".into(),
+            value: baseline_manifest.run_id.clone(),
         },
-    });
-    metadata.push(ViewerMetadataItem {
-        label: "Backend".into(),
-        value: match candidate_manifest.backend {
-            ProfileBackend::AndroidNative => "android-native".into(),
-            ProfileBackend::IosInstruments => "ios-instruments".into(),
-            ProfileBackend::RustTracing => "rust-tracing".into(),
-            ProfileBackend::Auto => "auto".into(),
+        ViewerMetadataItem {
+            label: "Candidate Run".into(),
+            value: candidate_manifest.run_id.clone(),
         },
-    });
-    metadata.push(ViewerMetadataItem {
-        label: "Benchmark".into(),
-        value: candidate_manifest.function.clone(),
-    });
+        ViewerMetadataItem {
+            label: "Target".into(),
+            value: match candidate_manifest.target {
+                MobileTarget::Android => "android".into(),
+                MobileTarget::Ios => "ios".into(),
+            },
+        },
+        ViewerMetadataItem {
+            label: "Backend".into(),
+            value: match candidate_manifest.backend {
+                ProfileBackend::AndroidNative => "android-native".into(),
+                ProfileBackend::IosInstruments => "ios-instruments".into(),
+                ProfileBackend::RustTracing => "rust-tracing".into(),
+                ProfileBackend::Auto => "auto".into(),
+            },
+        },
+        ViewerMetadataItem {
+            label: "Benchmark".into(),
+            value: candidate_manifest.function.clone(),
+        },
+    ];
     if let Some(device) = &candidate_manifest.capture_metadata.device {
         metadata.push(ViewerMetadataItem {
             label: "Device".into(),
@@ -1145,6 +1160,7 @@ fn build_differential_viewer_run_metadata(
     metadata
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_differential_viewer_artifact_links(
     processed_root: &Path,
     candidate_run_dir: &Path,
@@ -1275,31 +1291,32 @@ fn flamegraph_title_for_manifest(manifest: &ProfileManifest) -> String {
 }
 
 fn build_viewer_run_metadata(manifest: &ProfileManifest) -> Vec<ViewerMetadataItem> {
-    let mut metadata = Vec::new();
-    metadata.push(ViewerMetadataItem {
-        label: "Run ID".into(),
-        value: manifest.run_id.clone(),
-    });
-    metadata.push(ViewerMetadataItem {
-        label: "Target".into(),
-        value: match manifest.target {
-            MobileTarget::Android => "android".into(),
-            MobileTarget::Ios => "ios".into(),
+    let mut metadata = vec![
+        ViewerMetadataItem {
+            label: "Run ID".into(),
+            value: manifest.run_id.clone(),
         },
-    });
-    metadata.push(ViewerMetadataItem {
-        label: "Backend".into(),
-        value: match manifest.backend {
-            ProfileBackend::AndroidNative => "android-native".into(),
-            ProfileBackend::IosInstruments => "ios-instruments".into(),
-            ProfileBackend::RustTracing => "rust-tracing".into(),
-            ProfileBackend::Auto => "auto".into(),
+        ViewerMetadataItem {
+            label: "Target".into(),
+            value: match manifest.target {
+                MobileTarget::Android => "android".into(),
+                MobileTarget::Ios => "ios".into(),
+            },
         },
-    });
-    metadata.push(ViewerMetadataItem {
-        label: "Benchmark".into(),
-        value: manifest.function.clone(),
-    });
+        ViewerMetadataItem {
+            label: "Backend".into(),
+            value: match manifest.backend {
+                ProfileBackend::AndroidNative => "android-native".into(),
+                ProfileBackend::IosInstruments => "ios-instruments".into(),
+                ProfileBackend::RustTracing => "rust-tracing".into(),
+                ProfileBackend::Auto => "auto".into(),
+            },
+        },
+        ViewerMetadataItem {
+            label: "Benchmark".into(),
+            value: manifest.function.clone(),
+        },
+    ];
     if let Some(device) = &manifest.capture_metadata.device {
         metadata.push(ViewerMetadataItem {
             label: "Device".into(),
@@ -1458,7 +1475,7 @@ fn write_chronological_trace_sidecar(
     if let Some(parent) = trace_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&trace_path, serde_json::to_vec_pretty(&trace)?)
+    std::fs::write(trace_path, serde_json::to_vec_pretty(&trace)?)
         .with_context(|| format!("writing {}", trace_path.display()))?;
     Ok(Some(trace_path.to_path_buf()))
 }
@@ -1699,6 +1716,11 @@ pub fn cmd_profile_diff(args: &ProfileDiffArgs) -> Result<()> {
     let diff_run_dir = args.output_dir.join(&diff_run_id);
     let processed_root = diff_run_dir.join("artifacts/processed");
     std::fs::create_dir_all(&processed_root)?;
+    info!(
+        output_dir = %diff_run_dir.display(),
+        normalize = args.normalize,
+        "building profile diff"
+    );
 
     let full_mode = build_profile_diff_mode(
         baseline_run_dir,
@@ -1799,6 +1821,7 @@ fn validate_profile_diff_inputs(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_profile_diff_mode(
     baseline_run_dir: &Path,
     baseline_manifest: &ProfileManifest,

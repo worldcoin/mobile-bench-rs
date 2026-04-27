@@ -156,49 +156,51 @@
 //!
 //! ### Using the Builder Pattern
 //!
-//! ```ignore
+//! ```no_run
 //! use mobench_sdk::BenchmarkBuilder;
 //!
-//! let report = BenchmarkBuilder::new("my_benchmark")
-//!     .iterations(100)
-//!     .warmup(10)
-//!     .run()?;
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let report = BenchmarkBuilder::new("my_benchmark")
+//!         .iterations(100)
+//!         .warmup(10)
+//!         .run()?;
 //!
-//! println!("Mean: {} ns", report.samples.iter()
-//!     .map(|s| s.duration_ns)
-//!     .sum::<u64>() / report.samples.len() as u64);
+//!     println!("Mean: {} ns", report.mean_ns());
+//!     Ok(())
+//! }
 //! ```
 //!
 //! ### Using BenchSpec Directly
 //!
-//! ```ignore
+//! ```no_run
 //! use mobench_sdk::{BenchSpec, run_benchmark};
 //!
-//! let spec = BenchSpec {
-//!     name: "my_benchmark".to_string(),
-//!     iterations: 50,
-//!     warmup: 5,
-//! };
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let spec = BenchSpec::new("my_benchmark", 50, 5)?;
 //!
-//! let report = run_benchmark(spec)?;
-//! println!("Collected {} samples", report.samples.len());
+//!     let report = run_benchmark(spec)?;
+//!     println!("Collected {} samples", report.samples.len());
+//!     Ok(())
+//! }
 //! ```
 //!
 //! ### Discovering Benchmarks
 //!
-//! ```ignore
+//! ```no_run
 //! use mobench_sdk::{discover_benchmarks, list_benchmark_names};
 //!
-//! // Get all registered benchmark names
-//! let names = list_benchmark_names();
-//! for name in names {
-//!     println!("Found benchmark: {}", name);
-//! }
+//! fn main() {
+//!     // Get all registered benchmark names
+//!     let names = list_benchmark_names();
+//!     for name in names {
+//!         println!("Found benchmark: {}", name);
+//!     }
 //!
-//! // Get full benchmark function info
-//! let benchmarks = discover_benchmarks();
-//! for bench in benchmarks {
-//!     println!("Benchmark: {}", bench.name);
+//!     // Get full benchmark function info
+//!     let benchmarks = discover_benchmarks();
+//!     for bench in benchmarks {
+//!         println!("Benchmark: {}", bench.name);
+//!     }
 //! }
 //! ```
 //!

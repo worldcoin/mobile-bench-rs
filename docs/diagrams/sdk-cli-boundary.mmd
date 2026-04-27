@@ -1,0 +1,20 @@
+flowchart TB
+    subgraph SDK["mobench-sdk"]
+        timing["timing harness"]
+        registry["benchmark registry"]
+        builders["Android/iOS builders"]
+        codegen["template/codegen"]
+        ffi["FFI-safe types"]
+    end
+
+    subgraph CLI["mobench CLI"]
+        config["config and project resolution"]
+        orchestration["build/run/profile orchestration"]
+        providers["BrowserStack and local providers"]
+        reporting["summary, plots, PR reports"]
+    end
+
+    SDK --> CLI
+    CLI --> SDK
+    user["Downstream benchmark crate"] --> SDK
+    ci["CI workflow"] --> CLI

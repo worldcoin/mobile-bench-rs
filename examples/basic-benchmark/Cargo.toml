@@ -3,13 +3,15 @@ name = "basic-benchmark"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
+rust-version.workspace = true
+publish = false
 
 [lib]
 name = "basic_benchmark"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-mobench-sdk = { path = "../../crates/mobench-sdk" }
+mobench-sdk = { workspace = true, features = ["full"] }
 inventory.workspace = true
 serde.workspace = true
 thiserror.workspace = true

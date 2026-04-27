@@ -52,6 +52,7 @@ impl GitHubClient {
         Ok(Self { http, token })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_check_run(
         &self,
         repo: &str,

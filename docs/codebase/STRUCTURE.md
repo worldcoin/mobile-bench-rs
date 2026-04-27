@@ -1,6 +1,6 @@
 # Structure
 
-Updated: 2026-04-01
+Updated: 2026-04-26
 
 ## Workspace layout
 
@@ -32,7 +32,9 @@ mobile-bench-rs/
 
 ### CLI
 
-- `crates/mobench/src/lib.rs`: clap surface and benchmark/CI command orchestration
+- `crates/mobench/src/lib.rs`: crate facade, command dispatch, benchmark/CI orchestration, and shared report helpers
+- `crates/mobench/src/cli.rs`: clap command surface, CLI argument structs, and target value enums
+- `crates/mobench/src/doctor.rs`: prerequisite, `doctor`, `check`, and config validation checks
 - `crates/mobench/src/profile.rs`: local native profiling flow, manifests, summaries, artifact contracts
 - `crates/mobench/src/flamegraph_viewer.rs`: focused/full flamegraph generation, SVG retinting, and HTML viewer assembly
 - `crates/mobench/src/flamegraph_viewer_template.html`: interactive flamegraph shell, timeline mode, and keyboard/fullscreen controls
@@ -85,7 +87,9 @@ target/mobench/profile/<run-id>/
 
 ## Where to add new work
 
-- new CLI/report/profile behavior: `crates/mobench/src/`
+- new CLI arguments: `crates/mobench/src/cli.rs`
+- new prerequisite/config validation behavior: `crates/mobench/src/doctor.rs`
+- new CLI orchestration, report, or profile behavior: `crates/mobench/src/`
 - new SDK/runtime/build/codegen behavior: `crates/mobench-sdk/src/`
 - benchmark registration semantics: `crates/mobench-macros/src/lib.rs`
 - template/runtime UX changes: `templates/` first, then mirror into `crates/mobench-sdk/templates/`

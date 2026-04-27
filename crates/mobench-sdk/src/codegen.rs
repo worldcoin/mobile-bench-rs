@@ -166,6 +166,9 @@ pub struct BenchSpec {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchSample {
     pub duration_ns: u64,
+    pub cpu_time_ms: Option<u64>,
+    pub peak_memory_kb: Option<u64>,
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -228,6 +231,9 @@ impl From<mobench_sdk::BenchSample> for BenchSample {
     fn from(sample: mobench_sdk::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -762,13 +768,11 @@ fn render_dir(dir: &Dir, out_root: &Path, vars: &[TemplateVar]) -> Result<(), Be
                     relative.set_extension("");
                 }
 
-                if should_render {
-                    if let Ok(text) = std::str::from_utf8(&contents) {
-                        let rendered = render_template(text, vars);
-                        // Validate that all template variables were replaced
-                        validate_no_unreplaced_placeholders(&rendered, &relative)?;
-                        contents = rendered.into_bytes();
-                    }
+                if should_render && let Ok(text) = std::str::from_utf8(&contents) {
+                    let rendered = render_template(text, vars);
+                    // Validate that all template variables were replaced
+                    validate_no_unreplaced_placeholders(&rendered, &relative)?;
+                    contents = rendered.into_bytes();
                 }
 
                 let out_path = out_root.join(relative);
@@ -798,10 +802,10 @@ fn is_template_file(path: &Path) -> bool {
     // Also check the filename without the .template extension
     if let Some(stem) = path.file_stem() {
         let stem_path = Path::new(stem);
-        if let Some(ext) = stem_path.extension() {
-            if let Some(ext_str) = ext.to_str() {
-                return TEMPLATE_EXTENSIONS.contains(&ext_str);
-            }
+        if let Some(ext) = stem_path.extension()
+            && let Some(ext_str) = ext.to_str()
+        {
+            return TEMPLATE_EXTENSIONS.contains(&ext_str);
         }
     }
     false
@@ -1120,10 +1124,10 @@ pub fn resolve_default_function(
 
     // Try to detect benchmarks from each potential location
     for dir in &search_dirs {
-        if dir.join("Cargo.toml").exists() {
-            if let Some(detected) = detect_default_function(dir, &crate_name_normalized) {
-                return detected;
-            }
+        if dir.join("Cargo.toml").exists()
+            && let Some(detected) = detect_default_function(dir, &crate_name_normalized)
+        {
+            return detected;
         }
     }
 
@@ -1320,7 +1324,8 @@ mod tests {
 
         for file in files_to_check {
             let path = android_dir.join(file);
-            let contents = fs::read_to_string(&path).expect(&format!("Failed to read {}", file));
+            let contents =
+                fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read {}", file));
 
             // Check for unreplaced placeholders
             let has_placeholder = contents.contains("{{") && contents.contains("}}");
@@ -1344,6 +1349,14 @@ mod tests {
         assert!(
             build_gradle.contains("dev.world.mybenchproject"),
             "build.gradle should contain sanitized package name 'dev.world.mybenchproject'"
+        );
+        assert!(
+            !build_gradle.contains("testBuildType \"release\""),
+            "debug builds should be able to produce assembleDebugAndroidTest"
+        );
+        assert!(
+            build_gradle.contains("mobenchTestBuildType"),
+            "release builds should be able to request assembleReleaseAndroidTest"
         );
 
         let manifest =
@@ -1441,6 +1454,103 @@ mod tests {
         assert!(is_template_file(Path::new("Info.plist")));
         assert!(!is_template_file(Path::new("libfoo.so")));
         assert!(!is_template_file(Path::new("image.png")));
+    }
+
+    #[test]
+    fn test_mobile_templates_read_process_peak_memory_compatibly() {
+        let android =
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template");
+        assert!(
+            !android.contains("sample.processPeakMemoryKb"),
+            "Android template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(
+            !android.contains("it.processPeakMemoryKb"),
+            "Android template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(android.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(
+            !android.contains("sample.cpuTimeMs"),
+            "Android template should tolerate BenchSample without cpuTimeMs"
+        );
+        assert!(
+            !android.contains("sample.peakMemoryKb"),
+            "Android template should tolerate BenchSample without peakMemoryKb"
+        );
+        assert!(
+            !android.contains("report.phases"),
+            "Android template should tolerate BenchReport without phases"
+        );
+        assert!(android.contains("ProcessMemorySampler"));
+        assert!(android.contains("sampleIntervalMs: Long = 1000L"));
+        assert!(android.contains("/proc/self/smaps_rollup"));
+        assert!(android.contains("class BenchmarkWorkerService : Service()"));
+        assert!(android.contains("ResultReceiver(Handler(Looper.getMainLooper()))"));
+        assert!(android.contains("startForegroundService(intent)"));
+        assert!(android.contains("startForeground(FOREGROUND_NOTIFICATION_ID"));
+        assert!(android.contains("fun isBenchmarkComplete()"));
+        assert!(!android.contains("resultLatch.await"));
+        assert!(android.contains("memory_process\", \"isolated_worker\""));
+
+        let android_test = include_str!(
+            "../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
+        );
+        assert!(android_test.contains("Log.i(\"BenchRunnerTest\""));
+        assert!(android_test.contains("Thread.sleep(heartbeatMs)"));
+        assert!(android_test.contains("TimeUnit.SECONDS.toMillis(10)"));
+        assert!(android_test.contains("activity.isBenchmarkComplete()"));
+
+        let ios_test = include_str!(
+            "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+        );
+        assert!(
+            ios_test.contains("\\\"error\\\""),
+            "iOS XCUITest template should fail when the benchmark report is an error payload"
+        );
+
+        let android_manifest =
+            include_str!("../templates/android/app/src/main/AndroidManifest.xml");
+        assert!(android_manifest.contains("android.permission.FOREGROUND_SERVICE"));
+        assert!(android_manifest.contains("android.permission.FOREGROUND_SERVICE_DATA_SYNC"));
+        assert!(android_manifest.contains("android:name=\".BenchmarkWorkerService\""));
+        assert!(android_manifest.contains("android:foregroundServiceType=\"dataSync\""));
+        assert!(android_manifest.contains("android:process=\":mobench_worker\""));
+
+        let android_build_gradle = include_str!("../templates/android/app/build.gradle");
+        assert!(android_build_gradle.contains("generatedMainBenchSpec"));
+        assert!(android_build_gradle.contains("if (!generatedMainBenchSpec.exists())"));
+
+        let ios =
+            include_str!("../templates/ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift.template");
+        assert!(
+            !ios.contains("sample.processPeakMemoryKb"),
+            "iOS template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(
+            !ios.contains(r"\.processPeakMemoryKb"),
+            "iOS template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(ios.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(ios.contains("return [\n                \"name\": name,"));
+        assert!(
+            !ios.contains("sample.cpuTimeMs"),
+            "iOS template should tolerate BenchSample without cpuTimeMs"
+        );
+        assert!(
+            !ios.contains("sample.peakMemoryKb"),
+            "iOS template should tolerate BenchSample without peakMemoryKb"
+        );
+        assert!(
+            !ios.contains("report.phases"),
+            "iOS template should tolerate BenchReport without phases"
+        );
+        assert!(ios.contains("compactMap { optionalProcessPeakMemoryKb($0) }"));
+        assert!(ios.contains("ProcessMemorySampler"));
+        assert!(ios.contains("currentProcessResidentMemoryKb"));
+        assert!(ios.contains("task_info("));
+        assert!(ios.contains("\"memory_process\": \"benchmark_app\""));
+        assert!(ios.contains("generateJSONReport(report, runProcessPeakMemoryKb:"));
+        assert!(ios.contains("processPeakSamplesKb.max() ?? runProcessPeakMemoryKb"));
     }
 
     #[test]

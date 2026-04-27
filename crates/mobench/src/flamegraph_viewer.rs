@@ -415,11 +415,10 @@ fn build_frame_breakdown_list(
         .map(|(frame, samples)| FrameBreakdown {
             frame,
             samples,
-            percent_total: if total_samples == 0 {
-                0
-            } else {
-                samples.saturating_mul(100) / total_samples
-            },
+            percent_total: samples
+                .saturating_mul(100)
+                .checked_div(total_samples)
+                .unwrap_or(0),
         })
         .collect();
     frames.sort_by(|left, right| {
@@ -565,7 +564,7 @@ fn retint_flamegraph_palette(document: String) -> String {
     output
 }
 
-fn frame_title_for_fill<'a>(document: &'a str, fill_start: usize) -> &'a str {
+fn frame_title_for_fill(document: &str, fill_start: usize) -> &str {
     document[..fill_start]
         .rfind("<title>")
         .and_then(|title_start| {

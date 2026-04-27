@@ -46,7 +46,7 @@ The app reads benchmark configuration from:
 ## Benchmark report capture
 
 The app emits benchmark results for both local automation and BrowserStack:
-- Keeps results on screen briefly so humans and automation can inspect them
+- Runs the benchmark in an isolated `:mobench_worker` process and shows the worker result on screen
 - Outputs JSON with `BENCH_JSON` marker to logcat
 - Includes `phases` when the benchmark uses `profile_phase(...)`
 - Is marked `profileable` so local native profilers can attach to it

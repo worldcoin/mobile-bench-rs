@@ -64,11 +64,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc,
-};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -171,8 +167,10 @@ impl BenchSpec {
 
 /// A single timing sample from a benchmark iteration.
 ///
-/// Contains the elapsed time in nanoseconds for one execution of the
-/// benchmark function.
+/// Holds the elapsed wall time in nanoseconds plus optional per-iteration
+/// resource metrics (CPU time, peak memory growth, and process peak memory).
+/// The optional fields are only populated on platforms where the harness can
+/// capture them and are skipped from the JSON output when absent.
 ///
 /// # Example
 ///
@@ -204,10 +202,18 @@ pub struct BenchSample {
 
     /// Peak memory growth during the measured iteration in kilobytes.
     ///
-    /// Values are baseline-adjusted immediately before the measured closure
-    /// enters so harness footprint is not counted.
+    /// This legacy wire field is baseline-adjusted immediately before the
+    /// measured closure enters. It reports growth during the measured
+    /// iteration, not absolute process or device peak memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_memory_kb: Option<u64>,
+
+    /// Peak resident memory of the benchmark process during the measured iteration.
+    ///
+    /// This is sampled from the current process while the measured closure is
+    /// running. Unlike `peak_memory_kb`, it is not baseline-adjusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 impl BenchSample {
@@ -216,6 +222,7 @@ impl BenchSample {
             duration_ns: duration.as_nanos() as u64,
             cpu_time_ms: resources.cpu_time_ms,
             peak_memory_kb: resources.peak_memory_kb,
+            process_peak_memory_kb: resources.process_peak_memory_kb,
         }
     }
 }
@@ -259,9 +266,17 @@ pub struct BenchReport {
     pub samples: Vec<BenchSample>,
 
     /// Optional semantic phase timings captured during measured iterations.
+    ///
+    /// Defaults to an empty vector when deserializing reports produced by
+    /// older mobench versions that did not emit phase data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub phases: Vec<SemanticPhase>,
 
     /// Exact harness timeline spans in execution order.
+    ///
+    /// Defaults to an empty vector when deserializing reports produced by
+    /// older mobench versions that did not emit timeline data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timeline: Vec<HarnessTimelineSpan>,
 }
 
@@ -394,11 +409,36 @@ impl BenchReport {
     }
 
     /// Returns the maximum baseline-adjusted peak memory growth in kilobytes.
+    ///
+    /// This is the legacy accessor for the serialized `peak_memory_kb` sample
+    /// field. It does not report absolute process or device peak memory.
     #[must_use]
     pub fn peak_memory_kb(&self) -> Option<u64> {
         self.samples
             .iter()
             .filter_map(|sample| sample.peak_memory_kb)
+            .max()
+    }
+
+    /// Returns the maximum baseline-adjusted peak memory growth in kilobytes.
+    ///
+    /// This is an explicit alias for [`BenchReport::peak_memory_kb`] to make the
+    /// growth semantics clear while preserving the legacy wire field.
+    #[must_use]
+    #[doc(alias = "peak_memory_kb")]
+    pub fn peak_memory_growth_kb(&self) -> Option<u64> {
+        self.peak_memory_kb()
+    }
+
+    /// Returns the maximum process resident memory peak in kilobytes.
+    ///
+    /// This reports the current benchmark process peak sampled during measured
+    /// iterations. It excludes BrowserStack/session-level provider memory.
+    #[must_use]
+    pub fn process_peak_memory_kb(&self) -> Option<u64> {
+        self.samples
+            .iter()
+            .filter_map(|sample| sample.process_peak_memory_kb)
             .max()
     }
 
@@ -424,6 +464,7 @@ impl BenchReport {
 struct IterationResourceUsage {
     cpu_time_ms: Option<u64>,
     peak_memory_kb: Option<u64>,
+    process_peak_memory_kb: Option<u64>,
 }
 
 fn instant_offset_ns(origin: Instant, instant: Instant) -> u64 {
@@ -580,7 +621,19 @@ trait ResourceMonitor {
 }
 
 #[derive(Default)]
-struct DefaultResourceMonitor;
+struct DefaultResourceMonitor {
+    /// Lazily-initialized long-lived sampler shared across measured iterations.
+    ///
+    /// We pay thread-spawn cost once per benchmark function rather than per
+    /// iteration. On constrained mobile devices (Android/Bionic) thread
+    /// creation is significantly more expensive than on desktop Linux, and
+    /// 1000+ iteration benchmarks would otherwise spawn 1000+ throwaway
+    /// threads.
+    memory_sampler: Option<PersistentMemorySampler>,
+    /// Set after the first attempt to start the sampler so we do not retry
+    /// on platforms where the sampler is not supported.
+    sampler_init_attempted: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ProcessCpuTimeSnapshot {
@@ -604,16 +657,26 @@ impl ProcessCpuTimeSnapshot {
 
 struct DefaultResourceToken {
     cpu_time_start: Option<ProcessCpuTimeSnapshot>,
-    memory_sampler: Option<MemoryPeakSampler>,
+    /// True if the persistent sampler accepted a `Begin` for this iteration
+    /// and we therefore expect a corresponding result on `finish`.
+    has_memory_window: bool,
 }
 
 impl ResourceMonitor for DefaultResourceMonitor {
     type Token = DefaultResourceToken;
 
     fn start(&mut self) -> Self::Token {
+        if !self.sampler_init_attempted {
+            self.memory_sampler = PersistentMemorySampler::start();
+            self.sampler_init_attempted = true;
+        }
+        let has_memory_window = self
+            .memory_sampler
+            .as_ref()
+            .is_some_and(PersistentMemorySampler::begin_window);
         Self::Token {
             cpu_time_start: current_process_cpu_time(),
-            memory_sampler: MemoryPeakSampler::start(),
+            has_memory_window,
         }
     }
 
@@ -623,12 +686,20 @@ impl ResourceMonitor for DefaultResourceMonitor {
             .zip(current_process_cpu_time())
             .and_then(|(start, end)| process_cpu_delta_ms(start, end));
 
+        let memory_peak = if token.has_memory_window {
+            self.memory_sampler
+                .as_ref()
+                .and_then(PersistentMemorySampler::end_window)
+        } else {
+            None
+        };
+
         IterationResourceUsage {
             cpu_time_ms,
-            peak_memory_kb: token
-                .memory_sampler
-                .and_then(MemoryPeakSampler::stop)
-                .filter(|value| *value > 0),
+            peak_memory_kb: memory_peak
+                .and_then(|peak| (peak.growth_kb > 0).then_some(peak.growth_kb)),
+            process_peak_memory_kb: memory_peak
+                .and_then(|peak| (peak.process_peak_kb > 0).then_some(peak.process_peak_kb)),
         }
     }
 }
@@ -665,11 +736,15 @@ fn timeval_to_ns(value: libc::timeval) -> Option<u64> {
 #[cfg(unix)]
 fn current_process_cpu_time() -> Option<ProcessCpuTimeSnapshot> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: `RUSAGE_SELF` is always a valid `who` value and the kernel
+    // writes a fully-initialized `rusage` into the provided pointer on
+    // success. We bail out via `rc != 0` before touching the buffer below.
     let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
     if rc != 0 {
         return None;
     }
 
+    // SAFETY: `getrusage` returned 0, so the buffer is fully initialized.
     let usage = unsafe { usage.assume_init() };
     ProcessCpuTimeSnapshot::from_rusage_timevals(usage.ru_utime, usage.ru_stime)
 }
@@ -682,97 +757,154 @@ fn current_process_cpu_time() -> Option<ProcessCpuTimeSnapshot> {
 const MEMORY_SAMPLER_INTERVAL: Duration = Duration::from_millis(1);
 type MemoryReader = Arc<dyn Fn() -> Option<u64> + Send + Sync + 'static>;
 
-struct MemoryPeakSampler {
-    baseline_kb: u64,
-    stop_flag: Arc<AtomicBool>,
-    peak_kb: Arc<AtomicU64>,
-    handle: JoinHandle<()>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessMemoryPeak {
+    growth_kb: u64,
+    process_peak_kb: u64,
 }
 
-impl MemoryPeakSampler {
+/// Long-lived memory sampler. Spawned once per benchmark function and reused
+/// across every measured iteration via `begin_window` / `end_window`.
+///
+/// Replaces the previous per-iteration design that spawned and joined a fresh
+/// thread for every sample. On Android (Bionic) and iOS that thread-creation
+/// overhead is non-trivial and would inflate harness wall time on
+/// high-iteration runs.
+struct PersistentMemorySampler {
+    cmd_tx: mpsc::SyncSender<SamplerCmd>,
+    result_rx: mpsc::Receiver<Option<ProcessMemoryPeak>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+enum SamplerCmd {
+    Begin(mpsc::SyncSender<bool>),
+    End,
+    Shutdown,
+}
+
+impl PersistentMemorySampler {
     fn start() -> Option<Self> {
-        Self::start_with_reader(Arc::new(|| current_process_memory_kb()))
+        Self::start_with_reader(Arc::new(current_process_memory_kb))
     }
 
     fn start_with_reader(reader: MemoryReader) -> Option<Self> {
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let peak_kb = Arc::new(AtomicU64::new(0));
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        let (baseline_tx, baseline_rx) = mpsc::sync_channel(1);
-        let sampler_stop = Arc::clone(&stop_flag);
-        let sampler_peak = Arc::clone(&peak_kb);
-        let sampler_reader = Arc::clone(&reader);
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<SamplerCmd>(1);
+        let (result_tx, result_rx) = mpsc::sync_channel::<Option<ProcessMemoryPeak>>(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(1);
 
         let handle = thread::Builder::new()
             .name("mobench-memory-sampler".to_string())
             .spawn(move || {
-                // Touch the sampler thread's own stack and runtime state before the
-                // benchmark baseline is captured so its overhead is not reported as
-                // measured benchmark memory.
-                let _ = sampler_reader();
-                let _ = ready_tx.send(());
-
-                let Some(baseline_kb) = baseline_rx.recv().ok().flatten() else {
+                // Touch the sampler thread's own stack and runtime state once
+                // before any window opens so its initialization cost cannot
+                // contaminate the first iteration's baseline measurement.
+                let _ = reader();
+                if ready_tx.send(()).is_err() {
                     return;
-                };
-                sampler_peak.store(baseline_kb, Ordering::Release);
-
-                while !sampler_stop.load(Ordering::Acquire) {
-                    if let Some(current_kb) = sampler_reader() {
-                        update_atomic_max(&sampler_peak, current_kb);
-                    }
-                    thread::sleep(MEMORY_SAMPLER_INTERVAL);
                 }
+                drop(ready_tx);
 
-                if let Some(current_kb) = sampler_reader() {
-                    update_atomic_max(&sampler_peak, current_kb);
-                }
+                Self::run(reader, &cmd_rx, &result_tx);
             })
             .ok()?;
 
         if ready_rx.recv().is_err() {
-            stop_flag.store(true, Ordering::Release);
-            let _ = handle.join();
-            return None;
-        }
-
-        let baseline_kb = match reader() {
-            Some(value) => value,
-            None => {
-                let _ = baseline_tx.send(None);
-                stop_flag.store(true, Ordering::Release);
-                let _ = handle.join();
-                return None;
-            }
-        };
-        if baseline_tx.send(Some(baseline_kb)).is_err() {
-            stop_flag.store(true, Ordering::Release);
+            // Thread failed before sending readiness. Send Shutdown to make
+            // sure it does not get stuck on a later cmd recv, then join.
+            let _ = cmd_tx.send(SamplerCmd::Shutdown);
             let _ = handle.join();
             return None;
         }
 
         Some(Self {
-            baseline_kb,
-            stop_flag,
-            peak_kb,
-            handle,
+            cmd_tx,
+            result_rx,
+            handle: Some(handle),
         })
     }
 
-    fn stop(self) -> Option<u64> {
-        self.stop_flag.store(true, Ordering::Release);
-        let _ = self.handle.join();
-        let peak_kb = self.peak_kb.load(Ordering::Acquire);
-        Some(peak_kb.saturating_sub(self.baseline_kb))
+    fn run(
+        reader: MemoryReader,
+        cmd_rx: &mpsc::Receiver<SamplerCmd>,
+        result_tx: &mpsc::SyncSender<Option<ProcessMemoryPeak>>,
+    ) {
+        while let Ok(cmd) = cmd_rx.recv() {
+            match cmd {
+                SamplerCmd::Begin(ack_tx) => {
+                    let baseline = match reader() {
+                        Some(v) => v,
+                        None => {
+                            let _ = ack_tx.send(false);
+                            continue;
+                        }
+                    };
+                    if ack_tx.send(true).is_err() {
+                        continue;
+                    }
+                    let mut peak = baseline;
+                    let shutting_down = loop {
+                        match cmd_rx.recv_timeout(MEMORY_SAMPLER_INTERVAL) {
+                            Ok(SamplerCmd::End) => break false,
+                            Ok(SamplerCmd::Shutdown) => break true,
+                            // A stray Begin while a window is already open
+                            // means the producer side desynced — preserve
+                            // existing behavior by ignoring it.
+                            Ok(SamplerCmd::Begin(ack_tx)) => {
+                                let _ = ack_tx.send(false);
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                if let Some(current) = reader()
+                                    && current > peak
+                                {
+                                    peak = current;
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break true,
+                        }
+                    };
+                    // One last sample after the window closes so a final
+                    // allocation that happens between the last poll and the
+                    // End command is still accounted for.
+                    if let Some(current) = reader()
+                        && current > peak
+                    {
+                        peak = current;
+                    }
+                    let _ = result_tx.send(Some(ProcessMemoryPeak {
+                        growth_kb: peak.saturating_sub(baseline),
+                        process_peak_kb: peak,
+                    }));
+                    if shutting_down {
+                        return;
+                    }
+                }
+                SamplerCmd::Shutdown => return,
+                // End without an active Begin — ignore.
+                SamplerCmd::End => {}
+            }
+        }
+    }
+
+    fn begin_window(&self) -> bool {
+        let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+        self.cmd_tx
+            .send(SamplerCmd::Begin(ack_tx))
+            .ok()
+            .and_then(|()| ack_rx.recv().ok())
+            .unwrap_or(false)
+    }
+
+    fn end_window(&self) -> Option<ProcessMemoryPeak> {
+        self.cmd_tx.send(SamplerCmd::End).ok()?;
+        self.result_rx.recv().ok().flatten()
     }
 }
 
-fn update_atomic_max(target: &AtomicU64, value: u64) {
-    let mut current = target.load(Ordering::Relaxed);
-    while value > current {
-        match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(observed) => current = observed,
+impl Drop for PersistentMemorySampler {
+    fn drop(&mut self) {
+        let _ = self.cmd_tx.send(SamplerCmd::Shutdown);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
         }
     }
 }
@@ -784,6 +916,8 @@ fn current_process_memory_kb() -> Option<u64> {
         .split_whitespace()
         .nth(1)
         .and_then(|value| value.parse::<u64>().ok())?;
+    // SAFETY: `_SC_PAGESIZE` is a valid sysconf selector on every supported
+    // POSIX target; sysconf has no side effects and reports failures via -1.
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page_size <= 0 {
         return None;
@@ -796,7 +930,17 @@ fn current_process_memory_kb() -> Option<u64> {
 fn current_process_memory_kb() -> Option<u64> {
     let mut info = std::mem::MaybeUninit::<libc::mach_task_basic_info_data_t>::uninit();
     let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+    // `mach_task_self` is marked deprecated by libc in favor of
+    // `mach_task_self_`, but the replacement symbol is not yet exposed by the
+    // libc crate's iOS/macOS bindings (libc < 0.3). The deprecation is purely
+    // cosmetic — the function continues to be the documented way to obtain
+    // the current task port and is what Apple's headers expand the macro to.
     #[allow(deprecated)]
+    // SAFETY: `mach_task_self` always returns a valid task port for the
+    // current process. `MACH_TASK_BASIC_INFO` matches the
+    // `mach_task_basic_info_data_t` layout we pass; `count` carries the
+    // capacity in 32-bit words and is updated by the kernel on success.
+    // We check for `KERN_SUCCESS` before assuming the buffer is initialized.
     let rc = unsafe {
         libc::task_info(
             libc::mach_task_self(),
@@ -809,8 +953,10 @@ fn current_process_memory_kb() -> Option<u64> {
         return None;
     }
 
+    // SAFETY: `task_info` returned `KERN_SUCCESS`, so the basic info struct
+    // is fully populated.
     let info = unsafe { info.assume_init() };
-    Some((info.resident_size / 1024) as u64)
+    Some(info.resident_size / 1024)
 }
 
 #[cfg(not(any(
@@ -962,12 +1108,12 @@ pub enum TimingError {
 ///
 /// Uses [`std::time::Instant`] for timing, which provides monotonic,
 /// nanosecond-resolution measurements on most platforms.
-pub fn run_closure<F>(spec: BenchSpec, mut f: F) -> Result<BenchReport, TimingError>
+pub fn run_closure<F>(spec: BenchSpec, f: F) -> Result<BenchReport, TimingError>
 where
     F: FnMut() -> Result<(), TimingError>,
 {
-    let mut monitor = DefaultResourceMonitor;
-    run_closure_with_monitor(spec, &mut monitor, move || f())
+    let mut monitor = DefaultResourceMonitor::default();
+    run_closure_with_monitor(spec, &mut monitor, f)
 }
 
 fn run_closure_with_monitor<F, M>(
@@ -1007,7 +1153,7 @@ where
     begin_semantic_phase_collection();
     let mut samples = Vec::with_capacity(spec.iterations as usize);
     for iteration in 0..spec.iterations {
-        let (sample, start, end) = match measure_iteration(monitor, || f()) {
+        let (sample, start, end) = match measure_iteration(monitor, &mut f) {
             Ok(measurement) => measurement,
             Err(err) => {
                 let _ = finish_semantic_phase_collection();
@@ -1070,7 +1216,7 @@ where
     S: FnOnce() -> T,
     F: FnMut(&T) -> Result<(), TimingError>,
 {
-    let mut monitor = DefaultResourceMonitor;
+    let mut monitor = DefaultResourceMonitor::default();
     run_closure_with_setup_with_monitor(spec, &mut monitor, setup, move |input| f(input))
 }
 
@@ -1182,20 +1328,15 @@ where
 /// ```
 pub fn run_closure_with_setup_per_iter<S, T, F>(
     spec: BenchSpec,
-    mut setup: S,
-    mut f: F,
+    setup: S,
+    f: F,
 ) -> Result<BenchReport, TimingError>
 where
     S: FnMut() -> T,
     F: FnMut(T) -> Result<(), TimingError>,
 {
-    let mut monitor = DefaultResourceMonitor;
-    run_closure_with_setup_per_iter_with_monitor(
-        spec,
-        &mut monitor,
-        move || setup(),
-        move |input| f(input),
-    )
+    let mut monitor = DefaultResourceMonitor::default();
+    run_closure_with_setup_per_iter_with_monitor(spec, &mut monitor, setup, f)
 }
 
 fn run_closure_with_setup_per_iter_with_monitor<S, T, F, M>(
@@ -1324,7 +1465,7 @@ where
     F: FnMut(&T) -> Result<(), TimingError>,
     D: FnOnce(T),
 {
-    let mut monitor = DefaultResourceMonitor;
+    let mut monitor = DefaultResourceMonitor::default();
     run_closure_with_setup_teardown_with_monitor(
         spec,
         &mut monitor,
@@ -1369,44 +1510,48 @@ where
         None,
     );
 
-    // Warmup phase
-    for iteration in 0..spec.warmup {
-        let phase_start = Instant::now();
-        f(&input)?;
-        push_timeline_span(
-            &mut timeline,
-            harness_origin,
-            "warmup-benchmark",
-            phase_start,
-            Instant::now(),
-            Some(iteration),
-        );
-    }
+    let result = (|| {
+        // Warmup phase
+        for iteration in 0..spec.warmup {
+            let phase_start = Instant::now();
+            f(&input)?;
+            push_timeline_span(
+                &mut timeline,
+                harness_origin,
+                "warmup-benchmark",
+                phase_start,
+                Instant::now(),
+                Some(iteration),
+            );
+        }
 
-    // Measurement phase
-    begin_semantic_phase_collection();
-    let mut samples = Vec::with_capacity(spec.iterations as usize);
-    for iteration in 0..spec.iterations {
-        let (sample, start, end) = match measure_iteration(monitor, || f(&input)) {
-            Ok(measurement) => measurement,
-            Err(err) => {
-                let _ = finish_semantic_phase_collection();
-                return Err(err);
-            }
-        };
-        samples.push(sample);
-        push_timeline_span(
-            &mut timeline,
-            harness_origin,
-            "measured-benchmark",
-            start,
-            end,
-            Some(iteration),
-        );
-    }
-    let phases = finish_semantic_phase_collection();
+        // Measurement phase
+        begin_semantic_phase_collection();
+        let mut samples = Vec::with_capacity(spec.iterations as usize);
+        for iteration in 0..spec.iterations {
+            let (sample, start, end) = match measure_iteration(monitor, || f(&input)) {
+                Ok(measurement) => measurement,
+                Err(err) => {
+                    let _ = finish_semantic_phase_collection();
+                    return Err(err);
+                }
+            };
+            samples.push(sample);
+            push_timeline_span(
+                &mut timeline,
+                harness_origin,
+                "measured-benchmark",
+                start,
+                end,
+                Some(iteration),
+            );
+        }
+        let phases = finish_semantic_phase_collection();
 
-    // Teardown phase - not timed
+        Ok((samples, phases))
+    })();
+
+    // Teardown phase - not timed. It runs even when warmup/measurement fails.
     let teardown_start = Instant::now();
     teardown(input);
     push_timeline_span(
@@ -1418,6 +1563,7 @@ where
         None,
     );
 
+    let (samples, phases) = result?;
     Ok(BenchReport {
         spec,
         samples,
@@ -1552,6 +1698,7 @@ mod tests {
                 duration_ns: 1_000_000,
                 cpu_time_ms: Some(42),
                 peak_memory_kb: Some(512),
+                process_peak_memory_kb: Some(1536),
             }],
             phases: vec![SemanticPhase {
                 name: "prove".to_string(),
@@ -1566,12 +1713,16 @@ mod tests {
         };
 
         let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"peak_memory_kb\""));
+        assert!(json.contains("\"process_peak_memory_kb\""));
+        assert!(!json.contains("peak_memory_growth_kb"));
         let restored: BenchReport = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.spec.name, "test");
         assert_eq!(restored.samples.len(), 1);
         assert_eq!(restored.samples[0].cpu_time_ms, Some(42));
         assert_eq!(restored.samples[0].peak_memory_kb, Some(512));
+        assert_eq!(restored.samples[0].process_peak_memory_kb, Some(1536));
         assert_eq!(restored.phases.len(), 1);
         assert_eq!(restored.phases[0].name, "prove");
         assert!(restored.phases[0].duration_ns > 0);
@@ -1634,10 +1785,12 @@ mod tests {
             IterationResourceUsage {
                 cpu_time_ms: Some(11),
                 peak_memory_kb: Some(32),
+                ..Default::default()
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(17),
                 peak_memory_kb: Some(64),
+                ..Default::default()
             },
         ]);
         let mut calls = 0_u32;
@@ -1669,10 +1822,12 @@ mod tests {
             IterationResourceUsage {
                 cpu_time_ms: Some(5),
                 peak_memory_kb: Some(12),
+                ..Default::default()
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(7),
                 peak_memory_kb: Some(18),
+                ..Default::default()
             },
         ]);
 
@@ -1702,11 +1857,30 @@ mod tests {
     }
 
     #[test]
+    fn setup_teardown_runs_teardown_when_warmup_fails() {
+        let spec = BenchSpec::new("teardown-on-error", 1, 1).unwrap();
+        let mut teardown_calls = 0_u32;
+
+        let result = run_closure_with_setup_teardown(
+            spec,
+            || vec![1_u8, 2, 3],
+            |_fixture| Err(TimingError::Execution("warmup failed".to_string())),
+            |_fixture| {
+                teardown_calls += 1;
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(teardown_calls, 1);
+    }
+
+    #[test]
     fn single_iteration_cpu_median_matches_the_measured_iteration() {
         let spec = BenchSpec::new("single", 1, 0).unwrap();
         let mut monitor = FakeResourceMonitor::new(vec![IterationResourceUsage {
             cpu_time_ms: Some(42),
             peak_memory_kb: Some(24),
+            ..Default::default()
         }]);
 
         let report = run_closure_with_monitor(spec, &mut monitor, || Ok(())).unwrap();
@@ -1723,14 +1897,17 @@ mod tests {
             IterationResourceUsage {
                 cpu_time_ms: Some(19),
                 peak_memory_kb: Some(10),
+                ..Default::default()
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(7),
                 peak_memory_kb: Some(30),
+                ..Default::default()
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(11),
                 peak_memory_kb: Some(20),
+                ..Default::default()
             },
         ]);
 
@@ -1747,10 +1924,12 @@ mod tests {
             IterationResourceUsage {
                 cpu_time_ms: Some(3),
                 peak_memory_kb: Some(48),
+                process_peak_memory_kb: Some(1_048),
             },
             IterationResourceUsage {
                 cpu_time_ms: Some(4),
                 peak_memory_kb: Some(96),
+                process_peak_memory_kb: Some(1_096),
             },
         ]);
 
@@ -1772,6 +1951,8 @@ mod tests {
             vec![Some(48), Some(96)]
         );
         assert_eq!(report.peak_memory_kb(), Some(96));
+        assert_eq!(report.peak_memory_growth_kb(), report.peak_memory_kb());
+        assert_eq!(report.process_peak_memory_kb(), Some(1_096));
     }
 
     #[test]
@@ -1779,6 +1960,8 @@ mod tests {
         use std::collections::VecDeque;
         use std::sync::{Arc, Mutex};
 
+        // Queue: [80=startup warmup, 100=baseline-on-Begin, 140, 120, ...]
+        // After exhaustion the reader returns 120 forever, so peak stays 140.
         let samples = Arc::new(Mutex::new(VecDeque::from([
             Some(80_u64),
             Some(100_u64),
@@ -1794,10 +1977,172 @@ mod tests {
                 .unwrap_or(Some(120))
         });
 
-        let sampler = MemoryPeakSampler::start_with_reader(reader).expect("sampler");
-        let peak_kb = sampler.stop().expect("peak memory");
+        let sampler = PersistentMemorySampler::start_with_reader(reader).expect("sampler");
+        assert!(sampler.begin_window());
+        let peak = sampler.end_window().expect("peak memory");
 
-        assert_eq!(peak_kb, 40);
+        assert_eq!(
+            peak,
+            ProcessMemoryPeak {
+                growth_kb: 40,
+                process_peak_kb: 140,
+            }
+        );
+    }
+
+    #[test]
+    fn persistent_memory_sampler_does_not_queue_result_when_begin_fails() {
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+
+        // Queue: [80=startup warmup, None=failed first baseline,
+        // 100=second baseline, 130=final sample].
+        let samples = Arc::new(Mutex::new(VecDeque::from([
+            Some(80_u64),
+            None,
+            Some(100_u64),
+            Some(130_u64),
+        ])));
+        let reader_samples = Arc::clone(&samples);
+        let reader = Arc::new(move || {
+            reader_samples
+                .lock()
+                .expect("sample queue")
+                .pop_front()
+                .unwrap_or(Some(130))
+        });
+
+        let sampler = PersistentMemorySampler::start_with_reader(reader).expect("sampler");
+        assert!(!sampler.begin_window());
+        assert!(sampler.begin_window());
+        let peak = sampler
+            .end_window()
+            .expect("second window should receive its own result");
+
+        assert_eq!(
+            peak,
+            ProcessMemoryPeak {
+                growth_kb: 30,
+                process_peak_kb: 130,
+            }
+        );
+    }
+
+    #[test]
+    fn persistent_memory_sampler_waits_for_baseline_before_begin_returns() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let call_count = Arc::new(Mutex::new(0_u32));
+        let (baseline_entered_tx, baseline_entered_rx) = mpsc::sync_channel(1);
+        let (baseline_release_tx, baseline_release_rx) = mpsc::sync_channel(1);
+        let baseline_release_rx = Arc::new(Mutex::new(baseline_release_rx));
+        let baseline_released = Arc::new(AtomicBool::new(false));
+
+        let reader_calls = Arc::clone(&call_count);
+        let reader_release = Arc::clone(&baseline_release_rx);
+        let reader = Arc::new(move || {
+            let mut calls = reader_calls.lock().expect("call count");
+            *calls += 1;
+            let current = *calls;
+            drop(calls);
+
+            if current == 2 {
+                baseline_entered_tx.send(()).expect("baseline entered");
+                reader_release
+                    .lock()
+                    .expect("baseline release")
+                    .recv()
+                    .expect("release baseline");
+                return Some(100);
+            }
+
+            Some(120)
+        });
+
+        let released = Arc::clone(&baseline_released);
+        let release_handle = thread::spawn(move || {
+            baseline_entered_rx.recv().expect("baseline read started");
+            thread::sleep(Duration::from_millis(20));
+            released.store(true, Ordering::SeqCst);
+            baseline_release_tx.send(()).expect("release baseline");
+        });
+
+        let sampler = PersistentMemorySampler::start_with_reader(reader).expect("sampler");
+        assert!(sampler.begin_window());
+        assert!(
+            baseline_released.load(Ordering::SeqCst),
+            "begin_window returned before the baseline sample completed"
+        );
+        release_handle.join().expect("join release thread");
+
+        let peak = sampler.end_window().expect("peak memory");
+        assert_eq!(peak.growth_kb, 20);
+        assert_eq!(peak.process_peak_kb, 120);
+    }
+
+    #[test]
+    fn persistent_memory_sampler_supports_multiple_windows() {
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+
+        // First window baseline=200 peak=260 (growth=60).
+        // Second window baseline=190 peak=250 (growth=60).
+        let samples = Arc::new(Mutex::new(VecDeque::from([
+            Some(50_u64),  // startup warmup
+            Some(200_u64), // window 1 baseline
+            Some(260_u64), // window 1 peak
+            Some(190_u64), // window 2 baseline
+            Some(250_u64), // window 2 peak
+        ])));
+        let reader_samples = Arc::clone(&samples);
+        let reader = Arc::new(move || {
+            reader_samples
+                .lock()
+                .expect("sample queue")
+                .pop_front()
+                .unwrap_or(Some(0))
+        });
+
+        let sampler = PersistentMemorySampler::start_with_reader(reader).expect("sampler");
+
+        assert!(sampler.begin_window());
+        let first = sampler.end_window().expect("first peak");
+        assert_eq!(first.process_peak_kb, 260);
+        assert_eq!(first.growth_kb, 60);
+
+        assert!(sampler.begin_window());
+        let second = sampler.end_window().expect("second peak");
+        assert_eq!(second.process_peak_kb, 250);
+        assert_eq!(second.growth_kb, 60);
+    }
+
+    #[test]
+    fn bench_report_deserializes_legacy_payload_without_phases_or_timeline() {
+        // Wire format produced by mobench <= 0.1.34 (no phases / timeline /
+        // resource fields). Adding these fields to BenchReport must not
+        // break consumers that still emit the older shape.
+        let legacy = r#"{
+            "spec": { "name": "legacy", "iterations": 2, "warmup": 0 },
+            "samples": [
+                { "duration_ns": 100 },
+                { "duration_ns": 200 }
+            ]
+        }"#;
+
+        let report: BenchReport = serde_json::from_str(legacy).expect("legacy report parses");
+        assert_eq!(report.samples.len(), 2);
+        assert!(report.phases.is_empty());
+        assert!(report.timeline.is_empty());
+        assert!(report.samples[0].cpu_time_ms.is_none());
+        assert!(report.samples[0].peak_memory_kb.is_none());
+        assert!(report.samples[0].process_peak_memory_kb.is_none());
+
+        // Round-trip the parsed report and confirm the empty optional
+        // collections are skipped from the serialized output.
+        let json = serde_json::to_string(&report).expect("serialize");
+        assert!(!json.contains("\"phases\""));
+        assert!(!json.contains("\"timeline\""));
     }
 
     #[test]

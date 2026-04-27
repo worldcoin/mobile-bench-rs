@@ -11,11 +11,24 @@ Crates.io release history:
 - [mobench-sdk](https://crates.io/crates/mobench-sdk)
 - [mobench-macros](https://crates.io/crates/mobench-macros)
 
+## Unreleased
+
+- Added production-readiness documentation for public API boundaries, semver
+  expectations, feature flags, MSRV, release checks, examples, and launch
+  diagrams.
+- Added Rust quality CI covering rustfmt, clippy, rustdoc, tests, and publish
+  dry-runs for the published crates.
+- Added opt-in structured CLI tracing through `--verbose` or `MOBENCH_LOG`, plus
+  an explicit `doctor` MSRV check.
+- Added host-only fixture contract coverage for example summary schemas and
+  stable Markdown/CSV rendering.
+
 ## Support Policy
 
-- `v0.1.33` is the current supported release.
-- `v0.1.32` is the immediately previous supported release, superseded by
-  `v0.1.33`.
+- `v0.1.36` is the next production release candidate.
+- `v0.1.35` is the current published supported release.
+- `v0.1.34` is the immediately previous supported release, superseded by
+  `v0.1.35`.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -24,7 +37,10 @@ Crates.io release history:
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.33` | 2026-04-17 | `mobench 0.1.33`, `mobench-sdk 0.1.33`, `mobench-macros 0.1.33` | Current supported release |
+| `v0.1.36` | Pending | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Release candidate |
+| `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Current supported release |
+| `v0.1.34` | 2026-04-23 | `mobench 0.1.34`, `mobench-sdk 0.1.34`, `mobench-macros 0.1.34` | Superseded by `v0.1.35` |
+| `v0.1.33` | 2026-04-17 | `mobench 0.1.33`, `mobench-sdk 0.1.33`, `mobench-macros 0.1.33` | Superseded by `v0.1.34` |
 | `v0.1.32` | 2026-04-14 | `mobench 0.1.32`, `mobench-sdk 0.1.32`, `mobench-macros 0.1.32` | Superseded by `v0.1.33` |
 | `v0.1.31` | 2026-04-12 | `mobench 0.1.31`, `mobench-sdk 0.1.31`, `mobench-macros 0.1.31` | Superseded by `v0.1.32` |
 | `v0.1.30` | 2026-04-12 | `mobench 0.1.30`, `mobench-sdk 0.1.30`, `mobench-macros 0.1.30` | Superseded by `v0.1.31` |
@@ -60,9 +76,55 @@ Crates.io release history:
 | `v0.1.1` | 2026-01-13 | `mobench 0.1.1`, `mobench-sdk 0.1.1` | Yanked test build. Do not use. |
 | `v0.1.0` | 2026-01-13 | `mobench 0.1.0`, `mobench-sdk 0.1.0`, `mobench-macros 0.1.0` | Yanked test build. Do not use. |
 
-## v0.1.33
+## v0.1.36
+
+Status: release candidate.
+
+### Release hardening
+
+- Hardened clean first-run spec embedding for generated Android and iOS projects.
+- Restricted authenticated BrowserStack artifact downloads to BrowserStack HTTPS hosts.
+- Made config-file runs work without duplicate `--target` / `--function` flags and restored CLI-over-config precedence.
+- Tightened generated mobile template compatibility with minimal UniFFI report types.
+- Added compile-fail coverage for async benchmark functions and ensured setup teardown runs on benchmark errors.
+- Added release hygiene: locked CI gates, publish protections for examples, release checklist, security reporting policy, and BrowserStack secret-bearing workflow guards.
+
+## v0.1.35
 
 Status: current supported release.
+
+- Added iOS benchmark app process peak memory reporting using Mach
+  `task_info`, so iOS summaries now expose `process_peak_memory_kb` alongside
+  measured-iteration memory growth.
+- Marked iOS process peak resources with `memory_process = "benchmark_app"` to
+  match the Android summary contract while reflecting that iOS runs still
+  execute inside the generated benchmark app process.
+- Validated the release candidate with successful ProveKit iOS Mobile Bench
+  workflow run `24886057115`.
+
+## v0.1.34
+
+Status: superseded by `v0.1.35`.
+
+- Reported Android memory with explicit measured-iteration peak growth and an
+  isolated benchmark worker process peak, while keeping legacy
+  `peak_memory_kb` as the growth alias for existing consumers.
+- Removed BrowserStack provider peak memory from mobench summaries so harness
+  and device-level memory is not conflated with the benchmarked process.
+- Added Android worker-process execution for benchmark functions so the
+  process peak excludes the activity harness, UniFFI wrapper process, and
+  warmup allocations held before measured execution.
+- Preserved fallback handling for legacy `peak_memory_kb` inputs and updated
+  JSON, CSV, markdown, and table summaries to label memory as `Peak growth`
+  and `Process peak`.
+- Added Android foreground service type metadata required by newer platform
+  rules for the benchmark worker service.
+- Validated the release candidate with successful ProveKit Mobile Bench
+  workflow run `24858522379`.
+
+## v0.1.33
+
+Status: superseded by `v0.1.34`.
 
 - Measured benchmark CPU time as process CPU time under the standard
   user-plus-kernel definition across all threads, then exported both median

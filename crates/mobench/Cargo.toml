@@ -3,6 +3,7 @@ name = "mobench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Rust mobile benchmark CLI with CI contract outputs and BrowserStack automation"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
@@ -23,6 +24,9 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 default-run = "mobench"
 
+[features]
+bench-support = []
+
 # Dual binary targets allow the tool to work as both:
 # - `mobench run ...` (direct invocation)
 # - `cargo mobench run ...` (cargo subcommand)
@@ -37,7 +41,7 @@ path = "src/bin/cargo-mobench.rs"
 
 [dependencies]
 anyhow.workspace = true
-mobench-sdk = { version = "0.1.33", path = "../mobench-sdk" }
+mobench-sdk = { workspace = true, features = ["full"] }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -50,8 +54,16 @@ sha2 = "0.10"
 comfy-table = "7"
 tempfile = "3"
 inferno = { version = "0.12", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+criterion = "0.5"
 inventory = "0.3"
 sample-fns = { path = "../sample-fns" }
 jsonschema = "0.18"
+
+[[bench]]
+name = "host_contracts"
+harness = false
+required-features = ["bench-support"]

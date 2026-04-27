@@ -22,6 +22,29 @@ Common coverage areas:
 - flamegraph viewer HTML generation
 - template regeneration and binding refresh behavior
 
+Host-only tests must not require Android SDK, Xcode, BrowserStack credentials,
+connected devices, or local native profiler binaries. These are the default
+tests for pull requests and release-readiness checks.
+
+## Test taxonomy
+
+Use these labels when adding tests, workflows, or docs:
+
+- **Host-only**: runs with the Rust toolchain only. Examples: schema
+  validation, summary/CSV/Markdown rendering, CLI parsing, BrowserStack JSON
+  normalization, template text invariants, setup/teardown timing behavior.
+- **Tool-gated**: requires local platform tools but no external service.
+  Examples: Android Gradle/NDK builds, iOS/Xcode packaging, local `adb`,
+  `simpleperf`, simulator-host `sample`, and plot rendering that requires
+  Python/matplotlib.
+- **Service-gated**: requires credentials or remote infrastructure. Examples:
+  BrowserStack benchmark execution, GitHub PR comment publishing, and workflow
+  dispatch chains.
+
+Gate host-only tests in normal Rust CI. Keep tool-gated and service-gated tests
+in named workflows or explicit local commands so contributors can tell whether
+a failure is from code, local tooling, or a provider.
+
 ## Fixture validation
 
 The repository keeps a lightweight fixture CI loop around `examples/ffi-benchmark`.

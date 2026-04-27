@@ -20,7 +20,7 @@ const CHECKSUM_SWEEP_ITERATIONS: usize = 2_048;
 const FIBONACCI_START: u32 = 28;
 const FIBONACCI_SPAN: u32 = 6;
 const FIBONACCI_SWEEP_ITERATIONS: u32 = 200_000;
-const CHECKSUM_INPUT: [u8; CHECKSUM_INPUT_LEN] = build_checksum_input();
+static CHECKSUM_INPUT: [u8; CHECKSUM_INPUT_LEN] = build_checksum_input();
 
 const fn build_checksum_input() -> [u8; CHECKSUM_INPUT_LEN] {
     let mut bytes = [0u8; CHECKSUM_INPUT_LEN];

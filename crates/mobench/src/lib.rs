@@ -122,7 +122,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -135,833 +135,37 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tracing::{debug, info};
+use tracing_subscriber::EnvFilter;
 
 use browserstack::{BrowserStackAuth, BrowserStackClient};
+#[cfg(test)]
+pub(crate) use cli::CiTarget;
+pub use cli::MobileTarget;
+pub(crate) use cli::{
+    CheckOutputFormat, CiCheckRunArgs, CiCommand, CiRunArgs, CiSummarizeArgs, Cli, Command,
+    ConfigCommand, ContractErrorCategory, DevicePlatform, DevicesCommand, FixtureCommand,
+    IosSigningMethodArg, ProfileCommand, ReportCommand, SdkTarget, SummarizeFormat, SummaryFormat,
+};
+#[cfg(test)]
+pub(crate) use doctor::{
+    DEFAULT_ANDROID_DOCTOR_RUST_TARGETS, WORKSPACE_MSRV, category_slug, parse_rust_version,
+    render_check_results_json, rustc_version_meets_msrv,
+};
+pub(crate) use doctor::{
+    PrereqCheck, cmd_check, cmd_config_validate, cmd_doctor, collect_issues,
+    print_check_results_json, print_check_results_text,
+};
 
 mod browserstack;
+mod cli;
 pub mod config;
+mod doctor;
 mod flamegraph_viewer;
 mod github;
 mod plots;
 mod profile;
 pub(crate) mod summarize;
-
-/// CLI orchestrator for building, packaging, and executing Rust benchmarks on mobile.
-#[derive(Parser, Debug)]
-#[command(name = "mobench", author, version, about = "Mobile Rust benchmarking orchestrator", long_about = None)]
-struct Cli {
-    /// Print what would be done without actually doing it
-    #[arg(long, global = true)]
-    dry_run: bool,
-
-    /// Print verbose output including all commands
-    #[arg(long, short = 'v', global = true)]
-    verbose: bool,
-
-    /// Assume yes to prompts and allow overwriting files
-    #[arg(long, global = true)]
-    yes: bool,
-
-    /// Disable interactive prompts (fail instead)
-    #[arg(long, global = true)]
-    non_interactive: bool,
-
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand, Debug)]
-enum Command {
-    /// Run benchmarks locally or on BrowserStack devices.
-    ///
-    /// This is a single-command flow that:
-    /// 1. Builds Rust libraries for the target platform
-    /// 2. Packages mobile apps (APK/IPA) automatically
-    /// 3. Uploads to BrowserStack when devices are requested
-    /// 4. Schedules the benchmark run when using BrowserStack
-    /// 5. Fetches results when the provider returns them
-    ///
-    /// For iOS, IPA and XCUITest packages are created automatically unless
-    /// you provide --ios-app and --ios-test-suite to override.
-    Run {
-        #[arg(long, value_enum)]
-        target: MobileTarget,
-        #[arg(long, help = "Fully-qualified Rust function to benchmark")]
-        function: String,
-        #[arg(
-            long,
-            help = "Project root containing mobench.toml or the Cargo workspace"
-        )]
-        project_root: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Path to the benchmark crate directory containing Cargo.toml"
-        )]
-        crate_path: Option<PathBuf>,
-        #[arg(long, default_value_t = 100)]
-        iterations: u32,
-        #[arg(long, default_value_t = 10)]
-        warmup: u32,
-        #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
-        devices: Vec<String>,
-        #[arg(long, help = "Device matrix YAML file to load device names from")]
-        device_matrix: Option<PathBuf>,
-        #[arg(
-            long,
-            value_delimiter = ',',
-            help = "Device tags to select from the device matrix (comma-separated or repeatable)"
-        )]
-        device_tags: Vec<String>,
-        #[arg(long, help = "Optional path to config file")]
-        config: Option<PathBuf>,
-        #[arg(long, help = "Optional output path for JSON report")]
-        output: Option<PathBuf>,
-        #[arg(long, help = "Write CSV summary alongside JSON")]
-        summary_csv: bool,
-        #[arg(
-            long,
-            help = "Enable CI mode (job summary, optional JUnit, regression exit codes)"
-        )]
-        ci: bool,
-        #[arg(long, help = "Baseline summary source (path|url|artifact:<path>)")]
-        baseline: Option<String>,
-        #[arg(
-            long,
-            default_value_t = 5.0,
-            help = "Regression threshold percentage when comparing to baseline"
-        )]
-        regression_threshold_pct: f64,
-        #[arg(long, help = "Write JUnit XML report to the given path")]
-        junit: Option<PathBuf>,
-        #[arg(long, help = "Skip mobile builds and only run the host harness")]
-        local_only: bool,
-        #[arg(
-            long,
-            help = "Build in release mode (recommended for BrowserStack to reduce APK size and upload time)"
-        )]
-        release: bool,
-        #[arg(
-            long,
-            help = "Path to iOS app bundle (.ipa or zipped .app) for BrowserStack XCUITest"
-        )]
-        ios_app: Option<PathBuf>,
-        #[arg(long, help = "Path to iOS XCUITest test suite package (.zip or .ipa)")]
-        ios_test_suite: Option<PathBuf>,
-        #[arg(
-            long,
-            hide = true,
-            help = "Deprecated compatibility flag for generated XCUITest harness timeout"
-        )]
-        ios_completion_timeout_secs: Option<u64>,
-        #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
-        fetch: bool,
-        #[arg(long, default_value = "target/browserstack")]
-        fetch_output_dir: PathBuf,
-        #[arg(long, default_value_t = 5)]
-        fetch_poll_interval_secs: u64,
-        #[arg(long, default_value_t = 300)]
-        fetch_timeout_secs: u64,
-        #[arg(long, help = "Show simplified step-by-step progress output")]
-        progress: bool,
-    },
-    /// Scaffold a base config file for the CLI.
-    Init {
-        #[arg(long, default_value = "bench-config.toml")]
-        output: PathBuf,
-        #[arg(long, value_enum, default_value_t = MobileTarget::Android)]
-        target: MobileTarget,
-    },
-    /// Generate a sample device matrix file.
-    Plan {
-        #[arg(long, default_value = "device-matrix.yaml")]
-        output: PathBuf,
-    },
-    /// Validate run configuration and associated files.
-    Config {
-        #[command(subcommand)]
-        command: ConfigCommand,
-    },
-    /// Validate local + CI prerequisites and configuration.
-    Doctor {
-        #[arg(long, value_enum, default_value_t = SdkTarget::Both)]
-        target: SdkTarget,
-        #[arg(long, help = "Optional path to run config file to validate")]
-        config: Option<PathBuf>,
-        #[arg(long, help = "Optional path to device matrix YAML file to validate")]
-        device_matrix: Option<PathBuf>,
-        #[arg(
-            long,
-            value_delimiter = ',',
-            help = "Device tags to select from the device matrix (comma-separated or repeatable)"
-        )]
-        device_tags: Vec<String>,
-        #[arg(
-            long,
-            default_value_t = true,
-            action = clap::ArgAction::Set,
-            num_args = 0..=1,
-            default_missing_value = "true",
-            help = "Validate BrowserStack credentials"
-        )]
-        browserstack: bool,
-        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
-        format: CheckOutputFormat,
-    },
-    /// CI helpers (workflow and action scaffolding).
-    Ci {
-        #[command(subcommand)]
-        command: CiCommand,
-    },
-    /// Fetch BrowserStack build artifacts (logs, session JSON) for CI.
-    Fetch {
-        #[arg(long, value_enum)]
-        target: MobileTarget,
-        #[arg(long)]
-        build_id: String,
-        #[arg(long, default_value = "target/browserstack")]
-        output_dir: PathBuf,
-        #[arg(long, default_value_t = true)]
-        wait: bool,
-        #[arg(long, default_value_t = 10)]
-        poll_interval_secs: u64,
-        #[arg(long, default_value_t = 1800)]
-        timeout_secs: u64,
-    },
-    /// Compare two run summaries for regressions.
-    Compare {
-        #[arg(long, help = "Baseline JSON summary to compare against")]
-        baseline: PathBuf,
-        #[arg(long, help = "Candidate JSON summary to compare")]
-        candidate: PathBuf,
-        #[arg(long, help = "Optional output path for markdown report")]
-        output: Option<PathBuf>,
-    },
-    /// Initialize a new benchmark project with the SDK templates.
-    InitSdk {
-        #[arg(long, value_enum)]
-        target: SdkTarget,
-        #[arg(long, default_value = "bench-project")]
-        project_name: String,
-        #[arg(long, default_value = ".")]
-        output_dir: PathBuf,
-        #[arg(long, help = "Generate example benchmarks")]
-        examples: bool,
-    },
-    /// Build mobile artifacts from the resolved benchmark crate.
-    Build {
-        #[arg(long, value_enum)]
-        target: SdkTarget,
-        #[arg(long, help = "Build in release mode")]
-        release: bool,
-        #[arg(
-            long,
-            hide = true,
-            help = "Deprecated compatibility flag for generated XCUITest harness timeout"
-        )]
-        ios_completion_timeout_secs: Option<u64>,
-        #[arg(
-            long,
-            help = "Project root containing mobench.toml or the Cargo workspace"
-        )]
-        project_root: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Output directory for mobile artifacts (default: target/mobench)"
-        )]
-        output_dir: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Path to the benchmark crate (default: auto-detect bench-mobile/ or crates/{crate})"
-        )]
-        crate_path: Option<PathBuf>,
-        #[arg(long, help = "Show simplified step-by-step progress output")]
-        progress: bool,
-    },
-    /// Package iOS app as IPA for distribution or testing.
-    PackageIpa {
-        #[arg(long, default_value = "BenchRunner", help = "Xcode scheme to build")]
-        scheme: String,
-        #[arg(long, value_enum, default_value = "adhoc", help = "Signing method")]
-        method: IosSigningMethodArg,
-        #[arg(
-            long,
-            help = "Project root containing mobench.toml or the Cargo workspace"
-        )]
-        project_root: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Path to the benchmark crate directory containing Cargo.toml"
-        )]
-        crate_path: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Output directory for mobile artifacts (default: target/mobench)"
-        )]
-        output_dir: Option<PathBuf>,
-    },
-    /// Package XCUITest runner for BrowserStack testing.
-    ///
-    /// Builds the XCUITest runner using xcodebuild and zips the resulting
-    /// .xctest bundle for BrowserStack upload. The output is placed at
-    /// `target/mobench/ios/BenchRunnerUITests.zip` by default.
-    PackageXcuitest {
-        #[arg(long, default_value = "BenchRunner", help = "Xcode scheme to build")]
-        scheme: String,
-        #[arg(
-            long,
-            help = "Project root containing mobench.toml or the Cargo workspace"
-        )]
-        project_root: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Path to the benchmark crate directory containing Cargo.toml"
-        )]
-        crate_path: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Output directory for mobile artifacts (default: target/mobench)"
-        )]
-        output_dir: Option<PathBuf>,
-    },
-    /// List all discovered benchmark functions.
-    List {
-        #[arg(
-            long,
-            help = "Project root containing mobench.toml or the Cargo workspace"
-        )]
-        project_root: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Path to the benchmark crate directory containing Cargo.toml"
-        )]
-        crate_path: Option<PathBuf>,
-    },
-    /// Verify benchmark setup: registry, spec, artifacts, and optional smoke test.
-    ///
-    /// This command validates:
-    /// - Registry has benchmark functions registered
-    /// - Spec file exists and is valid (if --spec-path provided)
-    /// - Artifacts are present and consistent (if --check-artifacts)
-    /// - Runs a local smoke test (if --smoke-test and function is specified)
-    Verify {
-        #[arg(
-            long,
-            help = "Project root containing mobench.toml or the Cargo workspace"
-        )]
-        project_root: Option<PathBuf>,
-        #[arg(
-            long,
-            help = "Path to the benchmark crate directory containing Cargo.toml"
-        )]
-        crate_path: Option<PathBuf>,
-        #[arg(long, value_enum, help = "Target platform to verify artifacts for")]
-        target: Option<SdkTarget>,
-        #[arg(long, help = "Path to bench_spec.json to validate")]
-        spec_path: Option<PathBuf>,
-        #[arg(long, help = "Check that build artifacts exist")]
-        check_artifacts: bool,
-        #[arg(long, help = "Run a local smoke test with minimal iterations")]
-        smoke_test: bool,
-        #[arg(long, help = "Function name to verify/smoke test")]
-        function: Option<String>,
-        #[arg(
-            long,
-            help = "Output directory for mobile artifacts (default: target/mobench)"
-        )]
-        output_dir: Option<PathBuf>,
-    },
-    /// Display summary statistics from a benchmark report JSON file.
-    ///
-    /// Prints avg/min/max/median, sample count, device, and OS version
-    /// from the specified report file.
-    Summary {
-        #[arg(help = "Path to the benchmark report JSON file")]
-        report: PathBuf,
-        #[arg(long, help = "Output format: text (default), json, or csv")]
-        format: Option<SummaryFormat>,
-    },
-    /// List available BrowserStack devices for testing.
-    ///
-    /// Fetches and displays the list of available devices from BrowserStack
-    /// that can be used with the --devices flag in the run command.
-    ///
-    /// Examples:
-    ///   mobench devices                    # List all devices
-    ///   mobench devices --platform android # List Android devices only
-    ///   mobench devices --json             # Output as JSON
-    ///   mobench devices --validate "Google Pixel 7-13.0"  # Validate a device spec
-    Devices {
-        #[command(subcommand)]
-        command: Option<DevicesCommand>,
-        #[arg(long, value_enum, help = "Filter by platform (android or ios)")]
-        platform: Option<DevicePlatform>,
-        #[arg(long, help = "Output as JSON")]
-        json: bool,
-        #[arg(long, help = "Validate device specs against available devices")]
-        validate: Vec<String>,
-    },
-    /// Fixture lifecycle helpers for reproducible CI setup.
-    Fixture {
-        #[command(subcommand)]
-        command: FixtureCommand,
-    },
-    /// Reporting helpers for CI summaries and PR comments.
-    Report {
-        #[command(subcommand)]
-        command: ReportCommand,
-    },
-    /// Profiling helpers for native profile capture and summary rendering.
-    Profile {
-        #[command(subcommand)]
-        command: ProfileCommand,
-    },
-    /// Check prerequisites for building mobile artifacts.
-    ///
-    /// Validates that all required tools and configurations are in place
-    /// before attempting a build. This includes checking for:
-    ///
-    /// - Android: ANDROID_NDK_HOME, cargo-ndk, Rust targets
-    /// - iOS: Xcode, xcodegen, Rust targets
-    /// - Both: cargo, rustup
-    ///
-    /// Examples:
-    ///   cargo mobench check --target android
-    ///   cargo mobench check --target ios
-    ///   cargo mobench check --target android --format json
-    Check {
-        /// Target platform (android or ios)
-        #[arg(long, short, value_enum)]
-        target: SdkTarget,
-        /// Output format (text or json)
-        #[arg(long, default_value = "text")]
-        format: CheckOutputFormat,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum CiCommand {
-    /// Generate GitHub Actions workflow + local action wrapper.
-    Init {
-        #[arg(
-            long,
-            default_value = ".github/workflows/mobile-bench.yml",
-            help = "Path to write the workflow file"
-        )]
-        workflow: PathBuf,
-        #[arg(
-            long,
-            default_value = ".github/actions/mobench",
-            help = "Directory to write the local GitHub Action"
-        )]
-        action_dir: PathBuf,
-    },
-    /// Run a full CI benchmark flow with stable output contract.
-    Run(CiRunArgs),
-    /// Summarize benchmark results with device metrics.
-    Summarize(CiSummarizeArgs),
-    /// Create a GitHub Check Run with benchmark results.
-    CheckRun(CiCheckRunArgs),
-}
-
-#[derive(Subcommand, Debug)]
-enum DevicesCommand {
-    /// Resolve devices from a matrix deterministically for CI usage.
-    Resolve {
-        #[arg(long, value_enum)]
-        platform: DevicePlatform,
-        #[arg(long, help = "Device profile/tag to resolve (defaults to `default`)")]
-        profile: Option<String>,
-        #[arg(
-            long,
-            help = "Path to run config file (optional source for matrix/tags)"
-        )]
-        config: Option<PathBuf>,
-        #[arg(long, help = "Path to device matrix YAML file")]
-        device_matrix: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
-        format: CheckOutputFormat,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum ConfigCommand {
-    /// Validate bench-config.toml and referenced matrix/settings.
-    Validate {
-        #[arg(long, default_value = "bench-config.toml")]
-        config: PathBuf,
-        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
-        format: CheckOutputFormat,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum FixtureCommand {
-    /// Create starter fixture files for CI runs.
-    Init {
-        #[arg(long, default_value = "bench-config.toml")]
-        config: PathBuf,
-        #[arg(long, default_value = "device-matrix.yaml")]
-        device_matrix: PathBuf,
-        #[arg(long, help = "Overwrite existing fixture files")]
-        force: bool,
-    },
-    /// Build fixture artifacts using existing build commands.
-    Build {
-        #[arg(long, value_enum, default_value_t = SdkTarget::Both)]
-        target: SdkTarget,
-        #[arg(long, help = "Build in release mode")]
-        release: bool,
-        #[arg(long, help = "Output directory for mobile artifacts")]
-        output_dir: Option<PathBuf>,
-        #[arg(long, help = "Path to benchmark crate")]
-        crate_path: Option<PathBuf>,
-        #[arg(long, help = "Show simplified step-by-step progress output")]
-        progress: bool,
-    },
-    /// Verify fixture files and optional profile filtering.
-    Verify {
-        #[arg(long, default_value = "bench-config.toml")]
-        config: PathBuf,
-        #[arg(long)]
-        device_matrix: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = SdkTarget::Both)]
-        target: SdkTarget,
-        #[arg(long, help = "Device profile/tag to verify")]
-        profile: Option<String>,
-        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
-        format: CheckOutputFormat,
-    },
-    /// Compute deterministic fixture cache key from config/toolchain inputs.
-    CacheKey {
-        #[arg(long, default_value = "bench-config.toml")]
-        config: PathBuf,
-        #[arg(long)]
-        device_matrix: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = SdkTarget::Both)]
-        target: SdkTarget,
-        #[arg(long, help = "Device profile/tag for keying")]
-        profile: Option<String>,
-        #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
-        format: CheckOutputFormat,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum ReportCommand {
-    /// Generate markdown summary from standardized output JSON.
-    Summarize {
-        #[arg(long, default_value = "target/mobench/ci/summary.json")]
-        summary: PathBuf,
-        #[arg(long, help = "Write markdown output to file")]
-        output: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = plots::PlotMode::Auto)]
-        plots: plots::PlotMode,
-    },
-    /// Generate/publish sticky GitHub PR comment from summary output.
-    Github {
-        #[arg(
-            long,
-            help = "Pull request number (auto-detected from GITHUB_REF if omitted)"
-        )]
-        pr: Option<String>,
-        #[arg(long, default_value = "target/mobench/ci/summary.json")]
-        summary: PathBuf,
-        #[arg(long, default_value = "<!-- mobench-report -->")]
-        marker: String,
-        #[arg(long, help = "Publish via GitHub API using GITHUB_TOKEN")]
-        publish: bool,
-        #[arg(long, help = "Write generated comment body to file")]
-        output: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum ProfileCommand {
-    #[command(
-        about = "Plan or execute a native profiling session; local android-native and ios-instruments now attempt real native capture"
-    )]
-    Run(profile::ProfileRunArgs),
-    /// Generate a differential flamegraph bundle from two normalized profile manifests.
-    Diff(profile::ProfileDiffArgs),
-    /// Render markdown or JSON from a normalized profile manifest.
-    Summarize(profile::ProfileSummarizeArgs),
-}
-
-#[derive(Args, Debug, Clone)]
-struct CiRunArgs {
-    #[arg(long, value_enum)]
-    target: CiTarget,
-    #[arg(
-        long,
-        help = "Path to the benchmark crate directory containing Cargo.toml"
-    )]
-    crate_path: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Fully-qualified Rust function to benchmark (single function)"
-    )]
-    function: Option<String>,
-    #[arg(
-        long,
-        value_delimiter = ',',
-        help = "Multiple benchmark functions (comma-separated or JSON array). Runs each in sequence."
-    )]
-    functions: Vec<String>,
-    #[arg(long, default_value_t = 100)]
-    iterations: u32,
-    #[arg(long, default_value_t = 10)]
-    warmup: u32,
-    #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
-    devices: Vec<String>,
-    #[arg(long, help = "Device matrix YAML file to load device names from")]
-    device_matrix: Option<PathBuf>,
-    #[arg(
-        long,
-        value_delimiter = ',',
-        help = "Device tags to select from the device matrix (comma-separated or repeatable)"
-    )]
-    device_tags: Vec<String>,
-    #[arg(long, help = "Optional path to config file")]
-    config: Option<PathBuf>,
-    #[arg(long, help = "Baseline summary source (path|url|artifact:<path>)")]
-    baseline: Option<String>,
-    #[arg(
-        long,
-        default_value_t = 5.0,
-        help = "Regression threshold percentage when comparing to baseline"
-    )]
-    regression_threshold_pct: f64,
-    #[arg(long, help = "Write JUnit XML report to the given path")]
-    junit: Option<PathBuf>,
-    #[arg(long, help = "Skip mobile builds and only run the host harness")]
-    local_only: bool,
-    #[arg(
-        long,
-        help = "Build in release mode (recommended for BrowserStack to reduce APK size and upload time)"
-    )]
-    release: bool,
-    #[arg(
-        long,
-        help = "Path to iOS app bundle (.ipa or zipped .app) for BrowserStack XCUITest"
-    )]
-    ios_app: Option<PathBuf>,
-    #[arg(long, help = "Path to iOS XCUITest test suite package (.zip or .ipa)")]
-    ios_test_suite: Option<PathBuf>,
-    #[arg(
-        long,
-        hide = true,
-        help = "Deprecated compatibility flag for generated XCUITest harness timeout"
-    )]
-    ios_completion_timeout_secs: Option<u64>,
-    #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
-    fetch: bool,
-    #[arg(long, default_value = "target/browserstack")]
-    fetch_output_dir: PathBuf,
-    #[arg(long, default_value_t = 5)]
-    fetch_poll_interval_secs: u64,
-    #[arg(long, default_value_t = 300)]
-    fetch_timeout_secs: u64,
-    #[arg(long, help = "Show simplified step-by-step progress output")]
-    progress: bool,
-    #[arg(
-        long,
-        default_value = "target/mobench/ci",
-        help = "Output directory for CI contract files"
-    )]
-    output_dir: PathBuf,
-    #[arg(long, help = "Metadata: user or actor that requested the run")]
-    requested_by: Option<String>,
-    #[arg(long, help = "Metadata: pull request number")]
-    pr_number: Option<String>,
-    #[arg(long, help = "Metadata: original command requested by the caller")]
-    request_command: Option<String>,
-    #[arg(long, help = "Metadata: git ref/sha for this mobench invocation")]
-    mobench_ref: Option<String>,
-    #[arg(long, value_enum, default_value_t = plots::PlotMode::Auto)]
-    plots: plots::PlotMode,
-}
-
-#[derive(Args, Debug, Clone)]
-struct CiSummarizeArgs {
-    /// BrowserStack build ID to enrich results with device metrics (requires --results-dir).
-    #[arg(long)]
-    build_id: Option<String>,
-
-    /// Directory containing summary.json/CSV results (offline mode).
-    #[arg(long)]
-    results_dir: Option<PathBuf>,
-
-    /// Output format: table (terminal), markdown, or json.
-    #[arg(long, value_enum, default_value_t = SummarizeFormat::Table)]
-    output_format: SummarizeFormat,
-
-    /// Write output to file in addition to stdout.
-    #[arg(long)]
-    output_file: Option<PathBuf>,
-
-    /// Platform filter (show only one platform).
-    #[arg(long, value_enum)]
-    platform: Option<MobileTarget>,
-}
-
-#[derive(Args, Debug, Clone)]
-struct CiCheckRunArgs {
-    /// Path to summary JSON with benchmark results.
-    #[arg(long, required_unless_present = "results_dir")]
-    results: Option<PathBuf>,
-
-    /// Directory containing summary JSON files (processes all).
-    #[arg(long, required_unless_present = "results")]
-    results_dir: Option<PathBuf>,
-
-    /// GitHub repository (owner/repo format).
-    #[arg(long)]
-    repo: String,
-
-    /// Git commit SHA to annotate.
-    #[arg(long)]
-    sha: String,
-
-    /// GitHub App token (from GITHUB_TOKEN env var or actions/create-github-app-token).
-    #[arg(long, env = "GITHUB_TOKEN", hide = true)]
-    token: String,
-
-    /// Check Run name displayed in the PR.
-    #[arg(long, default_value = "Mobench")]
-    name: String,
-
-    /// Optional baseline JSON for regression detection.
-    #[arg(long)]
-    baseline: Option<PathBuf>,
-
-    /// Regression threshold percentage.
-    #[arg(long, default_value_t = 5.0)]
-    regression_threshold_pct: f64,
-
-    /// File path used in Check Run annotations (relative to repo root).
-    #[arg(long, default_value = "src/lib.rs")]
-    annotation_path: String,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum SummarizeFormat {
-    Table,
-    Markdown,
-    Json,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum CiTarget {
-    Android,
-    Ios,
-    Both,
-}
-
-impl CiTarget {
-    fn targets(self) -> &'static [MobileTarget] {
-        match self {
-            CiTarget::Android => &[MobileTarget::Android],
-            CiTarget::Ios => &[MobileTarget::Ios],
-            CiTarget::Both => &[MobileTarget::Android, MobileTarget::Ios],
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-#[clap(rename_all = "lowercase")]
-pub(crate) enum DevicePlatform {
-    Android,
-    Ios,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-#[clap(rename_all = "lowercase")]
-enum SummaryFormat {
-    Text,
-    Json,
-    Csv,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-#[clap(rename_all = "lowercase")]
-enum CheckOutputFormat {
-    Text,
-    Json,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ContractErrorCategory {
-    Config,
-    Preflight,
-    Provider,
-    Build,
-    Benchmark,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-/// Mobile platform target for build/run operations.
-pub enum MobileTarget {
-    /// Android platform.
-    Android,
-    /// iOS platform.
-    Ios,
-}
-
-impl MobileTarget {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Android => "android",
-            Self::Ios => "ios",
-        }
-    }
-
-    fn display_name(self) -> &'static str {
-        match self {
-            Self::Android => "Android",
-            Self::Ios => "iOS",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-#[clap(rename_all = "lowercase")]
-enum SdkTarget {
-    Android,
-    Ios,
-    Both,
-}
-
-impl From<SdkTarget> for mobench_sdk::Target {
-    fn from(target: SdkTarget) -> Self {
-        match target {
-            SdkTarget::Android => mobench_sdk::Target::Android,
-            SdkTarget::Ios => mobench_sdk::Target::Ios,
-            SdkTarget::Both => mobench_sdk::Target::Both,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-#[clap(rename_all = "lowercase")]
-enum IosSigningMethodArg {
-    /// Ad-hoc signing (no Apple ID needed, works for BrowserStack)
-    Adhoc,
-    /// Development signing (requires Apple Developer account)
-    Development,
-}
-
-impl From<IosSigningMethodArg> for mobench_sdk::builders::SigningMethod {
-    fn from(arg: IosSigningMethodArg) -> Self {
-        match arg {
-            IosSigningMethodArg::Adhoc => mobench_sdk::builders::SigningMethod::AdHoc,
-            IosSigningMethodArg::Development => mobench_sdk::builders::SigningMethod::Development,
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct BrowserStackConfig {
@@ -1119,8 +323,13 @@ struct BenchmarkResourceUsage {
     cpu_total_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cpu_median_ms: Option<u64>,
+    /// Legacy alias for `peak_memory_growth_kb`.
     #[serde(skip_serializing_if = "Option::is_none")]
     peak_memory_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_memory_growth_kb: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    process_peak_memory_kb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_pss_kb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1145,11 +354,34 @@ enum RemoteRun {
     },
 }
 
+fn init_tracing(verbose: bool) {
+    let filter = env::var("MOBENCH_LOG").unwrap_or_else(|_| {
+        if verbose {
+            "mobench=debug".to_string()
+        } else {
+            "warn".to_string()
+        }
+    });
+    let filter = EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new("warn"));
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .without_time()
+        .try_init();
+}
+
 pub fn run() -> Result<()> {
     // Load dotenv globally as a baseline for commands that don't resolve a layout
     // (e.g. fetch, doctor, ci run). Layout-aware commands reload from the resolved root.
     load_dotenv_global();
     let cli = Cli::parse();
+    init_tracing(cli.verbose);
+    debug!(
+        dry_run = cli.dry_run,
+        non_interactive = cli.non_interactive,
+        "parsed CLI arguments"
+    );
     match cli.command {
         Command::Run {
             target,
@@ -1205,9 +437,26 @@ pub fn run() -> Result<()> {
             )?;
             let summary_paths = resolve_summary_paths(output.as_deref())?;
             let output_dir = layout.output_dir.clone();
+            let run_span = tracing::info_span!(
+                "benchmark_run",
+                target = ?spec.target,
+                function = %spec.function,
+                iterations = spec.iterations,
+                warmup = spec.warmup,
+                devices = spec.devices.len(),
+                local_only,
+                release
+            );
+            let _run_span = run_span.enter();
+            info!(
+                output_dir = %output_dir.display(),
+                summary_json = %summary_paths.json.display(),
+                "resolved benchmark run"
+            );
 
             // Validate device specs early to catch errors before building (C2: Device validation)
             if !spec.devices.is_empty() && !local_only {
+                info!(device_count = spec.devices.len(), "validating device specs");
                 if cli.dry_run {
                     println!("[dry-run] Skipping BrowserStack device validation");
                 } else if let Ok(creds) =
@@ -1348,6 +597,7 @@ pub fn run() -> Result<()> {
             } else {
                 match spec.target {
                     MobileTarget::Android => {
+                        info!("building Android artifacts");
                         if progress {
                             println!("[2/4] Building Android APK...");
                         } else {
@@ -1373,6 +623,7 @@ pub fn run() -> Result<()> {
                             }
                             Some(MobileArtifacts::Android { apk })
                         } else {
+                            info!("uploading Android artifacts to BrowserStack");
                             if progress {
                                 println!("[3/4] Uploading to BrowserStack...");
                             }
@@ -1385,6 +636,7 @@ pub fn run() -> Result<()> {
                         }
                     }
                     MobileTarget::Ios => {
+                        info!("building iOS artifacts");
                         if progress {
                             println!("[2/4] Building iOS xcframework...");
                         } else {
@@ -1411,6 +663,7 @@ pub fn run() -> Result<()> {
                                 println!("[dry-run] Skipping BrowserStack upload/run for iOS");
                             }
                         } else {
+                            info!("uploading iOS artifacts to BrowserStack");
                             if ios_xcuitest.as_ref().is_some_and(|artifacts| {
                                 uses_managed_ios_xcuitest_artifacts(&layout, artifacts)
                             }) {
@@ -1549,14 +802,17 @@ pub fn run() -> Result<()> {
                         run_summary.performance_metrics = Some(perf_metrics.into_iter().collect());
                     }
                     Err(e) => {
-                        println!("\nWarning: Failed to fetch results: {}", e);
-                        println!("Build may still be accessible at: {}", dashboard_url);
+                        bail!(
+                            "failed to fetch BrowserStack benchmark results: {}. Build may still be accessible at: {}",
+                            e,
+                            dashboard_url
+                        );
                     }
                 }
 
                 // Also save detailed artifacts to separate directory
                 let output_root = fetch_output_dir.join(build_id);
-                if let Err(e) = fetch_browserstack_artifacts(
+                fetch_browserstack_artifacts(
                     &client,
                     run_summary.spec.target,
                     build_id,
@@ -1564,9 +820,13 @@ pub fn run() -> Result<()> {
                     false, // Don't wait again, we already did
                     fetch_poll_interval_secs,
                     fetch_timeout_secs,
-                ) {
-                    println!("Warning: Failed to fetch detailed artifacts: {}", e);
-                }
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to fetch detailed BrowserStack artifacts for build {}",
+                        build_id
+                    )
+                })?;
             } else if fetch {
                 println!("No BrowserStack run to fetch (devices not provided?)");
             }
@@ -1592,6 +852,7 @@ pub fn run() -> Result<()> {
             }
 
             run_summary.summary = build_summary(&run_summary)?;
+            info!("writing benchmark summaries");
             write_summary(
                 &run_summary,
                 &summary_paths,
@@ -1602,17 +863,17 @@ pub fn run() -> Result<()> {
             let mut compare_report = None;
             let mut regression_findings: Vec<RegressionFinding> = Vec::new();
             if let Some(baseline_path) = baseline_compare_path.as_deref() {
-                let report = compare_summaries(&baseline_path, &summary_paths.json)?;
+                let report = compare_summaries(baseline_path, &summary_paths.json)?;
                 regression_findings = detect_regressions(&report, regression_threshold_pct);
                 compare_report = Some(report);
             }
-            if let Some(snapshot_path) = baseline_snapshot_path {
-                if let Err(err) = fs::remove_file(&snapshot_path) {
-                    eprintln!(
-                        "Warning: failed to remove baseline snapshot {}: {err}",
-                        snapshot_path.display()
-                    );
-                }
+            if let Some(snapshot_path) = baseline_snapshot_path
+                && let Err(err) = fs::remove_file(&snapshot_path)
+            {
+                eprintln!(
+                    "Warning: failed to remove baseline snapshot {}: {err}",
+                    snapshot_path.display()
+                );
             }
             if let Some(report) = &compare_report {
                 inject_compare_into_summary(
@@ -1629,12 +890,11 @@ pub fn run() -> Result<()> {
                 }
                 if let Some(report) = &compare_report {
                     let compare_markdown = render_compare_markdown(report);
-                    if let Ok(summary_path) = env::var("GITHUB_STEP_SUMMARY") {
-                        if let Err(err) =
+                    if let Ok(summary_path) = env::var("GITHUB_STEP_SUMMARY")
+                        && let Err(err) =
                             append_github_step_summary(&compare_markdown, &summary_path)
-                        {
-                            eprintln!("Warning: failed to append comparison report: {err}");
-                        }
+                    {
+                        eprintln!("Warning: failed to append comparison report: {err}");
                     }
                 }
             } else if let Some(report) = &compare_report {
@@ -2388,6 +1648,54 @@ pub struct RunResult {
     pub regression_detected: bool,
 }
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub mod bench_support {
+    use super::*;
+
+    pub fn parse_run_config(input: &str) -> Result<()> {
+        let _: BenchConfig = toml::from_str(input)?;
+        Ok(())
+    }
+
+    pub fn parse_device_matrix(input: &str) -> Result<()> {
+        let _: DeviceMatrix = serde_yaml::from_str(input)?;
+        Ok(())
+    }
+
+    pub fn render_summary_markdown_from_json(input: &str) -> Result<String> {
+        let summary = summary_report_from_json(input)?;
+        Ok(render_markdown_summary(&summary))
+    }
+
+    pub fn render_summary_csv_from_json(input: &str) -> Result<String> {
+        let summary = summary_report_from_json(input)?;
+        Ok(render_csv_summary(&summary))
+    }
+
+    pub fn render_profile_markdown_from_json(input: &str) -> Result<String> {
+        let manifest: profile::ProfileManifest = serde_json::from_str(input)?;
+        Ok(profile::render_profile_markdown(&manifest))
+    }
+
+    pub fn extract_browserstack_results_from_logs(logs: &str) -> Result<usize> {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "benchmark".to_string(),
+                access_key: "benchmark".to_string(),
+            },
+            None,
+        )?;
+        Ok(client.extract_benchmark_results(logs)?.len())
+    }
+
+    fn summary_report_from_json(input: &str) -> Result<SummaryReport> {
+        let value: Value = serde_json::from_str(input)?;
+        let summary = value.get("summary").cloned().unwrap_or(value);
+        Ok(serde_json::from_value(summary)?)
+    }
+}
+
 /// Executes a [`RunRequest`] by invoking the current `mobench` binary and normalizing outputs.
 ///
 /// This function always writes/normalizes CI output file names in `request.output_dir`:
@@ -2531,19 +1839,19 @@ fn resolve_ci_functions(args: &CiRunArgs) -> Result<Vec<String>> {
     let mut funcs = args.functions.clone();
 
     // --function (singular) is sugar for a single-element list
-    if let Some(ref f) = args.function {
-        if !funcs.contains(f) {
-            funcs.insert(0, f.clone());
-        }
+    if let Some(ref f) = args.function
+        && !funcs.contains(f)
+    {
+        funcs.insert(0, f.clone());
     }
 
     // Support JSON array passed as a single element: '["a","b"]'
     if funcs.len() == 1 {
         let trimmed = funcs[0].trim();
-        if trimmed.starts_with('[') {
-            if let Ok(parsed) = serde_json::from_str::<Vec<String>>(trimmed) {
-                return Ok(parsed);
-            }
+        if trimmed.starts_with('[')
+            && let Ok(parsed) = serde_json::from_str::<Vec<String>>(trimmed)
+        {
+            return Ok(parsed);
         }
     }
 
@@ -3016,26 +2324,26 @@ fn cmd_ci_check_run(args: CiCheckRunArgs) -> Result<()> {
                     &bench.name,
                 );
 
-                if let Some(base) = baseline_bench {
-                    if base.timing.avg_ms > 0.0 {
-                        let pct_change =
-                            (bench.timing.avg_ms - base.timing.avg_ms) / base.timing.avg_ms * 100.0;
+                if let Some(base) = baseline_bench
+                    && base.timing.avg_ms > 0.0
+                {
+                    let pct_change =
+                        (bench.timing.avg_ms - base.timing.avg_ms) / base.timing.avg_ms * 100.0;
 
-                        if pct_change > args.regression_threshold_pct {
-                            has_regression = true;
-                            let line = annotations.len() as u32 + 1;
-                            annotations.push(github::CheckRunAnnotation {
-                                path: args.annotation_path.clone(),
-                                start_line: line,
-                                end_line: line,
-                                annotation_level: "warning".to_string(),
-                                message: format!(
-                                    "{} regressed {pct_change:+.1}% ({:.1}ms \u{2192} {:.1}ms)",
-                                    bench.label, base.timing.avg_ms, bench.timing.avg_ms
-                                ),
-                                title: format!("Regression: {}", bench.label),
-                            });
-                        }
+                    if pct_change > args.regression_threshold_pct {
+                        has_regression = true;
+                        let line = annotations.len() as u32 + 1;
+                        annotations.push(github::CheckRunAnnotation {
+                            path: args.annotation_path.clone(),
+                            start_line: line,
+                            end_line: line,
+                            annotation_level: "warning".to_string(),
+                            message: format!(
+                                "{} regressed {pct_change:+.1}% ({:.1}ms \u{2192} {:.1}ms)",
+                                bench.label, base.timing.avg_ms, bench.timing.avg_ms
+                            ),
+                            title: format!("Regression: {}", bench.label),
+                        });
                     }
                 }
             }
@@ -3430,10 +2738,10 @@ fn shorten_html_error(message: &str) -> String {
 
 #[allow(clippy::too_many_arguments)]
 fn resolve_run_spec(
-    target: MobileTarget,
-    function: String,
-    iterations: u32,
-    warmup: u32,
+    target: Option<MobileTarget>,
+    function: Option<String>,
+    iterations: Option<u32>,
+    warmup: Option<u32>,
     devices: Vec<String>,
     layout: &ResolvedProjectLayout,
     config: Option<&Path>,
@@ -3451,33 +2759,55 @@ fn resolve_run_spec(
         let configured_ios_completion_timeout_secs = ios_completion_timeout_secs
             .or(cfg.browserstack.ios_completion_timeout_secs)
             .or(layout.ios_completion_timeout_secs);
+        if device_matrix.is_some() && !devices.is_empty() {
+            bail!(
+                "--device-matrix cannot be combined with --devices; choose one source for devices"
+            );
+        }
         let matrix_path = device_matrix.map(Path::to_path_buf).unwrap_or_else(|| {
             resolve_project_relative_path(
                 cfg_path.parent().unwrap_or_else(|| Path::new(".")),
                 cfg.device_matrix.as_path(),
             )
         });
-        let matrix = load_device_matrix(&matrix_path)?;
         let resolved_tags = if !device_tags.is_empty() {
             Some(device_tags)
         } else {
             cfg.device_tags.clone()
         };
-        let device_names = match resolved_tags.as_ref() {
-            Some(tags) if !tags.is_empty() => filter_devices_by_tags(matrix.devices, tags)?,
-            _ => matrix.devices.into_iter().map(|d| d.name).collect(),
+        let device_names = if !devices.is_empty() {
+            devices
+        } else {
+            let matrix = load_device_matrix(&matrix_path)?;
+            match resolved_tags.as_ref() {
+                Some(tags) if !tags.is_empty() => filter_devices_by_tags(matrix.devices, tags)?,
+                _ => matrix.devices.into_iter().map(|d| d.name).collect(),
+            }
+        };
+        let ios_xcuitest = match (ios_app, ios_test_suite) {
+            (Some(app), Some(test_suite)) => Some(IosXcuitestArtifacts { app, test_suite }),
+            (None, None) => cfg.ios_xcuitest,
+            _ => bail!(
+                "both --ios-app and --ios-test-suite must be provided together; omit both to use config-managed iOS artifacts"
+            ),
         };
         return Ok(RunSpec {
-            target: cfg.target,
-            function: cfg.function,
-            iterations: cfg.iterations,
-            warmup: cfg.warmup,
+            target: target.unwrap_or(cfg.target),
+            function: function.unwrap_or(cfg.function),
+            iterations: iterations.unwrap_or(cfg.iterations),
+            warmup: warmup.unwrap_or(cfg.warmup),
             devices: device_names,
             ios_completion_timeout_secs: configured_ios_completion_timeout_secs,
             browserstack: Some(cfg.browserstack),
-            ios_xcuitest: cfg.ios_xcuitest,
+            ios_xcuitest,
         });
     }
+
+    let target =
+        target.context("target must be provided with --target or set in the config file")?;
+    let function = function.unwrap_or_default();
+    let iterations = iterations.unwrap_or(100);
+    let warmup = warmup.unwrap_or(10);
 
     if function.trim().is_empty() {
         bail!(
@@ -3799,15 +3129,15 @@ fn validate_artifacts_for_browserstack(
 
     match target {
         MobileTarget::Android => {
-            if let Some(apk_path) = apk {
-                if !apk_path.exists() {
-                    missing.push(("Android APK".to_string(), apk_path.to_path_buf()));
-                }
+            if let Some(apk_path) = apk
+                && !apk_path.exists()
+            {
+                missing.push(("Android APK".to_string(), apk_path.to_path_buf()));
             }
-            if let Some(test_apk_path) = test_apk {
-                if !test_apk_path.exists() {
-                    missing.push(("Android test APK".to_string(), test_apk_path.to_path_buf()));
-                }
+            if let Some(test_apk_path) = test_apk
+                && !test_apk_path.exists()
+            {
+                missing.push(("Android test APK".to_string(), test_apk_path.to_path_buf()));
             }
         }
         MobileTarget::Ios => {
@@ -4414,25 +3744,25 @@ struct RegressionFinding {
 fn detect_regressions(report: &CompareReport, threshold_pct: f64) -> Vec<RegressionFinding> {
     let mut findings = Vec::new();
     for row in &report.rows {
-        if let Some(delta) = row.median_delta_pct {
-            if delta > threshold_pct {
-                findings.push(RegressionFinding {
-                    device: row.device.clone(),
-                    function: row.function.clone(),
-                    metric: "median".to_string(),
-                    delta_pct: delta,
-                });
-            }
+        if let Some(delta) = row.median_delta_pct
+            && delta > threshold_pct
+        {
+            findings.push(RegressionFinding {
+                device: row.device.clone(),
+                function: row.function.clone(),
+                metric: "median".to_string(),
+                delta_pct: delta,
+            });
         }
-        if let Some(delta) = row.p95_delta_pct {
-            if delta > threshold_pct {
-                findings.push(RegressionFinding {
-                    device: row.device.clone(),
-                    function: row.function.clone(),
-                    metric: "p95".to_string(),
-                    delta_pct: delta,
-                });
-            }
+        if let Some(delta) = row.p95_delta_pct
+            && delta > threshold_pct
+        {
+            findings.push(RegressionFinding {
+                device: row.device.clone(),
+                function: row.function.clone(),
+                metric: "p95".to_string(),
+                delta_pct: delta,
+            });
         }
     }
     findings
@@ -5267,10 +4597,16 @@ fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
 }
 
 impl BenchmarkResourceUsage {
+    fn peak_memory_growth_or_legacy_kb(&self) -> Option<u64> {
+        self.peak_memory_growth_kb.or(self.peak_memory_kb)
+    }
+
     fn is_empty(&self) -> bool {
         self.cpu_total_ms.is_none()
             && self.cpu_median_ms.is_none()
             && self.peak_memory_kb.is_none()
+            && self.peak_memory_growth_kb.is_none()
+            && self.process_peak_memory_kb.is_none()
             && self.total_pss_kb.is_none()
             && self.private_dirty_kb.is_none()
             && self.native_heap_kb.is_none()
@@ -5388,25 +4724,9 @@ fn median_u64(values: &[u64]) -> Option<u64> {
     })
 }
 
-fn raw_peak_memory_kb(
-    total_pss_kb: Option<u64>,
-    private_dirty_kb: Option<u64>,
-    native_heap_kb: Option<u64>,
-    java_heap_kb: Option<u64>,
-) -> Option<u64> {
-    total_pss_kb
-        .or(private_dirty_kb)
-        .or_else(|| match (native_heap_kb, java_heap_kb) {
-            (Some(native), Some(java)) => Some(native + java),
-            (Some(native), None) => Some(native),
-            (None, Some(java)) => Some(java),
-            (None, None) => None,
-        })
-}
-
 fn extract_benchmark_resource_usage(
     entry: &Value,
-    perf_metrics: Option<&browserstack::PerformanceMetrics>,
+    _perf_metrics: Option<&browserstack::PerformanceMetrics>,
 ) -> Option<BenchmarkResourceUsage> {
     let resources = entry
         .get("resource_usage")
@@ -5414,6 +4734,7 @@ fn extract_benchmark_resource_usage(
         .or(Some(entry));
     let sample_cpu_ms = extract_sample_metric_u64(entry, "cpu_time_ms");
     let sample_peak_memory_kb = extract_sample_metric_u64(entry, "peak_memory_kb");
+    let sample_process_peak_memory_kb = extract_sample_metric_u64(entry, "process_peak_memory_kb");
 
     let cpu_total_ms = resources
         .and_then(|res| res.get("cpu_total_ms"))
@@ -5447,31 +4768,27 @@ fn extract_benchmark_resource_usage(
     let java_heap_kb = resources
         .and_then(|res| res.get("java_heap_kb"))
         .and_then(json_value_to_u64);
-    let reported_peak_memory_kb = resources
+    let explicit_peak_memory_growth_kb = resources
+        .and_then(|res| res.get("peak_memory_growth_kb"))
+        .and_then(json_value_to_u64);
+    let legacy_peak_memory_kb = resources
         .and_then(|res| res.get("peak_memory_kb"))
+        .and_then(json_value_to_u64);
+    let peak_memory_growth_kb = explicit_peak_memory_growth_kb
+        .or(legacy_peak_memory_kb)
+        .or_else(|| sample_peak_memory_kb.iter().copied().max());
+    let peak_memory_kb = peak_memory_growth_kb;
+    let process_peak_memory_kb = resources
+        .and_then(|res| res.get("process_peak_memory_kb"))
         .and_then(json_value_to_u64)
-        .or_else(|| {
-            resources
-                .and_then(|res| res.get("ram_peak_mb"))
-                .and_then(|value| value.as_f64())
-                .map(|value| (value * 1024.0).round() as u64)
-        });
-
-    let peak_memory_kb = reported_peak_memory_kb
-        .or_else(|| sample_peak_memory_kb.iter().copied().max())
-        .or_else(|| {
-            perf_metrics
-                .and_then(|metrics| metrics.memory.as_ref())
-                .map(|memory| (memory.peak_mb * 1024.0).round() as u64)
-        })
-        .or_else(|| {
-            raw_peak_memory_kb(total_pss_kb, private_dirty_kb, native_heap_kb, java_heap_kb)
-        });
+        .or_else(|| sample_process_peak_memory_kb.iter().copied().max());
 
     let resource_usage = BenchmarkResourceUsage {
         cpu_total_ms,
         cpu_median_ms,
         peak_memory_kb,
+        peak_memory_growth_kb,
+        process_peak_memory_kb,
         total_pss_kb,
         private_dirty_kb,
         native_heap_kb,
@@ -5509,17 +4826,17 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
 
     let _ = writeln!(
         output,
-        "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak memory |"
+        "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak |"
     );
     let _ = writeln!(
         output,
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
     );
     for device in &summary.device_summaries {
         for bench in &device.benchmarks {
             let _ = writeln!(
                 output,
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 device.device,
                 bench.function,
                 bench.samples,
@@ -5533,12 +4850,22 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
                     bench
                         .resource_usage
                         .as_ref()
-                        .and_then(|usage| usage.peak_memory_kb)
-                )
+                        .and_then(BenchmarkResourceUsage::peak_memory_growth_or_legacy_kb)
+                ),
+                format_peak_memory(
+                    bench
+                        .resource_usage
+                        .as_ref()
+                        .and_then(|usage| usage.process_peak_memory_kb)
+                ),
             );
         }
     }
     let _ = writeln!(output);
+    if summary_has_memory_baseline_gap(summary) {
+        let _ = writeln!(output, "_Note: {}_", MEMORY_BASELINE_GAP_NOTE);
+        let _ = writeln!(output);
+    }
 
     output
 }
@@ -5547,13 +4874,13 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
-        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb"
+        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb"
     );
     for device in &summary.device_summaries {
         for bench in &device.benchmarks {
             let _ = writeln!(
                 output,
-                "{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 device.device,
                 bench.function,
                 bench.samples,
@@ -5576,6 +4903,16 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
                     .resource_usage
                     .as_ref()
                     .and_then(|usage| usage.peak_memory_kb)
+                    .map_or(String::new(), |v| v.to_string()),
+                bench
+                    .resource_usage
+                    .as_ref()
+                    .and_then(BenchmarkResourceUsage::peak_memory_growth_or_legacy_kb)
+                    .map_or(String::new(), |v| v.to_string()),
+                bench
+                    .resource_usage
+                    .as_ref()
+                    .and_then(|usage| usage.process_peak_memory_kb)
                     .map_or(String::new(), |v| v.to_string())
             );
         }
@@ -5659,6 +4996,33 @@ fn format_cpu_total_duration_ms(ms: u64) -> String {
     }
 }
 
+const MEMORY_BASELINE_GAP_MIN_DIFF_KB: u64 = 256 * 1024;
+const MEMORY_BASELINE_GAP_RATIO: u64 = 4;
+const MEMORY_BASELINE_GAP_NOTE: &str =
+    "memory growth excludes warmup/baseline retained before the measured iteration.";
+
+fn summary_has_memory_baseline_gap(summary: &SummaryReport) -> bool {
+    summary.device_summaries.iter().any(|device| {
+        device.benchmarks.iter().any(|benchmark| {
+            benchmark
+                .resource_usage
+                .as_ref()
+                .is_some_and(resource_usage_has_memory_baseline_gap)
+        })
+    })
+}
+
+fn resource_usage_has_memory_baseline_gap(usage: &BenchmarkResourceUsage) -> bool {
+    let peak = usage.process_peak_memory_kb;
+    match (usage.peak_memory_growth_or_legacy_kb(), peak) {
+        (Some(growth), Some(peak)) if peak > growth => {
+            peak.saturating_sub(growth) >= MEMORY_BASELINE_GAP_MIN_DIFF_KB
+                && peak >= growth.saturating_mul(MEMORY_BASELINE_GAP_RATIO)
+        }
+        _ => false,
+    }
+}
+
 fn format_peak_memory(value_kb: Option<u64>) -> String {
     value_kb
         .map(|value| format!("{:.2} MB", value as f64 / 1024.0))
@@ -5705,18 +5069,17 @@ fn ensure_android_home() {
     if let Ok(ndk_home) = std::env::var("ANDROID_NDK_HOME") {
         // ANDROID_NDK_HOME is typically $ANDROID_HOME/ndk/<version>
         let ndk_path = std::path::Path::new(&ndk_home);
-        if let Some(ndk_dir) = ndk_path.parent() {
-            if ndk_dir.file_name().is_some_and(|n| n == "ndk") {
-                if let Some(sdk_root) = ndk_dir.parent() {
-                    eprintln!(
-                        "Inferred ANDROID_HOME={} from ANDROID_NDK_HOME",
-                        sdk_root.display()
-                    );
-                    // SAFETY: called early in single-threaded CLI init, before
-                    // any threads are spawned.
-                    unsafe { std::env::set_var("ANDROID_HOME", sdk_root) };
-                }
-            }
+        if let Some(ndk_dir) = ndk_path.parent()
+            && ndk_dir.file_name().is_some_and(|n| n == "ndk")
+            && let Some(sdk_root) = ndk_dir.parent()
+        {
+            eprintln!(
+                "Inferred ANDROID_HOME={} from ANDROID_NDK_HOME",
+                sdk_root.display()
+            );
+            // SAFETY: called early in single-threaded CLI init, before
+            // any threads are spawned.
+            unsafe { std::env::set_var("ANDROID_HOME", sdk_root) };
         }
     }
 }
@@ -5725,7 +5088,7 @@ fn ensure_android_home() {
 fn load_dotenv_global() {
     if let Ok(root) = repo_root() {
         let _ = dotenvy::from_path(root.join(".env"));
-        let _ = dotenvy::from_path_override(root.join(".env.local"));
+        let _ = dotenvy::from_path(root.join(".env.local"));
     }
 }
 
@@ -5740,7 +5103,7 @@ pub(crate) fn load_dotenv_for_layout(layout: &ResolvedProjectLayout) {
 
     for dir in directories {
         let _ = dotenvy::from_path(dir.join(".env"));
-        let _ = dotenvy::from_path_override(dir.join(".env.local"));
+        let _ = dotenvy::from_path(dir.join(".env.local"));
     }
 }
 
@@ -5834,6 +5197,7 @@ fn cmd_init_sdk(
 }
 
 /// Build mobile artifacts using `mobench-sdk`.
+#[allow(clippy::too_many_arguments)]
 fn cmd_build(
     target: SdkTarget,
     release: bool,
@@ -6204,6 +5568,7 @@ fn cmd_package_xcuitest(
 }
 
 /// Verify benchmark setup: registry, spec, artifacts, and optional smoke test
+#[allow(clippy::too_many_arguments)]
 fn cmd_verify(
     project_root: Option<PathBuf>,
     crate_path: Option<PathBuf>,
@@ -7585,673 +6950,6 @@ fn command_version_line(cmd: &str, args: &[&str]) -> Option<String> {
         .filter(|line| !line.is_empty())
 }
 
-/// Check prerequisites for building mobile artifacts.
-///
-/// This validates that all required tools and configurations are in place
-/// before attempting a build.
-fn cmd_check(target: SdkTarget, format: CheckOutputFormat) -> Result<()> {
-    let checks = collect_prereq_checks(target);
-    let issues = collect_issues(&checks);
-
-    match format {
-        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
-        CheckOutputFormat::Json => print_check_results_json(&checks, &issues)?,
-    }
-
-    if issues.is_empty() {
-        Ok(())
-    } else {
-        bail!(
-            "{} issue(s) found. Fix them and run 'cargo mobench check --target {:?}' again.",
-            issues.len(),
-            target
-        )
-    }
-}
-
-fn cmd_config_validate(config_path: &Path, format: CheckOutputFormat) -> Result<()> {
-    let mut checks = Vec::new();
-    let mut config: Option<BenchConfig> = None;
-
-    match load_config(config_path) {
-        Ok(cfg) => {
-            checks.push(PrereqCheck {
-                name: "Run config".to_string(),
-                passed: true,
-                detail: Some(config_path.display().to_string()),
-                fix_hint: None,
-            });
-            config = Some(cfg);
-        }
-        Err(err) => {
-            checks.push(PrereqCheck {
-                name: "Run config".to_string(),
-                passed: false,
-                detail: Some(err.to_string()),
-                fix_hint: Some(format!(
-                    "Fix config file syntax/fields at {}",
-                    config_path.display()
-                )),
-            });
-        }
-    }
-
-    if let Some(cfg) = &config {
-        match load_device_matrix(&cfg.device_matrix) {
-            Ok(matrix) => {
-                if let Some(tags) = cfg.device_tags.as_ref().filter(|tags| !tags.is_empty()) {
-                    if let Err(err) = filter_devices_by_tags(matrix.devices, tags) {
-                        checks.push(PrereqCheck {
-                            name: "Device matrix".to_string(),
-                            passed: false,
-                            detail: Some(err.to_string()),
-                            fix_hint: Some(format!(
-                                "Update tags in {} or adjust device_tags in config",
-                                cfg.device_matrix.display()
-                            )),
-                        });
-                    } else {
-                        checks.push(PrereqCheck {
-                            name: "Device matrix".to_string(),
-                            passed: true,
-                            detail: Some(format!(
-                                "{} (tags: {})",
-                                cfg.device_matrix.display(),
-                                tags.join(", ")
-                            )),
-                            fix_hint: None,
-                        });
-                    }
-                } else {
-                    checks.push(PrereqCheck {
-                        name: "Device matrix".to_string(),
-                        passed: true,
-                        detail: Some(cfg.device_matrix.display().to_string()),
-                        fix_hint: None,
-                    });
-                }
-            }
-            Err(err) => {
-                checks.push(PrereqCheck {
-                    name: "Device matrix".to_string(),
-                    passed: false,
-                    detail: Some(err.to_string()),
-                    fix_hint: Some(format!(
-                        "Fix or regenerate device matrix at {}",
-                        cfg.device_matrix.display()
-                    )),
-                });
-            }
-        }
-
-        match resolve_browserstack_credentials(Some(&cfg.browserstack)) {
-            Ok(creds) => checks.push(PrereqCheck {
-                name: "BrowserStack credentials".to_string(),
-                passed: true,
-                detail: Some(format!("user {}", creds.username)),
-                fix_hint: None,
-            }),
-            Err(err) => checks.push(PrereqCheck {
-                name: "BrowserStack credentials".to_string(),
-                passed: false,
-                detail: Some(err.to_string()),
-                fix_hint: Some("Set BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY".to_string()),
-            }),
-        }
-    }
-
-    let issues = collect_issues(&checks);
-    match format {
-        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
-        CheckOutputFormat::Json => print_check_results_json(&checks, &issues)?,
-    }
-
-    if issues.is_empty() {
-        Ok(())
-    } else {
-        bail!(
-            "{} issue(s) found. Fix them and rerun 'cargo mobench config validate'.",
-            issues.len()
-        )
-    }
-}
-
-fn cmd_doctor(
-    target: SdkTarget,
-    config_path: Option<&Path>,
-    device_matrix_path: Option<&Path>,
-    device_tags: Vec<String>,
-    browserstack: bool,
-    format: CheckOutputFormat,
-) -> Result<()> {
-    let mut checks = collect_prereq_checks(target);
-
-    let mut config: Option<BenchConfig> = None;
-    if let Some(path) = config_path {
-        match load_config(path) {
-            Ok(cfg) => {
-                checks.push(PrereqCheck {
-                    name: "Run config".to_string(),
-                    passed: true,
-                    detail: Some(path.display().to_string()),
-                    fix_hint: None,
-                });
-                config = Some(cfg);
-            }
-            Err(err) => {
-                checks.push(PrereqCheck {
-                    name: "Run config".to_string(),
-                    passed: false,
-                    detail: Some(err.to_string()),
-                    fix_hint: Some(format!("Fix or regenerate config at {}", path.display())),
-                });
-            }
-        }
-    } else {
-        checks.push(PrereqCheck {
-            name: "Run config".to_string(),
-            passed: true,
-            detail: Some("skipped (no --config)".to_string()),
-            fix_hint: None,
-        });
-    }
-
-    let resolved_matrix_path = device_matrix_path
-        .map(PathBuf::from)
-        .or_else(|| config.as_ref().map(|cfg| cfg.device_matrix.clone()));
-    let resolved_tags = if !device_tags.is_empty() {
-        Some(device_tags)
-    } else {
-        config.as_ref().and_then(|cfg| cfg.device_tags.clone())
-    };
-
-    if resolved_matrix_path.is_none() && resolved_tags.as_ref().is_some_and(|tags| !tags.is_empty())
-    {
-        checks.push(PrereqCheck {
-            name: "Device matrix".to_string(),
-            passed: false,
-            detail: Some("device tags provided without a matrix file".to_string()),
-            fix_hint: Some(
-                "Provide --device-matrix or set device_matrix in the config".to_string(),
-            ),
-        });
-    } else if let Some(path) = resolved_matrix_path.as_deref() {
-        match load_device_matrix(path) {
-            Ok(matrix) => {
-                if let Some(tags) = resolved_tags.as_ref().filter(|tags| !tags.is_empty()) {
-                    if let Err(err) = filter_devices_by_tags(matrix.devices, tags) {
-                        checks.push(PrereqCheck {
-                            name: "Device matrix".to_string(),
-                            passed: false,
-                            detail: Some(err.to_string()),
-                            fix_hint: Some(format!(
-                                "Update tags in {} or adjust --device-tags",
-                                path.display()
-                            )),
-                        });
-                    } else {
-                        checks.push(PrereqCheck {
-                            name: "Device matrix".to_string(),
-                            passed: true,
-                            detail: Some(format!("{} (tags: {})", path.display(), tags.join(", "))),
-                            fix_hint: None,
-                        });
-                    }
-                } else {
-                    checks.push(PrereqCheck {
-                        name: "Device matrix".to_string(),
-                        passed: true,
-                        detail: Some(path.display().to_string()),
-                        fix_hint: None,
-                    });
-                }
-            }
-            Err(err) => checks.push(PrereqCheck {
-                name: "Device matrix".to_string(),
-                passed: false,
-                detail: Some(err.to_string()),
-                fix_hint: Some(format!(
-                    "Fix or regenerate device matrix at {}",
-                    path.display()
-                )),
-            }),
-        }
-    } else {
-        checks.push(PrereqCheck {
-            name: "Device matrix".to_string(),
-            passed: true,
-            detail: Some("skipped (no --device-matrix)".to_string()),
-            fix_hint: None,
-        });
-    }
-
-    if browserstack {
-        let cfg_ref = config.as_ref().map(|cfg| &cfg.browserstack);
-        match resolve_browserstack_credentials(cfg_ref) {
-            Ok(creds) => checks.push(PrereqCheck {
-                name: "BrowserStack credentials".to_string(),
-                passed: true,
-                detail: Some(format!("user {}", creds.username)),
-                fix_hint: None,
-            }),
-            Err(err) => checks.push(PrereqCheck {
-                name: "BrowserStack credentials".to_string(),
-                passed: false,
-                detail: Some(err.to_string()),
-                fix_hint: Some("Set BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY".to_string()),
-            }),
-        }
-    } else {
-        checks.push(PrereqCheck {
-            name: "BrowserStack credentials".to_string(),
-            passed: true,
-            detail: Some("skipped (--browserstack=false)".to_string()),
-            fix_hint: None,
-        });
-    }
-
-    let issues = collect_issues(&checks);
-    match format {
-        CheckOutputFormat::Text => print_check_results_text(&checks, &issues),
-        CheckOutputFormat::Json => print_check_results_json(&checks, &issues)?,
-    }
-
-    if issues.is_empty() {
-        Ok(())
-    } else {
-        bail!(
-            "{} issue(s) found. Fix them and rerun 'cargo mobench doctor'.",
-            issues.len()
-        )
-    }
-}
-
-fn collect_prereq_checks(target: SdkTarget) -> Vec<PrereqCheck> {
-    let mut checks: Vec<PrereqCheck> = Vec::new();
-    checks.push(check_cargo());
-    checks.push(check_rustup());
-
-    match target {
-        SdkTarget::Android => {
-            println!("Checking prerequisites for Android...\n");
-            extend_android_prereq_checks(&mut checks);
-        }
-        SdkTarget::Ios => {
-            println!("Checking prerequisites for iOS...\n");
-            checks.push(check_xcode());
-            checks.push(check_xcodegen());
-            checks.push(check_rust_target("aarch64-apple-ios"));
-            checks.push(check_rust_target("aarch64-apple-ios-sim"));
-            checks.push(check_rust_target("x86_64-apple-ios"));
-        }
-        SdkTarget::Both => {
-            println!("Checking prerequisites for Android and iOS...\n");
-            extend_android_prereq_checks(&mut checks);
-            checks.push(check_xcode());
-            checks.push(check_xcodegen());
-            checks.push(check_rust_target("aarch64-apple-ios"));
-            checks.push(check_rust_target("aarch64-apple-ios-sim"));
-            checks.push(check_rust_target("x86_64-apple-ios"));
-        }
-    }
-
-    checks
-}
-
-const DEFAULT_ANDROID_DOCTOR_RUST_TARGETS: &[&str] = &["aarch64-linux-android"];
-
-fn extend_android_prereq_checks(checks: &mut Vec<PrereqCheck>) {
-    checks.push(check_android_ndk_home());
-    checks.push(check_cargo_ndk());
-    for target in DEFAULT_ANDROID_DOCTOR_RUST_TARGETS {
-        checks.push(check_rust_target(target));
-    }
-    checks.push(check_jdk());
-}
-
-fn collect_issues(checks: &[PrereqCheck]) -> Vec<ValidationIssue> {
-    let mut issues = Vec::new();
-    for check in checks {
-        if !check.passed {
-            if let Some(ref fix) = check.fix_hint {
-                issues.push(ValidationIssue {
-                    category: issue_category_for_check(check),
-                    check: check.name.clone(),
-                    detail: check.detail.clone(),
-                    fix_hint: fix.clone(),
-                });
-            }
-        }
-    }
-    issues
-}
-
-fn issue_category_for_check(check: &PrereqCheck) -> ContractErrorCategory {
-    match check.name.as_str() {
-        "Run config" | "Device matrix" => ContractErrorCategory::Config,
-        "BrowserStack credentials" => ContractErrorCategory::Provider,
-        _ => ContractErrorCategory::Preflight,
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct PrereqCheck {
-    name: String,
-    passed: bool,
-    detail: Option<String>,
-    fix_hint: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ValidationIssue {
-    category: ContractErrorCategory,
-    check: String,
-    detail: Option<String>,
-    fix_hint: String,
-}
-
-fn print_check_results_text(checks: &[PrereqCheck], issues: &[ValidationIssue]) {
-    for check in checks {
-        let status = if check.passed { "\u{2713}" } else { "\u{2717}" };
-        let detail = check.detail.as_deref().unwrap_or("");
-        let category = if check.passed {
-            None
-        } else {
-            Some(issue_category_for_check(check))
-        };
-        if detail.is_empty() {
-            if let Some(category) = category {
-                println!("{} {} [{}]", status, check.name, category_slug(category));
-            } else {
-                println!("{} {}", status, check.name);
-            }
-        } else {
-            if let Some(category) = category {
-                println!(
-                    "{} {} [{}] ({})",
-                    status,
-                    check.name,
-                    category_slug(category),
-                    detail
-                );
-            } else {
-                println!("{} {} ({})", status, check.name, detail);
-            }
-        }
-    }
-
-    if !issues.is_empty() {
-        println!("\nTo fix:");
-        for issue in issues {
-            println!("  * [{}] {}", category_slug(issue.category), issue.fix_hint);
-        }
-        println!();
-        let failed_count = checks.iter().filter(|c| !c.passed).count();
-        println!("{} issue(s) found.", failed_count);
-    } else {
-        println!("\nAll prerequisites satisfied!");
-    }
-}
-
-fn print_check_results_json(checks: &[PrereqCheck], issues: &[ValidationIssue]) -> Result<()> {
-    let output = render_check_results_json(checks, issues);
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
-}
-
-fn render_check_results_json(checks: &[PrereqCheck], issues: &[ValidationIssue]) -> Value {
-    json!({
-        "checks": checks,
-        "issues": issues,
-        "all_passed": checks.iter().all(|c| c.passed),
-        "passed_count": checks.iter().filter(|c| c.passed).count(),
-        "failed_count": checks.iter().filter(|c| !c.passed).count(),
-    })
-}
-
-fn category_slug(category: ContractErrorCategory) -> &'static str {
-    match category {
-        ContractErrorCategory::Config => "config_error",
-        ContractErrorCategory::Preflight => "preflight_error",
-        ContractErrorCategory::Provider => "provider_error",
-        ContractErrorCategory::Build => "build_error",
-        ContractErrorCategory::Benchmark => "benchmark_error",
-    }
-}
-
-fn check_cargo() -> PrereqCheck {
-    let result = std::process::Command::new("cargo")
-        .arg("--version")
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            PrereqCheck {
-                name: "cargo installed".to_string(),
-                passed: true,
-                detail: Some(version),
-                fix_hint: None,
-            }
-        }
-        _ => PrereqCheck {
-            name: "cargo installed".to_string(),
-            passed: false,
-            detail: None,
-            fix_hint: Some("Install Rust: https://rustup.rs".to_string()),
-        },
-    }
-}
-
-fn check_rustup() -> PrereqCheck {
-    let result = std::process::Command::new("rustup")
-        .arg("--version")
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            PrereqCheck {
-                name: "rustup installed".to_string(),
-                passed: true,
-                detail: Some(version),
-                fix_hint: None,
-            }
-        }
-        _ => PrereqCheck {
-            name: "rustup installed".to_string(),
-            passed: false,
-            detail: None,
-            fix_hint: Some("Install rustup: https://rustup.rs".to_string()),
-        },
-    }
-}
-
-fn check_android_ndk_home() -> PrereqCheck {
-    match env::var("ANDROID_NDK_HOME") {
-        Ok(path) if !path.is_empty() => {
-            let path_exists = Path::new(&path).exists();
-            if path_exists {
-                PrereqCheck {
-                    name: "ANDROID_NDK_HOME set".to_string(),
-                    passed: true,
-                    detail: Some(path),
-                    fix_hint: None,
-                }
-            } else {
-                PrereqCheck {
-                    name: "ANDROID_NDK_HOME set".to_string(),
-                    passed: false,
-                    detail: Some(format!("path does not exist: {}", path)),
-                    fix_hint: Some("Set ANDROID_NDK_HOME to a valid NDK path: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>".to_string()),
-                }
-            }
-        }
-        _ => PrereqCheck {
-            name: "ANDROID_NDK_HOME set".to_string(),
-            passed: false,
-            detail: None,
-            fix_hint: Some(
-                "Set ANDROID_NDK_HOME: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>"
-                    .to_string(),
-            ),
-        },
-    }
-}
-
-fn check_cargo_ndk() -> PrereqCheck {
-    let result = std::process::Command::new("cargo")
-        .args(["ndk", "--version"])
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            PrereqCheck {
-                name: "cargo-ndk installed".to_string(),
-                passed: true,
-                detail: Some(version),
-                fix_hint: None,
-            }
-        }
-        _ => PrereqCheck {
-            name: "cargo-ndk installed".to_string(),
-            passed: false,
-            detail: None,
-            fix_hint: Some("Install cargo-ndk: cargo install cargo-ndk".to_string()),
-        },
-    }
-}
-
-fn check_rust_target(target: &str) -> PrereqCheck {
-    let result = std::process::Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let installed = String::from_utf8_lossy(&output.stdout);
-            let has_target = installed.lines().any(|line| line.trim() == target);
-            if has_target {
-                PrereqCheck {
-                    name: format!("Rust target: {}", target),
-                    passed: true,
-                    detail: None,
-                    fix_hint: None,
-                }
-            } else {
-                PrereqCheck {
-                    name: format!("Rust target: {}", target),
-                    passed: false,
-                    detail: Some("not installed".to_string()),
-                    fix_hint: Some(format!("Install target: rustup target add {}", target)),
-                }
-            }
-        }
-        _ => PrereqCheck {
-            name: format!("Rust target: {}", target),
-            passed: false,
-            detail: Some("could not check".to_string()),
-            fix_hint: Some(format!("Install target: rustup target add {}", target)),
-        },
-    }
-}
-
-fn check_jdk() -> PrereqCheck {
-    // Try java -version
-    let result = std::process::Command::new("java").arg("-version").output();
-
-    match result {
-        Ok(output) => {
-            // Java outputs version to stderr
-            let version_output = String::from_utf8_lossy(&output.stderr);
-            let version_line = version_output.lines().next().unwrap_or("");
-
-            if output.status.success() || !version_line.is_empty() {
-                PrereqCheck {
-                    name: "JDK installed".to_string(),
-                    passed: true,
-                    detail: Some(version_line.trim().to_string()),
-                    fix_hint: None,
-                }
-            } else {
-                PrereqCheck {
-                    name: "JDK installed".to_string(),
-                    passed: false,
-                    detail: None,
-                    fix_hint: Some("Install JDK 17+: brew install openjdk@17".to_string()),
-                }
-            }
-        }
-        Err(_) => PrereqCheck {
-            name: "JDK installed".to_string(),
-            passed: false,
-            detail: None,
-            fix_hint: Some("Install JDK 17+: brew install openjdk@17".to_string()),
-        },
-    }
-}
-
-fn check_xcode() -> PrereqCheck {
-    let result = std::process::Command::new("xcodebuild")
-        .arg("-version")
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            PrereqCheck {
-                name: "Xcode installed".to_string(),
-                passed: true,
-                detail: Some(version),
-                fix_hint: None,
-            }
-        }
-        _ => PrereqCheck {
-            name: "Xcode installed".to_string(),
-            passed: false,
-            detail: None,
-            fix_hint: Some(
-                "Install Xcode from the App Store or run: xcode-select --install".to_string(),
-            ),
-        },
-    }
-}
-
-fn check_xcodegen() -> PrereqCheck {
-    let result = std::process::Command::new("xcodegen")
-        .arg("--version")
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            PrereqCheck {
-                name: "xcodegen installed".to_string(),
-                passed: true,
-                detail: Some(version),
-                fix_hint: None,
-            }
-        }
-        _ => PrereqCheck {
-            name: "xcodegen installed".to_string(),
-            passed: false,
-            detail: None,
-            fix_hint: Some("Install xcodegen: brew install xcodegen".to_string()),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8380,10 +7078,10 @@ pub fn bench_query_proof_generation() {}
         })
         .unwrap();
         let spec = resolve_run_spec(
-            MobileTarget::Android,
-            "sample_fns::fibonacci".into(),
-            5,
-            1,
+            Some(MobileTarget::Android),
+            Some("sample_fns::fibonacci".into()),
+            Some(5),
+            Some(1),
             vec!["pixel".into()],
             &layout,
             None,
@@ -8455,10 +7153,10 @@ project = "proj"
         })
         .unwrap();
         let spec = resolve_run_spec(
-            MobileTarget::Android,
-            "ignored::value".into(),
-            1,
-            0,
+            Some(MobileTarget::Android),
+            Some("ignored::value".into()),
+            Some(1),
+            Some(0),
             Vec::new(),
             &layout,
             Some(config_path.as_path()),
@@ -8474,6 +7172,74 @@ project = "proj"
         .expect("resolve spec");
 
         assert_eq!(spec.devices, vec!["CLI Device".to_string()]);
+    }
+
+    #[test]
+    fn run_accepts_config_without_target_or_function_flags() {
+        assert!(Cli::try_parse_from(["mobench", "run", "--config", "bench-config.toml"]).is_ok());
+    }
+
+    #[test]
+    fn resolve_run_spec_lets_cli_values_override_config_values() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let matrix_path = temp_dir.path().join("matrix.yml");
+        let config_path = temp_dir.path().join("bench-config.toml");
+
+        write_file(
+            &matrix_path,
+            br#"devices:
+  - name: Config Device
+    os: android
+    os_version: "14"
+"#,
+        )
+        .expect("write matrix");
+        let config_toml = format!(
+            r#"target = "android"
+function = "config::function"
+iterations = 10
+warmup = 2
+device_matrix = "{}"
+
+[browserstack]
+app_automate_username = "user"
+app_automate_access_key = "key"
+project = "proj"
+"#,
+            matrix_path.display()
+        );
+        write_file(&config_path, config_toml.as_bytes()).expect("write config");
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: None,
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .unwrap();
+        let spec = resolve_run_spec(
+            Some(MobileTarget::Ios),
+            Some("cli::function".into()),
+            Some(3),
+            Some(1),
+            Vec::new(),
+            &layout,
+            Some(config_path.as_path()),
+            None,
+            Vec::new(),
+            None,
+            None,
+            None,
+            false,
+            false,
+            false,
+        )
+        .expect("resolve spec");
+
+        assert_eq!(spec.target, MobileTarget::Ios);
+        assert_eq!(spec.function, "cli::function");
+        assert_eq!(spec.iterations, 3);
+        assert_eq!(spec.warmup, 1);
     }
 
     #[test]
@@ -8679,10 +7445,10 @@ project = "proj"
         })
         .expect("resolve layout");
         let spec = resolve_run_spec(
-            MobileTarget::Ios,
-            "zk_mobile_bench::bench_query_proof_generation".into(),
-            1,
-            0,
+            Some(MobileTarget::Ios),
+            Some("zk_mobile_bench::bench_query_proof_generation".into()),
+            Some(1),
+            Some(0),
             vec!["iPhone 15".into()],
             &layout,
             None,
@@ -8769,10 +7535,10 @@ project = "proj"
         })
         .expect("resolve layout");
         let spec = resolve_run_spec(
-            MobileTarget::Ios,
-            "zk_mobile_bench::bench_query_proof_generation".into(),
-            1,
-            0,
+            Some(MobileTarget::Ios),
+            Some("zk_mobile_bench::bench_query_proof_generation".into()),
+            Some(1),
+            Some(0),
             vec!["iPhone 15".into()],
             &layout,
             None,
@@ -8884,6 +7650,21 @@ project = "proj"
             DEFAULT_ANDROID_DOCTOR_RUST_TARGETS,
             &["aarch64-linux-android"]
         );
+    }
+
+    #[test]
+    fn rustc_msrv_parser_handles_stable_and_prerelease_versions() {
+        assert_eq!(
+            parse_rust_version("rustc 1.95.0 (59807616e 2026-04-14)"),
+            Some((1, 95, 0))
+        );
+        assert_eq!(
+            parse_rust_version("rustc 1.85.0-beta.1 (example)"),
+            Some((1, 85, 0))
+        );
+        assert!(rustc_version_meets_msrv("rustc 1.85.0", WORKSPACE_MSRV));
+        assert!(rustc_version_meets_msrv("rustc 1.95.0", WORKSPACE_MSRV));
+        assert!(!rustc_version_meets_msrv("rustc 1.84.1", WORKSPACE_MSRV));
     }
 
     #[test]
@@ -9019,10 +7800,10 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         })
         .unwrap();
         let spec = resolve_run_spec(
-            MobileTarget::Ios,
-            "ignored::value".into(),
-            1,
-            0,
+            Some(MobileTarget::Ios),
+            Some("ignored::value".into()),
+            Some(1),
+            Some(0),
             Vec::new(),
             &layout,
             Some(config_path.as_path()),
@@ -9484,6 +8265,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
                         peak_memory_kb: Some(249_416),
+                        peak_memory_growth_kb: Some(249_416),
+                        process_peak_memory_kb: Some(1_477_787),
                         total_pss_kb: None,
                         private_dirty_kb: None,
                         native_heap_kb: None,
@@ -9494,7 +8277,7 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         });
 
         assert!(markdown.contains(
-            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak memory |"
+            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak |"
         ));
         assert!(markdown.contains("1.250s"));
         assert!(markdown.contains("6.250s"));
@@ -9528,6 +8311,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_total_ms: Some(800),
                         cpu_median_ms: Some(200),
                         peak_memory_kb: Some(1_024),
+                        peak_memory_growth_kb: Some(1_024),
+                        process_peak_memory_kb: None,
                         total_pss_kb: None,
                         private_dirty_kb: None,
                         native_heap_kb: None,
@@ -9538,10 +8323,10 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         });
 
         assert!(markdown.contains(
-            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak memory |"
+            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak |"
         ));
         assert!(markdown.contains(
-            "| Google Pixel 8-14.0 | sample_fns::fibonacci | 4 | 1 | 1.000s | 4.000s | 200ms | 800ms | 20.0% | 1.00 MB |"
+            "| Google Pixel 8-14.0 | sample_fns::fibonacci | 4 | 1 | 1.000s | 4.000s | 200ms | 800ms | 20.0% | 1.00 MB | - |"
         ));
         assert!(!markdown.contains("### Device:"));
     }
@@ -9570,6 +8355,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
                         peak_memory_kb: Some(249_416),
+                        peak_memory_growth_kb: Some(249_416),
+                        process_peak_memory_kb: Some(1_477_787),
                         total_pss_kb: None,
                         private_dirty_kb: None,
                         native_heap_kb: None,
@@ -9581,10 +8368,52 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
 
         assert!(
             csv.starts_with(
-                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb\n"
+                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb\n"
             )
         );
-        assert!(csv.contains(",482,241,249416\n"));
+        assert!(csv.contains(",482,241,249416,249416,1477787\n"));
+    }
+
+    #[test]
+    fn render_summary_uses_legacy_peak_memory_as_growth_fallback() {
+        let summary = SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["Google Pixel 8-14.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Google Pixel 8-14.0".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "sample_fns::fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(1_250_000_000),
+                    median_ns: Some(1_200_000_000),
+                    p95_ns: Some(1_300_000_000),
+                    min_ns: Some(1_100_000_000),
+                    max_ns: Some(1_350_000_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: Some(482),
+                        cpu_median_ms: Some(241),
+                        peak_memory_kb: Some(249_416),
+                        peak_memory_growth_kb: None,
+                        process_peak_memory_kb: Some(1_477_787),
+                        total_pss_kb: None,
+                        private_dirty_kb: None,
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        };
+
+        let markdown = render_markdown_summary(&summary);
+        let csv = render_csv_summary(&summary);
+
+        assert!(markdown.contains("243.57 MB"));
+        assert!(csv.contains(",482,241,249416,249416,1477787\n"));
     }
 
     #[test]
@@ -9611,6 +8440,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
                         peak_memory_kb: Some(654_321),
+                        peak_memory_growth_kb: Some(654_321),
+                        process_peak_memory_kb: Some(1_477_787),
                         total_pss_kb: Some(654_321),
                         private_dirty_kb: None,
                         native_heap_kb: None,
@@ -9623,7 +8454,11 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         assert!(markdown.contains("CPU median / iter"));
         assert!(markdown.contains("CPU total"));
         assert!(markdown.contains("CPU / wall"));
-        assert!(markdown.contains("Peak memory"));
+        assert!(markdown.contains("Peak growth"));
+        assert!(markdown.contains("Process peak"));
+        assert!(!markdown.contains("Provider peak"));
+        assert!(!markdown.contains("Absolute peak"));
+        assert!(!markdown.contains("Peak memory"));
         assert!(markdown.contains("241ms"));
         assert!(markdown.contains("482ms"));
         assert!(markdown.contains("7.7%"));
@@ -9654,6 +8489,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
                         peak_memory_kb: Some(654_321),
+                        peak_memory_growth_kb: Some(654_321),
+                        process_peak_memory_kb: Some(1_477_787),
                         total_pss_kb: None,
                         private_dirty_kb: None,
                         native_heap_kb: None,
@@ -9669,11 +8506,58 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         assert!(markdown.contains("CPU median / iter"));
         assert!(markdown.contains("CPU total"));
         assert!(markdown.contains("CPU / wall"));
-        assert!(markdown.contains("Peak memory"));
+        assert!(markdown.contains("Peak growth"));
+        assert!(markdown.contains("Process peak"));
+        assert!(!markdown.contains("Provider peak"));
+        assert!(!markdown.contains("Absolute peak"));
+        assert!(!markdown.contains("Peak memory"));
         assert!(markdown.contains("241ms"));
         assert!(markdown.contains("482ms"));
         assert!(markdown.contains("7.7%"));
         assert!(markdown.contains("638.99 MB"));
+    }
+
+    #[test]
+    fn render_markdown_summary_notes_large_process_memory_baseline_gap() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 5,
+            warmup: 1,
+            devices: vec!["Motorola Moto G9 Play-11.0".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "Motorola Moto G9 Play-11.0".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "sample_fns::fibonacci".to_string(),
+                    samples: 5,
+                    mean_ns: Some(1_250_000_000),
+                    median_ns: Some(1_200_000_000),
+                    p95_ns: Some(1_300_000_000),
+                    min_ns: Some(1_100_000_000),
+                    max_ns: Some(1_350_000_000),
+                    resource_usage: Some(BenchmarkResourceUsage {
+                        cpu_total_ms: None,
+                        cpu_median_ms: None,
+                        peak_memory_kb: Some(171_556),
+                        peak_memory_growth_kb: Some(171_556),
+                        process_peak_memory_kb: Some(1_477_787),
+                        total_pss_kb: Some(1_477_787),
+                        private_dirty_kb: Some(1_462_460),
+                        native_heap_kb: None,
+                        java_heap_kb: None,
+                    }),
+                }],
+            }],
+        });
+
+        assert!(markdown.contains("Peak growth"));
+        assert!(markdown.contains("Process peak"));
+        assert!(!markdown.contains("Provider peak"));
+        assert!(!markdown.contains("Absolute peak"));
+        assert!(markdown.contains(MEMORY_BASELINE_GAP_NOTE));
+        assert!(!markdown.contains("Peak memory"));
     }
 
     #[test]
@@ -9699,9 +8583,9 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                 vec![json!({
                     "function": "sample_fns::fibonacci",
                     "samples": [
-                        { "duration_ns": 1000, "cpu_time_ms": 19, "peak_memory_kb": 48 },
-                        { "duration_ns": 2000, "cpu_time_ms": 7, "peak_memory_kb": 96 },
-                        { "duration_ns": 3000, "cpu_time_ms": 11, "peak_memory_kb": 64 }
+                        { "duration_ns": 1000, "cpu_time_ms": 19, "peak_memory_kb": 48, "process_peak_memory_kb": 1048 },
+                        { "duration_ns": 2000, "cpu_time_ms": 7, "peak_memory_kb": 96, "process_peak_memory_kb": 1096 },
+                        { "duration_ns": 3000, "cpu_time_ms": 11, "peak_memory_kb": 64, "process_peak_memory_kb": 1064 }
                     ]
                 })],
             )])),
@@ -9717,6 +8601,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
         assert_eq!(usage.cpu_total_ms, Some(37));
         assert_eq!(usage.cpu_median_ms, Some(11));
         assert_eq!(usage.peak_memory_kb, Some(96));
+        assert_eq!(usage.peak_memory_growth_kb, Some(96));
+        assert_eq!(usage.process_peak_memory_kb, Some(1_096));
     }
 
     #[test]
@@ -9742,8 +8628,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                 vec![json!({
                     "function": "sample_fns::fibonacci",
                     "samples": [
-                        { "duration_ns": 1000, "cpu_time_ms": 10, "peak_memory_kb": 64 },
-                        { "duration_ns": 2000, "cpu_time_ms": 12, "peak_memory_kb": 72 }
+                        { "duration_ns": 1000, "cpu_time_ms": 10, "peak_memory_kb": 64, "process_peak_memory_kb": 1064 },
+                        { "duration_ns": 2000, "cpu_time_ms": 12, "peak_memory_kb": 72, "process_peak_memory_kb": 1072 }
                     ]
                 })],
             )])),
@@ -9769,6 +8655,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
             .expect("resource usage");
 
         assert_eq!(usage.peak_memory_kb, Some(72));
+        assert_eq!(usage.peak_memory_growth_kb, Some(72));
+        assert_eq!(usage.process_peak_memory_kb, Some(1_072));
     }
 
     #[test]
@@ -9896,6 +8784,84 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
             let messages: Vec<String> = errors.map(|e| e.to_string()).collect();
             panic!("ci schema validation failed: {}", messages.join(" | "));
         }
+    }
+
+    #[test]
+    fn example_summary_fixtures_validate_against_summary_schema() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let summary_schema_path = root.join("docs/schemas/summary-v1.schema.json");
+        let summary_schema: Value = serde_json::from_str(
+            &fs::read_to_string(&summary_schema_path).expect("read summary schema"),
+        )
+        .expect("parse summary schema");
+        let validator = JSONSchema::options()
+            .compile(&summary_schema)
+            .expect("compile summary schema");
+
+        for fixture in [
+            "examples/fixtures/basic/summary.json",
+            "examples/fixtures/ffi/summary.json",
+            "crates/mobench/tests/fixtures/ci-artifact-root/android/summary.json",
+        ] {
+            let fixture_path = root.join(fixture);
+            let value: Value = serde_json::from_str(
+                &fs::read_to_string(&fixture_path).expect("read summary fixture"),
+            )
+            .expect("parse summary fixture");
+
+            if let Err(errors) = validator.validate(&value) {
+                let messages: Vec<String> = errors.map(|e| e.to_string()).collect();
+                panic!(
+                    "{} failed summary schema validation: {}",
+                    fixture_path.display(),
+                    messages.join(" | ")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn basic_example_fixture_renders_stable_markdown_and_csv() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixture_path = root.join("examples/fixtures/basic/summary.json");
+        let value: Value =
+            serde_json::from_str(&fs::read_to_string(&fixture_path).expect("read fixture"))
+                .expect("parse fixture");
+        let summary = summary_report_from_value(&value).expect("parse summary report");
+
+        let markdown = render_markdown_summary(&summary);
+        assert_eq!(
+            markdown,
+            "\
+### Benchmark Summary
+
+- Generated: 2026-03-26T00:00:00Z
+- Target: Android
+- Function: multiple
+- Iterations/Warmup: 5 / 1
+- Devices: Google Pixel 8-14.0, Samsung Galaxy S23-14.0
+
+| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Google Pixel 8-14.0 | basic_benchmark::bench_fibonacci | 5 | 1 | 100.000ms | 500.000ms | - | - | - | - | - |
+| Google Pixel 8-14.0 | basic_benchmark::bench_checksum | 5 | 1 | 145.000ms | 725.000ms | - | - | - | - | - |
+| Samsung Galaxy S23-14.0 | basic_benchmark::bench_fibonacci | 5 | 1 | 94.000ms | 470.000ms | - | - | - | - | - |
+| Samsung Galaxy S23-14.0 | basic_benchmark::bench_checksum | 5 | 1 | 136.000ms | 680.000ms | - | - | - | - | - |
+
+"
+        );
+
+        let csv = render_csv_summary(&summary);
+        assert_eq!(
+            csv,
+            "\
+device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb
+Google Pixel 8-14.0,basic_benchmark::bench_fibonacci,5,100000000,100000000,105000000,95000000,105000000,,,,,
+Google Pixel 8-14.0,basic_benchmark::bench_checksum,5,145000000,145000000,151000000,140000000,151000000,,,,,
+Samsung Galaxy S23-14.0,basic_benchmark::bench_fibonacci,5,94000000,94000000,98000000,90000000,98000000,,,,,
+Samsung Galaxy S23-14.0,basic_benchmark::bench_checksum,5,136000000,136000000,140000000,132000000,140000000,,,,,
+"
+        );
     }
 
     #[test]
@@ -10238,8 +9204,8 @@ mod ci_merge_tests {
 
         assert!(markdown.starts_with("### Benchmark Summary\n"));
         assert!(markdown.contains("- Target: iOS"));
-        assert!(markdown.contains("| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak memory |"));
-        assert!(markdown.contains("| iPhone 13 | ffi_benchmark::bench_fibonacci | 5 | 1 | 0.017ms | 0.085ms | - | - | - | - |"));
+        assert!(markdown.contains("| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak |"));
+        assert!(markdown.contains("| iPhone 13 | ffi_benchmark::bench_fibonacci | 5 | 1 | 0.017ms | 0.085ms | - | - | - | - | - |"));
         assert!(!markdown.contains("### Device:"));
     }
 
@@ -10488,7 +9454,9 @@ mod ci_merge_tests {
         let resource_usage = &value["device_summaries"][0]["benchmarks"][0]["resource_usage"];
 
         assert_eq!(resource_usage["cpu_total_ms"], 482);
-        assert_eq!(resource_usage["peak_memory_kb"], 654321);
+        assert_eq!(resource_usage["peak_memory_kb"], Value::Null);
+        assert_eq!(resource_usage["peak_memory_growth_kb"], Value::Null);
+        assert_eq!(resource_usage["process_peak_memory_kb"], Value::Null);
         assert_eq!(resource_usage["total_pss_kb"], 654321);
         assert_eq!(resource_usage["private_dirty_kb"], 321000);
         assert_eq!(resource_usage["native_heap_kb"], 120000);
@@ -10496,7 +9464,7 @@ mod ci_merge_tests {
     }
 
     #[test]
-    fn build_summary_prefers_browserstack_peak_memory_for_ci_summary() {
+    fn build_summary_ignores_browserstack_peak_memory_for_ci_summary() {
         let spec = RunSpec {
             target: MobileTarget::Ios,
             function: "bench_nullifier_proving_only".into(),
@@ -10548,10 +9516,9 @@ mod ci_merge_tests {
 
         let summary = build_summary(&run_summary).expect("build summary");
         let value = serde_json::to_value(summary).expect("serialize summary");
-        let resource_usage = &value["device_summaries"][0]["benchmarks"][0]["resource_usage"];
+        let benchmark = &value["device_summaries"][0]["benchmarks"][0];
 
-        assert_eq!(resource_usage["peak_memory_kb"], 249416);
-        assert_eq!(resource_usage["cpu_total_ms"], Value::Null);
+        assert_eq!(benchmark["resource_usage"], Value::Null);
     }
 }
 
@@ -10643,12 +9610,13 @@ mod resource_usage_tests {
         assert_eq!(usage.private_dirty_kb, Some(2048));
         assert_eq!(usage.native_heap_kb, Some(1024));
         assert_eq!(usage.java_heap_kb, Some(512));
-        // peak_memory_kb derived from raw fields when no perf_metrics
-        assert!(usage.peak_memory_kb.is_some());
+        assert_eq!(usage.peak_memory_kb, None);
+        assert_eq!(usage.peak_memory_growth_kb, None);
+        assert_eq!(usage.process_peak_memory_kb, None);
     }
 
     #[test]
-    fn test_extract_resource_usage_with_perf_metrics_overrides_peak() {
+    fn test_extract_resource_usage_ignores_provider_peak() {
         let entry = json!({
             "resources": {
                 "total_pss_kb": 4096
@@ -10666,9 +9634,44 @@ mod resource_usage_tests {
         };
 
         let usage = extract_benchmark_resource_usage(&entry, Some(&perf)).unwrap();
-        // peak_memory_kb should come from perf_metrics (10.0 * 1024 = 10240)
-        assert_eq!(usage.peak_memory_kb, Some(10240));
+        assert_eq!(usage.peak_memory_kb, None);
+        assert_eq!(usage.peak_memory_growth_kb, None);
+        assert_eq!(usage.process_peak_memory_kb, None);
         assert_eq!(usage.total_pss_kb, Some(4096));
+    }
+
+    #[test]
+    fn test_extract_resource_usage_preserves_moto_growth_and_process_peak() {
+        let entry = json!({
+            "resources": {
+                "peak_memory_kb": 171556,
+                "process_peak_memory_kb": 1477787,
+                "total_pss_kb": 1477787,
+                "private_dirty_kb": 1462460,
+                "native_heap_kb": 532000,
+                "java_heap_kb": 212000
+            }
+        });
+        let perf = browserstack::PerformanceMetrics {
+            sample_count: 5,
+            memory: Some(browserstack::AggregateMemoryMetrics {
+                peak_mb: 1640.65,
+                average_mb: 1500.0,
+                min_mb: 1400.0,
+            }),
+            cpu: None,
+            snapshots: vec![],
+        };
+
+        let usage = extract_benchmark_resource_usage(&entry, Some(&perf)).unwrap();
+
+        assert_eq!(usage.peak_memory_growth_kb, Some(171_556));
+        assert_eq!(usage.peak_memory_kb, Some(171_556));
+        assert_eq!(usage.process_peak_memory_kb, Some(1_477_787));
+        assert_eq!(usage.total_pss_kb, Some(1_477_787));
+        assert_eq!(usage.private_dirty_kb, Some(1_462_460));
+        assert_eq!(usage.native_heap_kb, Some(532_000));
+        assert_eq!(usage.java_heap_kb, Some(212_000));
     }
 
     #[test]
@@ -10684,6 +9687,8 @@ mod resource_usage_tests {
             cpu_total_ms: Some(250),
             cpu_median_ms: Some(125),
             peak_memory_kb: Some(8192),
+            peak_memory_growth_kb: Some(8192),
+            process_peak_memory_kb: Some(12288),
             total_pss_kb: Some(4096),
             private_dirty_kb: Some(2048),
             native_heap_kb: Some(1024),
@@ -10696,6 +9701,8 @@ mod resource_usage_tests {
         assert_eq!(deserialized.cpu_total_ms, Some(250));
         assert_eq!(deserialized.cpu_median_ms, Some(125));
         assert_eq!(deserialized.peak_memory_kb, Some(8192));
+        assert_eq!(deserialized.peak_memory_growth_kb, Some(8192));
+        assert_eq!(deserialized.process_peak_memory_kb, Some(12288));
         assert_eq!(deserialized.total_pss_kb, Some(4096));
         assert_eq!(deserialized.private_dirty_kb, Some(2048));
         assert_eq!(deserialized.native_heap_kb, Some(1024));
@@ -10703,5 +9710,9 @@ mod resource_usage_tests {
 
         // java_heap_kb should be absent in JSON due to skip_serializing_if
         assert!(!json_str.contains("java_heap_kb"));
+        assert!(json_str.contains("peak_memory_kb"));
+        assert!(json_str.contains("peak_memory_growth_kb"));
+        assert!(json_str.contains("process_peak_memory_kb"));
+        assert!(!json_str.contains("absolute_peak_memory_kb"));
     }
 }
