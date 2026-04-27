@@ -6,6 +6,7 @@ This guide migrates custom BrowserStack benchmark CI flows to the standardized `
 
 - One-command orchestration via `cargo mobench ci run`
 - Stable contract outputs: `summary.json`, `summary.md`, `results.csv`
+- Optional local plot artifacts under `plots/*.svg`
 - Optional sticky PR comments and deterministic matrix resolution
 
 ## Old -> New Mapping
@@ -30,8 +31,8 @@ This guide migrates custom BrowserStack benchmark CI flows to the standardized `
 | Fixture setup | `cargo mobench fixture init` |
 | Fixture verify | `cargo mobench fixture verify --config bench-config.toml` |
 | Fixture cache key | `cargo mobench fixture cache-key --config bench-config.toml --format json` |
-| CI orchestration | `cargo mobench ci run --target both --function sample_fns::fibonacci --local-only` |
-| Summary markdown | `cargo mobench report summarize --summary target/mobench/ci/summary.json` |
+| CI orchestration | `cargo mobench ci run --target both --function sample_fns::fibonacci --local-only --plots auto` |
+| Summary markdown | `cargo mobench report summarize --summary target/mobench/ci/summary.json --plots auto` |
 | Sticky PR comment | `cargo mobench report github --pr 123 --summary target/mobench/ci/summary.json --publish` |
 
 ## Minimal Reference Workflow
@@ -55,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: aarch64-linux-android
       - uses: ./.github/actions/mobench
         with:
           command: cargo mobench ci run
@@ -74,11 +75,30 @@ jobs:
 - `command` is allow-listed to `cargo mobench ci run` and `cargo mobench run`.
 - `ci` only appends `--ci` when `command: cargo mobench run`.
 - Prefer multiline `run-args` with explicit quoting for values containing spaces.
+- If you call `.github/workflows/reusable-bench.yml` directly, the caller workflow should grant `actions: read` in addition to any PR-comment permissions so baseline artifact lookup can read prior workflow runs.
+
+### Summary output notes
+
+- `summary.json`, `summary.md`, and `results.csv` remain the stable required outputs.
+- `plots/*.svg` is additive and only appears when local plot rendering is enabled and a Python + Matplotlib runtime is available, or when `--plots require` is used successfully.
+- `summary.md` now renders a single top-level CI table with `Wall mean / iter`, `Wall total`, `CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, and `Process peak`.
+- The reusable workflow attempts to compare against the latest successful default-branch run by downloading its per-platform `summary.json` artifacts before calling `ci check-run`.
 
 ## Compatibility Notes
 
-- Contract docs: `docs/CONTRACT_CI_V1.md`
-- ADR: `docs/adr/0001-mobench-ci-contract-v1.md`
-- Schemas: `docs/schemas/summary-v1.schema.json`, `docs/schemas/ci-contract-v1.schema.json`
+- Versioned schemas: `docs/schemas/summary-v1.schema.json`, `docs/schemas/ci-contract-v1.schema.json`
+- Current release history and support status: `RELEASE_NOTES.md`
+- Current implementation reference: `README.md` and `docs/codebase/`
 
-Any change to required output files or metadata keys requires a contract-version bump.
+Any change to required output files or metadata keys requires updating the
+versioned schemas and documenting the compatibility impact in `RELEASE_NOTES.md`.
+### Summary/CSV contract updates
+
+- `summary.md` now renders a flat per-device table instead of per-device sections
+- CPU values in that table are shown as `CPU median / iter`, `CPU total`, and `CPU / wall`
+- `peak_memory_kb` remains the legacy baseline-adjusted growth field
+- `results.csv` now includes `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`, `peak_memory_growth_kb`, and `process_peak_memory_kb`
+- missing resource values are left blank in CSV output
+
+Any change to required output files or metadata keys requires updating the
+versioned schemas and documenting the compatibility impact in `RELEASE_NOTES.md`.

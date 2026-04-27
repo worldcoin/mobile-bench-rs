@@ -1,4 +1,4 @@
-name: Mobile Bench (manual)
+name: Mobile Bench
 
 on:
   workflow_dispatch:
@@ -6,173 +6,97 @@ on:
       platform:
         description: "android | ios | both"
         required: false
-        default: "android"
+        type: choice
+        default: both
+        options:
+          - android
+          - ios
+          - both
+      device_profile:
+        description: "BrowserStack device profile"
+        required: false
+        type: string
+        default: "low-spec"
+      crate_path:
+        description: "Benchmark crate fixture path"
+        required: false
+        type: string
+        default: "examples/ffi-benchmark"
+      functions:
+        description: "Comma-separated benchmark functions"
+        required: false
+        type: string
+        default: "ffi_benchmark::bench_fibonacci,ffi_benchmark::bench_checksum"
+      iterations:
+        description: "Number of benchmark iterations"
+        required: false
+        type: string
+        default: "50"
+      warmup:
+        description: "Number of warmup iterations"
+        required: false
+        type: string
+        default: "5"
+      mobench_version:
+        description: "Mobench version to install from crates.io when mobench_ref is unset"
+        required: false
+        type: string
+        default: ""
+      mobench_ref:
+        description: "Git ref for mobile-bench-rs to install instead of the caller path or crates.io version"
+        required: false
+        type: string
+        default: ""
+      pr_number:
+        description: "PR number for sticky comment publishing"
+        required: false
+        type: string
+        default: ""
+      head_sha:
+        description: "Exact commit SHA to benchmark"
+        required: false
+        type: string
+        default: ""
+      requested_by:
+        description: "Who triggered the run"
+        required: false
+        type: string
+        default: ""
 
 permissions:
-  contents: read
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: mobench-${{ inputs.pr_number != '' && inputs.pr_number || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  tests:
-    name: Host tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cargo test
-        run: cargo test --all
-
-      - name: Host benchmark summary
-        run: |
-          cargo run -p mobench -- run \
-            --target android \
-            --function sample_fns::fibonacci \
-            --iterations 5 \
-            --warmup 1 \
-            --local-only \
-            --output run-summary.json \
-            --summary-csv
-
-      - name: Publish host summary
-        if: ${{ always() }}
-        run: |
-          if [ -f run-summary.md ]; then
-            cat run-summary.md >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice title=Host benchmark summary::Published to job summary"
-          fi
-
-      - name: Upload host summaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: host-run-summary
-          path: |
-            run-summary.json
-            run-summary.md
-            run-summary.csv
-
-  android:
-    if: ${{ github.event.inputs.platform == 'android' || github.event.inputs.platform == 'both' || github.event.inputs.platform == '' }}
-    name: Android build (APK)
-    needs: tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Setup Android SDK/NDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-34
-            build-tools;34.0.0
-            ndk;26.1.10909125
-
-      - name: Build Android artifacts
-        run: cargo mobench build --target android
-
-      - name: Setup Gradle
-        uses: gradle/gradle-build-action@v3
-        with:
-          gradle-version: 8.7
-
-      - name: Assemble APK
-        working-directory: target/mobench/android
-        run: gradle :app:assembleDebug
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mobile-bench-android-apk
-          path: target/mobench/android/app/build/outputs/apk/debug/*.apk
-
-  ios:
-    if: ${{ github.event.inputs.platform == 'ios' || github.event.inputs.platform == 'both' || github.event.inputs.platform == '' }}
-    name: iOS xcframework
-    needs: tests
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim
-
-      - name: Build iOS xcframework + header
-        run: cargo mobench build --target ios
-
-      - name: Upload iOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: mobile-bench-ios
-          path: target/mobench/ios/sample_fns.xcframework
-
-  browserstack:
-    name: BrowserStack run
-    needs: android
-    if: ${{ secrets.BROWSERSTACK_USERNAME != '' && secrets.BROWSERSTACK_ACCESS_KEY != '' }}
-    runs-on: ubuntu-latest
-    env:
+  benchmark:
+    name: Example fixture benchmark
+    uses: ./.github/workflows/reusable-bench.yml
+    with:
+      crate_path: ${{ inputs.crate_path }}
+      functions: ${{ inputs.functions }}
+      platform: ${{ inputs.platform }}
+      device_profile: ${{ inputs.device_profile }}
+      iterations: ${{ inputs.iterations }}
+      warmup: ${{ inputs.warmup }}
+      mobench_version: ${{ inputs.mobench_version }}
+      mobench_ref: ${{ inputs.mobench_ref }}
+      build_release: true
+      pr_number: ${{ inputs.pr_number }}
+      requested_by: ${{ inputs.requested_by }}
+      head_sha: ${{ inputs.head_sha }}
+      check_run_name: "Mobench Fixtures"
+      regression_threshold_pct: "1000.0"
+    secrets:
       BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
       BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Setup Android SDK/NDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-34
-            build-tools;34.0.0
-            ndk;26.1.10909125
-
-      - name: BrowserStack benchmark run
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
-        run: |
-          cargo run -p mobench -- run \
-            --target android \
-            --function sample_fns::fibonacci \
-            --iterations 5 \
-            --warmup 1 \
-            --devices "Pixel 7-13" \
-            --fetch \
-            --output run-summary.json \
-            --summary-csv
-
-      - name: Publish BrowserStack summary
-        if: ${{ always() }}
-        run: |
-          if [ -f run-summary.md ]; then
-            cat run-summary.md >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice title=BrowserStack benchmark summary::Published to job summary"
-          fi
-
-      - name: Upload BrowserStack summaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: browserstack-run-summary
-          path: |
-            run-summary.json
-            run-summary.md
-            run-summary.csv
-            target/browserstack
+      MOBENCH_APP_PRIVATE_KEY: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
+      MOBENCH_APP_ID: ${{ secrets.MOBENCH_APP_ID }}

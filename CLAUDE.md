@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-mobile-bench-rs (now **mobench**) is a mobile benchmarking SDK for Rust that enables developers to benchmark Rust functions on real Android and iOS devices via BrowserStack. It provides a library-first design with a `#[benchmark]` attribute macro and CLI tools for building, testing, and running benchmarks.
+mobile-bench-rs (now **mobench**) is a mobile benchmarking toolkit for Rust. It supports benchmark execution on local devices or BrowserStack and local-first native profiling on Android and iOS. It provides a library-first design with a `#[benchmark]` attribute macro plus CLI tools for building, testing, running, reporting, and profiling benchmarks.
 
-**Published on crates.io as the mobench ecosystem (v0.1.14):**
+**Release candidate workspace version: v0.1.36. Latest published supported release: v0.1.35.**
 
 - **[mobench](https://crates.io/crates/mobench)** - CLI tool for mobile benchmarking
 - **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK library with timing harness and build automation
@@ -70,10 +70,11 @@ The CLI supports both Espresso (Android) and XCUITest (iOS) test automation fram
 
 **Primary Documentation:**
 
-- **`BUILD.md`**: Complete build reference with prerequisites, step-by-step instructions, and troubleshooting for both Android and iOS
-- **`TESTING.md`**: Comprehensive testing guide with advanced scenarios and detailed troubleshooting
+- **`docs/guides/build.md`**: Complete build reference with prerequisites, step-by-step instructions, and troubleshooting for both Android and iOS
+- **`docs/guides/testing.md`**: Comprehensive testing guide with advanced scenarios and detailed troubleshooting
+- **`docs/guides/sdk-integration.md`**: Integration guide for SDK users
 
-For comprehensive testing instructions, see **`TESTING.md`** which includes:
+For comprehensive testing instructions, see **`docs/guides/testing.md`** which includes:
 
 - Prerequisites and setup
 - Host testing (cargo test)
@@ -180,34 +181,38 @@ cargo mobench verify --target android --check-artifacts
 Use `cargo mobench build --target <android|ios>` for local or CI builds. The CLI handles
 library builds, binding generation, and app packaging without extra scripts.
 
+Build/run/list/verify/package commands resolve the benchmark crate and project root from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`.
+
 **Important iOS Build Details:**
 
 The mobench iOS builder creates an xcframework with the following structure (default output directory is `target/mobench/`):
 
 ```
-target/mobench/ios/sample_fns.xcframework/
+target/mobench/ios/<library_name>.xcframework/
 ├── Info.plist                           # XCFramework manifest
 ├── ios-arm64/                           # Device slice
-│   └── sample_fns.framework/
-│       ├── sample_fns                   # Static library (libsample_fns.a)
+│   └── <library_name>.framework/
+│       ├── <library_name>               # Static library (lib<library_name>.a)
 │       ├── Headers/
-│       │   ├── sample_fnsFFI.h         # UniFFI-generated C header
+│       │   ├── <library_name>FFI.h     # UniFFI-generated C header
 │       │   └── module.modulemap        # Module map for Swift import
 │       └── Info.plist
 └── ios-simulator-arm64/                 # Simulator slice (M1+ Macs)
-    └── sample_fns.framework/
-        ├── sample_fns                   # Static library (libsample_fns.a)
+    └── <library_name>.framework/
+        ├── <library_name>               # Static library (lib<library_name>.a)
         ├── Headers/
-        │   ├── sample_fnsFFI.h
+        │   ├── <library_name>FFI.h
         │   └── module.modulemap
         └── Info.plist
 ```
 
+The output name comes from `[project].library_name` or the resolved crate name. The sample project still emits `sample_fns.xcframework`.
+
 **Key Configuration Details:**
 
-- Framework binary must be named `sample_fns` (the module name), not the platform identifier
-- Each framework slice must be in `{LibraryIdentifier}/sample_fns.framework/` directory structure
-- Module map defines the C module as `sample_fnsFFI` (matches what UniFFI-generated Swift code imports)
+- Framework binary must be named after the resolved library name, not the platform identifier
+- Each framework slice must be in `{LibraryIdentifier}/<library_name>.framework/` directory structure
+- Module map defines the C module as `<library_name>FFI` (matches what UniFFI-generated Swift code imports)
 - Info.plist uses `iPhoneOS`/`iPhoneSimulator` platform identifiers with `SupportedPlatformVariant`
 - Framework bundle ID is `dev.world.sample-fns` (must not conflict with app bundle ID `dev.world.bench`)
 - The Xcode project uses a bridging header (`BenchRunner-Bridging-Header.h`) to expose C FFI types to Swift
@@ -216,7 +221,7 @@ target/mobench/ios/sample_fns.xcframework/
 **Automatic Code Signing**: The build step automatically signs the xcframework with:
 
 ```bash
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 ```
 
 If automatic signing fails, the script will display a warning with instructions for manual signing.
@@ -414,7 +419,7 @@ fn my_expensive_operation() {
 
 The macro automatically registers functions at compile time via the `inventory` crate.
 
-**Setup and Teardown (v0.1.13+)**: The `#[benchmark]` macro supports setup and teardown for excluding expensive initialization from timing:
+**Setup and teardown**: The `#[benchmark]` macro supports setup and teardown for excluding expensive initialization from timing:
 
 ```rust
 // Setup runs once before all iterations (not measured)
@@ -446,7 +451,7 @@ fn db_query(db: &Database) {
 }
 ```
 
-**Macro Validation (v0.1.13+)**: The `#[benchmark]` macro validates function signatures at compile time:
+**Macro validation**: The `#[benchmark]` macro validates function signatures at compile time:
 - Simple benchmarks: no parameters, returns `()`
 - With setup: one parameter matching setup return type
 - Compile errors include helpful messages about requirements
@@ -549,7 +554,7 @@ Credentials are resolved in this order:
 2. Environment variables: `BROWSERSTACK_USERNAME`, `BROWSERSTACK_ACCESS_KEY`, `BROWSERSTACK_PROJECT`
 3. `.env.local` file (loaded automatically via `dotenvy`)
 
-**Improved Error Messages (v0.1.13+)**: Missing credentials now show setup instructions:
+**Credential error messages**: Missing credentials now show setup instructions:
 - Instructions for setting environment variables
 - Link to BrowserStack account settings page
 - Hints for `.env.local` file setup
@@ -590,7 +595,7 @@ The workflow supports manual dispatch with platform selection:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1"
+mobench-sdk = "0.1.36"
 inventory = "0.3"
 ```
 
@@ -658,7 +663,7 @@ The mobench iOS builder manually constructs an xcframework (not using `xcodebuil
 
 6. **Static vs Dynamic**: The xcframework contains static libraries (`.a` archives built with `staticlib` crate-type), not dynamic frameworks. This requires a bridging header in the Xcode project to expose C types to Swift.
 
-7. **Code Signing**: After building, the xcframework must be code-signed for Xcode to accept it: `codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework`
+7. **Code Signing**: After building, the xcframework must be code-signed for Xcode to accept it: `codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework`
 
 ### Gradle Integration (Android)
 
@@ -702,12 +707,12 @@ devices:
 
 ## Common iOS Build Issues and Solutions
 
-### Issue: "The Framework 'sample_fns.xcframework' is unsigned"
+### Issue: "The Framework '<library_name>.xcframework' is unsigned"
 
 **Solution**: Code-sign the xcframework after building:
 
 ```bash
-codesign --force --deep --sign - target/mobench/ios/sample_fns.xcframework
+codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
 ```
 
 ### Issue: "While building for iOS Simulator, no library for this platform was found"
@@ -792,10 +797,12 @@ ios-simulator-arm64/sample_fns.framework/  (not ios-simulator-arm64.framework/)
 
 ### Documentation
 
-- **`BUILD.md`**: Complete build reference with prerequisites and troubleshooting
-- **`TESTING.md`**: Comprehensive testing guide with detailed troubleshooting
-- **`BENCH_SDK_INTEGRATION.md`**: Integration guide for SDK users
-- **`PROJECT_PLAN.md`**: Goals, architecture, task backlog
+- **`docs/guides/build.md`**: Complete build reference with prerequisites and troubleshooting
+- **`docs/guides/testing.md`**: Comprehensive testing guide with detailed troubleshooting
+- **`docs/guides/sdk-integration.md`**: Integration guide for SDK users
+- **`docs/guides/browserstack-ci.md`**: BrowserStack benchmark execution and CI guidance
+- **`docs/codebase/ARCHITECTURE.md`**: Current architecture reference
+- **`RELEASE_NOTES.md`**: Published release history and support status
 - **`CLAUDE.md`**: This file - developer guide for the codebase
 
 ### Build Tooling

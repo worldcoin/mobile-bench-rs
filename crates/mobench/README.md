@@ -1,8 +1,8 @@
 # mobench
 
-Mobile benchmarking CLI for Rust - Run benchmarks on real Android and iOS devices.
+Mobile benchmarking CLI for Rust.
 
-The `mobench` CLI is the easiest way to benchmark your Rust code on mobile devices. It handles everything from project setup to building mobile apps to running tests on real devices via BrowserStack.
+The `mobench` CLI handles project setup, mobile artifact builds, benchmark execution, result reporting, and local native profiling for Android and iOS. Benchmark execution can run locally or on BrowserStack. Native profiling is currently local-first.
 
 ## Installation
 
@@ -44,6 +44,8 @@ This creates:
 - `bench-config.toml` - Run configuration file
 - `mobench.toml` - Project configuration file (when using `init`)
 - `benches/example.rs` - Example benchmarks (with `--examples`)
+
+Generated scaffolding still uses `bench-mobile/` by default, but existing repositories can point mobench at any benchmark crate through `mobench.toml`, `--project-root`, or `--crate-path`.
 
 ### 2. Write Benchmarks
 
@@ -99,6 +101,31 @@ cargo mobench run \
 
 **Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
 
+### 5. Run a Local Profiling Session
+
+```bash
+# Capture a local Android native profile
+cargo mobench profile run \
+  --target android \
+  --function fibonacci_30 \
+  --provider local \
+  --backend android-native
+
+# Summarize the latest profile session
+cargo mobench profile summarize \
+  --profile target/mobench/profile/profile.json
+```
+
+Local profile runs now attempt real native capture for:
+
+- `local + android-native`: `simpleperf`, symbolized folded stacks, `native-report.txt`, full/focused SVGs, and `flamegraph.html`
+- `local + ios-instruments`: simulator-host `sample`, folded stacks, `native-report.txt`, full/focused SVGs, and `flamegraph.html`
+
+Each run writes a normalized manifest under `target/mobench/profile/<run-id>/`
+and refreshes `target/mobench/profile/profile.json` plus `summary.md` as
+latest-run convenience copies. BrowserStack native profiling remains explicitly
+unsupported in this release.
+
 ## Commands
 
 ### `init` - Initialize Project
@@ -130,7 +157,8 @@ cargo mobench build --target <android|ios> [OPTIONS]
 - `--target <android|ios>` - Platform to build for (required)
 - `--release` - Build in release mode (default: debug)
 - `--output-dir <DIR>` - Output directory for mobile artifacts (default: `target/mobench/`)
-- `--crate-path <PATH>` - Path to the benchmark crate (default: auto-detect)
+- `--project-root <PATH>` - Project root containing `mobench.toml` or the Cargo workspace
+- `--crate-path <PATH>` - Path to the benchmark crate (default: resolve from flags, `mobench.toml`, workspace, or git root)
 - `--dry-run` - Print what would be done without making changes
 - `--verbose` / `-v` - Print verbose output including all commands
 
@@ -154,7 +182,7 @@ cargo mobench build --target android --output-dir ./my-output
 
 **Outputs:**
 - Android: `target/mobench/android/app/build/outputs/apk/debug/app-debug.apk`
-- iOS: `target/mobench/ios/sample_fns.xcframework`
+- iOS: `target/mobench/ios/<library_name>.xcframework` (derived from `[project].library_name` or the resolved crate name)
 
 ### `run` - Run Benchmarks
 
@@ -167,6 +195,8 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 **Options:**
 - `--target <android|ios>` - Platform (required)
 - `--function <NAME>` - Benchmark function name (required)
+- `--project-root <PATH>` - Project root containing `mobench.toml` or the Cargo workspace
+- `--crate-path <PATH>` - Path to the benchmark crate directory containing `Cargo.toml`
 - `--iterations <N>` - Number of iterations (default: 100)
 - `--warmup <N>` - Warmup iterations (default: 10)
 - `--devices <LIST>` - Comma-separated device list for BrowserStack
@@ -193,6 +223,14 @@ cargo mobench run --target <android|ios> --function <NAME> [OPTIONS]
 ```bash
 # Run locally (no BrowserStack devices specified)
 cargo mobench run --target android --function fibonacci_30
+
+# Run from a custom workspace layout
+cargo mobench run \
+  --project-root . \
+  --crate-path ./crates/zk-mobile-bench \
+  --target ios \
+  --function zk_mobile_bench::bench_query_proof_generation \
+  --dry-run
 
 # Run on BrowserStack devices (use --release for smaller APK)
 cargo mobench run \
@@ -225,6 +263,19 @@ cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 - `summary.md`
 - `results.csv`
 
+`summary.md` renders one top-level table with `Wall mean / iter`, `Wall total`,
+`CPU median / iter`, `CPU total`, `CPU / wall`, `Peak growth`, and
+`Process peak`.
+
+`results.csv` includes:
+- `cpu_total_ms`
+- `cpu_median_ms`
+- `peak_memory_kb` (legacy alias for peak growth)
+- `peak_memory_growth_kb`
+- `process_peak_memory_kb` (Android uses an isolated benchmark worker process; other targets use the benchmark app process)
+
+Blank fields indicate that a resource metric was not available for that benchmark/device row.
+
 `summary.json` includes a `ci` section with metadata fields:
 - `requested_by`
 - `pr_number`
@@ -232,10 +283,11 @@ cargo mobench ci run --target <android|ios|both> --function <NAME> [OPTIONS]
 - `mobench_ref`
 - `mobench_version`
 
-Contract references:
-- `docs/CONTRACT_CI_V1.md`
-- `docs/schemas/summary-v1.schema.json`
-- `docs/schemas/ci-contract-v1.schema.json`
+Stable output references:
+- `https://github.com/worldcoin/mobile-bench-rs/blob/dev/README.md` CI section
+- `https://github.com/worldcoin/mobile-bench-rs/blob/dev/docs/schemas/summary-v1.schema.json`
+- `https://github.com/worldcoin/mobile-bench-rs/blob/dev/docs/schemas/ci-contract-v1.schema.json`
+- `https://github.com/worldcoin/mobile-bench-rs/blob/dev/RELEASE_NOTES.md`
 
 **Example:**
 ```bash
@@ -309,6 +361,8 @@ cargo mobench package-ipa [OPTIONS]
 **Options:**
 - `--scheme <NAME>` - Xcode scheme (default: BenchRunner)
 - `--method <adhoc|development>` - Signing method (default: adhoc)
+- `--project-root <PATH>` - Project root containing `mobench.toml` or the Cargo workspace
+- `--crate-path <PATH>` - Path to the benchmark crate directory containing `Cargo.toml`
 
 **Example:**
 ```bash
@@ -327,6 +381,8 @@ cargo mobench package-xcuitest [OPTIONS]
 
 **Options:**
 - `--scheme <NAME>` - Xcode scheme for UI tests (default: BenchRunnerUITests)
+- `--project-root <PATH>` - Project root containing `mobench.toml` or the Cargo workspace
+- `--crate-path <PATH>` - Path to the benchmark crate directory containing `Cargo.toml`
 
 **Example:**
 ```bash
@@ -370,7 +426,26 @@ Show benchmarks discovered via `#[benchmark]`:
 
 ```bash
 cargo mobench list
+cargo mobench list --project-root . --crate-path ./crates/zk-mobile-bench
 ```
+
+`list` uses the same config-first resolver as `build` and `run`, so custom crate names from `mobench.toml` are discovered without a `bench-mobile/` directory.
+
+### `verify` - Validate Benchmark Setup
+
+Validate registry, spec files, build artifacts, and optional smoke tests:
+
+```bash
+cargo mobench verify --target android --check-artifacts --function zk_mobile_bench::bench_query_proof_generation
+```
+
+**Options:**
+- `--project-root <PATH>` - Project root containing `mobench.toml` or the Cargo workspace
+- `--crate-path <PATH>` - Path to the benchmark crate directory containing `Cargo.toml`
+- `--check-artifacts` - Validate resolved build outputs
+- `--smoke-test` - Run a local minimal-iteration smoke test when supported
+
+`verify --smoke-test` only works for benchmark crates linked into the `mobench` CLI binary. For external crates resolved through `mobench.toml`, `--project-root`, or `--crate-path`, use `cargo mobench list` plus `cargo mobench verify --check-artifacts`.
 
 ### `fetch` - Fetch Results
 
@@ -438,10 +513,10 @@ mobench automatically loads `mobench.toml` from the current directory or any par
 ```toml
 [project]
 # Name of the benchmark crate
-crate = "bench-mobile"
+crate = "zk-mobile-bench"
 
 # Rust library name (typically crate name with hyphens replaced by underscores)
-library_name = "bench_mobile"
+library_name = "zk_mobile_bench"
 
 # Output directory for build artifacts (default: target/mobench/)
 # output_dir = "target/mobench"
@@ -478,6 +553,7 @@ default_warmup = 10
 ```
 
 CLI flags always override config file values when provided.
+Resolution precedence is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 ### Run Config File Format (`bench-config.toml`)
 
@@ -739,8 +815,8 @@ cargo mobench package-ipa --method adhoc
 Verify credentials:
 
 ```bash
-echo $BROWSERSTACK_USERNAME
-echo $BROWSERSTACK_ACCESS_KEY
+test -n "$BROWSERSTACK_USERNAME" && echo "BROWSERSTACK_USERNAME is set"
+test -n "$BROWSERSTACK_ACCESS_KEY" && echo "BROWSERSTACK_ACCESS_KEY is set"
 ```
 
 Or check `.env.local` file exists and contains valid credentials.

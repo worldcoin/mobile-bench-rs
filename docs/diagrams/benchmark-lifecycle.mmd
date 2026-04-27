@@ -1,0 +1,16 @@
+sequenceDiagram
+    participant Dev as Developer
+    participant CLI as mobench CLI
+    participant SDK as mobench-sdk
+    participant App as Generated mobile app
+    participant Device as Device or BrowserStack
+    participant Reports as Reports
+
+    Dev->>CLI: cargo mobench run
+    CLI->>SDK: resolve crate and benchmark spec
+    SDK->>SDK: build native libraries and generate bindings
+    SDK->>App: embed bench_spec.json and templates
+    CLI->>Device: install/upload and start run
+    Device->>App: execute benchmark function
+    App->>CLI: emit BenchReport JSON
+    CLI->>Reports: write summary.json, summary.md, results.csv

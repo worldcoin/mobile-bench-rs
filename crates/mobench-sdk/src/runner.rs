@@ -24,17 +24,16 @@ use crate::types::{BenchError, RunnerReport};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use mobench_sdk::{BenchSpec, run_benchmark};
 ///
-/// let spec = BenchSpec {
-///     name: "my_benchmark".to_string(),
-///     iterations: 100,
-///     warmup: 10,
-/// };
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let spec = BenchSpec::new("my_benchmark", 100, 10)?;
 ///
-/// let report = run_benchmark(spec)?;
-/// println!("Mean: {} ns", report.mean());
+///     let report = run_benchmark(spec)?;
+///     println!("Mean: {} ns", report.mean_ns());
+///     Ok(())
+/// }
 /// ```
 pub fn run_benchmark(spec: BenchSpec) -> Result<RunnerReport, BenchError> {
     // Find the benchmark function in the registry
@@ -58,13 +57,18 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<RunnerReport, BenchError> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use mobench_sdk::BenchmarkBuilder;
 ///
-/// let report = BenchmarkBuilder::new("my_benchmark")
-///     .iterations(100)
-///     .warmup(10)
-///     .run()?;
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let report = BenchmarkBuilder::new("my_benchmark")
+///         .iterations(100)
+///         .warmup(10)
+///         .run()?;
+///
+///     println!("Median: {} ns", report.median_ns());
+///     Ok(())
+/// }
 /// ```
 #[derive(Debug, Clone)]
 pub struct BenchmarkBuilder {

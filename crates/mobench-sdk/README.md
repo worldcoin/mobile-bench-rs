@@ -1,8 +1,8 @@
 # mobench-sdk
 
-Mobile benchmarking SDK for Rust - run benchmarks on real Android and iOS devices.
+Mobile benchmarking SDK for Rust.
 
-Transform your Rust project into a mobile benchmarking suite. This SDK provides everything you need to benchmark your Rust code on real mobile devices via BrowserStack or local emulators/simulators.
+Transform your Rust project into a mobile benchmarking suite. The SDK provides the timing/runtime layer, registry, builders, and generated mobile runners used by the `mobench` CLI for local execution, BrowserStack benchmark runs, and local native profiling.
 
 ## Features
 
@@ -12,9 +12,11 @@ Transform your Rust project into a mobile benchmarking suite. This SDK provides 
 - **Mobile app generation**: Create Android/iOS apps from templates
 - **Build automation**: Cross-compile and package for mobile platforms
 - **Statistical analysis**: Mean, median, stddev, percentiles
-- **BrowserStack integration**: Test on real devices in the cloud
+- **Semantic profiling phases**: Annotate benchmark sub-steps with `profile_phase(...)`
+- **BrowserStack benchmark integration**: Run timing benchmarks on real devices in the cloud
 - **UniFFI bindings**: Automatic FFI generation for mobile platforms
 - **Configuration file support**: `mobench.toml` for project settings
+- **Config-first CLI integration**: the CLI resolves project root, crate name, and library name from flags, `mobench.toml`, workspace metadata, or git root
 
 ## Quick Start
 
@@ -22,7 +24,15 @@ Add mobench-sdk to your project:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1"
+mobench-sdk = "0.1.37"
+```
+
+For benchmark crates that only need `#[benchmark]`, registry discovery, and
+runtime execution, use the narrower registry feature:
+
+```toml
+[dependencies]
+mobench-sdk = { version = "0.1.37", default-features = false, features = ["registry"] }
 ```
 
 Mark functions to benchmark:
@@ -62,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Mean: {} ns", report.mean_ns());
     println!("Median: {} ns", report.median_ns());
-    println!("Std dev: {} ns", report.stddev_ns());
+    println!("Std dev: {} ns", report.std_dev_ns());
 
     Ok(())
 }
@@ -85,6 +95,8 @@ This creates:
 - `android/` or `ios/` - Mobile app projects
 - `bench-config.toml` - Configuration file
 
+The generated `bench-mobile/` crate is still the default scaffold, but the CLI can also target existing custom crate layouts through `mobench.toml`, `--project-root`, and `--crate-path`.
+
 ### 2. Add Benchmarks
 
 ```rust
@@ -101,6 +113,9 @@ fn my_benchmark() {
 ```bash
 # Build to default output directory (target/mobench/)
 cargo mobench build --target android
+
+# Build a custom crate from repo root
+cargo mobench build --target ios --project-root . --crate-path ./crates/zk-mobile-bench
 
 # Or with verbose output
 cargo mobench build --target android --verbose
@@ -127,6 +142,21 @@ export BROWSERSTACK_ACCESS_KEY=your_key
 cargo mobench run --target android --function my_benchmark \
   --devices "Google Pixel 7-13.0" --release
 ```
+
+Local profiling:
+
+```bash
+cargo mobench profile run \
+  --target android \
+  --provider local \
+  --backend android-native \
+  --crate-path ./crates/my-benchmarks \
+  --function my_benchmark
+```
+
+When the benchmark emits semantic phases with `mobench_sdk::timing::profile_phase(...)`,
+the CLI merges those phase timings into the profile manifest and summary next to the
+native stack artifacts.
 
 ## Examples (Repository)
 
@@ -191,7 +221,7 @@ impl RunnerReport {
     pub fn median_ns(&self) -> u64;
     pub fn min_ns(&self) -> u64;
     pub fn max_ns(&self) -> u64;
-    pub fn stddev_ns(&self) -> f64;
+    pub fn std_dev_ns(&self) -> f64;
     pub fn percentile(&self, p: f64) -> u64;
 }
 ```
@@ -366,8 +396,8 @@ mobench automatically loads `mobench.toml` from the current directory or parent 
 
 ```toml
 [project]
-crate = "bench-mobile"
-library_name = "bench_mobile"
+crate = "zk-mobile-bench"
+library_name = "zk_mobile_bench"
 # output_dir = "target/mobench"  # default
 
 [android]
@@ -384,6 +414,8 @@ default_function = "my_crate::my_benchmark"
 default_iterations = 100
 default_warmup = 10
 ```
+
+Resolution precedence is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 
 ### `bench-config.toml` (Run Configuration)
 

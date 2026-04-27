@@ -3,6 +3,7 @@ name = "mobench-sdk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
 description = "Rust SDK for mobile benchmarking with timing harness and Android/iOS builders"
 repository = "https://github.com/worldcoin/mobile-bench-rs"
@@ -26,13 +27,19 @@ crate-type = ["lib"]
 [features]
 default = ["full"]
 # Full SDK with build automation, templates, and registry
-full = ["dep:mobench-macros", "dep:inventory", "dep:include_dir", "dep:toml", "dep:anyhow"]
+full = ["registry", "builders", "codegen"]
+# Benchmark macro, inventory registry, and runtime execution without build tooling
+registry = ["dep:mobench-macros", "dep:inventory"]
+# Mobile build automation; depends on codegen because builders refresh app templates
+builders = ["codegen", "dep:toml"]
+# Project and mobile template generation
+codegen = ["dep:include_dir", "dep:toml"]
 # Minimal timing-only mode for mobile binaries (small footprint)
 runner-only = []
 
 [dependencies]
 # Proc macros (only with full feature)
-mobench-macros = { version = "0.1.14", path = "../mobench-macros", optional = true }
+mobench-macros = { workspace = true, optional = true }
 
 # Registry (only with full feature)
 inventory = { workspace = true, optional = true }
@@ -40,10 +47,10 @@ inventory = { workspace = true, optional = true }
 # Serialization (always needed for BenchSpec/BenchReport)
 serde.workspace = true
 serde_json.workspace = true
+libc = "0.2"
 
 # Error handling
 thiserror.workspace = true
-anyhow = { workspace = true, optional = true }
 
 # Template embedding (only with full feature)
 include_dir = { workspace = true, optional = true }

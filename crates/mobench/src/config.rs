@@ -56,6 +56,9 @@ pub struct MobenchConfig {
 
     /// Benchmark execution defaults.
     pub benchmarks: BenchmarksConfig,
+
+    /// Optional BrowserStack-specific configuration.
+    pub browserstack: BrowserStackConfig,
 }
 
 /// Project-level configuration.
@@ -102,7 +105,7 @@ pub struct AndroidConfig {
 
     /// Android ABIs to build for.
     ///
-    /// Defaults to ["arm64-v8a", "armeabi-v7a", "x86_64"].
+    /// Defaults to ["arm64-v8a"].
     pub abis: Option<Vec<String>>,
 }
 
@@ -175,6 +178,14 @@ impl Default for BenchmarksConfig {
             default_warmup: 10,
         }
     }
+}
+
+/// BrowserStack-specific configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserStackConfig {
+    /// Timeout in seconds for the generated iOS XCUITest harness to wait for benchmark completion.
+    pub ios_completion_timeout_secs: Option<u64>,
 }
 
 impl MobenchConfig {
@@ -315,6 +326,7 @@ impl MobenchConfig {
                 default_iterations: 100,
                 default_warmup: 10,
             },
+            browserstack: BrowserStackConfig::default(),
         }
     }
 
@@ -358,8 +370,8 @@ min_sdk = 24
 # Target Android SDK version (default: 34 / Android 14)
 target_sdk = 34
 
-# Android ABIs to build for (optional, defaults to all supported ABIs)
-# abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
+# Android ABIs to build for (optional, defaults to arm64-v8a)
+# abis = ["arm64-v8a"]
 
 [ios]
 # iOS bundle identifier
@@ -380,6 +392,10 @@ default_iterations = 100
 
 # Default number of warmup iterations (can be overridden with --warmup)
 default_warmup = 10
+
+[browserstack]
+# Timeout in seconds for the generated iOS XCUITest harness to wait for completion
+# ios_completion_timeout_secs = 1200
 "#,
             crate_name = crate_name,
             library_name = library_name,
@@ -511,6 +527,7 @@ mod tests {
         assert_eq!(config.ios.deployment_target, "15.0");
         assert_eq!(config.benchmarks.default_iterations, 100);
         assert_eq!(config.benchmarks.default_warmup, 10);
+        assert_eq!(config.browserstack.ios_completion_timeout_secs, None);
     }
 
     #[test]
@@ -520,6 +537,7 @@ mod tests {
         assert_eq!(config.project.library_name, Some("my_bench".to_string()));
         assert_eq!(config.android.package, "dev.world.mybench");
         assert_eq!(config.ios.bundle_id, "dev.world.mybench");
+        assert_eq!(config.browserstack.ios_completion_timeout_secs, None);
     }
 
     #[test]
@@ -545,6 +563,9 @@ deployment_target = "14.0"
 default_function = "test_bench::test_fn"
 default_iterations = 50
 default_warmup = 5
+
+[browserstack]
+ios_completion_timeout_secs = 1200
 "#;
 
         let mut file = std::fs::File::create(&config_path).unwrap();
@@ -565,6 +586,7 @@ default_warmup = 5
         );
         assert_eq!(config.benchmarks.default_iterations, 50);
         assert_eq!(config.benchmarks.default_warmup, 5);
+        assert_eq!(config.browserstack.ios_completion_timeout_secs, Some(1200));
     }
 
     #[test]
@@ -627,5 +649,7 @@ crate = "discovered-bench"
         assert!(toml.contains("deployment_target = \"15.0\""));
         assert!(toml.contains("default_iterations = 100"));
         assert!(toml.contains("default_warmup = 10"));
+        assert!(toml.contains("[browserstack]"));
+        assert!(toml.contains("ios_completion_timeout_secs"));
     }
 }

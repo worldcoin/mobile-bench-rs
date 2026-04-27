@@ -1,0 +1,84 @@
+{
+  "summary": {
+    "generated_at": "2026-03-26T00:00:00Z",
+    "generated_at_unix": 1774483200,
+    "target": "android",
+    "function": "multiple",
+    "iterations": 5,
+    "warmup": 1,
+    "devices": [
+      "Google Pixel 8 Pro-14.0",
+      "OnePlus 12-14.0"
+    ],
+    "device_summaries": [
+      {
+        "device": "Google Pixel 8 Pro-14.0",
+        "benchmarks": [
+          {
+            "function": "ffi_benchmark::bench_fibonacci",
+            "samples": 5,
+            "mean_ns": 112000000,
+            "median_ns": 112000000,
+            "p95_ns": 118000000,
+            "min_ns": 108000000,
+            "max_ns": 118000000
+          },
+          {
+            "function": "ffi_benchmark::bench_checksum",
+            "samples": 5,
+            "mean_ns": 159000000,
+            "median_ns": 159000000,
+            "p95_ns": 165000000,
+            "min_ns": 154000000,
+            "max_ns": 165000000
+          }
+        ]
+      },
+      {
+        "device": "OnePlus 12-14.0",
+        "benchmarks": [
+          {
+            "function": "ffi_benchmark::bench_fibonacci",
+            "samples": 5,
+            "mean_ns": 103000000,
+            "median_ns": 103000000,
+            "p95_ns": 107000000,
+            "min_ns": 99000000,
+            "max_ns": 107000000
+          },
+          {
+            "function": "ffi_benchmark::bench_checksum",
+            "samples": 5,
+            "mean_ns": 149000000,
+            "median_ns": 149000000,
+            "p95_ns": 153000000,
+            "min_ns": 145000000,
+            "max_ns": 153000000
+          }
+        ]
+      }
+    ]
+  },
+  "benchmark_results": {
+    "Google Pixel 8 Pro-14.0": [
+      {
+        "function": "ffi_benchmark::bench_fibonacci",
+        "samples": [108000000, 110000000, 112000000, 114000000, 118000000]
+      },
+      {
+        "function": "ffi_benchmark::bench_checksum",
+        "samples": [154000000, 156000000, 159000000, 161000000, 165000000]
+      }
+    ],
+    "OnePlus 12-14.0": [
+      {
+        "function": "ffi_benchmark::bench_fibonacci",
+        "samples": [99000000, 101000000, 103000000, 105000000, 107000000]
+      },
+      {
+        "function": "ffi_benchmark::bench_checksum",
+        "samples": [145000000, 147000000, 149000000, 151000000, 153000000]
+      }
+    ]
+  }
+}

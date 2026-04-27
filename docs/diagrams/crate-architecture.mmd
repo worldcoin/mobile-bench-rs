@@ -1,0 +1,9 @@
+flowchart LR
+    user["Benchmark crate"] --> macro["mobench-macros\n#[benchmark]"]
+    macro --> registry["mobench-sdk registry\ninventory"]
+    registry --> runner["mobench-sdk runner\nBenchSpec -> BenchReport"]
+    runner --> templates["Generated Android/iOS runners"]
+    cli["mobench CLI"] --> builders["SDK builders"]
+    builders --> templates
+    cli --> reports["JSON / Markdown / CSV / plots"]
+    templates --> reports

@@ -3,7 +3,19 @@ import XCTest
 final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
 
     /// Maximum time to wait for benchmark completion (5 minutes for long benchmarks)
-    private let benchmarkTimeout: TimeInterval = 300.0
+    private let defaultBenchmarkTimeout: TimeInterval = {{IOS_BENCHMARK_TIMEOUT_SECS}}.0
+
+    private var benchmarkTimeout: TimeInterval {
+        if let configuredTimeout =
+            ProcessInfo.processInfo.environment["MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS"],
+            let parsedTimeout = TimeInterval(configuredTimeout),
+            parsedTimeout > 0
+        {
+            return parsedTimeout
+        }
+
+        return defaultBenchmarkTimeout
+    }
 
     func testLaunchAndCaptureBenchmarkReport() {
         let app = XCUIApplication()
@@ -40,6 +52,7 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         // Verify we got valid JSON (not an error message)
         XCTAssertFalse(jsonString.isEmpty, "Benchmark report JSON should not be empty")
         XCTAssertTrue(jsonString.hasPrefix("{"), "Benchmark report should be valid JSON (starts with '{')")
+        XCTAssertFalse(jsonString.contains("\"error\""), "Benchmark report should not be an error payload: \(jsonString)")
     }
 
     // Keep the old test name for backward compatibility

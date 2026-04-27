@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 private let defaultFunction = "{{DEFAULT_FUNCTION}}"
 private let defaultIterations: UInt32 = 20
@@ -116,7 +117,7 @@ struct BenchmarkResult {
 }
 
 enum {{PROJECT_NAME_PASCAL}}FFI {
-    static func runCurrentBenchmark() async -> BenchmarkResult {
+    static func runCurrentBenchmark() -> BenchmarkResult {
         let params = BenchParams.resolved()
         return run(params: params)
     }
@@ -129,9 +130,18 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         )
 
         do {
-            let report = try runBenchmark(spec: spec)
+            let processMemorySampler = ProcessMemorySampler()
+            processMemorySampler.start()
+            let report: BenchReport
+            do {
+                report = try runBenchmark(spec: spec)
+            } catch {
+                _ = processMemorySampler.stop()
+                throw error
+            }
+            let runProcessPeakMemoryKb = processMemorySampler.stop()
             let displayText = formatBenchReport(report)
-            let jsonReport = generateJSONReport(report)
+            let jsonReport = generateJSONReport(report, runProcessPeakMemoryKb: runProcessPeakMemoryKb)
             return BenchmarkResult(displayText: displayText, jsonReport: jsonReport)
         } catch let error as BenchError {
             print("[BenchRunner] ERROR: Benchmark failed: \(error)")
@@ -146,8 +156,9 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         }
     }
 
-    /// Generates a JSON report matching the Android BENCH_JSON format for consistency
-    private static func generateJSONReport(_ report: BenchReport) -> String {
+    /// Generates a JSON report that matches the Android BENCH_JSON-style payload
+    /// consumed by mobench so cross-platform parsers can stay aligned.
+    private static func generateJSONReport(_ report: BenchReport, runProcessPeakMemoryKb: UInt64?) -> String {
         var json: [String: Any] = [:]
 
         // Spec section
@@ -166,8 +177,32 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         json["samples_ns"] = samplesNs
 
         // Also include samples in object format for compatibility
-        let samplesArray = report.samples.map { ["duration_ns": $0.durationNs] }
+        let samplesArray = report.samples.map { sample -> [String: Any] in
+            var sampleJson: [String: Any] = ["duration_ns": sample.durationNs]
+            if let cpuTimeMs = optionalCpuTimeMs(sample) {
+                sampleJson["cpu_time_ms"] = cpuTimeMs
+            }
+            if let peakMemoryKb = optionalPeakMemoryKb(sample) {
+                sampleJson["peak_memory_kb"] = peakMemoryKb
+            }
+            if let processPeakMemoryKb = optionalProcessPeakMemoryKb(sample) {
+                sampleJson["process_peak_memory_kb"] = processPeakMemoryKb
+            }
+            return sampleJson
+        }
         json["samples"] = samplesArray
+
+        let phases = optionalPhases(report).compactMap { phase -> [String: Any]? in
+            guard let name = optionalStringProperty(phase, named: "name"),
+                  let durationNs = optionalUInt64Property(phase, named: "durationNs") else {
+                return nil
+            }
+            return [
+                "name": name,
+                "duration_ns": durationNs
+            ] as [String: Any]
+        }
+        json["phases"] = phases
 
         // Statistics
         if !report.samples.isEmpty {
@@ -201,11 +236,38 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             json["max_ns"] = maxNs
         }
 
-        // Resource metrics (iOS-specific)
-        let resources: [String: Any] = [
+        let cpuSamplesMs = report.samples.compactMap { optionalCpuTimeMs($0) }
+        let peakSamplesKb = report.samples.compactMap { optionalPeakMemoryKb($0) }
+        let processPeakSamplesKb = report.samples.compactMap { optionalProcessPeakMemoryKb($0) }
+
+        func median(_ values: [UInt64]) -> UInt64 {
+            let sorted = values.sorted()
+            if sorted.count % 2 == 0 {
+                return (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+            } else {
+                return sorted[sorted.count / 2]
+            }
+        }
+
+        // Resource metrics derived from the measured loop itself.
+        var resources: [String: Any] = [
             "platform": "ios",
+            "memory_process": "benchmark_app",
             "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
         ]
+        if !cpuSamplesMs.isEmpty {
+            let cpuTotalMs = cpuSamplesMs.reduce(0, +)
+            resources["cpu_total_ms"] = cpuTotalMs
+            resources["cpu_median_ms"] = median(cpuSamplesMs)
+            resources["elapsed_cpu_ms"] = cpuTotalMs
+        }
+        if let peakMemoryKb = peakSamplesKb.max() {
+            resources["peak_memory_kb"] = peakMemoryKb
+            resources["peak_memory_growth_kb"] = peakMemoryKb
+        }
+        if let processPeakMemoryKb = processPeakSamplesKb.max() ?? runProcessPeakMemoryKb {
+            resources["process_peak_memory_kb"] = processPeakMemoryKb
+        }
         json["resources"] = resources
 
         // Serialize to JSON string
@@ -216,6 +278,83 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             print("[BenchRunner] ERROR: Failed to serialize JSON report: \(error)")
             return "{}"
         }
+    }
+
+    private static func optionalProcessPeakMemoryKb(_ sample: Any) -> UInt64? {
+        return optionalUInt64Property(sample, named: "processPeakMemoryKb")
+    }
+
+    private static func optionalCpuTimeMs(_ sample: Any) -> UInt64? {
+        return optionalUInt64Property(sample, named: "cpuTimeMs")
+    }
+
+    private static func optionalPeakMemoryKb(_ sample: Any) -> UInt64? {
+        return optionalUInt64Property(sample, named: "peakMemoryKb")
+    }
+
+    private static func optionalPhases(_ report: Any) -> [Any] {
+        for child in Mirror(reflecting: report).children where child.label == "phases" {
+            return coerceToArray(child.value)
+        }
+        return []
+    }
+
+    private static func coerceToArray(_ value: Any) -> [Any] {
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            guard let child = mirror.children.first else {
+                return []
+            }
+            return coerceToArray(child.value)
+        }
+        if let array = value as? [Any] {
+            return array
+        }
+        if mirror.displayStyle == .collection {
+            return mirror.children.map { $0.value }
+        }
+        return []
+    }
+
+    private static func optionalUInt64Property(_ instance: Any, named propertyName: String) -> UInt64? {
+        for child in Mirror(reflecting: instance).children where child.label == propertyName {
+            return coerceToUInt64(child.value)
+        }
+        return nil
+    }
+
+    private static func optionalStringProperty(_ instance: Any, named propertyName: String) -> String? {
+        for child in Mirror(reflecting: instance).children where child.label == propertyName {
+            return String(describing: child.value)
+        }
+        return nil
+    }
+
+    private static func coerceToUInt64(_ value: Any) -> UInt64? {
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            guard let child = mirror.children.first else {
+                return nil
+            }
+            return coerceToUInt64(child.value)
+        }
+
+        if let value = value as? UInt64 {
+            return value
+        }
+        if let value = value as? UInt32 {
+            return UInt64(value)
+        }
+        if let value = value as? UInt {
+            return UInt64(value)
+        }
+        if let value = value as? Int64, value >= 0 {
+            return UInt64(value)
+        }
+        if let value = value as? Int, value >= 0 {
+            return UInt64(value)
+        }
+        return nil
     }
 
     /// Generates a JSON error report
@@ -276,4 +415,68 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         // This avoids hardcoding specific error cases that may not exist in all schemas
         return "Benchmark error: \(error.localizedDescription)"
     }
+}
+
+private final class ProcessMemorySampler {
+    private let sampleInterval: TimeInterval
+    private let queue = DispatchQueue(label: "mobench-process-memory-sampler")
+    private var timer: DispatchSourceTimer?
+    private var peakKb: UInt64 = 0
+
+    init(sampleInterval: TimeInterval = 0.01) {
+        self.sampleInterval = sampleInterval
+    }
+
+    func start() {
+        queue.sync {
+            guard timer == nil else {
+                return
+            }
+
+            recordCurrentLocked()
+            let source = DispatchSource.makeTimerSource(queue: queue)
+            source.schedule(deadline: .now(), repeating: sampleInterval)
+            source.setEventHandler { [weak self] in
+                self?.recordCurrentLocked()
+            }
+            source.resume()
+            timer = source
+        }
+    }
+
+    func stop() -> UInt64? {
+        queue.sync {
+            timer?.cancel()
+            timer = nil
+            recordCurrentLocked()
+            return peakKb > 0 ? peakKb : nil
+        }
+    }
+
+    private func recordCurrentLocked() {
+        if let currentKb = currentProcessResidentMemoryKb(), currentKb > peakKb {
+            peakKb = currentKb
+        }
+    }
+}
+
+private func currentProcessResidentMemoryKb() -> UInt64? {
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+    let result = withUnsafeMutablePointer(to: &info) { infoPointer in
+        infoPointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPointer in
+            task_info(
+                mach_task_self_,
+                task_flavor_t(MACH_TASK_BASIC_INFO),
+                reboundPointer,
+                &count
+            )
+        }
+    }
+
+    guard result == KERN_SUCCESS else {
+        return nil
+    }
+
+    return UInt64(info.resident_size) / 1024
 }

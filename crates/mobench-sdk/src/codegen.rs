@@ -12,6 +12,7 @@ use include_dir::{Dir, DirEntry, include_dir};
 
 const ANDROID_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/android");
 const IOS_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/ios");
+const DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS: u64 = 300;
 
 /// Template variable that can be replaced in template files
 #[derive(Debug, Clone)]
@@ -111,7 +112,7 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-mobench-sdk = {{ path = ".." }}
+mobench-sdk = {{ path = "..", default-features = false, features = ["registry"] }}
 uniffi = "0.28"
 {} = {{ path = ".." }}
 
@@ -165,12 +166,31 @@ pub struct BenchSpec {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchSample {
     pub duration_ns: u64,
+    pub cpu_time_ms: Option<u64>,
+    pub peak_memory_kb: Option<u64>,
+    pub process_peak_memory_kb: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct SemanticPhase {
+    pub name: String,
+    pub duration_ns: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct HarnessTimelineSpan {
+    pub phase: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: u64,
+    pub iteration: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 pub struct BenchReport {
     pub spec: BenchSpec,
     pub samples: Vec<BenchSample>,
+    pub phases: Vec<SemanticPhase>,
+    pub timeline: Vec<HarnessTimelineSpan>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -211,6 +231,29 @@ impl From<mobench_sdk::BenchSample> for BenchSample {
     fn from(sample: mobench_sdk::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
+        }
+    }
+}
+
+impl From<mobench_sdk::SemanticPhase> for SemanticPhase {
+    fn from(phase: mobench_sdk::SemanticPhase) -> Self {
+        Self {
+            name: phase.name,
+            duration_ns: phase.duration_ns,
+        }
+    }
+}
+
+impl From<mobench_sdk::HarnessTimelineSpan> for HarnessTimelineSpan {
+    fn from(span: mobench_sdk::HarnessTimelineSpan) -> Self {
+        Self {
+            phase: span.phase,
+            start_offset_ns: span.start_offset_ns,
+            end_offset_ns: span.end_offset_ns,
+            iteration: span.iteration,
         }
     }
 }
@@ -220,6 +263,8 @@ impl From<mobench_sdk::RunnerReport> for BenchReport {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
+            phases: report.phases.into_iter().map(Into::into).collect(),
+            timeline: report.timeline.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -301,6 +346,7 @@ pub fn generate_android_project(
     default_function: &str,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("android");
+    reset_generated_project_dir(&target_dir)?;
     let library_name = project_slug.replace('-', "_");
     let project_pascal = to_pascal_case(project_slug);
     // Use sanitized bundle ID component (alphanumeric only) for consistency with iOS
@@ -343,6 +389,80 @@ pub fn generate_android_project(
     // The package "dev.world.{project_slug}" maps to directory "dev/world/{project_slug}/"
     move_kotlin_files_to_package_dir(&target_dir, &package_name)?;
 
+    Ok(())
+}
+
+fn collect_preserved_files(
+    root: &Path,
+    current: &Path,
+    preserved: &mut Vec<(PathBuf, Vec<u8>)>,
+) -> Result<(), BenchError> {
+    let mut entries = fs::read_dir(current)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(BenchError::Io)?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_preserved_files(root, &path, preserved)?;
+            continue;
+        }
+
+        let relative = path.strip_prefix(root).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to preserve generated resource {:?}: {}",
+                path, e
+            ))
+        })?;
+        preserved.push((relative.to_path_buf(), fs::read(&path)?));
+    }
+
+    Ok(())
+}
+
+fn collect_preserved_ios_resources(
+    target_dir: &Path,
+) -> Result<Vec<(PathBuf, Vec<u8>)>, BenchError> {
+    let resources_dir = target_dir.join("BenchRunner/BenchRunner/Resources");
+    let mut preserved = Vec::new();
+
+    if resources_dir.exists() {
+        collect_preserved_files(&resources_dir, &resources_dir, &mut preserved)?;
+    }
+
+    Ok(preserved)
+}
+
+fn restore_preserved_ios_resources(
+    target_dir: &Path,
+    preserved_resources: &[(PathBuf, Vec<u8>)],
+) -> Result<(), BenchError> {
+    if preserved_resources.is_empty() {
+        return Ok(());
+    }
+
+    let resources_dir = target_dir.join("BenchRunner/BenchRunner/Resources");
+    for (relative, contents) in preserved_resources {
+        let resource_path = resources_dir.join(relative);
+        if let Some(parent) = resource_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(resource_path, contents)?;
+    }
+
+    Ok(())
+}
+
+fn reset_generated_project_dir(target_dir: &Path) -> Result<(), BenchError> {
+    if target_dir.exists() {
+        fs::remove_dir_all(target_dir).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to clear existing generated project at {:?}: {}",
+                target_dir, e
+            ))
+        })?;
+    }
     Ok(())
 }
 
@@ -430,7 +550,32 @@ pub fn generate_ios_project(
     bundle_prefix: &str,
     default_function: &str,
 ) -> Result<(), BenchError> {
+    let ios_benchmark_timeout_secs = resolve_ios_benchmark_timeout_secs(
+        std::env::var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS")
+            .ok()
+            .as_deref(),
+    );
+    generate_ios_project_with_timeout(
+        output_dir,
+        project_slug,
+        project_pascal,
+        bundle_prefix,
+        default_function,
+        ios_benchmark_timeout_secs,
+    )
+}
+
+fn generate_ios_project_with_timeout(
+    output_dir: &Path,
+    project_slug: &str,
+    project_pascal: &str,
+    bundle_prefix: &str,
+    default_function: &str,
+    ios_benchmark_timeout_secs: u64,
+) -> Result<(), BenchError> {
     let target_dir = output_dir.join("ios");
+    let preserved_resources = collect_preserved_ios_resources(&target_dir)?;
+    reset_generated_project_dir(&target_dir)?;
     // Sanitize bundle ID components to ensure they only contain alphanumeric characters
     // iOS bundle identifiers should not contain hyphens or underscores
     let sanitized_bundle_prefix = {
@@ -465,9 +610,21 @@ pub fn generate_ios_project(
             name: "LIBRARY_NAME",
             value: project_slug.replace('-', "_"),
         },
+        TemplateVar {
+            name: "IOS_BENCHMARK_TIMEOUT_SECS",
+            value: ios_benchmark_timeout_secs.to_string(),
+        },
     ];
     render_dir(&IOS_TEMPLATES, &target_dir, &vars)?;
+    restore_preserved_ios_resources(&target_dir, &preserved_resources)?;
     Ok(())
+}
+
+fn resolve_ios_benchmark_timeout_secs(value: Option<&str>) -> u64 {
+    value
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS)
 }
 
 /// Generates bench-config.toml configuration file
@@ -611,13 +768,11 @@ fn render_dir(dir: &Dir, out_root: &Path, vars: &[TemplateVar]) -> Result<(), Be
                     relative.set_extension("");
                 }
 
-                if should_render {
-                    if let Ok(text) = std::str::from_utf8(&contents) {
-                        let rendered = render_template(text, vars);
-                        // Validate that all template variables were replaced
-                        validate_no_unreplaced_placeholders(&rendered, &relative)?;
-                        contents = rendered.into_bytes();
-                    }
+                if should_render && let Ok(text) = std::str::from_utf8(&contents) {
+                    let rendered = render_template(text, vars);
+                    // Validate that all template variables were replaced
+                    validate_no_unreplaced_placeholders(&rendered, &relative)?;
+                    contents = rendered.into_bytes();
                 }
 
                 let out_path = out_root.join(relative);
@@ -647,10 +802,10 @@ fn is_template_file(path: &Path) -> bool {
     // Also check the filename without the .template extension
     if let Some(stem) = path.file_stem() {
         let stem_path = Path::new(stem);
-        if let Some(ext) = stem_path.extension() {
-            if let Some(ext_str) = ext.to_str() {
-                return TEMPLATE_EXTENSIONS.contains(&ext_str);
-            }
+        if let Some(ext) = stem_path.extension()
+            && let Some(ext_str) = ext.to_str()
+        {
+            return TEMPLATE_EXTENSIONS.contains(&ext_str);
         }
     }
     false
@@ -757,6 +912,32 @@ pub fn android_project_exists(output_dir: &Path) -> bool {
 /// Returns true if the `ios/BenchRunner/project.yml` file exists.
 pub fn ios_project_exists(output_dir: &Path) -> bool {
     output_dir.join("ios/BenchRunner/project.yml").exists()
+}
+
+/// Checks whether an existing iOS project was generated for the given library name.
+///
+/// Returns `false` if the xcframework reference in `project.yml` doesn't match,
+/// which means the project needs to be regenerated for the new crate.
+fn ios_project_matches_library(output_dir: &Path, library_name: &str) -> bool {
+    let project_yml = output_dir.join("ios/BenchRunner/project.yml");
+    let Ok(content) = std::fs::read_to_string(&project_yml) else {
+        return false;
+    };
+    let expected = format!("../{}.xcframework", library_name);
+    content.contains(&expected)
+}
+
+/// Checks whether an existing Android project was generated for the given library name.
+///
+/// Returns `false` if the JNI library name in `build.gradle` doesn't match,
+/// which means the project needs to be regenerated for the new crate.
+fn android_project_matches_library(output_dir: &Path, library_name: &str) -> bool {
+    let build_gradle = output_dir.join("android/app/build.gradle");
+    let Ok(content) = std::fs::read_to_string(&build_gradle) else {
+        return false;
+    };
+    let expected = format!("lib{}.so", library_name);
+    content.contains(&expected)
 }
 
 /// Detects the first benchmark function in a crate by scanning src/lib.rs for `#[benchmark]`
@@ -943,10 +1124,10 @@ pub fn resolve_default_function(
 
     // Try to detect benchmarks from each potential location
     for dir in &search_dirs {
-        if dir.join("Cargo.toml").exists() {
-            if let Some(detected) = detect_default_function(dir, &crate_name_normalized) {
-                return detected;
-            }
+        if dir.join("Cargo.toml").exists()
+            && let Some(detected) = detect_default_function(dir, &crate_name_normalized)
+        {
+            return detected;
         }
     }
 
@@ -985,7 +1166,10 @@ pub fn ensure_android_project_with_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
-    if android_project_exists(output_dir) {
+    let library_name = crate_name.replace('-', "_");
+    if android_project_exists(output_dir)
+        && android_project_matches_library(output_dir, &library_name)
+    {
         return Ok(());
     }
 
@@ -1036,11 +1220,17 @@ pub fn ensure_ios_project_with_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
-    if ios_project_exists(output_dir) {
-        return Ok(());
+    let library_name = crate_name.replace('-', "_");
+    let project_exists = ios_project_exists(output_dir);
+    let project_matches = ios_project_matches_library(output_dir, &library_name);
+    if project_exists && !project_matches {
+        println!("Existing iOS scaffolding does not match library, regenerating...");
+    } else if project_exists {
+        println!("Refreshing generated iOS scaffolding...");
+    } else {
+        println!("iOS project not found, generating scaffolding...");
     }
 
-    println!("iOS project not found, generating scaffolding...");
     // Use fixed "BenchRunner" for project/scheme name to match template directory structure
     let project_pascal = "BenchRunner";
     // Derive library name and bundle prefix from crate name
@@ -1083,6 +1273,14 @@ mod tests {
         assert!(temp_dir.join("bench-mobile/Cargo.toml").exists());
         assert!(temp_dir.join("bench-mobile/src/lib.rs").exists());
         assert!(temp_dir.join("bench-mobile/build.rs").exists());
+        let cargo_toml =
+            fs::read_to_string(temp_dir.join("bench-mobile/Cargo.toml")).expect("read Cargo.toml");
+        assert!(
+            cargo_toml.contains(
+                r#"mobench-sdk = { path = "..", default-features = false, features = ["registry"] }"#
+            ),
+            "generated FFI wrapper should depend on the narrow registry feature, got:\n{cargo_toml}"
+        );
 
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
@@ -1134,7 +1332,8 @@ mod tests {
 
         for file in files_to_check {
             let path = android_dir.join(file);
-            let contents = fs::read_to_string(&path).expect(&format!("Failed to read {}", file));
+            let contents =
+                fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read {}", file));
 
             // Check for unreplaced placeholders
             let has_placeholder = contents.contains("{{") && contents.contains("}}");
@@ -1158,6 +1357,14 @@ mod tests {
         assert!(
             build_gradle.contains("dev.world.mybenchproject"),
             "build.gradle should contain sanitized package name 'dev.world.mybenchproject'"
+        );
+        assert!(
+            !build_gradle.contains("testBuildType \"release\""),
+            "debug builds should be able to produce assembleDebugAndroidTest"
+        );
+        assert!(
+            build_gradle.contains("mobenchTestBuildType"),
+            "release builds should be able to request assembleReleaseAndroidTest"
         );
 
         let manifest =
@@ -1211,6 +1418,40 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_android_project_replaces_previous_package_tree() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-android-regenerate-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_android_project(&temp_dir, "ffi_benchmark", "ffi_benchmark::bench_fibonacci")
+            .unwrap();
+        let old_package_dir = temp_dir.join("android/app/src/main/java/dev/world/ffibenchmark");
+        assert!(
+            old_package_dir.exists(),
+            "expected first package tree to exist"
+        );
+
+        generate_android_project(
+            &temp_dir,
+            "basic_benchmark",
+            "basic_benchmark::bench_fibonacci",
+        )
+        .unwrap();
+
+        let new_package_dir = temp_dir.join("android/app/src/main/java/dev/world/basicbenchmark");
+        assert!(
+            new_package_dir.exists(),
+            "expected new package tree to exist"
+        );
+        assert!(
+            !old_package_dir.exists(),
+            "old package tree should be removed when regenerating the Android scaffold"
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
     fn test_is_template_file() {
         assert!(is_template_file(Path::new("settings.gradle")));
         assert!(is_template_file(Path::new("app/build.gradle")));
@@ -1221,6 +1462,103 @@ mod tests {
         assert!(is_template_file(Path::new("Info.plist")));
         assert!(!is_template_file(Path::new("libfoo.so")));
         assert!(!is_template_file(Path::new("image.png")));
+    }
+
+    #[test]
+    fn test_mobile_templates_read_process_peak_memory_compatibly() {
+        let android =
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template");
+        assert!(
+            !android.contains("sample.processPeakMemoryKb"),
+            "Android template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(
+            !android.contains("it.processPeakMemoryKb"),
+            "Android template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(android.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(
+            !android.contains("sample.cpuTimeMs"),
+            "Android template should tolerate BenchSample without cpuTimeMs"
+        );
+        assert!(
+            !android.contains("sample.peakMemoryKb"),
+            "Android template should tolerate BenchSample without peakMemoryKb"
+        );
+        assert!(
+            !android.contains("report.phases"),
+            "Android template should tolerate BenchReport without phases"
+        );
+        assert!(android.contains("ProcessMemorySampler"));
+        assert!(android.contains("sampleIntervalMs: Long = 1000L"));
+        assert!(android.contains("/proc/self/smaps_rollup"));
+        assert!(android.contains("class BenchmarkWorkerService : Service()"));
+        assert!(android.contains("ResultReceiver(Handler(Looper.getMainLooper()))"));
+        assert!(android.contains("startForegroundService(intent)"));
+        assert!(android.contains("startForeground(FOREGROUND_NOTIFICATION_ID"));
+        assert!(android.contains("fun isBenchmarkComplete()"));
+        assert!(!android.contains("resultLatch.await"));
+        assert!(android.contains("memory_process\", \"isolated_worker\""));
+
+        let android_test = include_str!(
+            "../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
+        );
+        assert!(android_test.contains("Log.i(\"BenchRunnerTest\""));
+        assert!(android_test.contains("Thread.sleep(heartbeatMs)"));
+        assert!(android_test.contains("TimeUnit.SECONDS.toMillis(10)"));
+        assert!(android_test.contains("activity.isBenchmarkComplete()"));
+
+        let ios_test = include_str!(
+            "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+        );
+        assert!(
+            ios_test.contains("\\\"error\\\""),
+            "iOS XCUITest template should fail when the benchmark report is an error payload"
+        );
+
+        let android_manifest =
+            include_str!("../templates/android/app/src/main/AndroidManifest.xml");
+        assert!(android_manifest.contains("android.permission.FOREGROUND_SERVICE"));
+        assert!(android_manifest.contains("android.permission.FOREGROUND_SERVICE_DATA_SYNC"));
+        assert!(android_manifest.contains("android:name=\".BenchmarkWorkerService\""));
+        assert!(android_manifest.contains("android:foregroundServiceType=\"dataSync\""));
+        assert!(android_manifest.contains("android:process=\":mobench_worker\""));
+
+        let android_build_gradle = include_str!("../templates/android/app/build.gradle");
+        assert!(android_build_gradle.contains("generatedMainBenchSpec"));
+        assert!(android_build_gradle.contains("if (!generatedMainBenchSpec.exists())"));
+
+        let ios =
+            include_str!("../templates/ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift.template");
+        assert!(
+            !ios.contains("sample.processPeakMemoryKb"),
+            "iOS template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(
+            !ios.contains(r"\.processPeakMemoryKb"),
+            "iOS template should not require generated bindings to expose processPeakMemoryKb"
+        );
+        assert!(ios.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(ios.contains("return [\n                \"name\": name,"));
+        assert!(
+            !ios.contains("sample.cpuTimeMs"),
+            "iOS template should tolerate BenchSample without cpuTimeMs"
+        );
+        assert!(
+            !ios.contains("sample.peakMemoryKb"),
+            "iOS template should tolerate BenchSample without peakMemoryKb"
+        );
+        assert!(
+            !ios.contains("report.phases"),
+            "iOS template should tolerate BenchReport without phases"
+        );
+        assert!(ios.contains("compactMap { optionalProcessPeakMemoryKb($0) }"));
+        assert!(ios.contains("ProcessMemorySampler"));
+        assert!(ios.contains("currentProcessResidentMemoryKb"));
+        assert!(ios.contains("task_info("));
+        assert!(ios.contains("\"memory_process\": \"benchmark_app\""));
+        assert!(ios.contains("generateJSONReport(report, runProcessPeakMemoryKb:"));
+        assert!(ios.contains("processPeakSamplesKb.max() ?? runProcessPeakMemoryKb"));
     }
 
     #[test]
@@ -1399,9 +1737,185 @@ pub fn public_bench() {
             "Bundle ID should NOT be duplicated as 'dev.world.benchmobile.benchmobile', got:\n{}",
             project_yml
         );
+        assert!(
+            project_yml.contains("embed: false"),
+            "Static xcframework dependency should be link-only, got:\n{}",
+            project_yml
+        );
 
         // Cleanup
         fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_ios_project_preserves_existing_resources_on_regeneration() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-resources-regenerate-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_ios_project(
+            &temp_dir,
+            "bench_mobile",
+            "BenchRunner",
+            "dev.world.benchmobile",
+            "bench_mobile::bench_prepare",
+        )
+        .unwrap();
+
+        let resources_dir = temp_dir.join("ios/BenchRunner/BenchRunner/Resources");
+        fs::create_dir_all(resources_dir.join("nested")).unwrap();
+        fs::write(
+            resources_dir.join("bench_spec.json"),
+            r#"{"function":"bench_mobile::bench_prove","iterations":2,"warmup":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            resources_dir.join("bench_meta.json"),
+            r#"{"build_id":"build-123"}"#,
+        )
+        .unwrap();
+        fs::write(resources_dir.join("nested/custom.txt"), "keep me").unwrap();
+
+        generate_ios_project(
+            &temp_dir,
+            "bench_mobile",
+            "BenchRunner",
+            "dev.world.benchmobile",
+            "bench_mobile::bench_prepare",
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("bench_spec.json")).unwrap(),
+            r#"{"function":"bench_mobile::bench_prove","iterations":2,"warmup":1}"#
+        );
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("bench_meta.json")).unwrap(),
+            r#"{"build_id":"build-123"}"#
+        );
+        assert_eq!(
+            fs::read_to_string(resources_dir.join("nested/custom.txt")).unwrap(),
+            "keep me"
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_ios_project_refreshes_existing_content_view_template() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-refresh-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        ensure_ios_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("initial iOS project generation should succeed");
+
+        let content_view_path = temp_dir.join("ios/BenchRunner/BenchRunner/ContentView.swift");
+        assert!(content_view_path.exists(), "ContentView.swift should exist");
+
+        fs::write(&content_view_path, "stale generated content").unwrap();
+
+        ensure_ios_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("refreshing existing iOS project should succeed");
+
+        let refreshed = fs::read_to_string(&content_view_path).unwrap();
+        assert!(
+            refreshed.contains("ProfileLaunchOptions"),
+            "refreshed ContentView.swift should contain the latest profiling template, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("repeatUntilMs"),
+            "refreshed ContentView.swift should contain repeat-until profiling support, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("Task.detached(priority: .userInitiated)"),
+            "refreshed ContentView.swift should run benchmarks off the main actor, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("await MainActor.run"),
+            "refreshed ContentView.swift should apply UI updates on the main actor, got:\n{}",
+            refreshed
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_ios_project_refreshes_existing_ui_test_timeout_template() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-uitest-refresh-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        ensure_ios_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("initial iOS project generation should succeed");
+
+        let ui_test_path =
+            temp_dir.join("ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift");
+        assert!(
+            ui_test_path.exists(),
+            "BenchRunnerUITests.swift should exist"
+        );
+
+        fs::write(&ui_test_path, "stale generated content").unwrap();
+
+        ensure_ios_project_with_options(&temp_dir, "sample-fns", None, None)
+            .expect("refreshing existing iOS project should succeed");
+
+        let refreshed = fs::read_to_string(&ui_test_path).unwrap();
+        assert!(
+            refreshed.contains("private let defaultBenchmarkTimeout: TimeInterval = 300.0"),
+            "refreshed BenchRunnerUITests.swift should include the default timeout, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains(
+                "ProcessInfo.processInfo.environment[\"MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS\"]"
+            ),
+            "refreshed BenchRunnerUITests.swift should honor runtime timeout overrides, got:\n{}",
+            refreshed
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_ios_project_uses_configured_benchmark_timeout() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-timeout-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let result = generate_ios_project_with_timeout(
+            &temp_dir,
+            "sample_fns",
+            "BenchRunner",
+            "dev.world.samplefns",
+            "sample_fns::example_benchmark",
+            1200,
+        );
+
+        assert!(result.is_ok(), "generate_ios_project should succeed");
+
+        let ui_test_path =
+            temp_dir.join("ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift");
+        let contents = fs::read_to_string(&ui_test_path).unwrap();
+        assert!(
+            contents.contains("private let defaultBenchmarkTimeout: TimeInterval = 1200.0"),
+            "generated BenchRunnerUITests.swift should embed the configured timeout, got:\n{}",
+            contents
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_resolve_ios_benchmark_timeout_secs_defaults_invalid_values() {
+        assert_eq!(resolve_ios_benchmark_timeout_secs(None), 300);
+        assert_eq!(resolve_ios_benchmark_timeout_secs(Some("900")), 900);
+        assert_eq!(resolve_ios_benchmark_timeout_secs(Some("0")), 300);
+        assert_eq!(resolve_ios_benchmark_timeout_secs(Some("bogus")), 300);
     }
 
     #[test]

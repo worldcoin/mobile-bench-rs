@@ -18,7 +18,8 @@
 
 // Re-export timing types for convenience
 pub use crate::timing::{
-    BenchReport as RunnerReport, BenchSample, BenchSpec, BenchSummary, TimingError as RunnerError,
+    BenchReport as RunnerReport, BenchSample, BenchSpec, BenchSummary, HarnessTimelineSpan,
+    SemanticPhase, TimingError as RunnerError,
 };
 
 use std::path::PathBuf;
@@ -192,6 +193,7 @@ pub struct InitConfig {
 ///     target: Target::Android,
 ///     profile: BuildProfile::Release,
 ///     incremental: true,
+///     android_abis: None,
 /// };
 ///
 /// // Debug build for iOS
@@ -199,6 +201,7 @@ pub struct InitConfig {
 ///     target: Target::Ios,
 ///     profile: BuildProfile::Debug,
 ///     incremental: false,  // Force rebuild
+///     android_abis: None,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -209,6 +212,8 @@ pub struct BuildConfig {
     pub profile: BuildProfile,
     /// If `true`, skip rebuilding if artifacts already exist.
     pub incremental: bool,
+    /// Optional Android ABIs to build/package. Defaults to `["arm64-v8a"]`.
+    pub android_abis: Option<Vec<String>>,
 }
 
 /// Build profile controlling optimization and debug info.
@@ -273,6 +278,18 @@ impl BuildProfile {
 ///     println!("Test suite at: {:?}", test_suite);
 /// }
 /// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeLibraryArtifact {
+    /// ABI name used in Android packaging, for example `arm64-v8a`.
+    pub abi: String,
+    /// Shared library filename, for example `libsample_fns.so`.
+    pub library_name: String,
+    /// Path to the unstripped library produced by Cargo.
+    pub unstripped_path: PathBuf,
+    /// Path to the packaged copy under `jniLibs/`.
+    pub packaged_path: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub struct BuildResult {
     /// Platform that was built.
@@ -287,4 +304,6 @@ pub struct BuildResult {
     /// - Android: Path to the androidTest APK (for Espresso)
     /// - iOS: Path to the XCUITest runner zip
     pub test_suite_path: Option<PathBuf>,
+    /// Native libraries associated with this build, when applicable.
+    pub native_libraries: Vec<NativeLibraryArtifact>,
 }

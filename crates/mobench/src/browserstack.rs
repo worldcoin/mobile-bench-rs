@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow};
+use reqwest::Url;
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -69,6 +70,7 @@ pub struct DeviceValidationError {
 }
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
+const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
 
 #[derive(Debug, Clone)]
@@ -241,6 +243,8 @@ impl BrowserStackClient {
             devices: devices.to_vec(),
             device_logs: true,
             disable_animations: true,
+            app_profiling: true,
+            idle_timeout: ESPRESSO_IDLE_TIMEOUT_SECS,
             build_name: self.project.clone(),
         };
 
@@ -279,6 +283,7 @@ impl BrowserStackClient {
             test_suite: test_suite_url.to_string(),
             devices: devices.to_vec(),
             device_logs: true,
+            app_profiling: true,
             build_name: self.project.clone(),
             // Specify the test method to run (required by BrowserStack for XCUITest)
             only_testing: Some(vec![
@@ -322,9 +327,7 @@ impl BrowserStackClient {
 
     pub fn download_url(&self, url: &str, dest: &Path) -> Result<()> {
         let resp = self
-            .http
-            .get(url)
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
+            .asset_request(url)
             .send()
             .with_context(|| format!("downloading BrowserStack asset {}", url))?;
         let status = resp.status();
@@ -343,37 +346,32 @@ impl BrowserStackClient {
         Ok(())
     }
 
+    fn fetch_devices_inventory(&self) -> Result<Vec<BrowserStackDevice>> {
+        let json = self.get_json("app-automate/devices.json")?;
+        parse_device_list(json, "devices")
+    }
+
     /// List available Android devices for Espresso testing.
     pub fn list_espresso_devices(&self) -> Result<Vec<BrowserStackDevice>> {
-        let json = self.get_json("app-automate/espresso/v2/devices")?;
-        parse_device_list(json, "espresso")
+        Ok(self
+            .fetch_devices_inventory()?
+            .into_iter()
+            .filter(|device| device.os.eq_ignore_ascii_case("android"))
+            .collect())
     }
 
     /// List available iOS devices for XCUITest testing.
     pub fn list_xcuitest_devices(&self) -> Result<Vec<BrowserStackDevice>> {
-        let json = self.get_json("app-automate/xcuitest/v2/devices")?;
-        parse_device_list(json, "xcuitest")
+        Ok(self
+            .fetch_devices_inventory()?
+            .into_iter()
+            .filter(|device| device.os.eq_ignore_ascii_case("ios"))
+            .collect())
     }
 
     /// List all available devices (both Android and iOS).
     pub fn list_all_devices(&self) -> Result<Vec<BrowserStackDevice>> {
-        let mut devices = Vec::new();
-
-        match self.list_espresso_devices() {
-            Ok(android_devices) => devices.extend(android_devices),
-            Err(e) => {
-                eprintln!("Warning: Failed to fetch Android devices: {}", e);
-            }
-        }
-
-        match self.list_xcuitest_devices() {
-            Ok(ios_devices) => devices.extend(ios_devices),
-            Err(e) => {
-                eprintln!("Warning: Failed to fetch iOS devices: {}", e);
-            }
-        }
-
-        Ok(devices)
+        self.fetch_devices_inventory()
     }
 
     /// Validate device specifications against available devices.
@@ -508,6 +506,51 @@ impl BrowserStackClient {
         Ok(text)
     }
 
+    fn get_session_json(&self, build_id: &str, session_id: &str, platform: &str) -> Result<Value> {
+        let path = match platform {
+            "espresso" => format!(
+                "app-automate/espresso/v2/builds/{}/sessions/{}",
+                build_id, session_id
+            ),
+            "xcuitest" => format!(
+                "app-automate/xcuitest/v2/builds/{}/sessions/{}",
+                build_id, session_id
+            ),
+            _ => return Err(anyhow!("unsupported platform: {}", platform)),
+        };
+
+        self.get_json(&path)
+    }
+
+    fn download_text_url(&self, url: &str) -> Result<String> {
+        let resp = self
+            .asset_request(url)
+            .send()
+            .with_context(|| format!("downloading BrowserStack asset {}", url))?;
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .with_context(|| format!("reading BrowserStack asset body {}", url))?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "BrowserStack asset download failed (status {}): {}",
+                status,
+                String::from_utf8_lossy(&bytes)
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn asset_request(&self, url: &str) -> reqwest::blocking::RequestBuilder {
+        let request = self.http.get(url);
+        if should_authenticate_asset_url(url) {
+            request.basic_auth(&self.auth.username, Some(&self.auth.access_key))
+        } else {
+            request
+        }
+    }
+
     /// Extract benchmark results from device logs
     /// Looks for JSON output matching BenchReport format
     /// Supports both Android (BENCH_JSON) and iOS (BENCH_REPORT_JSON_START/END) formats
@@ -516,7 +559,7 @@ impl BrowserStackClient {
 
         // First, try iOS-style markers: BENCH_REPORT_JSON_START ... BENCH_REPORT_JSON_END
         if let Some(json) = Self::extract_ios_bench_json(logs) {
-            results.push(json);
+            Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
         }
 
         // Also look for Android-style BENCH_JSON marker
@@ -525,12 +568,10 @@ impl BrowserStackClient {
             if let Some(idx) = line.find(bench_json_marker) {
                 let json_part = &line[idx + bench_json_marker.len()..];
                 if let Ok(json) = serde_json::from_str::<Value>(json_part) {
-                    if json.get("function").is_some()
-                        || json.get("samples").is_some()
-                        || json.get("spec").is_some()
-                    {
-                        results.push(json);
-                    }
+                    Self::extend_unique_results(
+                        &mut results,
+                        Self::normalize_benchmark_values(json),
+                    );
                 }
             }
         }
@@ -543,15 +584,8 @@ impl BrowserStackClient {
                 trimmed.contains("\"function\"") && trimmed.contains("\"samples\"");
             if (looks_like_json || looks_like_bench)
                 && let Ok(json) = serde_json::from_str::<Value>(trimmed)
-                && (json.get("function").is_some() || json.get("samples").is_some())
             {
-                // Avoid duplicates
-                if !results
-                    .iter()
-                    .any(|existing| existing.to_string() == json.to_string())
-                {
-                    results.push(json);
-                }
+                Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
             }
         }
 
@@ -559,6 +593,66 @@ impl BrowserStackClient {
             Err(anyhow!("No benchmark results found in device logs"))
         } else {
             Ok(results)
+        }
+    }
+
+    pub(crate) fn extract_benchmark_results_from_artifact(
+        &self,
+        contents: &str,
+    ) -> Result<Vec<Value>> {
+        let trimmed = contents.trim();
+        if !trimmed.is_empty()
+            && let Ok(json) = serde_json::from_str::<Value>(trimmed)
+        {
+            let results = Self::normalize_benchmark_values(json);
+            if !results.is_empty() {
+                return Ok(results);
+            }
+        }
+
+        self.extract_benchmark_results(contents)
+    }
+
+    pub(crate) fn extract_results_from_session_artifacts<F>(
+        &self,
+        session_json: &Value,
+        mut fetch_text: F,
+    ) -> Result<(Vec<Value>, PerformanceMetrics)>
+    where
+        F: FnMut(&str) -> Result<String>,
+    {
+        let artifact_urls = Self::collect_text_artifact_urls(session_json);
+        if artifact_urls.is_empty() {
+            return Err(anyhow!("No text artifact URLs found in session response"));
+        }
+
+        let mut benchmark_results = Vec::new();
+        let mut snapshots = Vec::new();
+
+        for (_, url) in artifact_urls {
+            let contents = match fetch_text(&url) {
+                Ok(contents) => contents,
+                Err(_) => continue,
+            };
+
+            if benchmark_results.is_empty()
+                && let Ok(results) = self.extract_benchmark_results_from_artifact(&contents)
+            {
+                benchmark_results = results;
+            }
+
+            if let Ok(mut artifact_snapshots) = self.extract_performance_snapshots(&contents) {
+                snapshots.append(&mut artifact_snapshots);
+            }
+        }
+
+        if benchmark_results.is_empty() {
+            Err(anyhow!("No benchmark results found in session artifacts"))
+        } else {
+            Ok((
+                benchmark_results,
+                PerformanceMetrics::from_snapshots(snapshots),
+            ))
         }
     }
 
@@ -584,10 +678,11 @@ impl BrowserStackClient {
     fn extract_json_from_ios_log_section(section: &str) -> Option<Value> {
         // First, try the whole section as-is (trimmed)
         let trimmed = section.trim();
-        if trimmed.starts_with('{') && trimmed.ends_with('}') {
-            if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-                return Some(json);
-            }
+        if trimmed.starts_with('{')
+            && trimmed.ends_with('}')
+            && let Ok(json) = serde_json::from_str::<Value>(trimmed)
+        {
+            return Some(json);
         }
 
         // Look for JSON on individual lines, stripping iOS log prefixes
@@ -600,10 +695,10 @@ impl BrowserStackClient {
             // Look for JSON starting with {
             if let Some(json_start) = line.find('{') {
                 let potential_json = &line[json_start..];
-                if let Some(json) = Self::extract_balanced_json(potential_json) {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&json) {
-                        return Some(parsed);
-                    }
+                if let Some(json) = Self::extract_balanced_json(potential_json)
+                    && let Ok(parsed) = serde_json::from_str::<Value>(&json)
+                {
+                    return Some(parsed);
                 }
             }
         }
@@ -625,10 +720,10 @@ impl BrowserStackClient {
 
         if let Some(json_start) = all_content.find('{') {
             let potential_json = &all_content[json_start..];
-            if let Some(json) = Self::extract_balanced_json(potential_json) {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&json) {
-                    return Some(parsed);
-                }
+            if let Some(json) = Self::extract_balanced_json(potential_json)
+                && let Ok(parsed) = serde_json::from_str::<Value>(&json)
+            {
+                return Some(parsed);
             }
         }
 
@@ -677,6 +772,12 @@ impl BrowserStackClient {
     /// Extract performance metrics from device logs
     /// Looks for JSON objects with "type":"performance" or similar performance indicators
     pub fn extract_performance_metrics(&self, logs: &str) -> Result<PerformanceMetrics> {
+        Ok(PerformanceMetrics::from_snapshots(
+            self.extract_performance_snapshots(logs)?,
+        ))
+    }
+
+    fn extract_performance_snapshots(&self, logs: &str) -> Result<Vec<PerformanceSnapshot>> {
         let mut snapshots = Vec::new();
 
         for line in logs.lines() {
@@ -693,12 +794,13 @@ impl BrowserStackClient {
             }
         }
 
-        Ok(PerformanceMetrics::from_snapshots(snapshots))
+        Ok(snapshots)
     }
 
-    /// Wait for build completion and fetch all results including performance metrics
+    /// Wait for build completion and fetch all results including performance metrics.
     ///
-    /// Returns both benchmark results and performance metrics
+    /// Convenience wrapper around [`Self::wait_and_fetch_all_results_with_poll`]
+    /// with default poll interval.
     #[allow(dead_code)]
     pub fn wait_and_fetch_all_results(
         &self,
@@ -741,16 +843,19 @@ impl BrowserStackClient {
                 device.device, device.session_id
             );
 
+            let mut device_benchmark_results: Option<Vec<Value>> = None;
+            let mut device_performance_metrics = PerformanceMetrics::default();
+
             match self.get_device_logs(build_id, &device.session_id, platform) {
                 Ok(logs) => {
                     // Extract benchmark results
                     match self.extract_benchmark_results(&logs) {
-                        Ok(bench_results) => {
-                            println!("    Found {} benchmark result(s)", bench_results.len());
-                            benchmark_results.insert(device.device.clone(), bench_results);
+                        Ok(results) => {
+                            println!("    Found {} benchmark result(s)", results.len());
+                            device_benchmark_results = Some(results);
                         }
                         Err(e) => {
-                            println!("    Warning: No benchmark results - {}", e);
+                            println!("    No benchmark results in live logs: {}", e);
                         }
                     }
 
@@ -761,10 +866,10 @@ impl BrowserStackClient {
                                 "    Found {} performance metric snapshot(s)",
                                 perf_metrics.sample_count
                             );
-                            performance_metrics.insert(device.device.clone(), perf_metrics);
+                            device_performance_metrics = perf_metrics;
                         }
                         Ok(_) => {
-                            println!("    No performance metrics found");
+                            println!("    No performance metrics found in live logs");
                         }
                         Err(e) => {
                             println!("    Warning: Failed to extract performance metrics - {}", e);
@@ -772,8 +877,58 @@ impl BrowserStackClient {
                     }
                 }
                 Err(e) => {
-                    println!("    Failed to fetch logs: {}", e);
+                    println!("    Failed to fetch live logs: {}", e);
                 }
+            }
+
+            if device_benchmark_results.is_none() {
+                match self
+                    .get_session_json(build_id, &device.session_id, platform)
+                    .and_then(|session_json| {
+                        self.extract_results_from_session_artifacts(&session_json, |url| {
+                            self.download_text_url(url)
+                        })
+                    }) {
+                    Ok((results, perf_metrics)) => {
+                        println!(
+                            "    Found {} benchmark result(s) from session artifacts",
+                            results.len()
+                        );
+                        if device_performance_metrics.sample_count == 0
+                            && perf_metrics.sample_count > 0
+                        {
+                            println!(
+                                "    Found {} performance metric snapshot(s) from session artifacts",
+                                perf_metrics.sample_count
+                            );
+                            device_performance_metrics = perf_metrics;
+                        }
+                        device_benchmark_results = Some(results);
+                    }
+                    Err(e) => {
+                        println!(
+                            "    Warning: Failed to fetch results from session artifacts: {e}"
+                        );
+                    }
+                }
+            }
+
+            if let Ok(app_profiling_v2) = self.get_app_profiling_v2(build_id, &device.session_id)
+                && app_profiling_v2.sample_count > 0
+            {
+                println!("    Found App Profiling v2 metrics");
+                device_performance_metrics = merge_performance_metrics(
+                    Some(device_performance_metrics),
+                    Some(app_profiling_v2),
+                )
+                .unwrap_or_default();
+            }
+
+            if let Some(results) = device_benchmark_results {
+                benchmark_results.insert(device.device.clone(), results);
+            }
+            if device_performance_metrics.sample_count > 0 {
+                performance_metrics.insert(device.device.clone(), device_performance_metrics);
             }
         }
 
@@ -782,6 +937,288 @@ impl BrowserStackClient {
         } else {
             Ok((benchmark_results, performance_metrics))
         }
+    }
+
+    /// Fetch session details from BrowserStack API.
+    pub fn get_session_details(&self, build_id: &str, session_id: &str) -> Result<SessionDetails> {
+        let path = format!("/app-automate/builds/{build_id}/sessions/{session_id}");
+        let value = self.get_json(&path)?;
+
+        let automation_session = value
+            .get("automation_session")
+            .context("Missing automation_session in response")?;
+
+        Ok(SessionDetails {
+            device: automation_session
+                .get("device")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            os: automation_session
+                .get("os")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            os_version: automation_session
+                .get("os_version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            duration: automation_session.get("duration").and_then(|v| v.as_u64()),
+        })
+    }
+
+    /// Fetch App Profiling v2 metrics for a BrowserStack session.
+    pub fn get_app_profiling_v2(
+        &self,
+        build_id: &str,
+        session_id: &str,
+    ) -> Result<PerformanceMetrics> {
+        let path = format!("/app-automate/builds/{build_id}/sessions/{session_id}/appprofiling/v2");
+        let value = self.get_json(&path)?;
+        parse_app_profiling_v2_response(&value)
+            .with_context(|| format!("parsing App Profiling v2 for session {session_id}"))
+    }
+
+    /// Fetch build details with all sessions and performance data.
+    pub fn get_build_summary(&self, build_id: &str, platform: &str) -> Result<BuildSummary> {
+        let status = match platform {
+            "ios" => self.get_xcuitest_build_status(build_id)?,
+            _ => self.get_espresso_build_status(build_id)?,
+        };
+
+        let mut sessions = Vec::new();
+        for device_session in &status.devices {
+            let details = self
+                .get_session_details(build_id, &device_session.session_id)
+                .ok();
+
+            let perf = device_session
+                .device_logs
+                .as_ref()
+                .and_then(|logs| self.extract_performance_metrics(logs).ok());
+            let app_profiling_v2 = self
+                .get_app_profiling_v2(build_id, &device_session.session_id)
+                .ok();
+
+            sessions.push(SessionSummary {
+                session_id: device_session.session_id.clone(),
+                device: details
+                    .as_ref()
+                    .map(|d| d.device.clone())
+                    .unwrap_or_else(|| device_session.device.clone()),
+                os: details.as_ref().map(|d| d.os.clone()).unwrap_or_default(),
+                os_version: details
+                    .as_ref()
+                    .map(|d| d.os_version.clone())
+                    .unwrap_or_default(),
+                duration_secs: details.as_ref().and_then(|d| d.duration),
+                performance: merge_performance_metrics(perf, app_profiling_v2),
+            });
+        }
+
+        Ok(BuildSummary {
+            build_id: build_id.to_string(),
+            status: status.status,
+            sessions,
+        })
+    }
+
+    fn normalize_benchmark_values(value: Value) -> Vec<Value> {
+        match value {
+            Value::Array(entries) => entries
+                .into_iter()
+                .filter_map(Self::normalize_benchmark_value)
+                .collect(),
+            value => Self::normalize_benchmark_value(value).into_iter().collect(),
+        }
+    }
+
+    fn normalize_benchmark_value(mut value: Value) -> Option<Value> {
+        let samples = Self::extract_sample_durations(&value);
+        let stats = Self::compute_sample_stats(&samples);
+        let object = value.as_object_mut()?;
+
+        if !object.contains_key("function")
+            && let Some(function) = object
+                .get("spec")
+                .and_then(|spec| spec.get("name"))
+                .and_then(|name| name.as_str())
+        {
+            object.insert("function".to_string(), Value::String(function.to_string()));
+        }
+
+        if !object.contains_key("samples")
+            && let Some(samples_ns) = object
+                .get("samples_ns")
+                .and_then(|samples| samples.as_array())
+        {
+            object.insert("samples".to_string(), Value::Array(samples_ns.clone()));
+        }
+
+        let has_function = object
+            .get("function")
+            .and_then(|value| value.as_str())
+            .is_some();
+        let has_samples = object
+            .get("samples")
+            .and_then(|value| value.as_array())
+            .is_some();
+        let has_stats = ["mean_ns", "median_ns", "p95_ns", "min_ns", "max_ns"]
+            .iter()
+            .any(|key| object.get(*key).is_some());
+
+        if !has_function || (!has_samples && !has_stats) {
+            return None;
+        }
+
+        if let Some(stats) = stats {
+            if !object.contains_key("mean_ns") {
+                object.insert("mean_ns".to_string(), Value::from(stats.mean_ns));
+            }
+            if !object.contains_key("median_ns") {
+                object.insert("median_ns".to_string(), Value::from(stats.median_ns));
+            }
+            if !object.contains_key("p95_ns") {
+                object.insert("p95_ns".to_string(), Value::from(stats.p95_ns));
+            }
+            if !object.contains_key("min_ns") {
+                object.insert("min_ns".to_string(), Value::from(stats.min_ns));
+            }
+            if !object.contains_key("max_ns") {
+                object.insert("max_ns".to_string(), Value::from(stats.max_ns));
+            }
+        }
+
+        Some(value)
+    }
+
+    fn extend_unique_results(results: &mut Vec<Value>, mut new_results: Vec<Value>) {
+        for result in new_results.drain(..) {
+            if !results.iter().any(|existing| existing == &result) {
+                results.push(result);
+            }
+        }
+    }
+
+    fn collect_text_artifact_urls(value: &Value) -> Vec<(String, String)> {
+        let mut urls = Vec::new();
+        Self::collect_text_artifact_urls_recursive(value, "", &mut urls);
+        urls.sort_by_key(|(key, url)| Self::artifact_url_priority(key, url));
+        urls
+    }
+
+    fn collect_text_artifact_urls_recursive(
+        value: &Value,
+        prefix: &str,
+        out: &mut Vec<(String, String)>,
+    ) {
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    let next = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{}.{}", prefix, key)
+                    };
+                    if let Value::String(url) = value
+                        && (url.starts_with("http") || url.starts_with("bs://"))
+                        && Self::artifact_url_priority(&next, url) < 4
+                    {
+                        out.push((next.clone(), url.clone()));
+                    }
+                    Self::collect_text_artifact_urls_recursive(value, &next, out);
+                }
+            }
+            Value::Array(items) => {
+                for (index, value) in items.iter().enumerate() {
+                    let next = format!("{}[{}]", prefix, index);
+                    Self::collect_text_artifact_urls_recursive(value, &next, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn artifact_url_priority(key: &str, url: &str) -> u8 {
+        let lower = format!("{} {}", key.to_ascii_lowercase(), url.to_ascii_lowercase());
+        if lower.contains("bench-report") || lower.contains("bench_report") {
+            0
+        } else if lower.contains("device_log")
+            || lower.contains("devicelog")
+            || lower.contains("instrumentation_log")
+            || lower.contains("app_log")
+        {
+            1
+        } else if lower.ends_with(".json") || lower.ends_with(".log") || lower.ends_with(".txt") {
+            2
+        } else {
+            4
+        }
+    }
+
+    fn extract_sample_durations(value: &Value) -> Vec<u64> {
+        let mut durations = Vec::new();
+
+        if let Some(samples) = value.get("samples").and_then(|samples| samples.as_array()) {
+            for sample in samples {
+                if let Some(duration_ns) = sample
+                    .get("duration_ns")
+                    .and_then(|duration| duration.as_u64())
+                {
+                    durations.push(duration_ns);
+                } else if let Some(duration_ns) = sample.as_u64() {
+                    durations.push(duration_ns);
+                }
+            }
+        }
+
+        if durations.is_empty()
+            && let Some(samples_ns) = value
+                .get("samples_ns")
+                .and_then(|samples| samples.as_array())
+        {
+            durations.extend(samples_ns.iter().filter_map(|sample| sample.as_u64()));
+        }
+
+        durations
+    }
+
+    fn compute_sample_stats(samples: &[u64]) -> Option<NormalizedSampleStats> {
+        if samples.is_empty() {
+            return None;
+        }
+
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        let len = sorted.len();
+        let mean_ns =
+            (sorted.iter().map(|value| *value as u128).sum::<u128>() / len as u128) as u64;
+        let median_ns = if len % 2 == 1 {
+            sorted[len / 2]
+        } else {
+            let lower = sorted[(len / 2) - 1];
+            let upper = sorted[len / 2];
+            (lower + upper) / 2
+        };
+        let p95_ns = sorted[Self::percentile_index(len, 0.95)];
+
+        Some(NormalizedSampleStats {
+            mean_ns,
+            median_ns,
+            p95_ns,
+            min_ns: sorted[0],
+            max_ns: sorted[len - 1],
+        })
+    }
+
+    fn percentile_index(len: usize, percentile: f64) -> usize {
+        if len == 0 {
+            return 0;
+        }
+        let rank = (percentile * len as f64).ceil() as usize;
+        let index = rank.saturating_sub(1);
+        index.min(len - 1)
     }
 }
 
@@ -867,6 +1304,15 @@ pub struct AggregateCpuMetrics {
     pub peak_percent: f64,
     pub average_percent: f64,
     pub min_percent: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NormalizedSampleStats {
+    mean_ns: u64,
+    median_ns: u64,
+    p95_ns: u64,
+    min_ns: u64,
+    max_ns: u64,
 }
 
 impl PerformanceMetrics {
@@ -1031,6 +1477,112 @@ impl From<BuildStatusResponse> for BuildStatus {
     }
 }
 
+fn merge_performance_metrics(
+    base: Option<PerformanceMetrics>,
+    preferred: Option<PerformanceMetrics>,
+) -> Option<PerformanceMetrics> {
+    match (base, preferred) {
+        (None, None) => None,
+        (Some(base), None) => Some(base),
+        (None, Some(preferred)) => Some(preferred),
+        (Some(mut base), Some(preferred)) => {
+            if preferred.memory.is_some() {
+                base.memory = preferred.memory;
+            }
+            if preferred.cpu.is_some() {
+                base.cpu = preferred.cpu;
+            }
+            if !preferred.snapshots.is_empty() {
+                base.snapshots = preferred.snapshots;
+            }
+            base.sample_count = base.sample_count.max(preferred.sample_count);
+            Some(base)
+        }
+    }
+}
+
+fn parse_app_profiling_v2_response(value: &Value) -> Result<PerformanceMetrics> {
+    let data = value
+        .get("data")
+        .and_then(|data| data.as_object())
+        .context("App Profiling v2 response missing data object")?;
+
+    let mut selected_metrics = None;
+
+    for (app_id, app_data) in data {
+        if app_id == "units" {
+            continue;
+        }
+
+        let status = app_data.get("status").and_then(|status| status.as_str());
+        let metrics = app_data.get("metrics");
+        if status == Some("success") && metrics.is_some() {
+            selected_metrics = metrics;
+            break;
+        }
+
+        if selected_metrics.is_none() && metrics.is_some() {
+            selected_metrics = metrics;
+        }
+    }
+
+    let metrics = selected_metrics
+        .and_then(|metrics| metrics.as_object())
+        .context("App Profiling v2 response missing metrics payload")?;
+
+    let cpu_avg = metrics
+        .get("cpu")
+        .and_then(|cpu| cpu.get("avg"))
+        .and_then(|value| value.as_f64());
+    let cpu_max = metrics
+        .get("cpu")
+        .and_then(|cpu| cpu.get("max"))
+        .and_then(|value| value.as_f64());
+    let mem_avg = metrics
+        .get("mem")
+        .and_then(|mem| mem.get("avg"))
+        .and_then(|value| value.as_f64());
+    let mem_max = metrics
+        .get("mem")
+        .and_then(|mem| mem.get("max"))
+        .and_then(|value| value.as_f64());
+
+    let cpu = match (cpu_avg, cpu_max) {
+        (None, None) => None,
+        (avg, max) => {
+            let average_percent = avg.or(max).unwrap_or_default();
+            let peak_percent = max.or(avg).unwrap_or_default();
+            Some(AggregateCpuMetrics {
+                peak_percent,
+                average_percent,
+                min_percent: average_percent.min(peak_percent),
+            })
+        }
+    };
+
+    let memory = match (mem_avg, mem_max) {
+        (None, None) => None,
+        (avg, max) => {
+            let average_mb = avg.or(max).unwrap_or_default();
+            let peak_mb = max.or(avg).unwrap_or_default();
+            Some(AggregateMemoryMetrics {
+                peak_mb,
+                average_mb,
+                min_mb: average_mb.min(peak_mb),
+            })
+        }
+    };
+
+    let sample_count = usize::from(cpu.is_some() || memory.is_some());
+
+    Ok(PerformanceMetrics {
+        sample_count,
+        memory,
+        cpu,
+        snapshots: Vec::new(),
+    })
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BuildRequest {
@@ -1039,6 +1591,8 @@ struct BuildRequest {
     devices: Vec<String>,
     device_logs: bool,
     disable_animations: bool,
+    app_profiling: bool,
+    idle_timeout: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
 }
@@ -1050,6 +1604,7 @@ struct XcuitestBuildRequest {
     test_suite: String,
     devices: Vec<String>,
     device_logs: bool,
+    app_profiling: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
     #[serde(rename = "only-testing", skip_serializing_if = "Option::is_none")]
@@ -1079,6 +1634,20 @@ fn parse_response<T: DeserializeOwned>(resp: Response, context: &str) -> Result<
 
     serde_json::from_str(&text)
         .with_context(|| format!("parsing BrowserStack API response for {}", context))
+}
+
+fn should_authenticate_asset_url(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+
+    host == "browserstack.com" || host.ends_with(".browserstack.com")
 }
 
 /// Parse a device list response from BrowserStack API.
@@ -1289,6 +1858,34 @@ fn validate_device_spec(
     })
 }
 
+/// Details about a single BrowserStack session (from the session API).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDetails {
+    pub device: String,
+    pub os: String,
+    pub os_version: String,
+    pub duration: Option<u64>,
+}
+
+/// High-level summary of a BrowserStack build with all sessions and their metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildSummary {
+    pub build_id: String,
+    pub status: String,
+    pub sessions: Vec<SessionSummary>,
+}
+
+/// Summary of a single session within a build.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub device: String,
+    pub os: String,
+    pub os_version: String,
+    pub duration_secs: Option<u64>,
+    pub performance: Option<PerformanceMetrics>,
+}
+
 /// Format a helpful error message for missing BrowserStack credentials.
 pub fn format_credentials_error(_missing_username: bool, _missing_access_key: bool) -> String {
     let mut message = String::from("BrowserStack credentials not configured.\n\n");
@@ -1317,6 +1914,89 @@ pub fn format_credentials_error(_missing_username: bool, _missing_access_key: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
+    use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn test_client_with_base_url(base_url: impl Into<String>) -> BrowserStackClient {
+        BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap()
+        .with_base_url(base_url)
+    }
+
+    fn spawn_browserstack_json_server(
+        payload: Value,
+    ) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        listener
+            .set_nonblocking(true)
+            .expect("configure nonblocking listener");
+        let addr = listener.local_addr().expect("read test server address");
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let recorded_paths = Arc::clone(&paths);
+        let body = payload.to_string();
+
+        let handle = thread::spawn(move || {
+            let mut last_activity = Instant::now();
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _peer)) => {
+                        last_activity = Instant::now();
+                        stream.set_nonblocking(false).expect("set stream blocking");
+
+                        let mut buf = [0_u8; 4096];
+                        let bytes_read = stream.read(&mut buf).expect("read request");
+                        let request = String::from_utf8_lossy(&buf[..bytes_read]);
+                        let path = request
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or("/")
+                            .to_string();
+
+                        recorded_paths.lock().unwrap().push(path.clone());
+
+                        let (status, response_body) = if path == "/app-automate/devices.json" {
+                            ("200 OK", body.clone())
+                        } else {
+                            (
+                                "404 Not Found",
+                                format!("{{\"error\":\"unexpected path: {path}\"}}"),
+                            )
+                        };
+
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response_body.len(),
+                            response_body
+                        );
+                        stream
+                            .write_all(response.as_bytes())
+                            .expect("write response");
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if last_activity.elapsed() >= Duration::from_secs(2) {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept request: {error}"),
+                }
+            }
+        });
+
+        (format!("http://{addr}"), paths, handle)
+    }
 
     #[test]
     fn rejects_missing_artifact() {
@@ -1346,6 +2026,22 @@ mod tests {
         .with_base_url("https://test.example.com");
 
         assert_eq!(client.base_url, "https://test.example.com");
+    }
+
+    #[test]
+    fn authenticated_asset_downloads_are_limited_to_browserstack_https_hosts() {
+        assert!(should_authenticate_asset_url(
+            "https://api-cloud.browserstack.com/app-automate/logs/123"
+        ));
+        assert!(should_authenticate_asset_url(
+            "https://app-automate.browserstack.com/sessions/123/logs"
+        ));
+        assert!(!should_authenticate_asset_url(
+            "http://api-cloud.browserstack.com/app-automate/logs/123"
+        ));
+        assert!(!should_authenticate_asset_url(
+            "https://evil.example.com/browserstack/logs"
+        ));
     }
 
     #[test]
@@ -1885,6 +2581,79 @@ Test completed
     }
 
     #[test]
+    fn parse_app_profiling_v2_response_extracts_memory_and_cpu() {
+        let metrics = parse_app_profiling_v2_response(&json!({
+            "metadata": {
+                "device": "iPhone 15",
+                "os_version": "17"
+            },
+            "data": {
+                "units": {
+                    "cpu": "%",
+                    "mem": "MB"
+                },
+                "org.world.app": {
+                    "status": "success",
+                    "metrics": {
+                        "cpu": {
+                            "avg": 5.06,
+                            "max": 12.52
+                        },
+                        "mem": {
+                            "avg": 169.45,
+                            "max": 243.57
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("parse v2");
+
+        assert_eq!(metrics.sample_count, 1);
+        let cpu = metrics.cpu.expect("cpu");
+        assert!((cpu.average_percent - 5.06).abs() < 0.001);
+        assert!((cpu.peak_percent - 12.52).abs() < 0.001);
+
+        let memory = metrics.memory.expect("memory");
+        assert!((memory.average_mb - 169.45).abs() < 0.001);
+        assert!((memory.peak_mb - 243.57).abs() < 0.001);
+    }
+
+    #[test]
+    fn build_request_serializes_with_app_profiling_enabled() {
+        let request = BuildRequest {
+            app: "bs://app".into(),
+            test_suite: "bs://suite".into(),
+            devices: vec!["Google Pixel 8-14.0".into()],
+            device_logs: true,
+            disable_animations: true,
+            build_name: Some("mobench".into()),
+            app_profiling: true,
+            idle_timeout: ESPRESSO_IDLE_TIMEOUT_SECS,
+        };
+
+        let value = serde_json::to_value(&request).expect("serialize build request");
+        assert_eq!(value["appProfiling"], true);
+        assert_eq!(value["idleTimeout"], ESPRESSO_IDLE_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn xcuitest_build_request_serializes_with_app_profiling_enabled() {
+        let request = XcuitestBuildRequest {
+            app: "bs://app".into(),
+            test_suite: "bs://suite".into(),
+            devices: vec!["iPhone 15-17".into()],
+            device_logs: true,
+            build_name: Some("mobench".into()),
+            only_testing: Some(vec!["BenchRunnerUITests/test".into()]),
+            app_profiling: true,
+        };
+
+        let value = serde_json::to_value(&request).expect("serialize xcuitest build request");
+        assert_eq!(value["appProfiling"], true);
+    }
+
+    #[test]
     fn extract_benchmark_results_handles_ios_markers() {
         let client = BrowserStackClient::new(
             BrowserStackAuth {
@@ -2221,5 +2990,205 @@ BENCH_REPORT_JSON_END
         assert_eq!(devices.len(), 2);
         assert_eq!(devices[0].device, "Google Pixel 7");
         assert_eq!(devices[1].device, "iPhone 14");
+    }
+
+    #[test]
+    fn device_discovery_uses_unified_inventory_and_filters_by_os() {
+        let payload = json!([
+            {
+                "device": "Google Pixel 8",
+                "os": "ANDROID",
+                "os_version": "14.0",
+                "available": true
+            },
+            {
+                "device": "iPhone 15",
+                "os": "iOS",
+                "os_version": "17",
+                "available": true
+            }
+        ]);
+        let (base_url, paths, handle) = spawn_browserstack_json_server(payload);
+        let client = test_client_with_base_url(base_url);
+
+        let espresso = client.list_espresso_devices();
+        let xcuitest = client.list_xcuitest_devices();
+        let all = client.list_all_devices();
+
+        handle.join().expect("join test server");
+
+        let espresso = espresso.expect("fetch Android devices from unified inventory");
+        let xcuitest = xcuitest.expect("fetch iOS devices from unified inventory");
+        let all = all.expect("fetch all devices from unified inventory");
+
+        assert_eq!(
+            espresso
+                .iter()
+                .map(BrowserStackDevice::identifier)
+                .collect::<Vec<_>>(),
+            vec!["Google Pixel 8-14.0".to_string()]
+        );
+        assert_eq!(
+            xcuitest
+                .iter()
+                .map(BrowserStackDevice::identifier)
+                .collect::<Vec<_>>(),
+            vec!["iPhone 15-17".to_string()]
+        );
+        assert_eq!(
+            all.iter()
+                .map(BrowserStackDevice::identifier)
+                .collect::<Vec<_>>(),
+            vec![
+                "Google Pixel 8-14.0".to_string(),
+                "iPhone 15-17".to_string()
+            ]
+        );
+
+        let paths = paths.lock().unwrap().clone();
+        assert_eq!(
+            paths,
+            vec![
+                "/app-automate/devices.json".to_string(),
+                "/app-automate/devices.json".to_string(),
+                "/app-automate/devices.json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_results_from_session_artifacts_prefers_bench_report_json() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let session_json = json!({
+            "bench_report_url": "https://example.com/bench-report.json",
+            "device_logs_url": "https://example.com/device.log",
+        });
+
+        let (results, metrics) = client
+            .extract_results_from_session_artifacts(&session_json, |url| match url {
+                "https://example.com/bench-report.json" => Ok(json!({
+                    "spec": {
+                        "name": "bench_hash",
+                        "iterations": 2,
+                        "warmup": 1
+                    },
+                    "samples": [
+                        {"duration_ns": 1000},
+                        {"duration_ns": 2000}
+                    ]
+                })
+                .to_string()),
+                "https://example.com/device.log" => Ok("no benchmark markers here".to_string()),
+                other => Err(anyhow!("unexpected artifact url: {other}")),
+            })
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].get("function").and_then(|v| v.as_str()),
+            Some("bench_hash")
+        );
+        assert_eq!(
+            results[0]
+                .get("samples")
+                .and_then(|v| v.as_array())
+                .map(std::vec::Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            results[0].get("mean_ns").and_then(|v| v.as_u64()),
+            Some(1500)
+        );
+        assert_eq!(metrics.sample_count, 0);
+    }
+
+    #[test]
+    fn extract_results_from_session_artifacts_falls_back_to_ios_log_markers() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let session_json = json!({
+            "device_logs_url": "https://example.com/device.log"
+        });
+
+        let (results, _) = client
+            .extract_results_from_session_artifacts(&session_json, |url| match url {
+                "https://example.com/device.log" => Ok(
+                    r#"
+                    2026-01-20 12:34:57 BenchRunner[1:2] BENCH_REPORT_JSON_START
+                    2026-01-20 12:34:57 BenchRunner[1:2] {"spec":{"name":"bench_ios"},"samples_ns":[1000,2000,3000]}
+                    2026-01-20 12:34:57 BenchRunner[1:2] BENCH_REPORT_JSON_END
+                    "#
+                    .to_string(),
+                ),
+                other => Err(anyhow!("unexpected artifact url: {other}")),
+            })
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].get("function").and_then(|v| v.as_str()),
+            Some("bench_ios")
+        );
+        assert_eq!(
+            results[0].get("p95_ns").and_then(|v| v.as_u64()),
+            Some(3000)
+        );
+    }
+
+    #[test]
+    fn extract_results_from_session_artifacts_falls_back_to_android_bench_json_logs() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let session_json = json!({
+            "instrumentation_log_url": "https://example.com/instrumentation.log"
+        });
+
+        let (results, _) = client
+            .extract_results_from_session_artifacts(&session_json, |url| match url {
+                "https://example.com/instrumentation.log" => Ok(
+                    r#"
+                    2026-01-20 12:34:57 I/BenchRunner: BENCH_JSON {"spec":{"name":"bench_android","iterations":2,"warmup":1},"samples_ns":[10,20]}
+                    "#
+                    .to_string(),
+                ),
+                other => Err(anyhow!("unexpected artifact url: {other}")),
+            })
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].get("function").and_then(|v| v.as_str()),
+            Some("bench_android")
+        );
+        assert_eq!(results[0].get("mean_ns").and_then(|v| v.as_u64()), Some(15));
+        assert_eq!(
+            results[0]
+                .get("samples")
+                .and_then(|v| v.as_array())
+                .map(std::vec::Vec::len),
+            Some(2)
+        );
     }
 }

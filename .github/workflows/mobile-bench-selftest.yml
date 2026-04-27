@@ -1,0 +1,51 @@
+name: Mobile Bench Self-Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Target platform"
+        type: choice
+        default: both
+        options:
+          - android
+          - ios
+          - both
+      iterations:
+        description: "Number of benchmark iterations"
+        type: string
+        default: "5"
+      warmup:
+        description: "Number of warmup iterations"
+        type: string
+        default: "1"
+      mobench_version:
+        description: "Mobench version to install from crates.io when mobench_ref is unset"
+        type: string
+        default: ""
+      mobench_ref:
+        description: "Git ref for mobile-bench-rs to install instead of the in-repo path"
+        type: string
+        default: ""
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  selftest:
+    uses: ./.github/workflows/reusable-bench.yml
+    with:
+      crate_path: crates/sample-fns
+      functions: '["sample_fns::fibonacci"]'
+      platform: ${{ inputs.platform }}
+      iterations: ${{ inputs.iterations }}
+      warmup: ${{ inputs.warmup }}
+      device_profile: low-spec
+      build_release: true
+      mobench_version: ${{ inputs.mobench_version }}
+      mobench_ref: ${{ inputs.mobench_ref }}
+    secrets:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}

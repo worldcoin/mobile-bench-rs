@@ -76,6 +76,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// iOS builder that handles the complete build pipeline.
 ///
@@ -272,6 +273,7 @@ impl IosBuilder {
                 platform: Target::Ios,
                 app_path: xcframework_path,
                 test_suite_path: None,
+                native_libraries: Vec::new(),
             });
         }
 
@@ -333,6 +335,7 @@ impl IosBuilder {
             platform: Target::Ios,
             app_path: xcframework_path,
             test_suite_path: None,
+            native_libraries: Vec::new(),
         };
         self.validate_build_artifacts(&result, config)?;
 
@@ -478,12 +481,11 @@ impl IosBuilder {
         // Check if the current directory (project_root) IS the crate
         // This handles the case where user runs `cargo mobench build` from within the crate directory
         let root_cargo_toml = self.project_root.join("Cargo.toml");
-        if root_cargo_toml.exists() {
-            if let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml) {
-                if pkg_name == self.crate_name {
-                    return Ok(self.project_root.clone());
-                }
-            }
+        if root_cargo_toml.exists()
+            && let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml)
+            && pkg_name == self.crate_name
+        {
+            return Ok(self.project_root.clone());
         }
 
         // Try bench-mobile/ (SDK projects)
@@ -616,24 +618,43 @@ impl IosBuilder {
         Ok(())
     }
 
-    /// Checks if required Rust targets are installed
+    /// Checks if required Rust targets are installed.
+    ///
+    /// Uses `rustc --print sysroot` to locate the actual sysroot (respects
+    /// RUSTUP_TOOLCHAIN and toolchain overrides) instead of `rustup target list`
+    /// which may query a different toolchain in CI.
     fn check_rust_targets(&self, targets: &[&str]) -> Result<(), BenchError> {
-        let output = Command::new("rustup")
-            .arg("target")
-            .arg("list")
-            .arg("--installed")
+        let sysroot = Command::new("rustc")
+            .args(["--print", "sysroot"])
             .output()
-            .map_err(|e| {
-                BenchError::Build(format!(
-                    "Failed to check rustup targets: {}. Ensure rustup is installed and on PATH.",
-                    e
-                ))
-            })?;
-
-        let installed = String::from_utf8_lossy(&output.stdout);
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    String::from_utf8(o.stdout).ok()
+                } else {
+                    None
+                }
+            })
+            .map(|s| s.trim().to_string());
 
         for target in targets {
-            if !installed.contains(target) {
+            let installed = if let Some(ref root) = sysroot {
+                // Check if the target's stdlib exists in the active sysroot
+                let lib_dir =
+                    std::path::Path::new(root).join(format!("lib/rustlib/{}/lib", target));
+                lib_dir.exists()
+            } else {
+                // Fallback: ask rustup (may query wrong toolchain in CI)
+                let output = Command::new("rustup")
+                    .args(["target", "list", "--installed"])
+                    .output()
+                    .ok();
+                output
+                    .map(|o| String::from_utf8_lossy(&o.stdout).contains(target))
+                    .unwrap_or(false)
+            };
+
+            if !installed {
                 return Err(BenchError::Build(format!(
                     "Rust target '{}' is not installed.\n\n\
                      This target is required to compile for iOS.\n\n\
@@ -656,7 +677,8 @@ impl IosBuilder {
         let crate_dir = self.find_crate_dir()?;
         let crate_name_underscored = self.crate_name.replace("-", "_");
 
-        // Check if bindings already exist (for repository testing with pre-generated bindings)
+        // Prefer fresh bindings so schema changes in BenchReport stay in sync with the app.
+        // Fall back to pre-generated bindings only if generation tooling is unavailable.
         let bindings_path = self
             .output_dir
             .join("ios")
@@ -664,12 +686,12 @@ impl IosBuilder {
             .join("BenchRunner")
             .join("Generated")
             .join(format!("{}.swift", crate_name_underscored));
-
-        if bindings_path.exists() {
-            if self.verbose {
-                println!("  Using existing Swift bindings at {:?}", bindings_path);
-            }
-            return Ok(());
+        let had_existing_bindings = bindings_path.exists();
+        if had_existing_bindings && self.verbose {
+            println!(
+                "  Found existing Swift bindings at {:?}; regenerating to keep the UniFFI schema current",
+                bindings_path
+            );
         }
 
         // Build host library to feed uniffi-bindgen
@@ -731,6 +753,15 @@ impl IosBuilder {
                 .unwrap_or(false);
 
             if !uniffi_available {
+                if had_existing_bindings {
+                    if self.verbose {
+                        println!(
+                            "  Warning: uniffi-bindgen is unavailable; keeping existing Swift bindings at {:?}",
+                            bindings_path
+                        );
+                    }
+                    return Ok(());
+                }
                 return Err(BenchError::Build(
                     "uniffi-bindgen not found and no pre-generated bindings exist.\n\n\
                      To fix this, either:\n\
@@ -738,8 +769,8 @@ impl IosBuilder {
                         [[bin]]\n\
                         name = \"uniffi-bindgen\"\n\
                         path = \"src/bin/uniffi-bindgen.rs\"\n\n\
-                     2. Or install uniffi-bindgen globally:\n\
-                        cargo install uniffi-bindgen\n\n\
+                     2. Or install a matching uniffi-bindgen CLI globally:\n\
+                        cargo install --git https://github.com/mozilla/uniffi-rs --tag <uniffi-tag> uniffi-bindgen-cli --bin uniffi-bindgen\n\n\
                      3. Or pre-generate bindings and commit them."
                         .to_string(),
                 ));
@@ -753,7 +784,18 @@ impl IosBuilder {
                 .arg("swift")
                 .arg("--out-dir")
                 .arg(&out_dir);
-            run_command(cmd, "uniffi-bindgen swift")?;
+            if let Err(error) = run_command(cmd, "uniffi-bindgen swift") {
+                if had_existing_bindings {
+                    if self.verbose {
+                        println!(
+                            "  Warning: failed to regenerate Swift bindings ({error}); keeping existing bindings at {:?}",
+                            bindings_path
+                        );
+                    }
+                    return Ok(());
+                }
+                return Err(error);
+            }
         }
 
         if self.verbose {
@@ -1482,7 +1524,10 @@ impl IosBuilder {
 
         // Step 1: Build the app for device (simpler than archiving)
         let build_dir = self.output_dir.join("ios/build");
-        let build_configuration = "Debug";
+        // Package the same optimized device binary we ship to BrowserStack.
+        // `Release + iphoneos` has proven more stable in CI than the previous
+        // implicit Debug destination build.
+        let build_configuration = "Release";
         let mut cmd = Command::new("xcodebuild");
         cmd.arg("-project")
             .arg(&project_path)
@@ -1490,6 +1535,8 @@ impl IosBuilder {
             .arg(scheme)
             .arg("-destination")
             .arg("generic/platform=iOS")
+            .arg("-sdk")
+            .arg("iphoneos")
             .arg("-configuration")
             .arg(build_configuration)
             .arg("-derivedDataPath")
@@ -1499,9 +1546,18 @@ impl IosBuilder {
         // Add signing parameters based on method
         match method {
             SigningMethod::AdHoc => {
-                // Ad-hoc signing (works for BrowserStack, no Apple ID needed)
-                // For ad-hoc, we disable signing during build and sign manually after
-                cmd.args(["CODE_SIGNING_REQUIRED=NO", "CODE_SIGNING_ALLOWED=NO"]);
+                // Ad-hoc packaging on CI needs the app target to skip both signing
+                // and product validation; otherwise Xcode exits 65 after emitting a
+                // partial .app bundle with no executable.
+                cmd.args([
+                    "VALIDATE_PRODUCT=NO",
+                    "CODE_SIGN_STYLE=Manual",
+                    "CODE_SIGN_IDENTITY=",
+                    "CODE_SIGNING_ALLOWED=NO",
+                    "CODE_SIGNING_REQUIRED=NO",
+                    "DEVELOPMENT_TEAM=",
+                    "PROVISIONING_PROFILE_SPECIFIER=",
+                ]);
             }
             SigningMethod::Development => {
                 // Development signing (requires Apple Developer account)
@@ -1564,6 +1620,58 @@ impl IosBuilder {
             println!("  App bundle created successfully at {:?}", app_path);
         }
 
+        let build_log_path = export_path.join("ipa-build.log");
+        if let Ok(output) = &build_result
+            && !output.status.success()
+        {
+            let mut log = String::new();
+            log.push_str("STDOUT:\n");
+            log.push_str(&String::from_utf8_lossy(&output.stdout));
+            log.push_str("\n\nSTDERR:\n");
+            log.push_str(&String::from_utf8_lossy(&output.stderr));
+            let _ = fs::write(&build_log_path, log);
+            println!(
+                "Warning: xcodebuild exited with {} but produced {}. Validating the bundle before continuing. Log: {}",
+                output.status,
+                app_path.display(),
+                build_log_path.display()
+            );
+        }
+
+        let source_info_plist = ios_dir.join(scheme).join("Info.plist");
+        if let Err(bundle_err) =
+            self.ensure_device_app_bundle_metadata(&app_path, &source_info_plist, scheme)
+        {
+            if let Ok(output) = &build_result
+                && !output.status.success()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(BenchError::Build(format!(
+                    "xcodebuild build produced an incomplete app bundle.\n\n\
+                     Project: {}\n\
+                     Scheme: {}\n\
+                     Configuration: {}\n\
+                     Derived data: {}\n\
+                     Exit status: {}\n\
+                     Log: {}\n\n\
+                     Bundle validation: {}\n\n\
+                     Stdout:\n{}\n\n\
+                     Stderr:\n{}",
+                    project_path.display(),
+                    scheme,
+                    build_configuration,
+                    build_dir.display(),
+                    output.status,
+                    build_log_path.display(),
+                    bundle_err,
+                    stdout,
+                    stderr
+                )));
+            }
+            return Err(bundle_err);
+        }
+
         if matches!(method, SigningMethod::AdHoc) {
             let profile = find_provisioning_profile();
             let identity = find_codesign_identity();
@@ -1603,7 +1711,10 @@ impl IosBuilder {
 
         println!("Creating IPA from app bundle...");
 
-        // Step 3: Create IPA (which is just a zip of Payload/{app})
+        // Step 3: Stage the app bundle inside Payload/ and archive it with
+        // `ditto`, which preserves the bundle structure the way Xcode-generated
+        // IPAs do. The earlier recursive copy + `zip` path produced invalid
+        // BrowserStack uploads in CI.
         let payload_dir = export_path.join("Payload");
         if payload_dir.exists() {
             fs::remove_dir_all(&payload_dir).map_err(|e| {
@@ -1622,11 +1733,11 @@ impl IosBuilder {
             ))
         })?;
 
-        // Copy app bundle into Payload/
+        // Copy app bundle into Payload/ using the standard macOS bundle copier.
         let dest_app = payload_dir.join(format!("{}.app", scheme));
-        self.copy_dir_recursive(&app_path, &dest_app)?;
+        self.copy_bundle_with_ditto(&app_path, &dest_app)?;
 
-        // Create zip archive
+        // Create IPA archive
         if ipa_path.exists() {
             fs::remove_file(&ipa_path).map_err(|e| {
                 BenchError::Build(format!(
@@ -1637,17 +1748,21 @@ impl IosBuilder {
             })?;
         }
 
-        let mut cmd = Command::new("zip");
-        cmd.arg("-qr")
-            .arg(&ipa_path)
+        let mut cmd = Command::new("ditto");
+        cmd.arg("-c")
+            .arg("-k")
+            .arg("--sequesterRsrc")
+            .arg("--keepParent")
             .arg("Payload")
+            .arg(&ipa_path)
             .current_dir(&export_path);
 
         if self.verbose {
             println!("  Running: {:?}", cmd);
         }
 
-        run_command(cmd, "zip IPA")?;
+        run_command(cmd, "create IPA archive with ditto")?;
+        self.validate_ipa_archive(&ipa_path, scheme)?;
 
         // Clean up Payload directory
         fs::remove_dir_all(&payload_dir).map_err(|e| {
@@ -1831,42 +1946,126 @@ impl IosBuilder {
         Ok(zip_path)
     }
 
-    /// Recursively copies a directory
-    fn copy_dir_recursive(&self, src: &Path, dest: &Path) -> Result<(), BenchError> {
-        fs::create_dir_all(dest).map_err(|e| {
-            BenchError::Build(format!("Failed to create directory {:?}: {}", dest, e))
-        })?;
+    fn copy_bundle_with_ditto(&self, src: &Path, dest: &Path) -> Result<(), BenchError> {
+        let mut cmd = Command::new("ditto");
+        cmd.arg(src).arg(dest);
 
-        for entry in fs::read_dir(src)
-            .map_err(|e| BenchError::Build(format!("Failed to read directory {:?}: {}", src, e)))?
-        {
-            let entry =
-                entry.map_err(|e| BenchError::Build(format!("Failed to read entry: {}", e)))?;
-            let path = entry.path();
-            let file_name = path
-                .file_name()
-                .ok_or_else(|| BenchError::Build(format!("Invalid file name in {:?}", path)))?;
-            let dest_path = dest.join(file_name);
+        if self.verbose {
+            println!("  Running: {:?}", cmd);
+        }
 
-            if path.is_dir() {
-                self.copy_dir_recursive(&path, &dest_path)?;
-            } else {
-                fs::copy(&path, &dest_path).map_err(|e| {
-                    BenchError::Build(format!(
-                        "Failed to copy {:?} to {:?}: {}",
-                        path, dest_path, e
-                    ))
-                })?;
+        run_command(cmd, "copy app bundle with ditto")
+    }
+
+    fn ensure_device_app_bundle_metadata(
+        &self,
+        app_path: &Path,
+        source_info_plist: &Path,
+        scheme: &str,
+    ) -> Result<(), BenchError> {
+        let bundled_info_plist = app_path.join("Info.plist");
+        if !bundled_info_plist.is_file() {
+            if !source_info_plist.is_file() {
+                return Err(BenchError::Build(format!(
+                    "Built app bundle at {} is missing Info.plist, and the generated source plist was not found at {}.\n\n\
+                     The device build produced an incomplete .app bundle, so packaging cannot continue.",
+                    app_path.display(),
+                    source_info_plist.display()
+                )));
             }
+
+            fs::copy(source_info_plist, &bundled_info_plist).map_err(|e| {
+                BenchError::Build(format!(
+                    "Built app bundle at {} is missing Info.plist, and restoring it from {} failed: {}.",
+                    app_path.display(),
+                    source_info_plist.display(),
+                    e
+                ))
+            })?;
+            println!(
+                "Warning: Restored missing Info.plist into built app bundle from {}.",
+                source_info_plist.display()
+            );
+        }
+
+        let executable = app_path.join(scheme);
+        if !executable.is_file() {
+            return Err(BenchError::Build(format!(
+                "Built app bundle at {} is missing the expected executable {}.\n\n\
+                 The device build produced an incomplete .app bundle, so packaging cannot continue.",
+                app_path.display(),
+                executable.display()
+            )));
         }
 
         Ok(())
+    }
+
+    fn validate_ipa_archive(&self, ipa_path: &Path, scheme: &str) -> Result<(), BenchError> {
+        let extract_root = env::temp_dir().join(format!(
+            "mobench-ipa-validate-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+
+        if extract_root.exists() {
+            fs::remove_dir_all(&extract_root).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to clear IPA validation dir at {}: {}",
+                    extract_root.display(),
+                    e
+                ))
+            })?;
+        }
+        fs::create_dir_all(&extract_root).map_err(|e| {
+            BenchError::Build(format!(
+                "Failed to create IPA validation dir at {}: {}",
+                extract_root.display(),
+                e
+            ))
+        })?;
+
+        let mut extract = Command::new("ditto");
+        extract.arg("-x").arg("-k").arg(ipa_path).arg(&extract_root);
+
+        let extract_result = run_command(extract, "extract IPA for validation");
+        if let Err(err) = extract_result {
+            let _ = fs::remove_dir_all(&extract_root);
+            return Err(err);
+        }
+
+        let info_plist = extract_root
+            .join("Payload")
+            .join(format!("{}.app", scheme))
+            .join("Info.plist");
+        let validation_result = if info_plist.is_file() {
+            Ok(())
+        } else {
+            Err(BenchError::Build(format!(
+                "IPA validation failed: {} is missing from {}.\n\n\
+                 The packaged IPA does not contain a valid iOS app bundle. \
+                 BrowserStack will reject this upload.",
+                info_plist
+                    .strip_prefix(&extract_root)
+                    .unwrap_or(&info_plist)
+                    .display(),
+                ipa_path.display()
+            )))
+        };
+
+        let _ = fs::remove_dir_all(&extract_root);
+        validation_result
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    use std::io::Write;
 
     #[test]
     fn test_ios_builder_creation() {
@@ -1889,6 +2088,166 @@ mod tests {
         let builder =
             IosBuilder::new("/tmp/test-project", "test-bench-mobile").output_dir("/custom/output");
         assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_validate_ipa_archive_rejects_missing_info_plist() {
+        let temp_dir = env::temp_dir().join(format!(
+            "mobench-ios-test-bad-ipa-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let payload = temp_dir.join("Payload/BenchRunner.app");
+        fs::create_dir_all(&payload).expect("create payload");
+        let ipa = temp_dir.join("broken.ipa");
+
+        let status = Command::new("ditto")
+            .arg("-c")
+            .arg("-k")
+            .arg("--sequesterRsrc")
+            .arg("--keepParent")
+            .arg("Payload")
+            .arg(&ipa)
+            .current_dir(&temp_dir)
+            .status()
+            .expect("run ditto");
+        assert!(status.success(), "ditto should create the broken test ipa");
+
+        let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let err = builder
+            .validate_ipa_archive(&ipa, "BenchRunner")
+            .expect_err("IPA missing Info.plist should be rejected");
+        assert!(
+            err.to_string().contains("Info.plist"),
+            "expected validation error mentioning Info.plist, got: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_validate_ipa_archive_accepts_payload_with_info_plist() {
+        let temp_dir = env::temp_dir().join(format!(
+            "mobench-ios-test-good-ipa-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let payload = temp_dir.join("Payload/BenchRunner.app");
+        fs::create_dir_all(&payload).expect("create payload");
+        let mut info = fs::File::create(payload.join("Info.plist")).expect("create plist");
+        writeln!(
+            info,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"></plist>"
+        )
+        .expect("write plist");
+        let ipa = temp_dir.join("valid.ipa");
+
+        let status = Command::new("ditto")
+            .arg("-c")
+            .arg("-k")
+            .arg("--sequesterRsrc")
+            .arg("--keepParent")
+            .arg("Payload")
+            .arg(&ipa)
+            .current_dir(&temp_dir)
+            .status()
+            .expect("run ditto");
+        assert!(status.success(), "ditto should create the valid test ipa");
+
+        let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
+        builder
+            .validate_ipa_archive(&ipa, "BenchRunner")
+            .expect("IPA with Info.plist should validate");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_ensure_device_app_bundle_metadata_restores_missing_info_plist() {
+        let temp_dir = env::temp_dir().join(format!(
+            "mobench-ios-test-repair-plist-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let app_dir = temp_dir.join("Build/Products/Release-iphoneos/BenchRunner.app");
+        fs::create_dir_all(&app_dir).expect("create app dir");
+        fs::write(app_dir.join("BenchRunner"), "bin").expect("create executable");
+
+        let source_dir = temp_dir.join("BenchRunner");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::write(
+            source_dir.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"></plist>",
+        )
+        .expect("create source plist");
+
+        let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
+        builder
+            .ensure_device_app_bundle_metadata(
+                &app_dir,
+                &source_dir.join("Info.plist"),
+                "BenchRunner",
+            )
+            .expect("missing plist should be restored");
+
+        assert!(
+            app_dir.join("Info.plist").is_file(),
+            "restored app bundle should contain Info.plist"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_ensure_device_app_bundle_metadata_rejects_missing_executable() {
+        let temp_dir = env::temp_dir().join(format!(
+            "mobench-ios-test-missing-exec-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let app_dir = temp_dir.join("Build/Products/Release-iphoneos/BenchRunner.app");
+        fs::create_dir_all(&app_dir).expect("create app dir");
+        fs::write(
+            app_dir.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"></plist>",
+        )
+        .expect("create bundled plist");
+        let source_dir = temp_dir.join("BenchRunner");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::write(
+            source_dir.join("Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"></plist>",
+        )
+        .expect("create source plist");
+
+        let builder = IosBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let err = builder
+            .ensure_device_app_bundle_metadata(
+                &app_dir,
+                &source_dir.join("Info.plist"),
+                "BenchRunner",
+            )
+            .expect_err("missing executable should fail validation");
+        assert!(
+            err.to_string().contains("missing the expected executable"),
+            "expected executable validation error, got: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

@@ -1,0 +1,9 @@
+flowchart TD
+    workflow["GitHub Actions"] --> resolve["Resolve device matrix"]
+    resolve --> build["Build APK or IPA/XCUITest"]
+    build --> upload["Upload artifacts to BrowserStack"]
+    upload --> run["Run benchmark on selected devices"]
+    run --> fetch["Fetch logs, reports, and metrics"]
+    fetch --> normalize["Normalize timing, CPU, and memory"]
+    normalize --> outputs["summary.json\nsummary.md\nresults.csv\nplots"]
+    outputs --> pr["Optional PR comment/check run"]

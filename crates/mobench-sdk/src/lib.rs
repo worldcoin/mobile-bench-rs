@@ -4,14 +4,15 @@
 //! [![Documentation](https://docs.rs/mobench-sdk/badge.svg)](https://docs.rs/mobench-sdk)
 //! [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/worldcoin/mobile-bench-rs/blob/main/LICENSE)
 //!
-//! A mobile benchmarking SDK for Rust that enables running performance benchmarks
-//! on real Android and iOS devices via BrowserStack App Automate.
+//! A mobile benchmarking SDK for Rust that provides the runtime, builders, and
+//! generated mobile runners used by the `mobench` CLI for local execution,
+//! BrowserStack benchmark runs, and local native profiling.
 //!
 //! ## Overview
 //!
 //! `mobench-sdk` provides a simple, declarative API for defining benchmarks that can
-//! run on mobile devices. It handles the complexity of cross-compilation, FFI bindings,
-//! and mobile app packaging automatically.
+//! run on mobile devices. It handles the timing/runtime layer, cross-compilation,
+//! FFI bindings, template generation, and mobile app packaging used by the CLI.
 //!
 //! ## Quick Setup Checklist
 //!
@@ -21,7 +22,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1"
+//! mobench-sdk = "0.1.37"
 //! inventory = "0.3"  # Required for benchmark registration
 //!
 //! [lib]
@@ -64,7 +65,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1"
+//! mobench-sdk = "0.1.37"
 //! inventory = "0.3"  # Required for benchmark registration
 //! ```
 //!
@@ -106,6 +107,10 @@
 //! # Run on BrowserStack (use --release for smaller APK uploads)
 //! cargo mobench run --target android --function my_expensive_operation \
 //!     --iterations 100 --warmup 10 --devices "Google Pixel 7-13.0" --release
+//!
+//! # Or capture a local native profile
+//! cargo mobench profile run --target android --provider local \
+//!     --backend android-native --function my_expensive_operation
 //! ```
 //!
 //! ## Architecture
@@ -115,10 +120,10 @@
 //! | Module | Description |
 //! |--------|-------------|
 //! | [`timing`] | Core timing infrastructure (always available) |
-//! | [`registry`] | Runtime discovery of `#[benchmark]` functions (requires `full` feature) |
-//! | [`runner`] | Benchmark execution engine (requires `full` feature) |
-//! | [`builders`] | Android and iOS build automation (requires `full` feature) |
-//! | [`codegen`] | Mobile app template generation (requires `full` feature) |
+//! | [`registry`] | Runtime discovery of `#[benchmark]` functions (requires `registry` or `full` feature) |
+//! | [`runner`] | Benchmark execution engine (requires `registry` or `full` feature) |
+//! | [`builders`] | Android and iOS build automation (requires `builders` or `full` feature) |
+//! | [`codegen`] | Mobile app template generation (requires `codegen`, `builders`, or `full` feature) |
 //! | [`types`] | Common types and error definitions |
 //!
 //! ## Crate Ecosystem
@@ -136,64 +141,76 @@
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
 //! | `full` | Yes | Full SDK with build automation, templates, and registry |
+//! | `registry` | No | Benchmark macro, inventory registry, and runtime execution without build tooling |
+//! | `builders` | No | Android/iOS build automation; enables `codegen` |
+//! | `codegen` | No | Project and mobile app template generation |
 //! | `runner-only` | No | Minimal timing-only mode for mobile binaries |
 //!
 //! For mobile binaries where binary size matters, use `runner-only`:
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = { version = "0.1", default-features = false, features = ["runner-only"] }
+//! mobench-sdk = { version = "0.1.37", default-features = false, features = ["runner-only"] }
 //! ```
 //!
 //! ## Programmatic Usage
 //!
 //! You can also use the SDK programmatically:
 //!
-//! ### Using the Builder Pattern
+//! ### Using the Benchmark Builder Pattern
+//!
+//! Requires the `registry` or `full` feature.
 //!
 //! ```ignore
 //! use mobench_sdk::BenchmarkBuilder;
 //!
-//! let report = BenchmarkBuilder::new("my_benchmark")
-//!     .iterations(100)
-//!     .warmup(10)
-//!     .run()?;
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let report = BenchmarkBuilder::new("my_benchmark")
+//!         .iterations(100)
+//!         .warmup(10)
+//!         .run()?;
 //!
-//! println!("Mean: {} ns", report.samples.iter()
-//!     .map(|s| s.duration_ns)
-//!     .sum::<u64>() / report.samples.len() as u64);
+//!     println!("Mean: {} ns", report.mean_ns());
+//!     Ok(())
+//! }
 //! ```
 //!
-//! ### Using BenchSpec Directly
+//! ### Using BenchSpec With Registry Dispatch
+//!
+//! Requires the `registry` or `full` feature. With `runner-only`, use
+//! [`run_closure`] or [`timing::run_closure`] for manual dispatch instead.
 //!
 //! ```ignore
 //! use mobench_sdk::{BenchSpec, run_benchmark};
 //!
-//! let spec = BenchSpec {
-//!     name: "my_benchmark".to_string(),
-//!     iterations: 50,
-//!     warmup: 5,
-//! };
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let spec = BenchSpec::new("my_benchmark", 50, 5)?;
 //!
-//! let report = run_benchmark(spec)?;
-//! println!("Collected {} samples", report.samples.len());
+//!     let report = run_benchmark(spec)?;
+//!     println!("Collected {} samples", report.samples.len());
+//!     Ok(())
+//! }
 //! ```
 //!
 //! ### Discovering Benchmarks
 //!
+//! Requires the `registry` or `full` feature.
+//!
 //! ```ignore
 //! use mobench_sdk::{discover_benchmarks, list_benchmark_names};
 //!
-//! // Get all registered benchmark names
-//! let names = list_benchmark_names();
-//! for name in names {
-//!     println!("Found benchmark: {}", name);
-//! }
+//! fn main() {
+//!     // Get all registered benchmark names
+//!     let names = list_benchmark_names();
+//!     for name in names {
+//!         println!("Found benchmark: {}", name);
+//!     }
 //!
-//! // Get full benchmark function info
-//! let benchmarks = discover_benchmarks();
-//! for bench in benchmarks {
-//!     println!("Benchmark: {}", bench.name);
+//!     // Get full benchmark function info
+//!     let benchmarks = discover_benchmarks();
+//!     for bench in benchmarks {
+//!         println!("Benchmark: {}", bench.name);
+//!     }
 //! }
 //! ```
 //!
@@ -269,12 +286,13 @@
 //!
 //! - Android NDK (set `ANDROID_NDK_HOME` environment variable)
 //! - `cargo-ndk` (`cargo install cargo-ndk`)
-//! - Rust targets: `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`
+//! - Rust targets: `rustup target add aarch64-linux-android`
+//! - Optional extra ABI targets only when configured explicitly
 //!
 //! ### iOS
 //!
 //! - Xcode with command line tools
-//! - `uniffi-bindgen` (`cargo install uniffi-bindgen`)
+//! - `uniffi-bindgen` (`cargo install --git https://github.com/mozilla/uniffi-rs --tag <uniffi-tag> uniffi-bindgen-cli --bin uniffi-bindgen`)
 //! - `xcodegen` (optional, `brew install xcodegen`)
 //! - Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`
 //!
@@ -337,48 +355,51 @@ pub mod uniffi_types;
 // Unified FFI module for UniFFI integration
 pub mod ffi;
 
-// Full SDK modules - only with "full" feature
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+// Build automation modules - only with builder/codegen features
+#[cfg(feature = "builders")]
+#[cfg_attr(docsrs, doc(cfg(feature = "builders")))]
 pub mod builders;
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+#[cfg(feature = "codegen")]
+#[cfg_attr(docsrs, doc(cfg(feature = "codegen")))]
 pub mod codegen;
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+
+// Registry runtime modules - available without build tooling
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub mod registry;
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub mod runner;
 
-// Re-export the benchmark macro from bench-macros (only with full feature)
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+// Re-export the benchmark macro from bench-macros (only with registry feature)
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub use mobench_macros::benchmark;
 
 // Re-export inventory so users don't need to add it as a separate dependency
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub use inventory;
 
-// Re-export key types for convenience (full feature)
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+// Re-export key registry types for convenience
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub use registry::{BenchFunction, discover_benchmarks, find_benchmark, list_benchmark_names};
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub use runner::{BenchmarkBuilder, run_benchmark};
 
 // Re-export types that are always available
-pub use types::{BenchError, BenchSample, BenchSpec, RunnerReport};
+pub use types::{BenchError, BenchSample, BenchSpec, HarnessTimelineSpan, RunnerReport};
 
-// Re-export types that require full feature
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
-pub use types::{BuildConfig, BuildProfile, BuildResult, InitConfig, Target};
+// Re-export build/config types. These are plain data types and do not pull in
+// build automation dependencies by themselves.
+pub use types::{
+    BuildConfig, BuildProfile, BuildResult, InitConfig, NativeLibraryArtifact, Target,
+};
 
 // Re-export timing types at the crate root for convenience
-pub use timing::{BenchSummary, TimingError, run_closure};
+pub use timing::{BenchSummary, SemanticPhase, TimingError, profile_phase, run_closure};
 
 /// Re-export of [`std::hint::black_box`] for preventing compiler optimizations.
 ///
@@ -429,8 +450,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 2. Ensure functions are `pub` (public visibility)
 /// 3. Ensure the crate with benchmarks is linked into the binary
 /// 4. Check that `inventory` crate is in your dependencies
-#[cfg(feature = "full")]
-#[cfg_attr(docsrs, doc(cfg(feature = "full")))]
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 #[macro_export]
 macro_rules! debug_benchmarks {
     () => {
@@ -467,7 +488,7 @@ mod tests {
         assert!(!VERSION.is_empty());
     }
 
-    #[cfg(feature = "full")]
+    #[cfg(feature = "registry")]
     #[test]
     fn test_discover_benchmarks_compiles() {
         // This test just ensures the function is accessible

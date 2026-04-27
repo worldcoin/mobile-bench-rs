@@ -35,11 +35,13 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            Task {
+            Task.detached(priority: .userInitiated) {
                 let result = await BenchRunnerFFI.runCurrentBenchmark()
-                report = result.displayText
-                reportJSON = result.jsonReport
-                isCompleted = true
+                await MainActor.run {
+                    report = result.displayText
+                    reportJSON = result.jsonReport
+                    isCompleted = true
+                }
 
                 // Log the JSON report with markers for BrowserStack device logs
                 NSLog("BENCH_REPORT_JSON_START")

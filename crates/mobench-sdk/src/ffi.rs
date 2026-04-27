@@ -75,12 +75,24 @@ impl From<BenchSpecFfi> for crate::BenchSpec {
 pub struct BenchSampleFfi {
     /// Duration of the iteration in nanoseconds.
     pub duration_ns: u64,
+    /// CPU time consumed by the measured iteration in milliseconds.
+    pub cpu_time_ms: Option<u64>,
+    /// Peak memory growth during the measured iteration in kilobytes.
+    ///
+    /// This is the legacy wire field for baseline-adjusted growth, not
+    /// absolute process or device peak memory.
+    pub peak_memory_kb: Option<u64>,
+    /// Peak resident memory of the benchmark process during the measured iteration.
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 impl From<crate::BenchSample> for BenchSampleFfi {
     fn from(sample: crate::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -89,6 +101,9 @@ impl From<BenchSampleFfi> for crate::BenchSample {
     fn from(sample: BenchSampleFfi) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -100,6 +115,46 @@ pub struct BenchReportFfi {
     pub spec: BenchSpecFfi,
     /// All collected timing samples.
     pub samples: Vec<BenchSampleFfi>,
+    /// Optional semantic phase timings captured during measured iterations.
+    pub phases: Vec<SemanticPhaseFfi>,
+    /// Exact harness timeline spans in execution order.
+    pub timeline: Vec<HarnessTimelineSpanFfi>,
+}
+
+/// FFI-ready semantic phase timing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticPhaseFfi {
+    pub name: String,
+    pub duration_ns: u64,
+}
+
+impl From<crate::SemanticPhase> for SemanticPhaseFfi {
+    fn from(phase: crate::SemanticPhase) -> Self {
+        Self {
+            name: phase.name,
+            duration_ns: phase.duration_ns,
+        }
+    }
+}
+
+/// FFI-ready exact harness timeline span.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarnessTimelineSpanFfi {
+    pub phase: String,
+    pub start_offset_ns: u64,
+    pub end_offset_ns: u64,
+    pub iteration: Option<u32>,
+}
+
+impl From<crate::HarnessTimelineSpan> for HarnessTimelineSpanFfi {
+    fn from(span: crate::HarnessTimelineSpan) -> Self {
+        Self {
+            phase: span.phase,
+            start_offset_ns: span.start_offset_ns,
+            end_offset_ns: span.end_offset_ns,
+            iteration: span.iteration,
+        }
+    }
 }
 
 impl From<crate::RunnerReport> for BenchReportFfi {
@@ -107,6 +162,8 @@ impl From<crate::RunnerReport> for BenchReportFfi {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
+            phases: report.phases.into_iter().map(Into::into).collect(),
+            timeline: report.timeline.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -189,7 +246,7 @@ where
 /// Run a benchmark and return FFI-ready result.
 ///
 /// This is a convenience function that wraps `run_benchmark` with FFI type conversions.
-#[cfg(feature = "full")]
+#[cfg(feature = "registry")]
 pub fn run_benchmark_ffi(spec: BenchSpecFfi) -> Result<BenchReportFfi, BenchErrorFfi> {
     let sdk_spec: crate::BenchSpec = spec.into();
     crate::run_benchmark(sdk_spec)
@@ -220,9 +277,17 @@ mod tests {
 
     #[test]
     fn test_bench_sample_ffi_conversion() {
-        let sdk_sample = crate::BenchSample { duration_ns: 12345 };
+        let sdk_sample = crate::BenchSample {
+            duration_ns: 12345,
+            cpu_time_ms: Some(12),
+            peak_memory_kb: Some(48),
+            process_peak_memory_kb: Some(1024),
+        };
         let ffi: BenchSampleFfi = sdk_sample.into();
         assert_eq!(ffi.duration_ns, 12345);
+        assert_eq!(ffi.cpu_time_ms, Some(12));
+        assert_eq!(ffi.peak_memory_kb, Some(48));
+        assert_eq!(ffi.process_peak_memory_kb, Some(1024));
     }
 
     #[test]
@@ -234,15 +299,42 @@ mod tests {
                 warmup: 1,
             },
             samples: vec![
-                crate::BenchSample { duration_ns: 100 },
-                crate::BenchSample { duration_ns: 200 },
+                crate::BenchSample {
+                    duration_ns: 100,
+                    cpu_time_ms: Some(3),
+                    peak_memory_kb: Some(8),
+                    process_peak_memory_kb: Some(108),
+                },
+                crate::BenchSample {
+                    duration_ns: 200,
+                    cpu_time_ms: Some(5),
+                    peak_memory_kb: Some(13),
+                    process_peak_memory_kb: Some(113),
+                },
             ],
+            phases: vec![crate::SemanticPhase {
+                name: "prove".to_string(),
+                duration_ns: 300,
+            }],
+            timeline: vec![crate::HarnessTimelineSpan {
+                phase: "measured-benchmark".to_string(),
+                start_offset_ns: 0,
+                end_offset_ns: 100,
+                iteration: Some(0),
+            }],
         };
 
         let ffi: BenchReportFfi = report.into();
         assert_eq!(ffi.spec.name, "test");
         assert_eq!(ffi.samples.len(), 2);
         assert_eq!(ffi.samples[0].duration_ns, 100);
+        assert_eq!(ffi.samples[0].cpu_time_ms, Some(3));
+        assert_eq!(ffi.samples[0].peak_memory_kb, Some(8));
+        assert_eq!(ffi.samples[0].process_peak_memory_kb, Some(108));
+        assert_eq!(ffi.phases.len(), 1);
+        assert_eq!(ffi.phases[0].name, "prove");
+        assert_eq!(ffi.timeline.len(), 1);
+        assert_eq!(ffi.timeline[0].phase, "measured-benchmark");
     }
 
     #[test]

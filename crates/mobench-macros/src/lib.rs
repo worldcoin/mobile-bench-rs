@@ -277,6 +277,15 @@ pub fn benchmark(attr: TokenStream, item: TokenStream) -> TokenStream {
     let block = &input_fn.block;
     let attrs = &input_fn.attrs;
 
+    if input_fn.sig.asyncness.is_some() {
+        return syn::Error::new_spanned(
+            input_fn.sig.asyncness,
+            "#[benchmark] does not support async fn. Move async work into a synchronous runtime boundary so the benchmark measures execution instead of future creation.",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     // Validate based on whether setup is provided
     if args.setup.is_some() {
         // With setup: must have exactly one parameter
