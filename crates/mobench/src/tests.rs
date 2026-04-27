@@ -1227,6 +1227,58 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
     }
 
     #[test]
+    fn compare_summaries_accepts_raw_benchmark_reports() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let baseline = temp_dir.path().join("baseline.json");
+        let candidate = temp_dir.path().join("candidate.json");
+        write_file(
+            &baseline,
+            serde_json::to_string_pretty(&json!({
+                "spec": {
+                    "name": "bench_mobile::bench_prove",
+                    "iterations": 3,
+                    "warmup": 1
+                },
+                "samples": [
+                    { "duration_ns": 1_000_000_u64 },
+                    { "duration_ns": 2_000_000_u64 },
+                    { "duration_ns": 3_000_000_u64 }
+                ]
+            }))
+            .expect("serialize baseline")
+            .as_bytes(),
+        )
+        .expect("write baseline");
+        write_file(
+            &candidate,
+            serde_json::to_string_pretty(&json!({
+                "spec": {
+                    "name": "bench_mobile::bench_prove",
+                    "iterations": 3,
+                    "warmup": 1
+                },
+                "samples_ns": [
+                    2_000_000_u64,
+                    3_000_000_u64,
+                    4_000_000_u64
+                ]
+            }))
+            .expect("serialize candidate")
+            .as_bytes(),
+        )
+        .expect("write candidate");
+
+        let report = compare_summaries(&baseline, &candidate).expect("compare summaries");
+
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(report.rows[0].device, "local");
+        assert_eq!(report.rows[0].function, "bench_mobile::bench_prove");
+        assert_eq!(report.rows[0].baseline_median_ns, Some(2_000_000));
+        assert_eq!(report.rows[0].candidate_median_ns, Some(3_000_000));
+        assert_eq!(report.rows[0].median_delta_pct, Some(50.0));
+    }
+
+    #[test]
     fn render_markdown_summary_includes_resource_usage_columns_when_present() {
         let markdown = render_markdown_summary(&SummaryReport {
             generated_at: "2026-04-12T00:00:00Z".to_string(),

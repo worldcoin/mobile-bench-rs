@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::reports::{ensure_parent_dir, format_ms};
-use crate::{BenchmarkStats, RunSummary, SummaryReport, repo_root, write_file};
+use crate::{BenchmarkOutput, BenchmarkStats, SummaryReport, repo_root, write_file};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RegressionFinding {
@@ -161,11 +161,11 @@ pub(crate) struct CompareRow {
 }
 
 pub(crate) fn compare_summaries(baseline: &Path, candidate: &Path) -> Result<CompareReport> {
-    let baseline_summary = load_run_summary(baseline)?;
-    let candidate_summary = load_run_summary(candidate)?;
+    let baseline_summary = load_compare_summary(baseline)?;
+    let candidate_summary = load_compare_summary(candidate)?;
 
-    let baseline_map = summary_lookup(&baseline_summary.summary);
-    let candidate_map = summary_lookup(&candidate_summary.summary);
+    let baseline_map = summary_lookup(&baseline_summary);
+    let candidate_map = summary_lookup(&candidate_summary);
 
     let mut rows = Vec::new();
     let mut devices: BTreeMap<String, ()> = BTreeMap::new();
@@ -219,9 +219,35 @@ pub(crate) fn compare_summaries(baseline: &Path, candidate: &Path) -> Result<Com
     })
 }
 
-fn load_run_summary(path: &Path) -> Result<RunSummary> {
+fn load_compare_summary(path: &Path) -> Result<SummaryReport> {
     let contents = fs::read_to_string(path).with_context(|| format!("reading {:?}", path))?;
-    serde_json::from_str(&contents).with_context(|| format!("parsing summary {:?}", path))
+    let value: Value =
+        serde_json::from_str(&contents).with_context(|| format!("parsing summary {:?}", path))?;
+    let output = BenchmarkOutput::from_value(&value)
+        .with_context(|| format!("normalizing benchmark output {:?}", path))?;
+    flatten_benchmark_output(&output).with_context(|| format!("flattening {:?}", path))
+}
+
+fn flatten_benchmark_output(output: &BenchmarkOutput) -> Result<SummaryReport> {
+    let mut sections = output.sections().iter();
+    let Some(first) = sections.next() else {
+        bail!("benchmark output did not contain any summary sections");
+    };
+    let mut summary = first.summary.clone();
+    for section in sections {
+        for device in &section.summary.devices {
+            if !summary.devices.contains(device) {
+                summary.devices.push(device.clone());
+            }
+        }
+        summary
+            .device_summaries
+            .extend(section.summary.device_summaries.clone());
+        if summary.function != section.summary.function {
+            summary.function = "multiple".to_string();
+        }
+    }
+    Ok(summary)
 }
 
 fn summary_lookup(summary: &SummaryReport) -> BTreeMap<String, BTreeMap<String, BenchmarkStats>> {
