@@ -25,6 +25,7 @@ use mobench_sdk::types::NativeLibraryArtifact;
 
 mod capture;
 mod output;
+mod semantic;
 mod session;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -2657,7 +2658,7 @@ fn execute_local_android_capture(
         Ok(logs) => {
             let reports = extract_benchmark_reports_from_logs(&logs);
             if let Some(report) = select_benchmark_value_for_function(&reports, &args.function) {
-                merge_semantic_profile_from_bench_report(manifest, report)?;
+                semantic::merge_from_bench_report(manifest, report)?;
             }
         }
         Err(error) => {
@@ -2929,7 +2930,7 @@ fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManife
     match read_combined_text_files(&[stdout_path, stderr_path]) {
         Ok(logs) => {
             if let Some(report) = extract_ios_benchmark_json(&logs) {
-                merge_semantic_profile_from_bench_report(manifest, &report)?;
+                semantic::merge_from_bench_report(manifest, &report)?;
             } else {
                 manifest.capture_metadata.warnings.push(
                     "semantic phase capture was unavailable because the iOS log output did not contain BENCH_REPORT_JSON markers".into(),
@@ -3690,117 +3691,6 @@ fn select_benchmark_value_for_function<'a>(
         .or_else(|| values.last())
 }
 
-fn benchmark_value_sample_duration_total_ns(benchmark_value: &Value) -> u64 {
-    let sample_objects_total_ns: u64 = benchmark_value
-        .get("samples")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|sample| sample.get("duration_ns").and_then(Value::as_u64))
-        .sum();
-    if sample_objects_total_ns > 0 {
-        return sample_objects_total_ns;
-    }
-
-    benchmark_value
-        .get("samples_ns")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_u64)
-        .sum()
-}
-
-fn populate_semantic_profile_from_benchmark_value(
-    manifest: &mut ProfileManifest,
-    benchmark_value: &Value,
-) {
-    if let Some(spec) = benchmark_value.get("spec") {
-        manifest.capture_metadata.benchmark_iterations = spec
-            .get("iterations")
-            .and_then(Value::as_u64)
-            .map(|value| value as u32);
-        manifest.capture_metadata.benchmark_warmup = spec
-            .get("warmup")
-            .and_then(Value::as_u64)
-            .map(|value| value as u32);
-    }
-
-    if let Some(timeline) = benchmark_value.get("timeline").and_then(Value::as_array) {
-        manifest.semantic_profile.harness_timeline = timeline
-            .iter()
-            .filter_map(|span| {
-                Some(HarnessTimelineSpanRecord {
-                    phase: span.get("phase")?.as_str()?.to_string(),
-                    start_offset_ns: span.get("start_offset_ns")?.as_u64()?,
-                    end_offset_ns: span.get("end_offset_ns")?.as_u64()?,
-                    iteration: span
-                        .get("iteration")
-                        .and_then(Value::as_u64)
-                        .map(|value| value as u32),
-                })
-            })
-            .collect();
-    }
-
-    let Some(phases) = benchmark_value.get("phases").and_then(Value::as_array) else {
-        return;
-    };
-
-    let phase_duration_total_ns: u64 = phases
-        .iter()
-        .filter_map(|phase| phase.get("duration_ns").and_then(Value::as_u64))
-        .sum();
-    let sample_duration_total_ns = benchmark_value_sample_duration_total_ns(benchmark_value);
-    let total_duration_ns = if sample_duration_total_ns > 0 {
-        sample_duration_total_ns
-    } else {
-        phase_duration_total_ns
-    };
-
-    let mut semantic_phases = Vec::new();
-    let mut partial = false;
-    for phase in phases {
-        let Some(name) = phase.get("name").and_then(Value::as_str) else {
-            partial = true;
-            continue;
-        };
-        let duration_ns = phase.get("duration_ns").and_then(Value::as_u64);
-        let percent_total = duration_ns.and_then(|duration_ns| {
-            (total_duration_ns > 0).then_some(
-                (duration_ns.saturating_mul(100) + (total_duration_ns / 2)) / total_duration_ns,
-            )
-        });
-        if duration_ns.is_none() {
-            partial = true;
-        }
-        semantic_phases.push(SemanticPhaseRecord {
-            name: name.to_string(),
-            duration_ns,
-            percent_total,
-        });
-    }
-
-    if semantic_phases.is_empty() {
-        return;
-    }
-
-    manifest.semantic_profile.status = if partial {
-        SemanticCaptureStatus::Partial
-    } else {
-        SemanticCaptureStatus::Captured
-    };
-    manifest.semantic_profile.phases = semantic_phases;
-}
-
-fn merge_semantic_profile_from_bench_report(
-    manifest: &mut ProfileManifest,
-    bench_report: &Value,
-) -> Result<()> {
-    populate_semantic_profile_from_benchmark_value(manifest, bench_report);
-    Ok(())
-}
-
 fn resolve_android_runtime_abi(toolchain: &AndroidProfilerToolchain) -> Result<Option<String>> {
     let primary_abi = read_android_device_property(&toolchain.adb_path, "ro.product.cpu.abi")?;
     if let Some(abi) = primary_abi {
@@ -4075,7 +3965,7 @@ mod tests {
         )
         .expect("build plan");
 
-        populate_semantic_profile_from_benchmark_value(
+        semantic::populate_from_benchmark_value(
             &mut manifest,
             &serde_json::json!({
                 "function": "sample_fns::fibonacci",
@@ -4117,7 +4007,7 @@ mod tests {
         )
         .expect("build plan");
 
-        merge_semantic_profile_from_bench_report(
+        semantic::merge_from_bench_report(
             &mut manifest,
             &serde_json::json!({
                 "function": "sample_fns::fibonacci",
@@ -4136,6 +4026,74 @@ mod tests {
         );
         assert_eq!(manifest.semantic_profile.phases[0].percent_total, Some(80));
         assert_eq!(manifest.semantic_profile.phases[1].percent_total, Some(10));
+    }
+
+    #[test]
+    fn semantic_processor_ingests_phase_timings_and_harness_timeline() {
+        let mut manifest = build_capture_plan(
+            &sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Both,
+            ),
+            &resolve_profile_target(&sample_run_args(
+                MobileTarget::Android,
+                ProfileProvider::Local,
+                ProfileBackend::AndroidNative,
+                ProfileFormat::Both,
+            ))
+            .expect("resolve target"),
+            &PathBuf::from("target/mobench/profile"),
+        )
+        .expect("build plan");
+
+        semantic::merge_from_bench_report(
+            &mut manifest,
+            &serde_json::json!({
+                "spec": {
+                    "iterations": 3,
+                    "warmup": 1
+                },
+                "samples": [
+                    {"duration_ns": 200},
+                    {"duration_ns": 300}
+                ],
+                "phases": [
+                    {"name": "prepare", "duration_ns": 100},
+                    {"name": "execute", "duration_ns": 400}
+                ],
+                "timeline": [
+                    {
+                        "phase": "prepare",
+                        "start_offset_ns": 0,
+                        "end_offset_ns": 100,
+                        "iteration": null
+                    },
+                    {
+                        "phase": "execute",
+                        "start_offset_ns": 100,
+                        "end_offset_ns": 500,
+                        "iteration": 2
+                    }
+                ]
+            }),
+        )
+        .expect("merge semantic profile");
+
+        assert_eq!(
+            manifest.semantic_profile.status,
+            SemanticCaptureStatus::Captured
+        );
+        assert_eq!(manifest.capture_metadata.benchmark_iterations, Some(3));
+        assert_eq!(manifest.capture_metadata.benchmark_warmup, Some(1));
+        assert_eq!(manifest.semantic_profile.phases[0].percent_total, Some(20));
+        assert_eq!(manifest.semantic_profile.phases[1].percent_total, Some(80));
+        assert_eq!(manifest.semantic_profile.harness_timeline.len(), 2);
+        assert_eq!(
+            manifest.semantic_profile.harness_timeline[1].iteration,
+            Some(2)
+        );
     }
 
     #[test]
@@ -4832,7 +4790,7 @@ mod tests {
             ]
         });
 
-        populate_semantic_profile_from_benchmark_value(&mut manifest, &bench_report);
+        semantic::populate_from_benchmark_value(&mut manifest, &bench_report);
 
         assert_eq!(
             manifest.semantic_profile.status,
@@ -4888,7 +4846,7 @@ mod tests {
             ]
         });
 
-        populate_semantic_profile_from_benchmark_value(&mut manifest, &bench_report);
+        semantic::populate_from_benchmark_value(&mut manifest, &bench_report);
 
         let json = serde_json::to_value(&manifest).expect("serialize manifest");
         assert_eq!(
