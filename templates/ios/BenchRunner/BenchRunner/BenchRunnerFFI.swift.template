@@ -146,7 +146,8 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         }
     }
 
-    /// Generates a JSON report matching the Android BENCH_JSON format for consistency
+    /// Generates a JSON report that matches the Android BENCH_JSON-style payload
+    /// consumed by mobench so cross-platform parsers can stay aligned.
     private static func generateJSONReport(_ report: BenchReport) -> String {
         var json: [String: Any] = [:]
 
@@ -168,6 +169,14 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         // Also include samples in object format for compatibility
         let samplesArray = report.samples.map { ["duration_ns": $0.durationNs] }
         json["samples"] = samplesArray
+
+        let phases = report.phases.map { phase in
+            [
+                "name": phase.name,
+                "duration_ns": phase.durationNs
+            ] as [String: Any]
+        }
+        json["phases"] = phases
 
         // Statistics
         if !report.samples.isEmpty {

@@ -1,0 +1,47 @@
+{
+  "benchmark_results": {
+    "Google Pixel 8-14.0": [
+      {
+        "function": "bench_beta",
+        "mean_ns": 200000000,
+        "median_ns": 198000000,
+        "p95_ns": 220000000,
+        "min_ns": 190000000,
+        "max_ns": 225000000,
+        "samples": [190000000, 198000000, 200000000, 220000000, 225000000],
+        "resources": {
+          "elapsed_cpu_ms": 333,
+          "total_pss_kb": 444444,
+          "private_dirty_kb": 222222
+        }
+      }
+    ]
+  },
+  "summary": {
+    "generated_at": "2026-03-01T09:05:00Z",
+    "generated_at_unix": 1772355900,
+    "target": "android",
+    "function": "bench_beta",
+    "iterations": 20,
+    "warmup": 5,
+    "devices": [
+      "Google Pixel 8-14.0"
+    ],
+    "device_summaries": [
+      {
+        "device": "Google Pixel 8-14.0",
+        "benchmarks": [
+          {
+            "function": "bench_beta",
+            "samples": 20,
+            "mean_ns": 200000000,
+            "median_ns": 198000000,
+            "p95_ns": 220000000,
+            "min_ns": 190000000,
+            "max_ns": 225000000
+          }
+        ]
+      }
+    ]
+  }
+}

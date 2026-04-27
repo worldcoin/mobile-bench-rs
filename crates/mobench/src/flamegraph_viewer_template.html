@@ -1,0 +1,2684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__BROWSER_TITLE__</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%20512%20512%27%3E%0A%20%20%3Cpath%20fill%3D%27%23ef6f58%27%20d%3D%27M258%2018c16%2055-6%20102-29%20135-13%2019-17%2040-15%2067%206-8%2012-16%2017-26%2021-39%2018-87%209-123%2063%2050%20111%20145%20104%20242-4%2059-28%20108-71%20144-38%2032-87%2047-146%2047-73%200-130-22-171-67C49%20479%2031%20435%2031%20383c0-67%2028-126%2079-177%208%2033%2024%2061%2049%2083-6-47%208-95%2041-142%2017-24%2039-49%2058-75%2016-22%2032-42%2042-54z%27%2F%3E%0A%20%20%3Cpath%20fill%3D%27%23ffd766%27%20d%3D%27M258%20221c-9%2033%203%2059%2026%2088%2023%2029%2049%2062%2049%20110%200%2058-42%2093-95%2093-61%200-101-38-101-95%200-36%2018-66%2042-96%204%2021%2015%2038%2033%2052-10-43%206-76%2046-114z%27%2F%3E%0A%3C%2Fsvg%3E">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #fffdfb;
+      --panel: rgba(255,252,248,0.9);
+      --panel-strong: rgba(255,255,255,0.96);
+      --panel-border: rgba(243,155,116,0.22);
+      --text: #2f2118;
+      --muted: #7c6151;
+      --accent: #ff6b74;
+      --accent-strong: #f25c68;
+      --accent-soft: rgba(255,107,116,0.14);
+      --ink-soft: rgba(47,33,24,0.08);
+      --shadow: 0 20px 50px rgba(195,124,99,0.18);
+      --setup: rgba(255, 220, 107, 0.66);
+      --fixture-setup: rgba(255, 206, 111, 0.68);
+      --warmup: rgba(255, 191, 101, 0.58);
+      --measured: rgba(255, 178, 92, 0.62);
+      --teardown: rgba(255, 207, 177, 0.72);
+      --harness-other: rgba(255, 231, 198, 0.56);
+    }
+    html {
+      height: 100%;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.85), transparent 24rem),
+        radial-gradient(circle at top right, rgba(255,220,107,0.18), transparent 18rem),
+        linear-gradient(180deg, #fffefd 0%, #fff8f2 52%, #fff6ef 100%);
+      color: var(--text);
+      font: 14px/1.45 "Avenir Next", "SF Pro Display", "Helvetica Neue", "Segoe UI", sans-serif;
+      letter-spacing: 0.01em;
+    }
+    .viewer {
+      height: 100vh;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
+      gap: 12px;
+      padding: 16px;
+    }
+    .toolbar, .summary, .sidebar, .run-metadata {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+      border-radius: 16px;
+    }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+    }
+    .toolbar-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .toolbar-title {
+      font-size: 13px;
+      color: var(--accent-strong);
+      text-transform: uppercase;
+      letter-spacing: 0.11em;
+      margin-right: 6px;
+      font-weight: 700;
+    }
+    button {
+      border: 1px solid rgba(80,66,17,0.16);
+      background: rgba(255,255,255,0.86);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font: inherit;
+      cursor: pointer;
+      font-weight: 600;
+      box-shadow: inset 0 -1px 0 rgba(94,76,24,0.06);
+      transition: background 120ms ease, border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+    }
+    button:hover {
+      background: white;
+      border-color: rgba(80,66,17,0.28);
+      box-shadow: 0 8px 18px rgba(79, 59, 17, 0.10);
+    }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    button.active {
+      background: linear-gradient(180deg, #ff8790 0%, var(--accent) 100%);
+      border-color: var(--accent);
+      color: white;
+    }
+    .button-inline-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 20px;
+      margin-left: 8px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: rgba(47,33,24,0.08);
+      border: 1px solid rgba(80,66,17,0.10);
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      vertical-align: middle;
+    }
+    button.active .button-inline-badge {
+      background: rgba(255,255,255,0.18);
+      border-color: rgba(255,255,255,0.26);
+      color: white;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      padding: 12px 14px;
+    }
+    .summary-item {
+      min-width: 0;
+    }
+    .summary-label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
+    }
+    .summary-value {
+      font-size: 14px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .run-metadata {
+      display: grid;
+      grid-template-columns: repeat(var(--run-metadata-columns, 1), minmax(0, 1fr));
+      gap: 8px;
+      padding: 12px 14px;
+    }
+    .run-metadata-item {
+      min-width: 0;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(80,66,17,0.10);
+      background: linear-gradient(180deg, rgba(255,255,255,0.80), rgba(255,245,239,0.64));
+    }
+    .run-metadata-label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
+    }
+    .run-metadata-value {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
+    }
+    .workspace {
+      min-height: 0;
+      height: 100%;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      gap: 12px;
+    }
+    .graph-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      position: relative;
+      min-height: 0;
+      height: 100%;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    body.graph-fullscreen {
+      overflow: hidden;
+      background: #ffffff;
+    }
+    body.graph-fullscreen .viewer {
+      padding: 0;
+      gap: 0;
+    }
+    body.graph-fullscreen .toolbar,
+    body.graph-fullscreen .summary,
+    body.graph-fullscreen .run-metadata,
+    body.graph-fullscreen .sidebar {
+      display: none;
+    }
+    body.graph-fullscreen .workspace {
+      display: block;
+      height: 100vh;
+    }
+    body.graph-fullscreen .graph-panel {
+      position: fixed;
+      inset: 0;
+      z-index: 24;
+      display: block;
+      height: 100vh;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      background: #ffffff;
+    }
+    body.graph-fullscreen .harness-timeline {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 5;
+      border: 1px solid rgba(243,155,116,0.18);
+      border-radius: 16px;
+      background: rgba(255,252,248,0.92);
+      box-shadow: 0 18px 40px rgba(195,124,99,0.16);
+      backdrop-filter: blur(14px);
+    }
+    body.graph-fullscreen .graph-stage {
+      position: absolute;
+      inset: 0;
+      height: auto;
+      border-radius: 0;
+      background: #ffffff;
+    }
+    body.graph-fullscreen iframe,
+    body.graph-fullscreen .timeline-stage {
+      border-radius: 0;
+      background: #ffffff;
+    }
+    body.graph-fullscreen .graph-axis {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      z-index: 5;
+      border-radius: 16px;
+      border: 1px solid rgba(243,155,116,0.18);
+      background: rgba(255,252,248,0.94);
+      box-shadow: 0 18px 40px rgba(195,124,99,0.16);
+      backdrop-filter: blur(14px);
+    }
+    .harness-timeline {
+      grid-row: 1;
+      display: grid;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(80,66,17,0.10);
+      background: rgba(255,249,245,0.48);
+    }
+    .harness-timeline[hidden] {
+      display: none;
+    }
+    .harness-timeline-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .harness-timeline-title {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .harness-timeline-total {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .harness-track {
+      position: relative;
+      height: 54px;
+      border-radius: 12px;
+      border: 1px solid rgba(80,66,17,0.12);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.90), rgba(255,242,225,0.96));
+      overflow: hidden;
+    }
+    .harness-segment {
+      appearance: none;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      border-right: 1px solid rgba(255,255,255,0.75);
+      padding: 6px 8px;
+      overflow: hidden;
+      color: #231d0d;
+      background: transparent;
+      text-align: left;
+      font: inherit;
+      font-size: 11px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 2px;
+      cursor: pointer;
+      transition: filter 100ms ease;
+    }
+    .harness-segment:hover {
+      filter: brightness(1.08);
+    }
+    .harness-segment.selected {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+      z-index: 1;
+    }
+    .harness-segment-name,
+    .harness-segment-duration {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      font-weight: 600;
+    }
+    .harness-segment[data-phase="setup"] { background: var(--setup); }
+    .harness-segment[data-phase="fixture-setup"] { background: var(--fixture-setup); }
+    .harness-segment[data-phase="warmup-benchmark"] { background: var(--warmup); }
+    .harness-segment[data-phase="measured-benchmark"] { background: var(--measured); }
+    .harness-segment[data-phase="teardown"] { background: var(--teardown); }
+    .harness-segment[data-phase="fixture-teardown"] { background: var(--teardown); }
+    .harness-track-scale {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .harness-readout {
+      min-height: 18px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-variant-numeric: tabular-nums;
+    }
+    .harness-readout.active {
+      color: var(--text);
+    }
+    .graph-stage {
+      grid-row: 2;
+      position: relative;
+      align-self: stretch;
+      height: 100%;
+      min-height: 0;
+      background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(255,249,243,0.92));
+      border-radius: 18px;
+      overflow: hidden;
+    }
+    iframe,
+    .timeline-stage {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: transparent;
+    }
+    iframe[hidden],
+    .timeline-stage[hidden],
+    .sidebar-pane[hidden] {
+      display: none;
+    }
+    .timeline-stage {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(255,248,242,0.9));
+    }
+    .timeline-note {
+      display: none;
+      margin: 10px 14px 0;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(243,155,116,0.18);
+      background: linear-gradient(180deg, rgba(255,255,255,0.84), rgba(255,244,236,0.78));
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 12px;
+    }
+    .timeline-note.active {
+      display: block;
+    }
+    .phase-legend {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 8px 14px;
+      border-bottom: 1px solid rgba(80,66,17,0.10);
+      background: rgba(255,250,247,0.52);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .phase-legend-item {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      font-weight: 600;
+    }
+    .phase-legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 4px;
+      border: 1px solid rgba(80,66,17,0.12);
+    }
+    .evolution-container {
+      position: relative;
+      min-height: 0;
+      height: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    .evolution-canvas {
+      position: relative;
+      min-height: 100%;
+      width: 100%;
+    }
+    .timeline-fallback-shell {
+      display: grid;
+      gap: 16px;
+      min-height: 100%;
+      padding: 16px 18px 18px;
+      align-content: start;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.34), rgba(255,240,229,0.38)),
+        radial-gradient(circle at top left, rgba(255,255,255,0.66), transparent 18rem);
+    }
+    .timeline-fallback-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .timeline-fallback-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .timeline-fallback-meta {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .timeline-fallback-strip {
+      position: relative;
+      height: 96px;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid rgba(243,155,116,0.18);
+      background: linear-gradient(180deg, rgba(255,255,255,0.90), rgba(255,242,228,0.94));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.42);
+    }
+    .timeline-fallback-band {
+      position: absolute;
+      top: 10px;
+      bottom: 26px;
+      border-radius: 12px;
+      padding: 10px 10px 8px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.55);
+      color: #2f2410;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 2px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.35);
+    }
+    .timeline-fallback-band.selected {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+      z-index: 2;
+    }
+    .timeline-fallback-band-name,
+    .timeline-fallback-band-meta {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .timeline-fallback-band-meta {
+      font-size: 11px;
+      color: rgba(47,36,16,0.78);
+      font-weight: 600;
+    }
+    .timeline-fallback-ruler {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 26px;
+      border-top: 1px solid rgba(94,76,24,0.12);
+      background: rgba(255,250,247,0.62);
+    }
+    .timeline-fallback-ruler-tick {
+      position: absolute;
+      top: -1px;
+      transform: translateX(-50%);
+    }
+    .timeline-fallback-ruler-tick::before {
+      content: "";
+      display: block;
+      width: 1px;
+      height: 7px;
+      background: rgba(94,76,24,0.26);
+      margin: 0 auto 5px;
+    }
+    .timeline-fallback-ruler-label {
+      display: block;
+      font-size: 10px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .timeline-fallback-ruler-tick:first-child,
+    .timeline-fallback-ruler-tick:last-child {
+      transform: none;
+    }
+    .timeline-fallback-ruler-tick:first-child .timeline-fallback-ruler-label {
+      text-align: left;
+    }
+    .timeline-fallback-ruler-tick:last-child .timeline-fallback-ruler-label {
+      text-align: right;
+    }
+    .timeline-fallback-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .timeline-fallback-stat {
+      border-radius: 14px;
+      border: 1px solid rgba(243,155,116,0.14);
+      background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(255,247,240,0.72));
+      padding: 12px 14px;
+    }
+    .timeline-fallback-stat-label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
+    }
+    .timeline-fallback-stat-value {
+      display: block;
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .timeline-fallback-card {
+      border-radius: 18px;
+      border: 1px solid rgba(243,155,116,0.16);
+      background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(255,245,238,0.76));
+      padding: 16px 18px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.36);
+    }
+    .timeline-fallback-card-title {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .timeline-fallback-card-copy {
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 13px;
+      max-width: 72ch;
+    }
+    .phase-separator {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      border-left: 2px dashed rgba(80,66,17,0.22);
+      pointer-events: none;
+      z-index: 1;
+    }
+    .phase-separator-label {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      font-size: 10px;
+      color: var(--muted);
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: rgba(255,255,255,0.72);
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    .stack-frame {
+      position: absolute;
+      min-height: 18px;
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.35);
+      transition: filter 80ms ease;
+    }
+    .stack-frame:hover {
+      filter: brightness(1.12);
+      z-index: 2;
+    }
+    .stack-frame.selected {
+      outline: 2px solid var(--accent);
+      outline-offset: -1px;
+      z-index: 3;
+    }
+    .selection-overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      cursor: crosshair;
+      background: transparent;
+      z-index: 2;
+    }
+    .selection-overlay.active {
+      display: block;
+    }
+    .selection-box {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      border: 1px solid rgba(255,107,116,0.7);
+      background: rgba(255,107,116,0.14);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35);
+      pointer-events: none;
+      display: none;
+    }
+    .selection-box.visible {
+      display: block;
+    }
+    .selection-hint {
+      position: absolute;
+      right: 14px;
+      bottom: 14px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(242,92,104,0.88);
+      color: white;
+      font-size: 12px;
+      z-index: 3;
+      display: none;
+    }
+    .selection-hint.active {
+      display: block;
+    }
+    body.graph-fullscreen .selection-hint {
+      bottom: 86px;
+    }
+    .graph-fullscreen-hud {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 6;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      pointer-events: none;
+    }
+    body.graph-fullscreen .graph-fullscreen-hud {
+      display: flex;
+    }
+    .graph-fullscreen-pill,
+    .graph-fullscreen-hud button {
+      pointer-events: auto;
+      border-radius: 999px;
+      border: 1px solid rgba(80,66,17,0.14);
+      background: rgba(255,255,255,0.92);
+      box-shadow: 0 12px 28px rgba(117, 69, 61, 0.18);
+      backdrop-filter: blur(12px);
+    }
+    .graph-fullscreen-pill {
+      padding: 8px 12px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .graph-fullscreen-hud button {
+      padding: 8px 12px;
+    }
+    .shortcut-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(117, 69, 61, 0.24);
+      backdrop-filter: blur(8px);
+    }
+    .shortcut-overlay[hidden] {
+      display: none;
+    }
+    .shortcut-card {
+      width: min(560px, calc(100vw - 32px));
+      max-height: min(720px, calc(100vh - 48px));
+      overflow: auto;
+      border-radius: 20px;
+      border: 1px solid rgba(243,155,116,0.22);
+      background: rgba(255,252,248,0.94);
+      box-shadow: 0 24px 54px rgba(195, 124, 99, 0.22);
+      padding: 18px 18px 16px;
+    }
+    .shortcut-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .shortcut-title {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0.02em;
+    }
+    .shortcut-subtitle {
+      margin: 0 0 14px 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .shortcut-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .shortcut-item {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      border: 1px solid rgba(80,66,17,0.10);
+      border-radius: 14px;
+      background: rgba(243, 238, 197, 0.34);
+    }
+    .shortcut-key {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .shortcut-kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 30px;
+      padding: 4px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(80,66,17,0.18);
+      background: white;
+      box-shadow: inset 0 -1px 0 rgba(80,66,17,0.08);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      color: var(--text);
+    }
+    .shortcut-body {
+      min-width: 0;
+    }
+    .shortcut-name {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+    .shortcut-detail {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .graph-axis {
+      grid-row: 3;
+      display: grid;
+      gap: 8px;
+      padding: 10px 14px 14px;
+      border-top: 1px solid rgba(80,66,17,0.10);
+      background: rgba(255,255,255,0.38);
+    }
+    .graph-axis[hidden] {
+      display: none;
+    }
+    .graph-axis-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .graph-axis-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .graph-axis-range {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .graph-axis-scale {
+      position: relative;
+      height: 26px;
+      border-top: 1px solid rgba(80,66,17,0.18);
+    }
+    .graph-axis-tick {
+      position: absolute;
+      top: -1px;
+      transform: translateX(-50%);
+    }
+    .graph-axis-tick::before {
+      content: "";
+      display: block;
+      width: 1px;
+      height: 8px;
+      background: rgba(80,66,17,0.35);
+      margin: 0 auto 6px;
+    }
+    .graph-axis-tick-label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .graph-axis-tick:first-child,
+    .graph-axis-tick:last-child {
+      transform: none;
+    }
+    .graph-axis-tick:first-child .graph-axis-tick-label {
+      text-align: left;
+    }
+    .graph-axis-tick:last-child .graph-axis-tick-label {
+      text-align: right;
+    }
+    .sidebar {
+      min-height: 0;
+      display: grid;
+      overflow: hidden;
+    }
+    .sidebar-scroll {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+    }
+    .sidebar h2 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent-strong);
+    }
+    .warning {
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(195,98,31,0.12);
+      color: #6f3415;
+      border: 1px solid rgba(195,98,31,0.18);
+    }
+    .source-card,
+    .detail-card {
+      border: 1px solid rgba(80,66,17,0.10);
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.76), rgba(255,251,243,0.62));
+      margin-bottom: 12px;
+    }
+    .source-name,
+    .detail-card-title {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+    .source-meta,
+    .detail-card-meta,
+    .frame-meta {
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-word;
+    }
+    .frame-list, .artifact-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 8px;
+    }
+    .frame-item, .artifact-item {
+      border: 1px solid rgba(80,66,17,0.10);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.6);
+    }
+    .frame-name {
+      display: block;
+      font-weight: 600;
+      word-break: break-word;
+      margin-bottom: 4px;
+    }
+    .artifact-link {
+      color: #7a341a;
+      text-decoration: none;
+      font-weight: 600;
+      word-break: break-word;
+    }
+    .artifact-link:hover {
+      text-decoration: underline;
+    }
+    @media (max-width: 1100px) {
+      body {
+        overflow: auto;
+        height: auto;
+        min-height: 100vh;
+      }
+      .viewer {
+        height: auto;
+        min-height: 100vh;
+        overflow: visible;
+      }
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 800px) {
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="viewer">
+    <header class="toolbar">
+      <div class="toolbar-group">
+        <span class="toolbar-title">__VIEWER_TITLE__</span>
+        <button id="mode-focused" data-mode="focused">Benchmark Only</button>
+        <button id="mode-full" data-mode="full">Full Process</button>
+        <button id="mode-timeline" data-mode="timeline">Timeline</button>
+      </div>
+      <div class="toolbar-group">
+        <button id="viewer-select-range" hidden aria-hidden="true">Select Range</button>
+        <button id="viewer-back">Back</button>
+        <button id="viewer-forward">Forward</button>
+        <button id="viewer-fullscreen">Fullscreen</button>
+        <button id="viewer-toggle-timeline">Hide Timeline</button>
+        <button id="viewer-reset">Reset</button>
+        <button id="viewer-legend">Legend <span class="button-inline-badge shortcut-badge">?</span></button>
+        <button id="viewer-search">Search</button>
+      </div>
+    </header>
+    <section class="summary">
+      <div class="summary-item">
+        <span class="summary-label">Mode</span>
+        <span class="summary-value" id="summary-mode">Benchmark Only</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Current Root</span>
+        <span class="summary-value" id="summary-root">all</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label" id="summary-samples-label">Visible Samples</span>
+        <span class="summary-value" id="summary-samples">-</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Selection Width</span>
+        <span class="summary-value" id="summary-range">100%</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Visible Duration</span>
+        <span class="summary-value" id="summary-duration">-</span>
+      </div>
+    </section>
+    <section class="run-metadata" id="run-metadata">
+      __RUN_METADATA_MARKUP__
+    </section>
+    <div class="workspace">
+      <section class="graph-panel">
+        <div class="harness-timeline" id="harness-timeline">
+          __HARNESS_TIMELINE_MARKUP__
+        </div>
+        <div class="graph-stage" id="graph-stage">
+          <iframe id="frame-focused" title="Benchmark only flamegraph"></iframe>
+          <iframe id="frame-full" title="Full process flamegraph" hidden></iframe>
+          <div id="timeline-stage" class="timeline-stage" hidden>
+            <div id="timeline-note" class="timeline-note"></div>
+            <div class="phase-legend" id="phase-legend"></div>
+            <div class="evolution-container" id="evolution-container">
+              <div class="evolution-canvas" id="evolution-canvas"></div>
+            </div>
+          </div>
+          <div id="graph-fullscreen-hud" class="graph-fullscreen-hud">
+            <div class="graph-fullscreen-pill" id="graph-fullscreen-mode">Benchmark Only</div>
+            <button id="viewer-toggle-timeline-hud" type="button">Hide Timeline</button>
+            <button id="viewer-fullscreen-exit" type="button">Exit Fullscreen</button>
+          </div>
+          <div id="selection-overlay" class="selection-overlay">
+            <div id="selection-box" class="selection-box"></div>
+          </div>
+          <div id="selection-hint" class="selection-hint">Drag across the graph to zoom. Double-click to step back one range. Press T to toggle the timeline. Press R to reset. Press F for fullscreen.</div>
+        </div>
+        <div class="graph-axis" id="graph-axis" hidden>
+          <div class="graph-axis-meta">
+            <span class="graph-axis-label" id="graph-axis-label">Approx. sampled time</span>
+            <span class="graph-axis-range" id="graph-axis-range">-</span>
+          </div>
+          <div class="graph-axis-scale" id="graph-axis-scale"></div>
+        </div>
+      </section>
+      <aside class="sidebar">
+        <div id="aggregate-sidebar" class="sidebar-pane sidebar-scroll">
+          <div id="sidebar-warning"></div>
+          <div id="source-link-panel"></div>
+          <h2>Self Time</h2>
+          <ul id="self-frame-list" class="frame-list"></ul>
+          <h2 style="margin-top:18px;">Inclusive Time</h2>
+          <ul id="inclusive-frame-list" class="frame-list"></ul>
+          <h2 style="margin-top:18px;">Artifacts</h2>
+          <ul id="aggregate-artifact-list" class="artifact-list"></ul>
+        </div>
+        <div id="timeline-sidebar" class="sidebar-pane sidebar-scroll" hidden>
+          <h2>Phase Detail</h2>
+          <div id="phase-detail">
+            <div class="detail-card">
+              <span class="detail-card-title">No phase selected</span>
+              <span class="detail-card-meta">Click a harness segment to inspect that exact interval.</span>
+            </div>
+          </div>
+          <h2 style="margin-top:18px;">Selected Sample</h2>
+          <div id="sample-detail">
+            <div class="detail-card">
+              <span class="detail-card-title">No sample selected</span>
+              <span class="detail-card-meta">Click a stack frame in Timeline mode to inspect its call stack.</span>
+            </div>
+          </div>
+          <h2 style="margin-top:18px;">Visible Phases</h2>
+          <ul id="phase-list" class="frame-list"></ul>
+          <h2 style="margin-top:18px;">Artifacts</h2>
+          <ul id="timeline-artifact-list" class="artifact-list"></ul>
+        </div>
+      </aside>
+    </div>
+  </div>
+  <div id="shortcut-overlay" class="shortcut-overlay" hidden>
+    <div class="shortcut-card" role="dialog" aria-modal="true" aria-labelledby="shortcut-title">
+      <div class="shortcut-header">
+        <h2 id="shortcut-title" class="shortcut-title">Shortcuts</h2>
+        <button id="shortcut-close" type="button">Close</button>
+      </div>
+      <p class="shortcut-subtitle">Keyboard and graph gestures for moving around the profiler quickly.</p>
+      <div class="shortcut-grid">
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">1</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Benchmark Only</span><span class="shortcut-detail">Switch to the benchmark-focused aggregate flamegraph.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">2</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Full Process</span><span class="shortcut-detail">Switch to the full-process aggregate flamegraph.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">3</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Timeline</span><span class="shortcut-detail">Open the chronological timeline mode.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">T</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Toggle Timeline Strip</span><span class="shortcut-detail">Show or hide the harness timeline to recover vertical graph space.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">J</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Back</span><span class="shortcut-detail">Step back one range or history entry.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">K</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Forward</span><span class="shortcut-detail">Step forward one range or history entry.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">F</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Fullscreen</span><span class="shortcut-detail">Make the active graph take over the entire viewport.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">Esc</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Exit Fullscreen</span><span class="shortcut-detail">Leave graph fullscreen and return to the normal viewer layout.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">R</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Reset</span><span class="shortcut-detail">Reset the current graph all the way back to the full range.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">?</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Toggle Legend</span><span class="shortcut-detail">Show or hide this shortcuts panel.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">Drag</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Brush Zoom</span><span class="shortcut-detail">Drag across the graph to zoom into the selected x-axis interval.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">Double-click</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Step Back</span><span class="shortcut-detail">Go back one range selection without resetting all the way out.</span></div>
+        </div>
+        <div class="shortcut-item">
+          <div class="shortcut-key"><span class="shortcut-kbd">Click</span></div>
+          <div class="shortcut-body"><span class="shortcut-name">Frame Zoom</span><span class="shortcut-detail">Zoom directly into the clicked flamegraph frame.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const MOBENCH_DOCS = {
+      focused: __FOCUSED_SVG__,
+      full: __FULL_SVG__,
+    };
+    const MOBENCH_SUMMARIES = {
+      focused: __FOCUSED_SUMMARY__,
+      full: __FULL_SUMMARY__,
+    };
+    const MOBENCH_ARTIFACTS = __ARTIFACT_LINKS__;
+    const MOBENCH_SAMPLED_DURATION_SECS = __SAMPLED_DURATION_SECS__;
+    const MOBENCH_HARNESS_TIMELINE = __HARNESS_TIMELINE_JSON__;
+    const MOBENCH_TIMELINE_LANES = __TIMELINE_LANES_JSON__;
+    const MOBENCH_TIMELINE_TOTAL_DURATION_NS = __TIMELINE_TOTAL_DURATION_NS__;
+    const MOBENCH_TIMELINE_NOTE = __TIMELINE_NOTE__;
+    const MOBENCH_SOURCE_LINKS = __SOURCE_LINKS__;
+    const MOBENCH_SOURCE_LINK_NOTE = __SOURCE_LINK_NOTE__;
+    const MOBENCH_LABELS = {
+      focused: "Benchmark Only",
+      full: "Full Process",
+      timeline: "Timeline",
+    };
+    const PHASE_COLORS = {
+      "setup": "rgba(255, 220, 107, 0.66)",
+      "fixture-setup": "rgba(255, 206, 111, 0.68)",
+      "warmup-benchmark": "rgba(255, 191, 101, 0.58)",
+      "measured-benchmark": "rgba(255, 178, 92, 0.62)",
+      "teardown": "rgba(255, 207, 177, 0.72)",
+      "fixture-teardown": "rgba(255, 207, 177, 0.72)",
+      "harness": "rgba(255, 231, 198, 0.56)",
+    };
+    const PHASE_LABELS = {
+      "setup": "Setup",
+      "fixture-setup": "Fixture Setup",
+      "warmup-benchmark": "Warmup",
+      "measured-benchmark": "Bench Body",
+      "teardown": "Teardown",
+      "fixture-teardown": "Fixture Teardown",
+      "harness": "Harness",
+    };
+    const FRAME_PALETTE = [
+      "rgba(255,107,116,0.78)", "rgba(255,166,95,0.76)", "rgba(255,178,92,0.76)",
+      "rgba(255,194,99,0.74)", "rgba(255,220,107,0.76)", "rgba(255,208,123,0.76)",
+      "rgba(255,207,177,0.78)", "rgba(255,231,198,0.74)"
+    ];
+    const DEFAULT_MODE = __DEFAULT_MODE__;
+    const SOURCE_LINK_LOOKUP = new Map(MOBENCH_SOURCE_LINKS.map((entry) => [entry.frame, entry]));
+
+    const MOBENCH_STATE = {
+      activeMode: DEFAULT_MODE,
+      lastAggregateMode: DEFAULT_MODE === "full" ? "full" : "focused",
+      loaded: new Set(),
+      currentView: {
+        focused: null,
+        full: null,
+      },
+      savedAggregateViews: {
+        focused: null,
+        full: null,
+      },
+      timeline: {
+        totalDurationNs: 0,
+        viewStartNs: 0,
+        viewEndNs: 0,
+        history: [],
+        index: -1,
+        selectedPhaseIndex: -1,
+        selectedSampleKey: null,
+        selectedSampleItem: null,
+        selectedSampleFrames: [],
+      },
+      harness: {
+        hoveredPhaseIndex: -1,
+      },
+      layout: {
+        timelineStripVisible: true,
+      },
+    };
+    const AGGREGATE_BASE_SCROLL_GENERATION = {
+      focused: 0,
+      full: 0,
+    };
+
+    function getAggregateDatasetMode() {
+      return MOBENCH_STATE.lastAggregateMode === "full" ? "full" : "focused";
+    }
+
+    function defaultAggregateView(mode) {
+      var summary = MOBENCH_SUMMARIES[mode];
+      var total = Math.max(1, summary && summary.total_samples ? summary.total_samples : 1);
+      return {
+        label: "all",
+        start: 0,
+        width: total,
+        total: total,
+      };
+    }
+
+    function cloneAggregateView(view, fallbackMode) {
+      var fallback = defaultAggregateView(fallbackMode);
+      if (!view) {
+        return fallback;
+      }
+      var total = Math.max(1, Math.round(view.total || fallback.total || 1));
+      var start = Math.max(0, Math.min(total - 1, Math.round(view.start || 0)));
+      var width = Math.max(1, Math.min(total - start, Math.round(view.width || total)));
+      return {
+        label: view.label || fallback.label || "all",
+        start: start,
+        width: width,
+        total: total,
+      };
+    }
+
+    const frames = {
+      focused: document.getElementById("frame-focused"),
+      full: document.getElementById("frame-full"),
+    };
+    const modeButtons = {
+      focused: document.getElementById("mode-focused"),
+      full: document.getElementById("mode-full"),
+      timeline: document.getElementById("mode-timeline"),
+    };
+    const summarySamplesLabel = document.getElementById("summary-samples-label");
+    const summaryMode = document.getElementById("summary-mode");
+    const summaryRoot = document.getElementById("summary-root");
+    const summarySamples = document.getElementById("summary-samples");
+    const summaryRange = document.getElementById("summary-range");
+    const summaryDuration = document.getElementById("summary-duration");
+    const backButton = document.getElementById("viewer-back");
+    const forwardButton = document.getElementById("viewer-forward");
+    const fullscreenButton = document.getElementById("viewer-fullscreen");
+    const timelineToggleButton = document.getElementById("viewer-toggle-timeline");
+    const timelineToggleHudButton = document.getElementById("viewer-toggle-timeline-hud");
+    const fullscreenExitButton = document.getElementById("viewer-fullscreen-exit");
+    const fullscreenModeLabel = document.getElementById("graph-fullscreen-mode");
+    const legendButton = document.getElementById("viewer-legend");
+    const resetButton = document.getElementById("viewer-reset");
+    const searchButton = document.getElementById("viewer-search");
+    const selectionButton = document.getElementById("viewer-select-range");
+    const selectionOverlay = document.getElementById("selection-overlay");
+    const selectionBox = document.getElementById("selection-box");
+    const selectionHint = document.getElementById("selection-hint");
+    const shortcutOverlay = document.getElementById("shortcut-overlay");
+    const shortcutCloseButton = document.getElementById("shortcut-close");
+    const graphAxis = document.getElementById("graph-axis");
+    const graphAxisLabel = document.getElementById("graph-axis-label");
+    const graphAxisRange = document.getElementById("graph-axis-range");
+    const graphAxisScale = document.getElementById("graph-axis-scale");
+    const runMetadata = document.getElementById("run-metadata");
+    const harnessTimeline = document.getElementById("harness-timeline");
+    const harnessTrack = document.getElementById("harness-track");
+    const harnessScale = document.getElementById("harness-scale");
+    const harnessTotal = document.getElementById("harness-total");
+    const harnessReadout = document.getElementById("harness-readout");
+    const timelineStage = document.getElementById("timeline-stage");
+    const timelineNote = document.getElementById("timeline-note");
+    const phaseLegend = document.getElementById("phase-legend");
+    const evolutionContainer = document.getElementById("evolution-container");
+    const evolutionCanvas = document.getElementById("evolution-canvas");
+    const aggregateSidebar = document.getElementById("aggregate-sidebar");
+    const timelineSidebar = document.getElementById("timeline-sidebar");
+    const sidebarWarning = document.getElementById("sidebar-warning");
+    const sourceLinkPanel = document.getElementById("source-link-panel");
+    const selfFrameList = document.getElementById("self-frame-list");
+    const inclusiveFrameList = document.getElementById("inclusive-frame-list");
+    const aggregateArtifactList = document.getElementById("aggregate-artifact-list");
+    const timelineArtifactList = document.getElementById("timeline-artifact-list");
+    const phaseDetail = document.getElementById("phase-detail");
+    const sampleDetail = document.getElementById("sample-detail");
+    const phaseList = document.getElementById("phase-list");
+
+    let dragStartX = null;
+    let dragCurrentX = null;
+    let dragMoved = false;
+    let dragPointerId = null;
+    let pendingForwardClick = null;
+    let lastOverlayTapAt = 0;
+    let lastOverlayTapX = 0;
+    let lastOverlayTapY = 0;
+    let lastHistoryStepAt = 0;
+    let selectionHintTimer = null;
+
+    function syncRunMetadataColumns() {
+      if (!runMetadata) return;
+      var items = Array.prototype.slice.call(runMetadata.querySelectorAll(".run-metadata-item"));
+      if (!items.length) return;
+
+      var count = items.length;
+      var half = Math.max(1, Math.ceil(count / 2));
+      var styles = window.getComputedStyle(runMetadata);
+      var gap = parseFloat(styles.columnGap || styles.gap || "8") || 8;
+      var minCardWidth = 168;
+      var availableWidth = Math.max(0, runMetadata.clientWidth);
+      var maxColumnsByWidth = Math.max(
+        1,
+        Math.floor((availableWidth + gap) / (minCardWidth + gap))
+      );
+
+      var columns = 1;
+      if (maxColumnsByWidth >= count) {
+        columns = count;
+      } else if (maxColumnsByWidth >= half) {
+        columns = half;
+      } else {
+        columns = maxColumnsByWidth;
+      }
+
+      runMetadata.style.setProperty("--run-metadata-columns", String(columns));
+    }
+
+    function fullscreenVisible() {
+      return document.body.classList.contains("graph-fullscreen");
+    }
+
+    function timelineStripVisible() {
+      return MOBENCH_STATE.layout.timelineStripVisible;
+    }
+
+    function syncTimelineStripChrome() {
+      var visible = timelineStripVisible();
+      harnessTimeline.hidden = !visible;
+      timelineToggleButton.classList.toggle("active", visible);
+      timelineToggleButton.textContent = visible ? "Hide Timeline" : "Show Timeline";
+      timelineToggleHudButton.textContent = visible ? "Hide Timeline" : "Show Timeline";
+    }
+
+    function toggleTimelineStrip(force) {
+      var next = typeof force === "boolean" ? force : !timelineStripVisible();
+      MOBENCH_STATE.layout.timelineStripVisible = next;
+      syncTimelineStripChrome();
+    }
+
+    function syncFullscreenChrome() {
+      var activeLabel = MOBENCH_LABELS[MOBENCH_STATE.activeMode] || "Graph";
+      fullscreenModeLabel.textContent = activeLabel;
+      fullscreenButton.classList.toggle("active", fullscreenVisible());
+      fullscreenButton.textContent = fullscreenVisible() ? "Exit Fullscreen" : "Fullscreen";
+    }
+
+    function toggleFullscreenGraph(force) {
+      var next = typeof force === "boolean" ? force : !fullscreenVisible();
+      document.body.classList.toggle("graph-fullscreen", next);
+      syncFullscreenChrome();
+      if (next) {
+        if (MOBENCH_STATE.activeMode === "focused" || MOBENCH_STATE.activeMode === "full") {
+          scrollAggregateFrameToBase(MOBENCH_STATE.activeMode);
+        } else if (evolutionContainer) {
+          evolutionContainer.scrollTop = 0;
+        }
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function escapeAttribute(value) {
+      return escapeHtml(value).replace(/'/g, "&#39;");
+    }
+
+    function formatDurationSeconds(seconds) {
+      if (!isFinite(seconds)) return "—";
+      if (seconds >= 1) return seconds.toFixed(2) + " s";
+      if (seconds >= 0.001) return (seconds * 1000).toFixed(2) + " ms";
+      if (seconds >= 0.000001) return (seconds * 1000000).toFixed(2) + " µs";
+      return Math.round(seconds * 1000000000) + " ns";
+    }
+
+    function formatDurationNs(ns) {
+      if (!isFinite(ns)) return "—";
+      if (ns >= 1e9) return (ns / 1e9).toFixed(2) + " s";
+      if (ns >= 1e6) return (ns / 1e6).toFixed(2) + " ms";
+      if (ns >= 1e3) return (ns / 1e3).toFixed(2) + " µs";
+      return Math.round(ns) + " ns";
+    }
+
+    function phaseLabel(phase, iteration) {
+      var label = PHASE_LABELS[phase] || phase || "Phase";
+      if (iteration != null) label += " #" + (iteration + 1);
+      return label;
+    }
+
+    function phaseColor(phase) {
+      return PHASE_COLORS[phase] || "rgba(120,104,64,0.28)";
+    }
+
+    function hashString(s) {
+      var hash = 0;
+      for (var i = 0; i < s.length; i++) {
+        hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+      }
+      return Math.abs(hash);
+    }
+
+    function frameColorForName(name) {
+      return FRAME_PALETTE[hashString(name || "") % FRAME_PALETTE.length];
+    }
+
+    function computeTimelineTotalDuration() {
+      var total = MOBENCH_TIMELINE_TOTAL_DURATION_NS || 0;
+      MOBENCH_HARNESS_TIMELINE.forEach(function(span) {
+        if (span.end_offset_ns > total) total = span.end_offset_ns;
+      });
+      MOBENCH_TIMELINE_LANES.forEach(function(lane) {
+        lane.events.forEach(function(event) {
+          var end = event.end_offset_ns != null ? event.end_offset_ns : event.start_offset_ns;
+          if (end > total) total = end;
+        });
+      });
+      return Math.max(1, total);
+    }
+
+    function getActiveFrame() {
+      if (MOBENCH_STATE.activeMode === "focused" || MOBENCH_STATE.activeMode === "full") {
+        return frames[MOBENCH_STATE.activeMode];
+      }
+      return null;
+    }
+
+    function getActiveWindow() {
+      var frame = getActiveFrame();
+      return frame && frame.contentWindow ? frame.contentWindow : null;
+    }
+
+    function scrollAggregateFrameToBase(mode) {
+      var generation = (AGGREGATE_BASE_SCROLL_GENERATION[mode] || 0) + 1;
+      AGGREGATE_BASE_SCROLL_GENERATION[mode] = generation;
+
+      function apply() {
+        if (AGGREGATE_BASE_SCROLL_GENERATION[mode] !== generation) {
+          return;
+        }
+        var frame = frames[mode];
+        if (!frame || frame.hidden) {
+          return;
+        }
+        var win = frame.contentWindow;
+        if (!win) {
+          return;
+        }
+        if (win.mobenchScrollToBase) {
+          win.mobenchScrollToBase();
+          return;
+        }
+        if (typeof win.scrollTo === "function") {
+          var doc = win.document && win.document.documentElement ? win.document.documentElement : null;
+          var body = win.document && win.document.body ? win.document.body : null;
+          var maxScroll = Math.max(
+            0,
+            doc ? doc.scrollHeight : 0,
+            body ? body.scrollHeight : 0
+          ) - (win.innerHeight || 0);
+          win.scrollTo(0, Math.max(0, maxScroll));
+        }
+      }
+
+      apply();
+      window.setTimeout(apply, 0);
+      window.setTimeout(apply, 24);
+      window.requestAnimationFrame(function() {
+        apply();
+        window.requestAnimationFrame(apply);
+      });
+    }
+
+    function cancelPendingForwardClick() {
+      if (pendingForwardClick !== null) {
+        window.clearTimeout(pendingForwardClick);
+        pendingForwardClick = null;
+      }
+    }
+
+    function captureAggregateView(mode) {
+      return cloneAggregateView(MOBENCH_STATE.currentView[mode], mode);
+    }
+
+    function applyAggregateWindowView(mode, view) {
+      ensureFrameLoaded(mode);
+      var frame = frames[mode];
+      var win = frame && frame.contentWindow ? frame.contentWindow : null;
+      if (!win || !win.mobenchResetView) {
+        return false;
+      }
+      var nextView = cloneAggregateView(view, mode);
+      MOBENCH_STATE.currentView[mode] = nextView;
+      win.mobenchResetView();
+      if (nextView.start !== 0 || nextView.width !== nextView.total) {
+        if (win.mobenchZoomAbsoluteRange) {
+          win.mobenchZoomAbsoluteRange(nextView.start, nextView.width, nextView.label || "selected range");
+        } else if (win.mobenchZoomVisibleFraction) {
+          var from = nextView.start / nextView.total;
+          var to = (nextView.start + nextView.width) / nextView.total;
+          win.mobenchZoomVisibleFraction(from, to);
+        }
+      }
+      return true;
+    }
+
+    function restoreAggregateWindowFromSaved(mode) {
+      var saved = MOBENCH_STATE.savedAggregateViews[mode];
+      return applyAggregateWindowView(mode, saved || defaultAggregateView(mode));
+    }
+
+    function syncAggregateWindowToTimelineView() {
+      return false;
+    }
+
+    function ensureFrameLoaded(mode) {
+      if (mode !== "focused" && mode !== "full") return;
+      if (MOBENCH_STATE.loaded.has(mode)) return;
+      frames[mode].srcdoc = MOBENCH_DOCS[mode];
+      MOBENCH_STATE.loaded.add(mode);
+    }
+
+    function renderArtifacts(target) {
+      target.innerHTML = "";
+      MOBENCH_ARTIFACTS.forEach(function(artifact) {
+        var item = document.createElement("li");
+        item.className = "artifact-item";
+        item.innerHTML = "<a class=\"artifact-link\" href=\"" + escapeAttribute(artifact.path) + "\">" + escapeHtml(artifact.label) + "</a>";
+        target.appendChild(item);
+      });
+    }
+
+    function renderSourcePanel() {
+      sourceLinkPanel.innerHTML = "";
+      var current = MOBENCH_STATE.currentView[getAggregateDatasetMode()];
+      var source = current && current.label ? SOURCE_LINK_LOOKUP.get(current.label) : null;
+      if (!source && !MOBENCH_SOURCE_LINK_NOTE && MOBENCH_SOURCE_LINKS.length === 0) {
+        return;
+      }
+      var card = document.createElement("div");
+      card.className = "source-card";
+      if (source) {
+        card.innerHTML =
+          "<h2>Source</h2>" +
+          "<span class=\"source-name\">" + escapeHtml(source.frame) + "</span>" +
+          "<div class=\"source-meta\"><a class=\"artifact-link\" href=\"" + escapeAttribute(source.href) + "\">" + escapeHtml(source.location) + "</a></div>";
+      } else if (MOBENCH_SOURCE_LINK_NOTE) {
+        card.innerHTML = "<h2>Source</h2><div class=\"source-meta\">" + escapeHtml(MOBENCH_SOURCE_LINK_NOTE) + "</div>";
+      } else {
+        card.innerHTML = "<h2>Source</h2><div class=\"source-meta\">Click a frame in the flamegraph to inspect its source location when symbol data is available.</div>";
+      }
+      sourceLinkPanel.appendChild(card);
+    }
+
+    function renderAggregateSidebar() {
+      var summary = MOBENCH_SUMMARIES[getAggregateDatasetMode()];
+      sidebarWarning.innerHTML = "";
+      if (summary.warning) {
+        var warning = document.createElement("div");
+        warning.className = "warning";
+        warning.textContent = summary.warning;
+        sidebarWarning.appendChild(warning);
+      }
+
+      selfFrameList.innerHTML = "";
+      summary.self_frames.forEach(function(frame) {
+        var item = document.createElement("li");
+        item.className = "frame-item";
+        item.innerHTML =
+          "<span class=\"frame-name\">" + escapeHtml(frame.frame) + "</span>" +
+          "<span class=\"frame-meta\">" + frame.samples.toLocaleString() + " samples · " + frame.percent_total + "% self</span>";
+        selfFrameList.appendChild(item);
+      });
+
+      inclusiveFrameList.innerHTML = "";
+      summary.inclusive_frames.forEach(function(frame) {
+        var item = document.createElement("li");
+        item.className = "frame-item";
+        item.innerHTML =
+          "<span class=\"frame-name\">" + escapeHtml(frame.frame) + "</span>" +
+          "<span class=\"frame-meta\">" + frame.samples.toLocaleString() + " samples · " + frame.percent_total + "% inclusive</span>";
+        inclusiveFrameList.appendChild(item);
+      });
+
+      renderArtifacts(aggregateArtifactList);
+      renderSourcePanel();
+    }
+
+    function getVisibleHarnessSpans() {
+      return MOBENCH_HARNESS_TIMELINE.filter(function(span) {
+        return span.end_offset_ns > span.start_offset_ns && span.phase !== "harness";
+      });
+    }
+
+    function renderHarnessReadout() {
+      var spans = getVisibleHarnessSpans();
+      var hoveredIndex = MOBENCH_STATE.harness.hoveredPhaseIndex;
+      var selectedIndex = MOBENCH_STATE.timeline.selectedPhaseIndex;
+      var prefix = "";
+      var span = null;
+
+      if (hoveredIndex >= 0 && hoveredIndex < spans.length) {
+        prefix = "Hover";
+        span = spans[hoveredIndex];
+      } else if (selectedIndex >= 0 && selectedIndex < spans.length) {
+        prefix = "Selected";
+        span = spans[selectedIndex];
+      }
+
+      if (!span) {
+        harnessReadout.textContent = "Hover a harness segment to inspect its full label.";
+        harnessReadout.classList.remove("active");
+        return;
+      }
+
+      var label = phaseLabel(span.phase, span.iteration);
+      var duration = formatDurationNs(span.end_offset_ns - span.start_offset_ns);
+      harnessReadout.textContent =
+        prefix + ": " + label + " · " + duration + " · " +
+        formatDurationNs(span.start_offset_ns) + " to " +
+        formatDurationNs(span.end_offset_ns);
+      harnessReadout.classList.add("active");
+    }
+
+    function renderHarnessTrack() {
+      var spans = getVisibleHarnessSpans();
+      var total = MOBENCH_STATE.timeline.totalDurationNs;
+      harnessTrack.innerHTML = "";
+      harnessTotal.textContent = "Exact harness time · " + formatDurationNs(total);
+      harnessScale.innerHTML = "<span>0</span><span>" + escapeHtml(formatDurationNs(total)) + "</span>";
+
+      spans.forEach(function(span, index) {
+        var left = total === 0 ? 0 : (span.start_offset_ns / total) * 100;
+        var width = total === 0 ? 100 : ((span.end_offset_ns - span.start_offset_ns) / total) * 100;
+        var label = phaseLabel(span.phase, span.iteration);
+        var dur = formatDurationNs(span.end_offset_ns - span.start_offset_ns);
+        var title = label + " · " + formatDurationNs(span.start_offset_ns) + " to " + formatDurationNs(span.end_offset_ns);
+        var el = document.createElement("button");
+        el.type = "button";
+        el.className = "harness-segment";
+        if (MOBENCH_STATE.activeMode === "timeline" && MOBENCH_STATE.timeline.selectedPhaseIndex === index) {
+          el.className += " selected";
+        }
+        el.setAttribute("data-phase", span.phase);
+        el.setAttribute("aria-label", title);
+        el.style.left = left.toFixed(4) + "%";
+        el.style.width = Math.max(0.5, width).toFixed(4) + "%";
+        el.title = title;
+        el.innerHTML = "<span class=\"harness-segment-name\">" + escapeHtml(label) + "</span><span class=\"harness-segment-duration\">" + escapeHtml(dur) + "</span>";
+        el.addEventListener("mouseenter", function() {
+          MOBENCH_STATE.harness.hoveredPhaseIndex = index;
+          renderHarnessReadout();
+        });
+        el.addEventListener("mouseleave", function() {
+          if (MOBENCH_STATE.harness.hoveredPhaseIndex === index) {
+            MOBENCH_STATE.harness.hoveredPhaseIndex = -1;
+            renderHarnessReadout();
+          }
+        });
+        el.addEventListener("focus", function() {
+          MOBENCH_STATE.harness.hoveredPhaseIndex = index;
+          renderHarnessReadout();
+        });
+        el.addEventListener("blur", function() {
+          if (MOBENCH_STATE.harness.hoveredPhaseIndex === index) {
+            MOBENCH_STATE.harness.hoveredPhaseIndex = -1;
+            renderHarnessReadout();
+          }
+        });
+        el.addEventListener("click", function() { onHarnessSegmentClick(index); });
+        harnessTrack.appendChild(el);
+      });
+      renderHarnessReadout();
+    }
+
+    function timelineInitialView() {
+      return {
+        start: 0,
+        end: MOBENCH_STATE.timeline.totalDurationNs,
+        label: "Full Run",
+        selectedPhaseIndex: -1,
+      };
+    }
+
+    function normalizeTimelineView(view) {
+      var total = MOBENCH_STATE.timeline.totalDurationNs;
+      var start = Math.max(0, Math.min(total, Math.round(view.start || 0)));
+      var end = Math.max(start + 1, Math.min(total, Math.round(view.end || total)));
+      return {
+        start: start,
+        end: end,
+        label: view.label || "Full Run",
+        selectedPhaseIndex: typeof view.selectedPhaseIndex === "number" ? view.selectedPhaseIndex : -1,
+      };
+    }
+
+    function pushTimelineHistory(view) {
+      var current = MOBENCH_STATE.timeline.history[MOBENCH_STATE.timeline.index];
+      if (current && current.start === view.start && current.end === view.end && current.label === view.label && current.selectedPhaseIndex === view.selectedPhaseIndex) {
+        return;
+      }
+      MOBENCH_STATE.timeline.history = MOBENCH_STATE.timeline.history.slice(0, MOBENCH_STATE.timeline.index + 1);
+      MOBENCH_STATE.timeline.history.push(view);
+      MOBENCH_STATE.timeline.index = MOBENCH_STATE.timeline.history.length - 1;
+    }
+
+    function applyTimelineView(view, pushHistory) {
+      var next = normalizeTimelineView(view);
+      MOBENCH_STATE.timeline.viewStartNs = next.start;
+      MOBENCH_STATE.timeline.viewEndNs = next.end;
+      MOBENCH_STATE.timeline.selectedPhaseIndex = next.selectedPhaseIndex;
+      MOBENCH_STATE.timeline.selectedSampleKey = null;
+      MOBENCH_STATE.timeline.selectedSampleItem = null;
+      MOBENCH_STATE.timeline.selectedSampleFrames = [];
+      if (pushHistory !== false) {
+        pushTimelineHistory(next);
+      }
+      renderTimelineAll();
+      refreshSummary();
+    }
+
+    function timelineCanGoBack() {
+      return MOBENCH_STATE.timeline.index > 0;
+    }
+
+    function timelineCanGoForward() {
+      return MOBENCH_STATE.timeline.index >= 0 && MOBENCH_STATE.timeline.index < MOBENCH_STATE.timeline.history.length - 1;
+    }
+
+    function timelineHistoryBack() {
+      if (!timelineCanGoBack()) return;
+      MOBENCH_STATE.timeline.index -= 1;
+      applyTimelineView(MOBENCH_STATE.timeline.history[MOBENCH_STATE.timeline.index], false);
+    }
+
+    function timelineHistoryForward() {
+      if (!timelineCanGoForward()) return;
+      MOBENCH_STATE.timeline.index += 1;
+      applyTimelineView(MOBENCH_STATE.timeline.history[MOBENCH_STATE.timeline.index], false);
+    }
+
+    function timelineReset() {
+      applyTimelineView(timelineInitialView(), true);
+    }
+
+    function getTimelineEventEnd(event) {
+      if (event.end_offset_ns != null) return event.end_offset_ns;
+      return event.start_offset_ns;
+    }
+
+    function getVisibleTraceItems() {
+      var start = MOBENCH_STATE.timeline.viewStartNs;
+      var end = MOBENCH_STATE.timeline.viewEndNs;
+      var items = [];
+      MOBENCH_TIMELINE_LANES.forEach(function(lane, laneIdx) {
+        lane.events.forEach(function(event, eventIdx) {
+          var eventEnd = getTimelineEventEnd(event);
+          if (event.start_offset_ns > end) return;
+          if (eventEnd < start) return;
+          items.push({
+            laneIdx: laneIdx,
+            eventIdx: eventIdx,
+            lane: lane,
+            event: event,
+            eventEnd: eventEnd,
+            key: laneIdx + ":" + eventIdx,
+          });
+        });
+      });
+      return items;
+    }
+
+    function renderPhaseLegend() {
+      var seen = {};
+      var items = [];
+      getVisibleHarnessSpans().forEach(function(span) {
+        if (seen[span.phase]) return;
+        seen[span.phase] = true;
+        items.push("<span class=\"phase-legend-item\"><span class=\"phase-legend-swatch\" style=\"background:" + phaseColor(span.phase) + "\"></span>" + escapeHtml(PHASE_LABELS[span.phase] || span.phase) + "</span>");
+      });
+      phaseLegend.innerHTML = items.join("");
+    }
+
+    function renderHarnessOnlyTimelineStage(viewStart, viewEnd) {
+      var visibleSpans = getVisibleHarnessSpans().filter(function(span) {
+        return span.start_offset_ns < viewEnd && span.end_offset_ns > viewStart;
+      });
+      var selectedIndex = MOBENCH_STATE.timeline.selectedPhaseIndex;
+      var selectedSpan = selectedIndex >= 0 && selectedIndex < getVisibleHarnessSpans().length
+        ? getVisibleHarnessSpans()[selectedIndex]
+        : null;
+      var visibleDuration = Math.max(1, viewEnd - viewStart);
+      var title = selectedSpan
+        ? phaseLabel(selectedSpan.phase, selectedSpan.iteration)
+        : (MOBENCH_STATE.timeline.history[MOBENCH_STATE.timeline.index].label || "Harness View");
+      var subtitle = selectedSpan
+        ? "Selected interval"
+        : "Harness-only interval";
+      var strip = visibleSpans.map(function(span) {
+        var start = Math.max(span.start_offset_ns, viewStart);
+        var end = Math.min(span.end_offset_ns, viewEnd);
+        var left = ((start - viewStart) / visibleDuration) * 100;
+        var width = Math.max(0.5, ((end - start) / visibleDuration) * 100);
+        var selected = selectedSpan && selectedSpan.start_offset_ns === span.start_offset_ns && selectedSpan.end_offset_ns === span.end_offset_ns;
+        return (
+          "<div class=\"timeline-fallback-band" + (selected ? " selected" : "") + "\" style=\"left:" + left.toFixed(4) + "%;width:" + width.toFixed(4) + "%;background:" + phaseColor(span.phase) + "\">" +
+          "<span class=\"timeline-fallback-band-name\">" + escapeHtml(phaseLabel(span.phase, span.iteration)) + "</span>" +
+          "<span class=\"timeline-fallback-band-meta\">" + escapeHtml(formatDurationNs(span.end_offset_ns - span.start_offset_ns)) + "</span>" +
+          "</div>"
+        );
+      }).join("");
+      var ticks = [];
+      for (var i = 0; i < 5; i++) {
+        var ratio = i / 4;
+        var value = viewStart + visibleDuration * ratio;
+        ticks.push(
+          "<span class=\"timeline-fallback-ruler-tick\" style=\"left:" + (ratio * 100).toFixed(2) + "%\">" +
+          "<span class=\"timeline-fallback-ruler-label\">" + escapeHtml(formatDurationNs(Math.round(value))) + "</span>" +
+          "</span>"
+        );
+      }
+      var selectionShare = MOBENCH_STATE.timeline.totalDurationNs > 0
+        ? ((visibleDuration / MOBENCH_STATE.timeline.totalDurationNs) * 100).toFixed(1) + "%"
+        : "100%";
+      var startLabel = formatDurationNs(viewStart);
+      var endLabel = formatDurationNs(viewEnd);
+      evolutionCanvas.style.minHeight = "360px";
+      evolutionCanvas.innerHTML =
+        "<div class=\"timeline-fallback-shell\">" +
+          "<div class=\"timeline-fallback-header\">" +
+            "<div class=\"timeline-fallback-title\">" + escapeHtml(title) + "</div>" +
+            "<div class=\"timeline-fallback-meta\">" + escapeHtml(subtitle) + "</div>" +
+          "</div>" +
+          "<div class=\"timeline-fallback-strip\">" +
+            strip +
+            "<div class=\"timeline-fallback-ruler\">" + ticks.join("") + "</div>" +
+          "</div>" +
+          "<div class=\"timeline-fallback-stats\">" +
+            "<div class=\"timeline-fallback-stat\"><span class=\"timeline-fallback-stat-label\">Visible Window</span><span class=\"timeline-fallback-stat-value\">" + escapeHtml(formatDurationNs(visibleDuration)) + "</span></div>" +
+            "<div class=\"timeline-fallback-stat\"><span class=\"timeline-fallback-stat-label\">Window Start</span><span class=\"timeline-fallback-stat-value\">" + escapeHtml(startLabel) + "</span></div>" +
+            "<div class=\"timeline-fallback-stat\"><span class=\"timeline-fallback-stat-label\">Window End</span><span class=\"timeline-fallback-stat-value\">" + escapeHtml(endLabel) + "</span></div>" +
+            "<div class=\"timeline-fallback-stat\"><span class=\"timeline-fallback-stat-label\">Share of Run</span><span class=\"timeline-fallback-stat-value\">" + escapeHtml(selectionShare) + "</span></div>" +
+          "</div>" +
+          "<div class=\"timeline-fallback-card\">" +
+            "<span class=\"timeline-fallback-card-title\">Harness chronology is exact for this interval</span>" +
+            "<div class=\"timeline-fallback-card-copy\">This capture did not attach time-ordered stack samples, so Timeline is showing the exact phase layout, selection range, and wall-clock boundaries instead of inventing a fake execution trace. Aggregate flamegraph modes above still carry the full hotspot analysis.</div>" +
+          "</div>" +
+        "</div>";
+    }
+
+    function renderTimelineStage() {
+      var viewStart = MOBENCH_STATE.timeline.viewStartNs;
+      var viewEnd = MOBENCH_STATE.timeline.viewEndNs;
+      var span = Math.max(1, viewEnd - viewStart);
+      var items = getVisibleTraceItems();
+      var sampleItems = items.filter(function(item) {
+        return item.event.event_kind === "sample";
+      });
+      evolutionCanvas.innerHTML = "";
+
+      MOBENCH_HARNESS_TIMELINE.forEach(function(harnessSpan) {
+        ["start_offset_ns", "end_offset_ns"].forEach(function(key) {
+          var boundary = harnessSpan[key];
+          if (boundary <= viewStart || boundary >= viewEnd) return;
+          var pct = ((boundary - viewStart) / span) * 100;
+          var sep = document.createElement("div");
+          sep.className = "phase-separator";
+          sep.style.left = pct.toFixed(4) + "%";
+          var label = document.createElement("span");
+          label.className = "phase-separator-label";
+          label.textContent = formatDurationNs(boundary);
+          sep.appendChild(label);
+          evolutionCanvas.appendChild(sep);
+        });
+      });
+
+      getVisibleHarnessSpans().forEach(function(harnessSpan) {
+        var start = Math.max(harnessSpan.start_offset_ns, viewStart);
+        var end = Math.min(harnessSpan.end_offset_ns, viewEnd);
+        if (end <= start) return;
+        var left = ((start - viewStart) / span) * 100;
+        var width = ((end - start) / span) * 100;
+        var band = document.createElement("div");
+        band.style.cssText = "position:absolute;top:0;bottom:0;left:" + left.toFixed(4) + "%;width:" + width.toFixed(4) + "%;background:" + phaseColor(harnessSpan.phase).replace(/0\.\d+\)/, "0.08)") + ";pointer-events:none;";
+        evolutionCanvas.appendChild(band);
+      });
+
+      if (sampleItems.length === 0) {
+        renderHarnessOnlyTimelineStage(viewStart, viewEnd);
+        return;
+      }
+
+      var maxDepth = 1;
+      sampleItems.forEach(function(item) {
+        var depth = Math.max(1, (item.event.frames && item.event.frames.length) || 1);
+        if (depth > maxDepth) maxDepth = depth;
+      });
+      var frameHeight = 18;
+      var canvasHeight = Math.max(240, maxDepth * (frameHeight + 2) + 48);
+      evolutionCanvas.style.minHeight = canvasHeight + "px";
+
+      sampleItems.forEach(function(item) {
+        var eventStart = Math.max(item.event.start_offset_ns, viewStart);
+        var eventEnd = Math.min(item.eventEnd, viewEnd);
+        var left = ((eventStart - viewStart) / span) * 100;
+        var width = Math.max(0.18, ((Math.max(eventEnd, eventStart + 1) - eventStart) / span) * 100);
+        var frames = item.event.frames && item.event.frames.length > 0
+          ? item.event.frames
+          : [phaseLabel(item.event.phase, item.event.iteration)];
+
+        frames.forEach(function(frame, depth) {
+          var y = canvasHeight - ((depth + 1) * (frameHeight + 2)) - 12;
+          var el = document.createElement("div");
+          el.className = "stack-frame";
+          if (MOBENCH_STATE.timeline.selectedSampleKey === item.key) el.className += " selected";
+          el.style.cssText =
+            "top:" + y + "px;left:" + left.toFixed(4) + "%;width:" + width.toFixed(4) + "%;height:" + frameHeight + "px;background:" + frameColorForName(frame) + ";line-height:" + (frameHeight - 2) + "px;";
+          el.textContent = frame;
+          el.title = frame + " · " + formatDurationNs(item.event.start_offset_ns);
+          el.addEventListener("click", function() { onTimelineSampleClick(item); });
+          evolutionCanvas.appendChild(el);
+        });
+      });
+    }
+
+    function renderTimelineNote() {
+      var hasSampleEvents = MOBENCH_TIMELINE_LANES.some(function(lane) {
+        return lane.events.some(function(event) { return event.event_kind === "sample"; });
+      });
+      var note = MOBENCH_TIMELINE_NOTE;
+      if (!note && !hasSampleEvents) {
+        note = "Harness-only timeline. This capture includes exact phase timing, but not time-ordered stack samples.";
+      }
+      timelineNote.textContent = note || "";
+      timelineNote.classList.toggle("active", Boolean(note));
+    }
+
+    function renderTimelinePhaseDetail() {
+      var spans = getVisibleHarnessSpans();
+      var index = MOBENCH_STATE.timeline.selectedPhaseIndex;
+      if (index < 0 || index >= spans.length) {
+        phaseDetail.innerHTML = "<div class=\"detail-card\"><span class=\"detail-card-title\">No phase selected</span><span class=\"detail-card-meta\">Click a harness segment to inspect that exact interval.</span></div>";
+        return;
+      }
+      var span = spans[index];
+      var duration = span.end_offset_ns - span.start_offset_ns;
+      var pct = MOBENCH_STATE.timeline.totalDurationNs > 0 ? ((duration / MOBENCH_STATE.timeline.totalDurationNs) * 100).toFixed(1) : "0";
+      phaseDetail.innerHTML =
+        "<div class=\"detail-card\" style=\"border-left:3px solid " + phaseColor(span.phase) + "\">" +
+        "<span class=\"detail-card-title\">" + escapeHtml(phaseLabel(span.phase, span.iteration)) + "</span>" +
+        "<span class=\"detail-card-meta\">Duration: " + escapeHtml(formatDurationNs(duration)) + " (" + pct + "% of total)<br>Start: " + escapeHtml(formatDurationNs(span.start_offset_ns)) + "<br>End: " + escapeHtml(formatDurationNs(span.end_offset_ns)) + "</span>" +
+        "</div>";
+    }
+
+    function renderTimelineSampleDetail() {
+      var item = MOBENCH_STATE.timeline.selectedSampleItem;
+      if (!item) {
+        sampleDetail.innerHTML = "<div class=\"detail-card\"><span class=\"detail-card-title\">No sample selected</span><span class=\"detail-card-meta\">Click a stack frame in Timeline mode to inspect its call stack.</span></div>";
+        return;
+      }
+      var html =
+        "<div class=\"detail-card\"><span class=\"detail-card-title\">" + escapeHtml(item.event.event_kind || "sample") + " at " + escapeHtml(formatDurationNs(item.event.start_offset_ns)) + "</span>" +
+        "<span class=\"detail-card-meta\">" + (item.event.phase ? "Phase: " + escapeHtml(phaseLabel(item.event.phase, item.event.iteration)) + "<br>" : "") + "Lane: " + escapeHtml(item.lane.label) + "</span></div>";
+      if (MOBENCH_STATE.timeline.selectedSampleFrames.length > 0) {
+        html += "<ul class=\"frame-list\">";
+        MOBENCH_STATE.timeline.selectedSampleFrames.forEach(function(frame, depth) {
+          html += "<li class=\"frame-item\"><span class=\"frame-name\">" + escapeHtml(frame) + "</span><span class=\"frame-meta\">depth " + depth + "</span></li>";
+        });
+        html += "</ul>";
+      }
+      sampleDetail.innerHTML = html;
+    }
+
+    function renderTimelinePhaseList() {
+      var start = MOBENCH_STATE.timeline.viewStartNs;
+      var end = MOBENCH_STATE.timeline.viewEndNs;
+      var spans = getVisibleHarnessSpans().filter(function(span) {
+        return span.start_offset_ns < end && span.end_offset_ns > start;
+      });
+      if (spans.length === 0) {
+        phaseList.innerHTML = "<li class=\"frame-item\"><span class=\"frame-name\">No phases in current view</span></li>";
+        return;
+      }
+      phaseList.innerHTML = spans.map(function(span) {
+        var duration = span.end_offset_ns - span.start_offset_ns;
+        return "<li class=\"frame-item\" style=\"border-left:3px solid " + phaseColor(span.phase) + "\"><span class=\"frame-name\">" + escapeHtml(phaseLabel(span.phase, span.iteration)) + "</span><span class=\"frame-meta\">" + escapeHtml(formatDurationNs(duration)) + " · " + escapeHtml(formatDurationNs(span.start_offset_ns)) + " to " + escapeHtml(formatDurationNs(span.end_offset_ns)) + "</span></li>";
+      }).join("");
+    }
+
+    function renderTimelineAll() {
+      renderHarnessTrack();
+      renderTimelineNote();
+      renderPhaseLegend();
+      renderTimelineStage();
+      renderTimelinePhaseDetail();
+      renderTimelineSampleDetail();
+      renderTimelinePhaseList();
+      renderArtifacts(timelineArtifactList);
+    }
+
+    function onTimelineSampleClick(item) {
+      if (MOBENCH_STATE.timeline.selectedSampleKey === item.key) {
+        MOBENCH_STATE.timeline.selectedSampleKey = null;
+        MOBENCH_STATE.timeline.selectedSampleItem = null;
+        MOBENCH_STATE.timeline.selectedSampleFrames = [];
+      } else {
+        MOBENCH_STATE.timeline.selectedSampleKey = item.key;
+        MOBENCH_STATE.timeline.selectedSampleItem = item;
+        MOBENCH_STATE.timeline.selectedSampleFrames = item.event.frames || [];
+      }
+      renderTimelineStage();
+      renderTimelineSampleDetail();
+    }
+
+    function onHarnessSegmentClick(index) {
+      var spans = getVisibleHarnessSpans();
+      if (index < 0 || index >= spans.length) return;
+      var span = spans[index];
+      switchMode("timeline");
+      if (MOBENCH_STATE.timeline.selectedPhaseIndex === index) {
+        timelineReset();
+        return;
+      }
+      applyTimelineView({
+        start: span.start_offset_ns,
+        end: Math.max(span.start_offset_ns + 1, span.end_offset_ns),
+        label: phaseLabel(span.phase, span.iteration),
+        selectedPhaseIndex: index,
+      }, true);
+    }
+
+    function renderAxis(label, tickFormatter, rangeText, start, end) {
+      graphAxis.hidden = false;
+      graphAxisLabel.textContent = label;
+      graphAxisRange.textContent = rangeText;
+      var span = Math.max(1, end - start);
+      var ticks = [];
+      for (var i = 0; i < 5; i++) {
+        var ratio = i / 4;
+        var value = start + span * ratio;
+        ticks.push(
+          "<span class=\"graph-axis-tick\" style=\"left:" + (ratio * 100).toFixed(2) + "%\"><span class=\"graph-axis-tick-label\">" +
+          escapeHtml(tickFormatter(value)) +
+          "</span></span>"
+        );
+      }
+      graphAxisScale.innerHTML = ticks.join("");
+    }
+
+    function refreshSummary() {
+      summaryMode.textContent = MOBENCH_LABELS[MOBENCH_STATE.activeMode];
+      if (MOBENCH_STATE.activeMode === "timeline") {
+        var visibleItems = getVisibleTraceItems();
+        summarySamplesLabel.textContent = "Visible Events";
+        summaryRoot.textContent = MOBENCH_STATE.timeline.history[MOBENCH_STATE.timeline.index].label || "Full Run";
+        summarySamples.textContent = visibleItems.length.toLocaleString();
+        var span = Math.max(1, MOBENCH_STATE.timeline.viewEndNs - MOBENCH_STATE.timeline.viewStartNs);
+        var percent = Math.max(1, Math.round((span / MOBENCH_STATE.timeline.totalDurationNs) * 100));
+        summaryRange.textContent = percent + "%";
+        summaryDuration.textContent = formatDurationNs(span);
+        renderAxis(
+          "Wall-clock time",
+          function(value) { return formatDurationNs(Math.round(value)); },
+          formatDurationNs(span),
+          MOBENCH_STATE.timeline.viewStartNs,
+          MOBENCH_STATE.timeline.viewEndNs
+        );
+        backButton.disabled = !timelineCanGoBack();
+        forwardButton.disabled = !timelineCanGoForward();
+        selectionButton.disabled = true;
+        searchButton.disabled = true;
+        return;
+      }
+
+      summarySamplesLabel.textContent = "Visible Samples";
+      selectionButton.disabled = true;
+      searchButton.disabled = false;
+      var summary = MOBENCH_SUMMARIES[MOBENCH_STATE.activeMode];
+      var currentView = MOBENCH_STATE.currentView[MOBENCH_STATE.activeMode];
+      summaryRoot.textContent = currentView && currentView.label ? currentView.label : "all";
+      var visibleSamples = currentView && typeof currentView.width === "number" ? currentView.width : summary.total_samples;
+      summarySamples.textContent = visibleSamples.toLocaleString();
+      var percent = summary.total_samples > 0 ? Math.max(1, Math.round((visibleSamples / summary.total_samples) * 100)) : 100;
+      summaryRange.textContent = percent + "%";
+      if (Number.isFinite(MOBENCH_SAMPLED_DURATION_SECS) && MOBENCH_SAMPLED_DURATION_SECS > 0 && summary.total_samples > 0) {
+        var startSamples = currentView && typeof currentView.start === "number" ? currentView.start : 0;
+        var durationPerSample = MOBENCH_SAMPLED_DURATION_SECS / summary.total_samples;
+        var startSeconds = startSamples * durationPerSample;
+        var endSeconds = (startSamples + visibleSamples) * durationPerSample;
+        summaryDuration.textContent = formatDurationSeconds(Math.max(0, endSeconds - startSeconds));
+        renderAxis(
+          "Approx. sampled time",
+          function(value) { return formatDurationSeconds(value); },
+          formatDurationSeconds(Math.max(0, endSeconds - startSeconds)),
+          startSeconds,
+          endSeconds
+        );
+      } else {
+        summaryDuration.textContent = "—";
+        graphAxis.hidden = true;
+      }
+      var activeWindow = getActiveWindow();
+      backButton.disabled = !(activeWindow && activeWindow.mobenchCanGoBack && activeWindow.mobenchCanGoBack());
+      forwardButton.disabled = !(activeWindow && activeWindow.mobenchCanGoForward && activeWindow.mobenchCanGoForward());
+    }
+
+    function enableRangeSelection() {
+      selectionButton.hidden = true;
+      selectionOverlay.classList.add("active");
+      showSelectionHintFor(3000);
+    }
+
+    function hideSelectionHint() {
+      if (selectionHintTimer != null) {
+        window.clearTimeout(selectionHintTimer);
+        selectionHintTimer = null;
+      }
+      selectionHint.classList.remove("active");
+    }
+
+    function showSelectionHintFor(durationMs) {
+      hideSelectionHint();
+      selectionHint.classList.add("active");
+      selectionHintTimer = window.setTimeout(function() {
+        selectionHint.classList.remove("active");
+        selectionHintTimer = null;
+      }, durationMs);
+    }
+
+    function clearSelectionGesture() {
+      selectionBox.classList.remove("visible");
+      dragStartX = null;
+      dragCurrentX = null;
+      dragMoved = false;
+      dragPointerId = null;
+    }
+
+    function updateSelectionBox() {
+      if (dragStartX == null || dragCurrentX == null || !dragMoved) {
+        selectionBox.classList.remove("visible");
+        return;
+      }
+      var left = Math.min(dragStartX, dragCurrentX);
+      var right = Math.max(dragStartX, dragCurrentX);
+      selectionBox.classList.add("visible");
+      selectionBox.style.left = left + "px";
+      selectionBox.style.width = Math.max(1, right - left) + "px";
+    }
+
+    function canStepBackCurrentRange() {
+      if (MOBENCH_STATE.activeMode === "timeline") {
+        return timelineCanGoBack();
+      }
+      var activeWindow = getActiveWindow();
+      return Boolean(activeWindow && activeWindow.mobenchCanGoBack && activeWindow.mobenchCanGoBack());
+    }
+
+    function stepBackCurrentRange() {
+      cancelPendingForwardClick();
+      if (MOBENCH_STATE.activeMode === "timeline") {
+        timelineHistoryBack();
+        return;
+      }
+      var activeWindow = getActiveWindow();
+      if (activeWindow && activeWindow.mobenchHistoryBack) {
+        activeWindow.mobenchHistoryBack();
+      }
+    }
+
+    function requestStepBackCurrentRange() {
+      var now = Date.now();
+      if ((now - lastHistoryStepAt) <= 250) {
+        return;
+      }
+      if (!canStepBackCurrentRange()) {
+        return;
+      }
+      lastHistoryStepAt = now;
+      stepBackCurrentRange();
+    }
+
+    function stepForwardCurrentRange() {
+      cancelPendingForwardClick();
+      if (MOBENCH_STATE.activeMode === "timeline") {
+        timelineHistoryForward();
+        return;
+      }
+      var activeWindow = getActiveWindow();
+      if (activeWindow && activeWindow.mobenchHistoryForward) {
+        activeWindow.mobenchHistoryForward();
+      }
+    }
+
+    function resetZoomFully() {
+      cancelPendingForwardClick();
+      if (MOBENCH_STATE.activeMode === "timeline") {
+        timelineReset();
+        return;
+      }
+      var activeWindow = getActiveWindow();
+      if (activeWindow && activeWindow.mobenchResetView) {
+        activeWindow.mobenchResetView();
+      }
+    }
+
+    function forwardClickToTimeline(event) {
+      selectionOverlay.style.pointerEvents = "none";
+      var target = document.elementFromPoint(event.clientX, event.clientY);
+      selectionOverlay.style.pointerEvents = "";
+      if (!target || target === selectionOverlay || target === selectionBox) {
+        return;
+      }
+      if (typeof target.click === "function") {
+        target.click();
+      }
+    }
+
+    function forwardClickToAggregateFrame(event) {
+      var frame = getActiveFrame();
+      if (!frame || !frame.contentWindow || !frame.contentWindow.document) {
+        return;
+      }
+      var rect = frame.getBoundingClientRect();
+      var innerX = event.clientX - rect.left;
+      var innerY = event.clientY - rect.top;
+      if (innerX < 0 || innerY < 0 || innerX > rect.width || innerY > rect.height) {
+        return;
+      }
+      var doc = frame.contentWindow.document;
+      var target = doc.elementFromPoint(innerX, innerY);
+      if (!target) {
+        return;
+      }
+      var clickable = target.closest ? target.closest("g") || target : target;
+      var forwardedEvent = new frame.contentWindow.MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        clientX: innerX,
+        clientY: innerY,
+        detail: 1,
+      });
+      clickable.dispatchEvent(forwardedEvent);
+    }
+
+    function scrollActiveGraphSurface(deltaX, deltaY) {
+      if (MOBENCH_STATE.activeMode === "timeline") {
+        if (evolutionContainer) {
+          evolutionContainer.scrollBy({
+            left: deltaX,
+            top: deltaY,
+            behavior: "auto",
+          });
+        }
+        return;
+      }
+      var frame = getActiveFrame();
+      if (!frame || !frame.contentWindow) {
+        return;
+      }
+      frame.contentWindow.scrollBy({
+        left: deltaX,
+        top: deltaY,
+        behavior: "auto",
+      });
+    }
+
+    function shortcutsVisible() {
+      return !shortcutOverlay.hidden;
+    }
+
+    function toggleShortcutLegend(force) {
+      var wasVisible = shortcutsVisible();
+      var nextVisible = typeof force === "boolean" ? force : shortcutOverlay.hidden;
+      shortcutOverlay.hidden = !nextVisible;
+      if (nextVisible) {
+        hideSelectionHint();
+        shortcutCloseButton.focus();
+      } else if (wasVisible) {
+        showSelectionHintFor(3000);
+      }
+    }
+
+    function scheduleForwardGraphClick(event) {
+      cancelPendingForwardClick();
+      var clientX = event.clientX;
+      var clientY = event.clientY;
+      pendingForwardClick = window.setTimeout(function() {
+        pendingForwardClick = null;
+        var forwarded = { clientX: clientX, clientY: clientY };
+        if (MOBENCH_STATE.activeMode === "timeline") {
+          forwardClickToTimeline(forwarded);
+        } else {
+          forwardClickToAggregateFrame(forwarded);
+        }
+      }, 220);
+    }
+
+    function isRepeatedOverlayTap(event) {
+      var now = Date.now();
+      var repeated =
+        lastOverlayTapAt > 0 &&
+        (now - lastOverlayTapAt) <= 1200 &&
+        Math.abs(event.clientX - lastOverlayTapX) <= 24 &&
+        Math.abs(event.clientY - lastOverlayTapY) <= 24;
+      lastOverlayTapAt = now;
+      lastOverlayTapX = event.clientX;
+      lastOverlayTapY = event.clientY;
+      return repeated;
+    }
+
+    function switchMode(mode) {
+      var previousMode = MOBENCH_STATE.activeMode;
+      if (mode === "focused" || mode === "full") {
+        MOBENCH_STATE.lastAggregateMode = mode;
+      }
+      var datasetMode = mode === "timeline" ? getAggregateDatasetMode() : mode;
+      if (mode === "timeline" && previousMode !== "timeline") {
+        MOBENCH_STATE.savedAggregateViews[datasetMode] = captureAggregateView(datasetMode);
+      }
+
+      MOBENCH_STATE.activeMode = mode;
+      frames.focused.hidden = mode === "timeline" || datasetMode !== "focused";
+      frames.full.hidden = mode === "timeline" || datasetMode !== "full";
+      timelineStage.hidden = mode !== "timeline";
+      aggregateSidebar.hidden = mode === "timeline";
+      timelineSidebar.hidden = mode !== "timeline";
+      modeButtons.focused.classList.toggle("active", mode === "focused");
+      modeButtons.full.classList.toggle("active", mode === "full");
+      modeButtons.timeline.classList.toggle("active", mode === "timeline");
+
+      if (mode !== "timeline") {
+        ensureFrameLoaded(datasetMode);
+      }
+      if (mode === "timeline") {
+        clearSelectionGesture();
+        renderTimelineAll();
+      } else if (previousMode === "timeline") {
+        restoreAggregateWindowFromSaved(mode);
+      }
+      if (mode === "focused" || mode === "full") {
+        scrollAggregateFrameToBase(mode);
+      }
+      if (mode === "timeline") {
+        renderTimelineAll();
+      } else {
+        renderAggregateSidebar();
+      }
+      syncFullscreenChrome();
+      refreshSummary();
+      renderHarnessTrack();
+    }
+
+    selectionOverlay.addEventListener("pointerdown", function(event) {
+      cancelPendingForwardClick();
+      var rect = selectionOverlay.getBoundingClientRect();
+      dragStartX = event.clientX - rect.left;
+      dragCurrentX = dragStartX;
+      dragMoved = false;
+      dragPointerId = event.pointerId;
+      updateSelectionBox();
+      if (selectionOverlay.setPointerCapture) {
+        try {
+          selectionOverlay.setPointerCapture(event.pointerId);
+        } catch (_error) {}
+      }
+    });
+
+    selectionOverlay.addEventListener("pointermove", function(event) {
+      if (dragStartX == null || dragPointerId !== event.pointerId) return;
+      var rect = selectionOverlay.getBoundingClientRect();
+      dragCurrentX = Math.min(rect.width, Math.max(0, event.clientX - rect.left));
+      if (Math.abs(dragCurrentX - dragStartX) >= 4) {
+        dragMoved = true;
+      }
+      updateSelectionBox();
+    });
+
+    selectionOverlay.addEventListener("pointerup", function(event) {
+      if (dragStartX == null || dragCurrentX == null || dragPointerId !== event.pointerId) {
+        clearSelectionGesture();
+        return;
+      }
+      if (selectionOverlay.hasPointerCapture && selectionOverlay.hasPointerCapture(event.pointerId)) {
+        try {
+          selectionOverlay.releasePointerCapture(event.pointerId);
+        } catch (_error) {}
+      }
+      if (dragMoved) {
+        var rect = selectionOverlay.getBoundingClientRect();
+        var from = Math.min(dragStartX, dragCurrentX) / rect.width;
+        var to = Math.max(dragStartX, dragCurrentX) / rect.width;
+        if (MOBENCH_STATE.activeMode === "timeline") {
+          var span = Math.max(1, MOBENCH_STATE.timeline.viewEndNs - MOBENCH_STATE.timeline.viewStartNs);
+          applyTimelineView({
+            start: MOBENCH_STATE.timeline.viewStartNs + (span * from),
+            end: MOBENCH_STATE.timeline.viewStartNs + (span * to),
+            label: "Selection",
+            selectedPhaseIndex: -1,
+          }, true);
+        } else {
+          var activeWindow = getActiveWindow();
+          if (activeWindow && activeWindow.mobenchZoomVisibleFraction) {
+            activeWindow.mobenchZoomVisibleFraction(from, to);
+          }
+        }
+        clearSelectionGesture();
+        return;
+      }
+      if (isRepeatedOverlayTap(event)) {
+        lastOverlayTapAt = 0;
+        cancelPendingForwardClick();
+        requestStepBackCurrentRange();
+        clearSelectionGesture();
+        return;
+      }
+      scheduleForwardGraphClick(event);
+      clearSelectionGesture();
+    });
+
+    selectionOverlay.addEventListener("pointercancel", function() {
+      clearSelectionGesture();
+    });
+
+    selectionOverlay.addEventListener("wheel", function(event) {
+      if (dragStartX != null) {
+        return;
+      }
+      event.preventDefault();
+      scrollActiveGraphSurface(event.deltaX, event.deltaY);
+    }, { passive: false });
+
+    selectionOverlay.addEventListener("click", function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    selectionOverlay.addEventListener("dblclick", function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      requestStepBackCurrentRange();
+    });
+
+    shortcutOverlay.addEventListener("click", function(event) {
+      if (event.target === shortcutOverlay) {
+        toggleShortcutLegend(false);
+      }
+    });
+
+    shortcutCloseButton.addEventListener("click", function() {
+      toggleShortcutLegend(false);
+    });
+
+    backButton.addEventListener("click", function() {
+      if (MOBENCH_STATE.activeMode === "timeline") {
+        timelineHistoryBack();
+        return;
+      }
+      var activeWindow = getActiveWindow();
+      if (activeWindow && activeWindow.mobenchHistoryBack) activeWindow.mobenchHistoryBack();
+    });
+
+    forwardButton.addEventListener("click", function() {
+      if (MOBENCH_STATE.activeMode === "timeline") {
+        timelineHistoryForward();
+        return;
+      }
+      var activeWindow = getActiveWindow();
+      if (activeWindow && activeWindow.mobenchHistoryForward) activeWindow.mobenchHistoryForward();
+    });
+
+    resetButton.addEventListener("click", function() {
+      resetZoomFully();
+    });
+
+    legendButton.addEventListener("click", function() {
+      toggleShortcutLegend(true);
+    });
+
+    fullscreenButton.addEventListener("click", function() {
+      toggleFullscreenGraph();
+    });
+
+    timelineToggleButton.addEventListener("click", function() {
+      toggleTimelineStrip();
+    });
+
+    timelineToggleHudButton.addEventListener("click", function() {
+      toggleTimelineStrip();
+    });
+
+    fullscreenExitButton.addEventListener("click", function() {
+      toggleFullscreenGraph(false);
+    });
+
+    searchButton.addEventListener("click", function() {
+      if (searchButton.disabled) return;
+      var activeWindow = getActiveWindow();
+      if (!activeWindow || !activeWindow.mobenchSearch) return;
+      var term = window.prompt("Search current flamegraph mode (regexp allowed). Leave empty to clear search.", "");
+      if (term === null) return;
+      activeWindow.mobenchSearch(term);
+    });
+
+    modeButtons.focused.addEventListener("click", function() { switchMode("focused"); });
+    modeButtons.full.addEventListener("click", function() { switchMode("full"); });
+    modeButtons.timeline.addEventListener("click", function() { switchMode("timeline"); });
+
+    window.addEventListener("keydown", function(event) {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+      var active = document.activeElement;
+      if (
+        active &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.tagName === "SELECT" ||
+          active.isContentEditable)
+      ) {
+        return;
+      }
+      if (event.key === "Escape" && fullscreenVisible()) {
+        event.preventDefault();
+        toggleFullscreenGraph(false);
+        return;
+      }
+      if (event.key === "Escape" && shortcutsVisible()) {
+        event.preventDefault();
+        toggleShortcutLegend(false);
+        return;
+      }
+      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
+        event.preventDefault();
+        toggleShortcutLegend();
+        return;
+      }
+      if (shortcutsVisible()) {
+        return;
+      }
+      if (event.key === "1") {
+        event.preventDefault();
+        switchMode("focused");
+        return;
+      }
+      if (event.key === "2") {
+        event.preventDefault();
+        switchMode("full");
+        return;
+      }
+      if (event.key === "3") {
+        event.preventDefault();
+        switchMode("timeline");
+        return;
+      }
+      if (event.key === "t" || event.key === "T") {
+        event.preventDefault();
+        toggleTimelineStrip();
+        return;
+      }
+      if (event.key === "r" || event.key === "R") {
+        event.preventDefault();
+        resetZoomFully();
+        return;
+      }
+      if (event.key === "j" || event.key === "J") {
+        event.preventDefault();
+        requestStepBackCurrentRange();
+        return;
+      }
+      if (event.key === "k" || event.key === "K") {
+        event.preventDefault();
+        stepForwardCurrentRange();
+        return;
+      }
+      if (event.key === "f" || event.key === "F") {
+        event.preventDefault();
+        toggleFullscreenGraph();
+      }
+    });
+
+    syncFullscreenChrome();
+    syncTimelineStripChrome();
+
+    window.addEventListener("message", function(event) {
+      if (!event.data || event.data.type !== "mobench:view-change") return;
+      var mode = event.source === frames.focused.contentWindow
+        ? "focused"
+        : event.source === frames.full.contentWindow
+        ? "full"
+        : null;
+      if (!mode) return;
+      MOBENCH_STATE.currentView[mode] = event.data;
+      if (mode === MOBENCH_STATE.activeMode || (MOBENCH_STATE.activeMode === "timeline" && mode === getAggregateDatasetMode())) {
+        refreshSummary();
+        renderAggregateSidebar();
+      }
+    });
+
+    frames.focused.addEventListener("load", function() {
+      var win = frames.focused.contentWindow;
+      if (win && win.mobenchGetViewState) {
+        MOBENCH_STATE.currentView.focused = win.mobenchGetViewState();
+        scrollAggregateFrameToBase("focused");
+        if (MOBENCH_STATE.activeMode === "focused") {
+          refreshSummary();
+          renderAggregateSidebar();
+        }
+      }
+    });
+
+    frames.full.addEventListener("load", function() {
+      var win = frames.full.contentWindow;
+      if (win && win.mobenchGetViewState) {
+        MOBENCH_STATE.currentView.full = win.mobenchGetViewState();
+        scrollAggregateFrameToBase("full");
+        if (MOBENCH_STATE.activeMode === "full") {
+          refreshSummary();
+          renderAggregateSidebar();
+        }
+      }
+    });
+
+    MOBENCH_STATE.timeline.totalDurationNs = computeTimelineTotalDuration();
+    var initialTimeline = timelineInitialView();
+    MOBENCH_STATE.timeline.viewStartNs = initialTimeline.start;
+    MOBENCH_STATE.timeline.viewEndNs = initialTimeline.end;
+    MOBENCH_STATE.timeline.history = [initialTimeline];
+    MOBENCH_STATE.timeline.index = 0;
+
+    syncRunMetadataColumns();
+    if (typeof ResizeObserver === "function" && runMetadata) {
+      var runMetadataObserver = new ResizeObserver(syncRunMetadataColumns);
+      runMetadataObserver.observe(runMetadata);
+    } else {
+      window.addEventListener("resize", syncRunMetadataColumns);
+    }
+
+    enableRangeSelection();
+    ensureFrameLoaded("focused");
+    switchMode(DEFAULT_MODE);
+  </script>
+</body>
+</html>

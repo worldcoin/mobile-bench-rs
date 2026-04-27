@@ -30,12 +30,14 @@ inventory::collect!(BenchFunction);
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use mobench_sdk::registry::discover_benchmarks;
 ///
-/// let benchmarks = discover_benchmarks();
-/// for bench in benchmarks {
-///     println!("Found benchmark: {}", bench.name);
+/// fn main() {
+///     let benchmarks = discover_benchmarks();
+///     for bench in benchmarks {
+///         println!("Found benchmark: {}", bench.name);
+///     }
 /// }
 /// ```
 pub fn discover_benchmarks() -> Vec<&'static BenchFunction> {
@@ -59,13 +61,15 @@ pub fn discover_benchmarks() -> Vec<&'static BenchFunction> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use mobench_sdk::registry::find_benchmark;
 ///
-/// if let Some(bench) = find_benchmark("fibonacci") {
-///     println!("Found benchmark: {}", bench.name);
-/// } else {
-///     eprintln!("Benchmark not found");
+/// fn main() {
+///     if let Some(bench) = find_benchmark("fibonacci") {
+///         println!("Found benchmark: {}", bench.name);
+///     } else {
+///         eprintln!("Benchmark not found");
+///     }
 /// }
 /// ```
 pub fn find_benchmark(name: &str) -> Option<&'static BenchFunction> {
@@ -81,13 +85,15 @@ pub fn find_benchmark(name: &str) -> Option<&'static BenchFunction> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use mobench_sdk::registry::list_benchmark_names;
 ///
-/// let names = list_benchmark_names();
-/// println!("Available benchmarks:");
-/// for name in names {
-///     println!("  - {}", name);
+/// fn main() {
+///     let names = list_benchmark_names();
+///     println!("Available benchmarks:");
+///     for name in names {
+///         println!("  - {}", name);
+///     }
 /// }
 /// ```
 pub fn list_benchmark_names() -> Vec<&'static str> {

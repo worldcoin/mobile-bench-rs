@@ -1,0 +1,24 @@
+{
+  "source": {
+    "kind": "mobench-trace-events",
+    "profiler": "simpleperf",
+    "origin": "local"
+  },
+  "total_duration_ns": 900,
+  "lanes": [
+    {
+      "id": "harness",
+      "label": "Harness",
+      "events": [
+        {
+          "event_kind": "span",
+          "start_offset_ns": 100,
+          "end_offset_ns": 900,
+          "frames": [],
+          "phase": "measured-benchmark",
+          "iteration": 0
+        }
+      ]
+    }
+  ]
+}

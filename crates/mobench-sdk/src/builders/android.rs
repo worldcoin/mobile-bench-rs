@@ -18,7 +18,8 @@
 //!
 //! - Android NDK (set `ANDROID_NDK_HOME` environment variable)
 //! - `cargo-ndk` (`cargo install cargo-ndk`)
-//! - Rust targets: `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`
+//! - Rust targets: `aarch64-linux-android` by default
+//! - Optional extra targets can be enabled via `BuildConfig::android_abis`
 //! - Java JDK (for Gradle)
 //!
 //! ## Example
@@ -35,6 +36,7 @@
 //!     target: Target::Android,
 //!     profile: BuildProfile::Release,
 //!     incremental: true,
+//!     android_abis: None,
 //! };
 //!
 //! let result = builder.build(&config)?;
@@ -56,7 +58,9 @@
 //! ```
 
 use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
-use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
+use crate::types::{
+    BenchError, BuildConfig, BuildProfile, BuildResult, NativeLibraryArtifact, Target,
+};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -82,6 +86,7 @@ use std::process::Command;
 ///     target: Target::Android,
 ///     profile: BuildProfile::Release,
 ///     incremental: true,
+///     android_abis: None,
 /// };
 ///
 /// let result = builder.build(&config)?;
@@ -101,6 +106,8 @@ pub struct AndroidBuilder {
     /// Whether to run in dry-run mode (print what would be done without making changes)
     dry_run: bool,
 }
+
+const DEFAULT_ANDROID_ABIS: &[&str] = &["arm64-v8a"];
 
 impl AndroidBuilder {
     /// Creates a new Android builder
@@ -183,6 +190,7 @@ impl AndroidBuilder {
             BuildProfile::Debug => "debug",
             BuildProfile::Release => "release",
         };
+        let android_abis = self.resolve_android_abis(config)?;
 
         if self.dry_run {
             println!("\n[dry-run] Android build plan:");
@@ -192,7 +200,8 @@ impl AndroidBuilder {
             );
             println!("  Step 0.5: Ensure Gradle wrapper exists (run 'gradle wrapper' if needed)");
             println!(
-                "  Step 1: Build Rust libraries for Android ABIs (arm64-v8a, armeabi-v7a, x86_64)"
+                "  Step 1: Build Rust libraries for Android ABIs ({})",
+                android_abis.join(", ")
             );
             println!(
                 "    Command: cargo ndk --target <abi> --platform 24 build {}",
@@ -249,6 +258,7 @@ impl AndroidBuilder {
                     "app/build/outputs/apk/androidTest/{}/app-{}-androidTest.apk",
                     profile_name, profile_name
                 ))),
+                native_libraries: Vec::new(),
             });
         }
 
@@ -274,7 +284,7 @@ impl AndroidBuilder {
 
         // Step 3: Copy .so files to jniLibs
         println!("Copying native libraries to jniLibs...");
-        self.copy_native_libraries(config)?;
+        let native_libraries = self.copy_native_libraries(config)?;
 
         // Step 4: Build APK with Gradle
         println!("Building Android APK with Gradle...");
@@ -289,6 +299,7 @@ impl AndroidBuilder {
             platform: Target::Android,
             app_path: apk_path,
             test_suite_path: Some(test_suite_path),
+            native_libraries,
         };
         self.validate_build_artifacts(&result, config)?;
 
@@ -313,16 +324,16 @@ impl AndroidBuilder {
         }
 
         // Check test APK
-        if let Some(ref test_path) = result.test_suite_path {
-            if !test_path.exists() {
-                missing.push(format!("Test APK: {}", test_path.display()));
-            }
+        if let Some(ref test_path) = result.test_suite_path
+            && !test_path.exists()
+        {
+            missing.push(format!("Test APK: {}", test_path.display()));
         }
 
         // Check that at least one native library exists in jniLibs
         let jni_libs_dir = self.output_dir.join("android/app/src/main/jniLibs");
         let lib_name = format!("lib{}.so", self.crate_name.replace("-", "_"));
-        let required_abis = ["arm64-v8a", "armeabi-v7a", "x86_64"];
+        let required_abis = self.resolve_android_abis(config)?;
         let mut found_libs = 0;
         for abi in &required_abis {
             let lib_path = jni_libs_dir.join(abi).join(&lib_name);
@@ -367,6 +378,34 @@ impl AndroidBuilder {
         Ok(())
     }
 
+    fn resolve_android_abis(&self, config: &BuildConfig) -> Result<Vec<String>, BenchError> {
+        let requested = config
+            .android_abis
+            .as_ref()
+            .filter(|abis| !abis.is_empty())
+            .cloned()
+            .unwrap_or_else(|| {
+                DEFAULT_ANDROID_ABIS
+                    .iter()
+                    .map(|abi| (*abi).to_string())
+                    .collect()
+            });
+
+        let mut resolved = Vec::new();
+        for abi in requested {
+            if android_abi_to_rust_target(&abi).is_none() {
+                return Err(BenchError::Build(format!(
+                    "Unsupported Android ABI '{abi}'. Supported values: arm64-v8a, armeabi-v7a, x86_64"
+                )));
+            }
+            if !resolved.contains(&abi) {
+                resolved.push(abi);
+            }
+        }
+
+        Ok(resolved)
+    }
+
     /// Finds the benchmark crate directory.
     ///
     /// Search order:
@@ -390,12 +429,11 @@ impl AndroidBuilder {
         // Check if the current directory (project_root) IS the crate
         // This handles the case where user runs `cargo mobench build` from within the crate directory
         let root_cargo_toml = self.project_root.join("Cargo.toml");
-        if root_cargo_toml.exists() {
-            if let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml) {
-                if pkg_name == self.crate_name {
-                    return Ok(self.project_root.clone());
-                }
-            }
+        if root_cargo_toml.exists()
+            && let Some(pkg_name) = super::common::read_package_name(&root_cargo_toml)
+            && pkg_name == self.crate_name
+        {
+            return Ok(self.project_root.clone());
         }
 
         // Try bench-mobile/ (SDK projects)
@@ -453,8 +491,7 @@ impl AndroidBuilder {
         // Check if cargo-ndk is installed
         self.check_cargo_ndk()?;
 
-        // Android ABIs to build for
-        let abis = vec!["arm64-v8a", "armeabi-v7a", "x86_64"];
+        let abis = self.resolve_android_abis(config)?;
         let release_flag = if matches!(config.profile, BuildProfile::Release) {
             "--release"
         } else {
@@ -469,7 +506,7 @@ impl AndroidBuilder {
             let mut cmd = Command::new("cargo");
             cmd.arg("ndk")
                 .arg("--target")
-                .arg(abi)
+                .arg(&abi)
                 .arg("--platform")
                 .arg("24") // minSdk
                 .arg("build");
@@ -515,12 +552,7 @@ impl AndroidBuilder {
                 } else {
                     "debug"
                 };
-                let rust_target = match abi {
-                    "arm64-v8a" => "aarch64-linux-android",
-                    "armeabi-v7a" => "armv7-linux-androideabi",
-                    "x86_64" => "x86_64-linux-android",
-                    _ => abi,
-                };
+                let rust_target = android_abi_to_rust_target(&abi).unwrap_or(abi.as_str());
                 return Err(BenchError::Build(format!(
                     "cargo-ndk build failed for {} ({} profile).\n\n\
                      Command: {}\n\
@@ -677,7 +709,10 @@ impl AndroidBuilder {
     }
 
     /// Copies .so files to Android jniLibs directories
-    fn copy_native_libraries(&self, config: &BuildConfig) -> Result<(), BenchError> {
+    fn copy_native_libraries(
+        &self,
+        config: &BuildConfig,
+    ) -> Result<Vec<NativeLibraryArtifact>, BenchError> {
         let crate_dir = self.find_crate_dir()?;
         let profile_dir = match config.profile {
             BuildProfile::Debug => "debug",
@@ -697,20 +732,21 @@ impl AndroidBuilder {
             ))
         })?;
 
-        // Map cargo-ndk ABIs to Android jniLibs ABIs
-        let abi_mappings = vec![
-            ("aarch64-linux-android", "arm64-v8a"),
-            ("armv7-linux-androideabi", "armeabi-v7a"),
-            ("x86_64-linux-android", "x86_64"),
-        ];
+        let mut native_libraries = Vec::new();
 
-        for (rust_target, android_abi) in abi_mappings {
+        for android_abi in self.resolve_android_abis(config)? {
+            let rust_target = android_abi_to_rust_target(&android_abi).ok_or_else(|| {
+                BenchError::Build(format!(
+                    "Unsupported Android ABI '{android_abi}'. Supported values: arm64-v8a, armeabi-v7a, x86_64"
+                ))
+            })?;
+            let library_name = format!("lib{}.so", self.crate_name.replace("-", "_"));
             let src = target_dir
                 .join(rust_target)
                 .join(profile_dir)
-                .join(format!("lib{}.so", self.crate_name.replace("-", "_")));
+                .join(&library_name);
 
-            let dest_dir = jni_libs_dir.join(android_abi);
+            let dest_dir = jni_libs_dir.join(&android_abi);
             std::fs::create_dir_all(&dest_dir).map_err(|e| {
                 BenchError::Build(format!(
                     "Failed to create ABI directory {} at {}: {}. Check output directory permissions.",
@@ -720,7 +756,7 @@ impl AndroidBuilder {
                 ))
             })?;
 
-            let dest = dest_dir.join(format!("lib{}.so", self.crate_name.replace("-", "_")));
+            let dest = dest_dir.join(&library_name);
 
             if src.exists() {
                 std::fs::copy(&src, &dest).map_err(|e| {
@@ -736,6 +772,13 @@ impl AndroidBuilder {
                 if self.verbose {
                     println!("  Copied {} -> {}", src.display(), dest.display());
                 }
+
+                native_libraries.push(NativeLibraryArtifact {
+                    abi: android_abi.clone(),
+                    library_name: library_name.clone(),
+                    unstripped_path: src,
+                    packaged_path: dest,
+                });
             } else {
                 // Always warn about missing native libraries - this will cause runtime crashes
                 eprintln!(
@@ -748,7 +791,7 @@ impl AndroidBuilder {
             }
         }
 
-        Ok(())
+        Ok(native_libraries)
     }
 
     /// Ensures local.properties exists with sdk.dir set
@@ -1020,21 +1063,21 @@ impl AndroidBuilder {
     ) -> Result<PathBuf, BenchError> {
         // First, try to read output-metadata.json for the actual APK name
         let metadata_path = apk_dir.join("output-metadata.json");
-        if metadata_path.exists() {
-            if let Ok(metadata_content) = fs::read_to_string(&metadata_path) {
-                // Parse the JSON to find the outputFile
-                // Format: {"elements":[{"outputFile":"app-release-unsigned.apk",...}]}
-                if let Some(apk_name) = self.parse_output_metadata(&metadata_content) {
-                    let apk_path = apk_dir.join(&apk_name);
-                    if apk_path.exists() {
-                        if self.verbose {
-                            println!(
-                                "  Found APK from output-metadata.json: {}",
-                                apk_path.display()
-                            );
-                        }
-                        return Ok(apk_path);
+        if metadata_path.exists()
+            && let Ok(metadata_content) = fs::read_to_string(&metadata_path)
+        {
+            // Parse the JSON to find the outputFile
+            // Format: {"elements":[{"outputFile":"app-release-unsigned.apk",...}]}
+            if let Some(apk_name) = self.parse_output_metadata(&metadata_content) {
+                let apk_path = apk_dir.join(&apk_name);
+                if apk_path.exists() {
+                    if self.verbose {
+                        println!(
+                            "  Found APK from output-metadata.json: {}",
+                            apk_path.display()
+                        );
                     }
+                    return Ok(apk_path);
                 }
             }
         }
@@ -1102,13 +1145,12 @@ impl AndroidBuilder {
             let after_colon = after_key.trim_start().strip_prefix(':')?;
             let after_ws = after_colon.trim_start();
             // Extract the string value
-            if after_ws.starts_with('"') {
-                let value_start = &after_ws[1..];
-                if let Some(end_quote) = value_start.find('"') {
-                    let filename = &value_start[..end_quote];
-                    if filename.ends_with(".apk") {
-                        return Some(filename.to_string());
-                    }
+            if let Some(value_start) = after_ws.strip_prefix('"')
+                && let Some(end_quote) = value_start.find('"')
+            {
+                let filename = &value_start[..end_quote];
+                if filename.ends_with(".apk") {
+                    return Some(filename.to_string());
                 }
             }
         }
@@ -1132,9 +1174,15 @@ impl AndroidBuilder {
             BuildProfile::Debug => "assembleDebugAndroidTest",
             BuildProfile::Release => "assembleReleaseAndroidTest",
         };
+        let profile_name = match config.profile {
+            BuildProfile::Debug => "debug",
+            BuildProfile::Release => "release",
+        };
 
         let mut cmd = Command::new("./gradlew");
-        cmd.arg(gradle_task).current_dir(&android_dir);
+        cmd.arg(format!("-PmobenchTestBuildType={profile_name}"))
+            .arg(gradle_task)
+            .current_dir(&android_dir);
 
         if self.verbose {
             cmd.arg("--info");
@@ -1177,11 +1225,6 @@ impl AndroidBuilder {
             )));
         }
 
-        let profile_name = match config.profile {
-            BuildProfile::Debug => "debug",
-            BuildProfile::Release => "release",
-        };
-
         let test_apk_dir = android_dir
             .join("app/build/outputs/apk/androidTest")
             .join(profile_name);
@@ -1205,20 +1248,19 @@ impl AndroidBuilder {
     ) -> Result<PathBuf, BenchError> {
         // First, try to read output-metadata.json for the actual APK name
         let metadata_path = apk_dir.join("output-metadata.json");
-        if metadata_path.exists() {
-            if let Ok(metadata_content) = fs::read_to_string(&metadata_path) {
-                if let Some(apk_name) = self.parse_output_metadata(&metadata_content) {
-                    let apk_path = apk_dir.join(&apk_name);
-                    if apk_path.exists() {
-                        if self.verbose {
-                            println!(
-                                "  Found test APK from output-metadata.json: {}",
-                                apk_path.display()
-                            );
-                        }
-                        return Ok(apk_path);
-                    }
+        if metadata_path.exists()
+            && let Ok(metadata_content) = fs::read_to_string(&metadata_path)
+            && let Some(apk_name) = self.parse_output_metadata(&metadata_content)
+        {
+            let apk_path = apk_dir.join(&apk_name);
+            if apk_path.exists() {
+                if self.verbose {
+                    println!(
+                        "  Found test APK from output-metadata.json: {}",
+                        apk_path.display()
+                    );
                 }
+                return Ok(apk_path);
             }
         }
 
@@ -1244,6 +1286,178 @@ impl AndroidBuilder {
             gradle_task
         )))
     }
+}
+
+fn android_abi_to_rust_target(abi: &str) -> Option<&'static str> {
+    match abi {
+        "arm64-v8a" => Some("aarch64-linux-android"),
+        "armeabi-v7a" => Some("armv7-linux-androideabi"),
+        "x86_64" => Some("x86_64-linux-android"),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AndroidStackSymbolization {
+    pub line: String,
+    pub resolved_frames: u64,
+    pub unresolved_frames: u64,
+}
+
+pub fn symbolize_android_native_stack_line_with_resolver<F>(
+    line: &str,
+    mut resolve: F,
+) -> AndroidStackSymbolization
+where
+    F: FnMut(&str, u64) -> Option<String>,
+{
+    let (stack, sample_count) = split_folded_stack_line(line);
+    let mut resolved_frames = 0;
+    let mut unresolved_frames = 0;
+    let rewritten = stack
+        .split(';')
+        .map(|frame| {
+            if let Some((library_name, offset)) = parse_android_native_offset_frame(frame) {
+                if let Some(symbol) = resolve(library_name, offset) {
+                    resolved_frames += 1;
+                    return symbol;
+                }
+                unresolved_frames += 1;
+            }
+            frame.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+
+    let line = match sample_count {
+        Some(count) => format!("{rewritten} {count}"),
+        None => rewritten,
+    };
+
+    AndroidStackSymbolization {
+        line,
+        resolved_frames,
+        unresolved_frames,
+    }
+}
+
+pub fn resolve_android_native_symbol_with_addr2line(
+    library_path: &Path,
+    offset: u64,
+) -> Option<String> {
+    let tool_path = locate_android_addr2line_tool_path()?;
+    resolve_android_native_symbol_with_tool(&tool_path, library_path, offset)
+}
+
+pub fn resolve_android_native_symbol_with_tool(
+    tool_path: &Path,
+    library_path: &Path,
+    offset: u64,
+) -> Option<String> {
+    let output = Command::new(tool_path)
+        .args(["-Cfpe"])
+        .arg(library_path)
+        .arg(format!("0x{offset:x}"))
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_android_addr2line_stdout(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_android_addr2line_stdout(stdout: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let symbol = line.trim();
+        if symbol.is_empty() || symbol == "??" || symbol.starts_with("?? ") {
+            None
+        } else {
+            Some(
+                symbol
+                    .split(" at ")
+                    .next()
+                    .unwrap_or(symbol)
+                    .trim()
+                    .to_owned(),
+            )
+        }
+    })
+}
+
+fn locate_android_addr2line_tool_path() -> Option<PathBuf> {
+    let override_path = std::env::var_os("MOBENCH_ANDROID_LLVM_ADDR2LINE")
+        .or_else(|| std::env::var_os("LLVM_ADDR2LINE"))
+        .map(PathBuf::from);
+    if let Some(path) = override_path {
+        return path.exists().then_some(path);
+    }
+
+    let sdk_root = std::env::var_os("ANDROID_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("ANDROID_SDK_ROOT").map(PathBuf::from))
+        .or_else(|| {
+            std::env::var_os("ANDROID_NDK_HOME")
+                .map(PathBuf::from)
+                .and_then(|ndk_home| ndk_home.parent().and_then(Path::parent).map(PathBuf::from))
+        })?;
+    let ndk_root = std::env::var_os("ANDROID_NDK_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let ndk_dir = sdk_root.join("ndk");
+            std::fs::read_dir(&ndk_dir).ok().and_then(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.path())
+                    .filter(|path| path.is_dir())
+                    .max()
+            })
+        })?;
+
+    let tool_name = if cfg!(windows) {
+        "llvm-addr2line.exe"
+    } else {
+        "llvm-addr2line"
+    };
+    let prebuilt_root = ndk_root.join("toolchains").join("llvm").join("prebuilt");
+    let mut candidates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&prebuilt_root) {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("bin").join(tool_name);
+            if candidate.exists() {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates.sort();
+    candidates.into_iter().next()
+}
+
+fn split_folded_stack_line(line: &str) -> (&str, Option<&str>) {
+    match line.rsplit_once(' ') {
+        Some((stack, count))
+            if !stack.is_empty() && count.chars().all(|ch| ch.is_ascii_digit()) =>
+        {
+            (stack, Some(count))
+        }
+        _ => (line, None),
+    }
+}
+
+fn parse_android_native_offset_frame(frame: &str) -> Option<(&str, u64)> {
+    let marker = ".so[+";
+    let marker_index = frame.find(marker)?;
+    let library_end = marker_index + 3;
+    let library_name = frame[..library_end].rsplit('/').next()?;
+    let offset_start = marker_index + marker.len();
+    let offset_end = frame[offset_start..].find(']')? + offset_start;
+    let offset_raw = &frame[offset_start..offset_end];
+    let offset = if let Some(hex) = offset_raw.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16).ok()?
+    } else {
+        offset_raw.parse().ok()?
+    };
+    Some((library_name, offset))
 }
 
 #[cfg(test)]
@@ -1303,6 +1517,132 @@ mod tests {
         let metadata = "not valid json";
         let result = builder.parse_output_metadata(metadata);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_android_builder_defaults_to_arm64_only() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let config = BuildConfig {
+            target: Target::Android,
+            profile: BuildProfile::Debug,
+            incremental: true,
+            android_abis: None,
+        };
+
+        let abis = builder
+            .resolve_android_abis(&config)
+            .expect("resolve default ABIs");
+        assert_eq!(abis, vec!["arm64-v8a".to_string()]);
+    }
+
+    #[test]
+    fn test_android_builder_uses_explicit_abis_when_configured() {
+        let builder = AndroidBuilder::new("/tmp/test-project", "test-bench-mobile");
+        let config = BuildConfig {
+            target: Target::Android,
+            profile: BuildProfile::Release,
+            incremental: true,
+            android_abis: Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()]),
+        };
+
+        let abis = builder
+            .resolve_android_abis(&config)
+            .expect("resolve configured ABIs");
+        assert_eq!(abis, vec!["arm64-v8a".to_string(), "x86_64".to_string()]);
+    }
+
+    #[test]
+    fn android_native_offsets_are_symbolized_into_rust_frames() {
+        let input = "dev.world.samplefns;uniffi.sample_fns.Sample_fnsKt.runBenchmark;libsample_fns.so[+94138] 1";
+        let output =
+            symbolize_android_native_stack_line_with_resolver(input, |library_name, offset| {
+                if library_name == "libsample_fns.so" && offset == 94_138 {
+                    Some("sample_fns::fibonacci".into())
+                } else {
+                    None
+                }
+            });
+
+        assert!(
+            output.line.contains("sample_fns::fibonacci"),
+            "expected unresolved native offsets to be rewritten into Rust symbols, got: {}",
+            output.line
+        );
+        assert_eq!(output.resolved_frames, 1);
+        assert_eq!(output.unresolved_frames, 0);
+    }
+
+    #[test]
+    fn resolve_android_native_symbol_with_tool_invokes_addr2line() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "mobench-addr2line-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let tool_path = temp_dir.join("llvm-addr2line.sh");
+        let args_path = temp_dir.join("args.txt");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s\\n' 'sample_fns::fibonacci at /tmp/src/lib.rs:131'\n",
+            args_path.display()
+        );
+        std::fs::write(&tool_path, script).expect("write shim");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&tool_path)
+                .expect("metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&tool_path, perms).expect("chmod");
+        }
+
+        let symbol = resolve_android_native_symbol_with_tool(
+            &tool_path,
+            Path::new("/cargo/target/aarch64-linux-android/release/libsample_fns.so"),
+            94_138,
+        );
+
+        assert_eq!(symbol.as_deref(), Some("sample_fns::fibonacci"));
+
+        let args = std::fs::read_to_string(&args_path).expect("read args");
+        let expected_offset = format!("0x{:x}", 94_138);
+        assert!(
+            args.lines().any(|line| line == "-Cfpe"),
+            "expected llvm-addr2line to be called with -Cfpe, got:\n{args}"
+        );
+        assert!(
+            args.lines().any(|line| {
+                line == "/cargo/target/aarch64-linux-android/release/libsample_fns.so"
+            }),
+            "expected llvm-addr2line to use the unstripped library path, got:\n{args}"
+        );
+        assert!(
+            args.lines().any(|line| line == expected_offset),
+            "expected llvm-addr2line to receive the resolved offset, got:\n{args}"
+        );
+    }
+
+    #[test]
+    fn android_native_offsets_preserve_unresolved_frames() {
+        let input = "dev.world.samplefns;libsample_fns.so[+94138];libother.so[+17] 1";
+        let output =
+            symbolize_android_native_stack_line_with_resolver(input, |library_name, offset| {
+                if library_name == "libsample_fns.so" && offset == 94_138 {
+                    Some("sample_fns::fibonacci".into())
+                } else {
+                    None
+                }
+            });
+
+        assert!(output.line.contains("sample_fns::fibonacci"));
+        assert!(output.line.contains("libother.so[+17]"));
+        assert_eq!(output.resolved_frames, 1);
+        assert_eq!(output.unresolved_frames, 1);
     }
 
     #[test]

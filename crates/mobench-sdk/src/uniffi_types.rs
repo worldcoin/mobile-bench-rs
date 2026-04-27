@@ -13,7 +13,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1"
+//! mobench-sdk = "0.1.37"
 //! uniffi = { version = "0.28", features = ["cli"] }
 //!
 //! [build-dependencies]
@@ -38,6 +38,9 @@
 //! #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
 //! pub struct BenchSample {
 //!     pub duration_ns: u64,
+//!     pub cpu_time_ms: Option<u64>,
+//!     pub peak_memory_kb: Option<u64>,
+//!     pub process_peak_memory_kb: Option<u64>,
 //! }
 //!
 //! #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
@@ -181,12 +184,24 @@ impl From<BenchSpecTemplate> for crate::BenchSpec {
 pub struct BenchSampleTemplate {
     /// Duration of the iteration in nanoseconds.
     pub duration_ns: u64,
+    /// CPU time consumed by the measured iteration in milliseconds.
+    pub cpu_time_ms: Option<u64>,
+    /// Peak memory growth during the measured iteration in kilobytes.
+    ///
+    /// This is the legacy wire field for baseline-adjusted growth, not
+    /// absolute process or device peak memory.
+    pub peak_memory_kb: Option<u64>,
+    /// Peak resident memory of the benchmark process during the measured iteration.
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 impl From<crate::BenchSample> for BenchSampleTemplate {
     fn from(sample: crate::BenchSample) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -195,6 +210,9 @@ impl From<BenchSampleTemplate> for crate::BenchSample {
     fn from(sample: BenchSampleTemplate) -> Self {
         Self {
             duration_ns: sample.duration_ns,
+            cpu_time_ms: sample.cpu_time_ms,
+            peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -209,6 +227,10 @@ pub struct BenchReportTemplate {
     pub spec: BenchSpecTemplate,
     /// All collected timing samples.
     pub samples: Vec<BenchSampleTemplate>,
+    /// Optional semantic phase timings captured during measured iterations.
+    pub phases: Vec<crate::SemanticPhase>,
+    /// Exact harness timeline spans in execution order.
+    pub timeline: Vec<crate::HarnessTimelineSpan>,
 }
 
 impl From<crate::RunnerReport> for BenchReportTemplate {
@@ -216,6 +238,8 @@ impl From<crate::RunnerReport> for BenchReportTemplate {
         Self {
             spec: report.spec.into(),
             samples: report.samples.into_iter().map(Into::into).collect(),
+            phases: report.phases,
+            timeline: report.timeline,
         }
     }
 }
@@ -297,7 +321,7 @@ impl From<crate::timing::TimingError> for BenchErrorVariant {
 ///     }
 /// }
 /// ```
-#[cfg(feature = "full")]
+#[cfg(feature = "registry")]
 pub fn run_benchmark_template(
     spec: crate::BenchSpec,
 ) -> Result<BenchReportTemplate, BenchErrorVariant> {
@@ -331,9 +355,17 @@ mod tests {
 
     #[test]
     fn test_bench_sample_template_conversion() {
-        let sdk_sample = crate::BenchSample { duration_ns: 12345 };
+        let sdk_sample = crate::BenchSample {
+            duration_ns: 12345,
+            cpu_time_ms: Some(12),
+            peak_memory_kb: Some(48),
+            process_peak_memory_kb: Some(1024),
+        };
         let template: BenchSampleTemplate = sdk_sample.into();
         assert_eq!(template.duration_ns, 12345);
+        assert_eq!(template.cpu_time_ms, Some(12));
+        assert_eq!(template.peak_memory_kb, Some(48));
+        assert_eq!(template.process_peak_memory_kb, Some(1024));
     }
 
     #[test]

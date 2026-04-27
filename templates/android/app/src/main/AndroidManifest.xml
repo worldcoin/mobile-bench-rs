@@ -8,6 +8,7 @@
         android:roundIcon="@android:drawable/ic_dialog_info"
         android:supportsRtl="true"
         android:theme="@style/Theme.{{PROJECT_NAME_PASCAL}}">
+        <profileable android:shell="true" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

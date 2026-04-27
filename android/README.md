@@ -1,6 +1,6 @@
 # Android demo app
 
-Minimal Android app that loads the Rust `sample-fns` cdylib and calls exported functions. This is a thin wrapper meant for BrowserStack AppAutomate and CI smoke tests.
+Minimal Android app that loads the Rust `sample-fns` cdylib and calls exported functions. This is a thin wrapper used for local smoke tests, template parity, and BrowserStack App Automate benchmark runs.
 
 ## Build steps
 

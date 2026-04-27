@@ -3,7 +3,19 @@ import XCTest
 final class BenchRunnerUITests: XCTestCase {
 
     /// Maximum time to wait for benchmark completion (5 minutes for long benchmarks)
-    private let benchmarkTimeout: TimeInterval = 300.0
+    private let defaultBenchmarkTimeout: TimeInterval = 300.0
+
+    private var benchmarkTimeout: TimeInterval {
+        if let configuredTimeout =
+            ProcessInfo.processInfo.environment["MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS"],
+            let parsedTimeout = TimeInterval(configuredTimeout),
+            parsedTimeout > 0
+        {
+            return parsedTimeout
+        }
+
+        return defaultBenchmarkTimeout
+    }
 
     func testLaunchAndCaptureBenchmarkReport() {
         let app = XCUIApplication()

@@ -1,0 +1,161 @@
+name: "Reusable: /mobench PR comment dispatch"
+
+# Parses /mobench commands from PR comments and dispatches benchmark workflows.
+# Caller must have `pull-requests: read` and `issues: read` permissions.
+
+on:
+  workflow_call:
+    inputs:
+      benchmark_workflow:
+        description: "Workflow file to dispatch (e.g. .github/workflows/bench.yml)"
+        required: true
+        type: string
+      crate_path:
+        description: "Path to the benchmark crate in the caller repo"
+        required: true
+        type: string
+      functions:
+        description: "JSON array of benchmark function names"
+        required: true
+        type: string
+      trusted_associations:
+        description: "Comma-separated author associations allowed to trigger (default: OWNER,MEMBER,COLLABORATOR)"
+        required: false
+        type: string
+        default: "OWNER,MEMBER,COLLABORATOR"
+      default_iterations:
+        description: "Default iteration count"
+        required: false
+        type: string
+        default: "50"
+      default_warmup:
+        description: "Default warmup count"
+        required: false
+        type: string
+        default: "5"
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  dispatch:
+    name: Parse /mobench and dispatch
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/mobench')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check trust
+        id: trust
+        env:
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+          TRUSTED: ${{ inputs.trusted_associations }}
+        run: |
+          if echo "$TRUSTED" | tr ',' '\n' | grep -qx "$AUTHOR_ASSOCIATION"; then
+            echo "trusted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Untrusted author association: $AUTHOR_ASSOCIATION"
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Parse command
+        if: steps.trust.outputs.trusted == 'true'
+        id: parse
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          DEFAULT_ITERATIONS: ${{ inputs.default_iterations }}
+          DEFAULT_WARMUP: ${{ inputs.default_warmup }}
+        run: |
+          # Extract key=value pairs from /mobench command
+          LINE=$(echo "$COMMENT_BODY" | head -1)
+
+          # Parse with sed (portable, no grep -P dependency)
+          extract_val() {
+            echo "$LINE" | sed -n "s/.*${1}=\([^ ]*\).*/\1/p"
+          }
+
+          platform=$(extract_val platform)
+          device_profile=$(extract_val device_profile)
+          iterations=$(extract_val iterations)
+          warmup=$(extract_val warmup)
+
+          # Validate platform against allowlist
+          case "${platform:-both}" in
+            android|ios|both) platform="${platform:-both}" ;;
+            *) echo "::warning::Invalid platform '${platform}', defaulting to 'both'"; platform="both" ;;
+          esac
+
+          # Validate device_profile against allowlist
+          case "${device_profile:-low-spec}" in
+            low-spec|mid-spec|high-spec|flagship) device_profile="${device_profile:-low-spec}" ;;
+            *) echo "::warning::Invalid device_profile '${device_profile}', defaulting to 'low-spec'"; device_profile="low-spec" ;;
+          esac
+
+          # Validate numeric fields
+          if ! [[ "${iterations:-$DEFAULT_ITERATIONS}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid iterations '${iterations}', defaulting to '${DEFAULT_ITERATIONS}'"
+            iterations="$DEFAULT_ITERATIONS"
+          fi
+          iterations="${iterations:-$DEFAULT_ITERATIONS}"
+
+          if ! [[ "${warmup:-$DEFAULT_WARMUP}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid warmup '${warmup}', defaulting to '${DEFAULT_WARMUP}'"
+            warmup="$DEFAULT_WARMUP"
+          fi
+          warmup="${warmup:-$DEFAULT_WARMUP}"
+
+          echo "platform=${platform}" >> "$GITHUB_OUTPUT"
+          echo "device_profile=${device_profile}" >> "$GITHUB_OUTPUT"
+          echo "iterations=${iterations}" >> "$GITHUB_OUTPUT"
+          echo "warmup=${warmup}" >> "$GITHUB_OUTPUT"
+
+      - name: Get PR head SHA
+        if: steps.trust.outputs.trusted == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.issue.pull_request.url }}
+          REPO: ${{ github.repository }}
+        run: |
+          head_sha=$(gh api "$PR_URL" --jq '.head.sha')
+          head_repo=$(gh api "$PR_URL" --jq '.head.repo.full_name')
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "::warning::PR #${{ github.event.issue.number }} comes from ${head_repo}; skipping secret-bearing BrowserStack dispatch"
+            echo "trusted_head=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "trusted_head=true" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch benchmark workflow
+        if: steps.trust.outputs.trusted == 'true' && steps.pr.outputs.trusted_head == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ inputs.benchmark_workflow }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PLATFORM: ${{ steps.parse.outputs.platform }}
+          DEVICE_PROFILE: ${{ steps.parse.outputs.device_profile }}
+          ITERATIONS: ${{ steps.parse.outputs.iterations }}
+          WARMUP: ${{ steps.parse.outputs.warmup }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REQUESTED_BY: ${{ github.event.comment.user.login }}
+          FUNCTIONS: ${{ inputs.functions }}
+          CRATE_PATH: ${{ inputs.crate_path }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          gh workflow run "$WORKFLOW" \
+            --ref "$DEFAULT_BRANCH" \
+            -f head_sha="$HEAD_SHA" \
+            -f crate_path="$CRATE_PATH" \
+            -f functions="$FUNCTIONS" \
+            -f platform="$PLATFORM" \
+            -f device_profile="$DEVICE_PROFILE" \
+            -f iterations="$ITERATIONS" \
+            -f warmup="$WARMUP" \
+            -f pr_number="$PR_NUMBER" \
+            -f requested_by="$REQUESTED_BY"
+          echo "Dispatched benchmark for PR #${PR_NUMBER} at ${HEAD_SHA}"

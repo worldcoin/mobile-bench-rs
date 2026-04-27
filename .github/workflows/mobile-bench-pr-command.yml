@@ -1,0 +1,19 @@
+name: Mobile Bench PR Command
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  dispatch:
+    uses: ./.github/workflows/reusable-pr-command.yml
+    with:
+      benchmark_workflow: .github/workflows/mobile-bench.yml
+      crate_path: examples/ffi-benchmark
+      functions: ffi_benchmark::bench_fibonacci,ffi_benchmark::bench_checksum

@@ -1,0 +1,84 @@
+{
+  "summary": {
+    "generated_at": "2026-03-26T00:00:00Z",
+    "generated_at_unix": 1774483200,
+    "target": "android",
+    "function": "multiple",
+    "iterations": 5,
+    "warmup": 1,
+    "devices": [
+      "Google Pixel 8-14.0",
+      "Samsung Galaxy S23-14.0"
+    ],
+    "device_summaries": [
+      {
+        "device": "Google Pixel 8-14.0",
+        "benchmarks": [
+          {
+            "function": "basic_benchmark::bench_fibonacci",
+            "samples": 5,
+            "mean_ns": 100000000,
+            "median_ns": 100000000,
+            "p95_ns": 105000000,
+            "min_ns": 95000000,
+            "max_ns": 105000000
+          },
+          {
+            "function": "basic_benchmark::bench_checksum",
+            "samples": 5,
+            "mean_ns": 145000000,
+            "median_ns": 145000000,
+            "p95_ns": 151000000,
+            "min_ns": 140000000,
+            "max_ns": 151000000
+          }
+        ]
+      },
+      {
+        "device": "Samsung Galaxy S23-14.0",
+        "benchmarks": [
+          {
+            "function": "basic_benchmark::bench_fibonacci",
+            "samples": 5,
+            "mean_ns": 94000000,
+            "median_ns": 94000000,
+            "p95_ns": 98000000,
+            "min_ns": 90000000,
+            "max_ns": 98000000
+          },
+          {
+            "function": "basic_benchmark::bench_checksum",
+            "samples": 5,
+            "mean_ns": 136000000,
+            "median_ns": 136000000,
+            "p95_ns": 140000000,
+            "min_ns": 132000000,
+            "max_ns": 140000000
+          }
+        ]
+      }
+    ]
+  },
+  "benchmark_results": {
+    "Google Pixel 8-14.0": [
+      {
+        "function": "basic_benchmark::bench_fibonacci",
+        "samples": [95000000, 98000000, 100000000, 102000000, 105000000]
+      },
+      {
+        "function": "basic_benchmark::bench_checksum",
+        "samples": [140000000, 142000000, 145000000, 147000000, 151000000]
+      }
+    ],
+    "Samsung Galaxy S23-14.0": [
+      {
+        "function": "basic_benchmark::bench_fibonacci",
+        "samples": [90000000, 92000000, 94000000, 96000000, 98000000]
+      },
+      {
+        "function": "basic_benchmark::bench_checksum",
+        "samples": [132000000, 134000000, 136000000, 138000000, 140000000]
+      }
+    ]
+  }
+}

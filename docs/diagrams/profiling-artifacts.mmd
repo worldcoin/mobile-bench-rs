@@ -1,0 +1,9 @@
+flowchart LR
+    run["profile run"] --> manifest["profile.json\nnative_capture\nsemantic_profile\ncapture_metadata"]
+    run --> raw["raw capture\nsimpleperf or sample"]
+    raw --> processed["processed stacks\nstacks.folded\nnative-report.txt"]
+    processed --> viewer["flamegraph.html\nfull and focused SVGs"]
+    manifest --> summary["summary.md"]
+    manifest --> semantic["artifacts/semantic/phases.json"]
+    viewer --> diff["profile diff\nbaseline vs candidate"]
+    summary --> diff
