@@ -24,7 +24,7 @@ Add mobench-sdk to your project:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1"
+mobench-sdk = "0.1.36"
 ```
 
 Mark functions to benchmark:

@@ -13,7 +13,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1"
+//! mobench-sdk = "0.1.36"
 //! uniffi = { version = "0.28", features = ["cli"] }
 //!
 //! [build-dependencies]

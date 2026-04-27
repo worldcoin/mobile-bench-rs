@@ -15,11 +15,24 @@ cargo bench -p mobench --features bench-support --bench host_contracts -- --test
 ## Publish Dry Run
 
 Publish order matters because the SDK depends on the proc macro crate and the
-CLI depends on the SDK.
+CLI depends on the SDK. Before the first crate is published, only the leaf
+crate can complete a crates.io dry run because unpublished sibling versions are
+not yet available in the registry index.
 
 ```bash
 cargo publish --dry-run -p mobench-macros
+```
+
+After `mobench-macros` is published and available from crates.io, dry-run the
+SDK before publishing it:
+
+```bash
 cargo publish --dry-run -p mobench-sdk
+```
+
+After `mobench-sdk` is published and available from crates.io, dry-run the CLI:
+
+```bash
 cargo publish --dry-run -p mobench
 ```
 
@@ -31,5 +44,6 @@ cargo publish -p mobench-sdk
 cargo publish -p mobench
 ```
 
-After publishing, tag the release and update `RELEASE_NOTES.md` with the
-published version and any migration notes.
+Wait for each crate to become available before publishing the dependent crate.
+After publishing, update `RELEASE_NOTES.md` with the published date/status, push
+that docs commit, then tag the release at the published commit.

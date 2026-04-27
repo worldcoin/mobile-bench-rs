@@ -132,12 +132,14 @@ Run these before publishing the published crates:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --all-features --no-deps
 cargo test --workspace --locked
+cargo bench -p mobench --features bench-support --bench host_contracts -- --test
 cargo publish --dry-run -p mobench-macros
-cargo publish --dry-run -p mobench-sdk
-cargo publish --dry-run -p mobench
 ```
 
-Publish order is `mobench-macros`, `mobench-sdk`, then `mobench`.
+Publish order is `mobench-macros`, `mobench-sdk`, then `mobench`. Because
+crates.io dry-runs resolve dependencies from the registry index, dry-run
+`mobench-sdk` only after `mobench-macros` is published, and dry-run `mobench`
+only after `mobench-sdk` is published.

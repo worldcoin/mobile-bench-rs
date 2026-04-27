@@ -22,7 +22,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1"
+//! mobench-sdk = "0.1.36"
 //! inventory = "0.3"  # Required for benchmark registration
 //!
 //! [lib]
@@ -65,7 +65,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1"
+//! mobench-sdk = "0.1.36"
 //! inventory = "0.3"  # Required for benchmark registration
 //! ```
 //!

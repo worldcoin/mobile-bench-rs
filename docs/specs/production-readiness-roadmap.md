@@ -1,13 +1,12 @@
 # Production Readiness Roadmap
 
-Updated: 2026-04-25
+Updated: 2026-04-27
 
 ## Purpose
 
-mobench v0.1.36 is feature-ready for production use. This roadmap tracks the
-quality, maintainability, documentation, and launch-readiness work needed before
-broader public promotion, including tweets, landing pages, and wider crates.io
-adoption.
+mobench v0.1.36 is the current published supported release. This roadmap records
+the quality, maintainability, documentation, and launch-readiness work completed
+for that release, plus follow-up hardening after broader public promotion.
 
 ## Launch Gates
 
@@ -29,7 +28,8 @@ Checklist:
 - [x] Audit crate metadata, badges, readmes, categories, and keywords.
 - [x] Document MSRV policy.
 - [x] Enforce rustfmt, clippy, and rustdoc warnings in CI.
-- [x] Run `cargo publish --dry-run` for all published crates before release.
+- [x] Run staged `cargo publish --dry-run` checks for all published crates
+  during release.
 
 Verification signals:
 - `cargo test --workspace` passes.
@@ -117,18 +117,18 @@ announcement unless they expose real launch risk.
 
 ### Later Hardening Evaluation
 
-Updated: 2026-04-26
+Updated: 2026-04-27
 
 This bucket should be sequenced by launch risk rather than implemented as one
-large polish pass. The current repository has CI caching and fixture cache keys,
-but no dedicated `benches/`, fuzz target, `cargo-semver-checks`, or
-`cargo-deny` policy yet.
+large polish pass. The current repository has CI caching, fixture cache keys,
+host benchmark smoke coverage, `cargo-semver-checks`, and a `cargo-deny`
+policy. Fuzz/property tests and dedicated build-cache profiling remain open.
 
 P0 after first public promotion:
 - Completed: add `cargo-semver-checks` for `mobench-sdk` and `mobench`.
   `mobench-macros` is a proc-macro target, so `cargo-semver-checks` does not
   treat it as a normal library API surface; keep it covered by rustdoc, clippy,
-  tests, and publish dry-runs.
+  tests, and staged publish dry-runs.
 - Completed: add `cargo-deny` with explicit license/advisory/source policy.
   Current policy denies vulnerable and yanked crates, restricts registries, and
   documents the direct Inferno `CDDL-1.0` license exception.

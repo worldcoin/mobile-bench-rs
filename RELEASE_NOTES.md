@@ -13,23 +13,14 @@ Crates.io release history:
 
 ## Unreleased
 
-- Added production-readiness documentation for public API boundaries, semver
-  expectations, feature flags, MSRV, release checks, examples, and launch
-  diagrams.
-- Added Rust quality CI covering rustfmt, clippy, rustdoc, tests, and
-  manually-triggered publish dry-runs for the published crates.
-- Added opt-in structured CLI tracing through `--verbose` or `MOBENCH_LOG`, plus
-  an explicit `doctor` MSRV check.
-- Added host-only fixture contract coverage for example summary schemas and
-  stable Markdown/CSV rendering.
+- No user-facing unreleased changes yet.
 
 ## Support Policy
 
 - `v0.1.36` is the current published supported release.
 - `v0.1.35` is the immediately previous supported release, superseded by
   `v0.1.36`.
-- `v0.1.34` is the immediately previous supported release, superseded by
-  `v0.1.35`.
+- `v0.1.34` is superseded by `v0.1.35`.
 - Every earlier published version is a historical test build and should not be
   used.
 - Yanked versions are explicitly called out below.
@@ -83,6 +74,15 @@ Status: current supported release.
 
 ### Release hardening
 
+- Added production-readiness documentation for public API boundaries, semver
+  expectations, feature flags, MSRV, release checks, examples, and launch
+  diagrams.
+- Added Rust quality CI covering rustfmt, clippy, rustdoc, tests, and
+  manually-triggered publish dry-runs for the published crates.
+- Added opt-in structured CLI tracing through `--verbose` or `MOBENCH_LOG`, plus
+  an explicit `doctor` MSRV check.
+- Added host-only fixture contract coverage for example summary schemas and
+  stable Markdown/CSV rendering.
 - Hardened clean first-run spec embedding for generated Android and iOS projects.
 - Restricted authenticated BrowserStack artifact downloads to BrowserStack HTTPS hosts.
 - Made config-file runs work without duplicate `--target` / `--function` flags and restored CLI-over-config precedence.
@@ -92,7 +92,7 @@ Status: current supported release.
 
 ## v0.1.35
 
-Status: current supported release.
+Status: superseded by `v0.1.36`.
 
 - Added iOS benchmark app process peak memory reporting using Mach
   `task_info`, so iOS summaries now expose `process_peak_memory_kb` alongside
