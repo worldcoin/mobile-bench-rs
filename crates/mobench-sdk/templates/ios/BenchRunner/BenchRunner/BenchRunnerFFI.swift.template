@@ -197,7 +197,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
                   let durationNs = optionalUInt64Property(phase, named: "durationNs") else {
                 return nil
             }
-            [
+            return [
                 "name": name,
                 "duration_ns": durationNs
             ] as [String: Any]

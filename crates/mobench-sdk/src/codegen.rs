@@ -1516,6 +1516,10 @@ mod tests {
         assert!(android_manifest.contains("android:foregroundServiceType=\"dataSync\""));
         assert!(android_manifest.contains("android:process=\":mobench_worker\""));
 
+        let android_build_gradle = include_str!("../templates/android/app/build.gradle");
+        assert!(android_build_gradle.contains("generatedMainBenchSpec"));
+        assert!(android_build_gradle.contains("if (!generatedMainBenchSpec.exists())"));
+
         let ios =
             include_str!("../templates/ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift.template");
         assert!(
@@ -1527,6 +1531,7 @@ mod tests {
             "iOS template should not require generated bindings to expose processPeakMemoryKb"
         );
         assert!(ios.contains("optionalProcessPeakMemoryKb(sample)"));
+        assert!(ios.contains("return [\n                \"name\": name,"));
         assert!(
             !ios.contains("sample.cpuTimeMs"),
             "iOS template should tolerate BenchSample without cpuTimeMs"

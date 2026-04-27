@@ -7,6 +7,7 @@ android {
     ndkVersion "26.1.10909125"
     def repoRoot = rootProject.projectDir.parentFile
     def benchSpecDir = new File(repoRoot, "target/mobile-spec/android")
+    def generatedMainBenchSpec = new File(projectDir, "src/main/assets/bench_spec.json")
     if (!benchSpecDir.exists()) {
         benchSpecDir.mkdirs()
     }
@@ -45,10 +46,14 @@ android {
     sourceSets {
         main {
             jniLibs.srcDirs "src/main/jniLibs"
-            assets.srcDirs += [benchSpecDir.absolutePath]
+            if (!generatedMainBenchSpec.exists()) {
+                assets.srcDirs += [benchSpecDir.absolutePath]
+            }
         }
         androidTest {
-            assets.srcDirs += [benchSpecDir.absolutePath]
+            if (!generatedMainBenchSpec.exists()) {
+                assets.srcDirs += [benchSpecDir.absolutePath]
+            }
         }
     }
 
