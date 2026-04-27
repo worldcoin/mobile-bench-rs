@@ -23,6 +23,7 @@ use crate::{
 };
 use mobench_sdk::types::NativeLibraryArtifact;
 
+mod capture;
 mod session;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -574,7 +575,7 @@ pub fn write_profile_manifest(path: &Path, manifest: &ProfileManifest) -> Result
 }
 
 pub fn cmd_profile_run(args: &ProfileRunArgs, dry_run: bool) -> Result<()> {
-    session::run_profile_session_with_executor(args, dry_run, execute_capture)
+    session::run_profile_session_with_executor(args, dry_run, capture::execute)
 }
 
 fn write_profile_session_outputs(
@@ -4015,157 +4016,6 @@ fn resolved_profile_device_from_matrix(
     }
 }
 
-fn execute_capture(
-    args: &ProfileRunArgs,
-    target: &ResolvedProfileTarget,
-    manifest: &mut ProfileManifest,
-) -> Result<()> {
-    if let Some(device) = &target.device {
-        manifest.capture_metadata.warnings.push(format!(
-            "resolved target device: {} ({}, source: {})",
-            device.identifier, device.os, device.source
-        ));
-    }
-
-    let plan_only_warning = match (args.provider, target.backend) {
-        (ProfileProvider::Local, ProfileBackend::AndroidNative) => {
-            return execute_capture_with_local_android_executor(
-                args,
-                manifest,
-                execute_local_android_capture,
-            );
-        }
-        (ProfileProvider::Local, ProfileBackend::IosInstruments) => {
-            return execute_capture_with_local_ios_executor(
-                args,
-                manifest,
-                execute_local_ios_capture,
-            );
-        }
-        (ProfileProvider::Local, ProfileBackend::RustTracing) => Some(
-            "local rust-tracing capture is not implemented yet; this session records the planned trace-events artifact contract only",
-        ),
-        (ProfileProvider::Browserstack, ProfileBackend::AndroidNative) => {
-            bail!(browserstack_native_capture_unsupported_message(
-                "android-native",
-                "local Android profiling produces simpleperf artifacts and flamegraphs",
-            ));
-        }
-        (ProfileProvider::Browserstack, ProfileBackend::IosInstruments) => {
-            bail!(browserstack_native_capture_unsupported_message(
-                "ios-instruments",
-                "local iOS profiling produces raw sample output (`sample.txt`), collapsed stacks, and `flamegraph.html` from a simulator-hosted capture",
-            ));
-        }
-        (ProfileProvider::Browserstack, ProfileBackend::RustTracing) => {
-            bail!(
-                "BrowserStack rust-tracing capture is not implemented.\nThis command currently writes a local-first profile contract only.\nUse --provider local for trace-events output, or run a normal BrowserStack benchmark if you only need timing/memory metrics."
-            );
-        }
-        (_, ProfileBackend::Auto) => unreachable!("auto backend should resolve before execution"),
-    };
-
-    if let Some(warning) = plan_only_warning {
-        manifest.capture_metadata.warnings.push(warning.into());
-    }
-    Ok(())
-}
-
-fn execute_capture_with_local_android_executor<E>(
-    args: &ProfileRunArgs,
-    manifest: &mut ProfileManifest,
-    execute: E,
-) -> Result<()>
-where
-    E: FnOnce(&ProfileRunArgs, &mut ProfileManifest) -> Result<()>,
-{
-    if let Err(error) = execute(args, manifest) {
-        mark_android_capture_attempt_failed(manifest, &error);
-        return Err(error);
-    }
-    Ok(())
-}
-
-fn execute_capture_with_local_ios_executor<E>(
-    args: &ProfileRunArgs,
-    manifest: &mut ProfileManifest,
-    execute: E,
-) -> Result<()>
-where
-    E: FnOnce(&ProfileRunArgs, &mut ProfileManifest) -> Result<()>,
-{
-    if let Err(error) = execute(args, manifest) {
-        mark_ios_capture_attempt_failed(manifest, &error);
-        return Err(error);
-    }
-    Ok(())
-}
-
-fn mark_android_capture_attempt_failed(manifest: &mut ProfileManifest, error: &anyhow::Error) {
-    manifest.native_capture.status = CaptureStatus::Failed;
-    manifest.native_capture.symbolization.status = CaptureStatus::Failed;
-
-    let failure_note = format!("local android-native capture failed: {error}");
-    if !manifest
-        .native_capture
-        .symbolization
-        .notes
-        .iter()
-        .any(|note| note == &failure_note)
-    {
-        manifest
-            .native_capture
-            .symbolization
-            .notes
-            .push(failure_note.clone());
-    }
-    if !manifest
-        .capture_metadata
-        .warnings
-        .iter()
-        .any(|warning| warning == &failure_note)
-    {
-        manifest.capture_metadata.warnings.push(failure_note);
-    }
-}
-
-fn mark_ios_capture_attempt_failed(manifest: &mut ProfileManifest, error: &anyhow::Error) {
-    manifest.native_capture.status = CaptureStatus::Failed;
-    manifest.native_capture.symbolization.status = CaptureStatus::Failed;
-
-    let failure_note = format!("local ios-instruments capture failed: {error}");
-    if !manifest
-        .native_capture
-        .symbolization
-        .notes
-        .iter()
-        .any(|note| note == &failure_note)
-    {
-        manifest
-            .native_capture
-            .symbolization
-            .notes
-            .push(failure_note.clone());
-    }
-    if !manifest
-        .capture_metadata
-        .warnings
-        .iter()
-        .any(|warning| warning == &failure_note)
-    {
-        manifest.capture_metadata.warnings.push(failure_note);
-    }
-}
-
-fn browserstack_native_capture_unsupported_message(
-    backend_label: &str,
-    artifact_guidance: &str,
-) -> String {
-    format!(
-        "BrowserStack native profiling is not implemented for {backend_label}.\nThis command currently writes a local-first profile contract only.\nUse --provider local for planning/local capture, or run a normal BrowserStack benchmark if you only need timing/memory metrics.\n{artifact_guidance}."
-    )
-}
-
 fn slugify_function_name(function: &str) -> String {
     let mut slug = String::new();
     for ch in function.chars() {
@@ -5322,7 +5172,7 @@ mod tests {
             build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
                 .expect("build capture plan");
 
-        let error = execute_capture_with_local_android_executor(
+        let error = capture::execute_with_local_android_executor(
             &args,
             &mut manifest,
             |_args, _manifest| anyhow::bail!("simulated android capture failure"),
@@ -5350,6 +5200,41 @@ mod tests {
     }
 
     #[test]
+    fn local_ios_attempted_capture_marks_failed_state() {
+        let args = sample_run_args(
+            MobileTarget::Ios,
+            ProfileProvider::Local,
+            ProfileBackend::IosInstruments,
+            ProfileFormat::Both,
+        );
+        let target = resolve_profile_target(&args).expect("resolve target");
+        let mut manifest =
+            build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
+                .expect("build capture plan");
+
+        let error =
+            capture::execute_with_local_ios_executor(&args, &mut manifest, |_args, _manifest| {
+                anyhow::bail!("simulated ios capture failure")
+            })
+            .expect_err("simulated capture failure");
+
+        assert!(error.to_string().contains("simulated ios capture failure"));
+        assert_eq!(manifest.native_capture.status, CaptureStatus::Failed);
+        assert_eq!(
+            manifest.native_capture.symbolization.status,
+            CaptureStatus::Failed
+        );
+        assert_eq!(manifest.native_capture.symbolization.tool, None);
+        assert!(
+            manifest
+                .capture_metadata
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("simulated ios capture failure"))
+        );
+    }
+
+    #[test]
     fn profile_session_writes_failed_android_manifest_after_attempted_execution() {
         let dir = tempfile::tempdir().expect("temp dir");
         let mut args = sample_run_args(
@@ -5361,7 +5246,7 @@ mod tests {
         args.output_dir = dir.path().to_path_buf();
 
         let error = run_profile_session_with_executor(&args, false, |args, _target, manifest| {
-            execute_capture_with_local_android_executor(args, manifest, |_args, _manifest| {
+            capture::execute_with_local_android_executor(args, manifest, |_args, _manifest| {
                 anyhow::bail!("simulated android capture failure")
             })
         })
@@ -5619,7 +5504,7 @@ mod tests {
         let mut manifest =
             build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
                 .expect("plan");
-        let error = execute_capture(&args, &target, &mut manifest).unwrap_err();
+        let error = capture::execute(&args, &target, &mut manifest).unwrap_err();
 
         assert!(error.to_string().contains("BrowserStack"));
         assert!(
@@ -5640,7 +5525,7 @@ mod tests {
         let mut manifest =
             build_capture_plan(&args, &target, &PathBuf::from("target/mobench/profile"))
                 .expect("plan");
-        let error = execute_capture(&args, &target, &mut manifest).unwrap_err();
+        let error = capture::execute(&args, &target, &mut manifest).unwrap_err();
 
         let message = error.to_string();
         assert!(
