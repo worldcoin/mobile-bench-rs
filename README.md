@@ -29,99 +29,6 @@ that CI and humans can compare.
 - Mobile apps call `run_benchmark` via the generated bindings and return timing samples
 - The CLI collects results locally or from BrowserStack and writes summaries
 
-## Workflow diagrams
-
-The Mermaid sources live under `docs/diagrams/` so the same diagrams can be
-reused in launch posts and landing-page assets.
-
-### Crate architecture
-
-```mermaid
-flowchart LR
-    user["Benchmark crate"] --> macro["mobench-macros\n#[benchmark]"]
-    macro --> registry["mobench-sdk registry\ninventory"]
-    registry --> runner["mobench-sdk runner\nBenchSpec -> BenchReport"]
-    runner --> templates["Generated Android/iOS runners"]
-    cli["mobench CLI"] --> builders["SDK builders"]
-    builders --> templates
-    cli --> reports["JSON / Markdown / CSV / plots"]
-    templates --> reports
-```
-
-### Benchmark lifecycle
-
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant CLI as mobench CLI
-    participant SDK as mobench-sdk
-    participant App as Generated mobile app
-    participant Device as Device or BrowserStack
-    participant Reports as Reports
-
-    Dev->>CLI: cargo mobench run
-    CLI->>SDK: resolve crate and benchmark spec
-    SDK->>SDK: build native libraries and generate bindings
-    SDK->>App: embed bench_spec.json and templates
-    CLI->>Device: install/upload and start run
-    Device->>App: execute benchmark function
-    App->>CLI: emit BenchReport JSON
-    CLI->>Reports: write summary.json, summary.md, results.csv
-```
-
-### BrowserStack CI lifecycle
-
-```mermaid
-flowchart TD
-    workflow["GitHub Actions"] --> resolve["Resolve device matrix"]
-    resolve --> build["Build APK or IPA/XCUITest"]
-    build --> upload["Upload artifacts to BrowserStack"]
-    upload --> run["Run benchmark on selected devices"]
-    run --> fetch["Fetch logs, reports, and metrics"]
-    fetch --> normalize["Normalize timing, CPU, and memory"]
-    normalize --> outputs["summary.json\nsummary.md\nresults.csv\nplots"]
-    outputs --> pr["Optional PR comment/check run"]
-```
-
-### Profiling artifact lifecycle
-
-```mermaid
-flowchart LR
-    run["profile run"] --> manifest["profile.json\nnative_capture\nsemantic_profile\ncapture_metadata"]
-    run --> raw["raw capture\nsimpleperf or sample"]
-    raw --> processed["processed stacks\nstacks.folded\nnative-report.txt"]
-    processed --> viewer["flamegraph.html\nfull and focused SVGs"]
-    manifest --> summary["summary.md"]
-    manifest --> semantic["artifacts/semantic/phases.json"]
-    viewer --> diff["profile diff\nbaseline vs candidate"]
-    summary --> diff
-```
-
-### SDK versus CLI responsibilities
-
-```mermaid
-flowchart TB
-    subgraph SDK["mobench-sdk"]
-        timing["timing harness"]
-        registry["benchmark registry"]
-        builders["Android/iOS builders"]
-        codegen["template/codegen"]
-        ffi["FFI-safe types"]
-    end
-
-    subgraph CLI["mobench CLI"]
-        config["config and project resolution"]
-        orchestration["build/run/profile orchestration"]
-        providers["BrowserStack and local providers"]
-        reporting["summary, plots, PR reports"]
-    end
-
-    SDK --> CLI
-    CLI --> SDK
-    user["Downstream benchmark crate"] --> SDK
-    ci["CI workflow"] --> CLI
-```
-
 ## Workspace crates
 
 - `crates/mobench` ([mobench](https://crates.io/crates/mobench)): CLI tool that builds, runs, and fetches benchmarks
@@ -404,6 +311,99 @@ fn db_query(db: &Database) {
 | `#[benchmark(setup = fn)]` | Expensive one-time setup, reused across iterations |
 | `#[benchmark(setup = fn, per_iteration)]` | Benchmarks that mutate input, need fresh data each time |
 | `#[benchmark(setup = fn, teardown = fn)]` | Resources requiring cleanup (connections, files, etc.) |
+
+## Workflow diagrams
+
+The Mermaid sources live under `docs/diagrams/` so the same diagrams can be
+reused in launch posts and landing-page assets.
+
+### Crate architecture
+
+```mermaid
+flowchart LR
+    user["Benchmark crate"] --> macro["mobench-macros\n#[benchmark]"]
+    macro --> registry["mobench-sdk registry\ninventory"]
+    registry --> runner["mobench-sdk runner\nBenchSpec -> BenchReport"]
+    runner --> templates["Generated Android/iOS runners"]
+    cli["mobench CLI"] --> builders["SDK builders"]
+    builders --> templates
+    cli --> reports["JSON / Markdown / CSV / plots"]
+    templates --> reports
+```
+
+### Benchmark lifecycle
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant CLI as mobench CLI
+    participant SDK as mobench-sdk
+    participant App as Generated mobile app
+    participant Device as Device or BrowserStack
+    participant Reports as Reports
+
+    Dev->>CLI: cargo mobench run
+    CLI->>SDK: resolve crate and benchmark spec
+    SDK->>SDK: build native libraries and generate bindings
+    SDK->>App: embed bench_spec.json and templates
+    CLI->>Device: install/upload and start run
+    Device->>App: execute benchmark function
+    App->>CLI: emit BenchReport JSON
+    CLI->>Reports: write summary.json, summary.md, results.csv
+```
+
+### BrowserStack CI lifecycle
+
+```mermaid
+flowchart TD
+    workflow["GitHub Actions"] --> resolve["Resolve device matrix"]
+    resolve --> build["Build APK or IPA/XCUITest"]
+    build --> upload["Upload artifacts to BrowserStack"]
+    upload --> run["Run benchmark on selected devices"]
+    run --> fetch["Fetch logs, reports, and metrics"]
+    fetch --> normalize["Normalize timing, CPU, and memory"]
+    normalize --> outputs["summary.json\nsummary.md\nresults.csv\nplots"]
+    outputs --> pr["Optional PR comment/check run"]
+```
+
+### Profiling artifact lifecycle
+
+```mermaid
+flowchart LR
+    run["profile run"] --> manifest["profile.json\nnative_capture\nsemantic_profile\ncapture_metadata"]
+    run --> raw["raw capture\nsimpleperf or sample"]
+    raw --> processed["processed stacks\nstacks.folded\nnative-report.txt"]
+    processed --> viewer["flamegraph.html\nfull and focused SVGs"]
+    manifest --> summary["summary.md"]
+    manifest --> semantic["artifacts/semantic/phases.json"]
+    viewer --> diff["profile diff\nbaseline vs candidate"]
+    summary --> diff
+```
+
+### SDK versus CLI responsibilities
+
+```mermaid
+flowchart TB
+    subgraph SDK["mobench-sdk"]
+        timing["timing harness"]
+        registry["benchmark registry"]
+        builders["Android/iOS builders"]
+        codegen["template/codegen"]
+        ffi["FFI-safe types"]
+    end
+
+    subgraph CLI["mobench CLI"]
+        config["config and project resolution"]
+        orchestration["build/run/profile orchestration"]
+        providers["BrowserStack and local providers"]
+        reporting["summary, plots, PR reports"]
+    end
+
+    SDK --> CLI
+    CLI --> SDK
+    user["Downstream benchmark crate"] --> SDK
+    ci["CI workflow"] --> CLI
+```
 
 ## Release Notes
 
