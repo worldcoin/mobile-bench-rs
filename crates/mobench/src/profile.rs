@@ -11,7 +11,7 @@ use std::process::Command;
 use tracing::info;
 
 use crate::{
-    DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
+    MobileTarget, ProjectLayoutOptions, RunSpec,
     benchmark_output::{
         ANDROID_BENCH_LOG_MARKER, extract_benchmark_reports_from_logs, extract_ios_benchmark_json,
         select_benchmark_value_for_function,
@@ -22,8 +22,8 @@ use crate::{
         count_folded_stack_lines, derive_benchmark_focused_folded_stacks,
         render_flamegraph_viewer_html, render_standalone_flamegraph_svg, summarize_folded_stacks,
     },
-    load_dotenv_for_layout, persist_mobile_spec, repo_root, resolve_devices_for_profile,
-    resolve_project_layout, run_android_build, run_ios_build, validate_benchmark_function,
+    load_dotenv_for_layout, persist_mobile_spec, repo_root, resolve_project_layout,
+    run_android_build, run_ios_build, validate_benchmark_function,
 };
 use mobench_sdk::types::NativeLibraryArtifact;
 
@@ -31,6 +31,12 @@ mod capture;
 mod output;
 mod semantic;
 mod session;
+mod target;
+
+pub(super) use target::{
+    ResolvedProfileDevice, ResolvedProfileTarget, build_run_id, resolve_profile_device,
+    resolve_profile_target, validate_format_capabilities,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -405,22 +411,6 @@ impl From<ProfileManifestSerde> for ProfileManifest {
 
 fn default_profile_provider() -> ProfileProvider {
     ProfileProvider::Local
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ResolvedProfileTarget {
-    backend: ProfileBackend,
-    device: Option<ResolvedProfileDevice>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ResolvedProfileDevice {
-    name: String,
-    os: String,
-    os_version: String,
-    identifier: String,
-    profile: Option<String>,
-    source: String,
 }
 
 pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
@@ -3617,111 +3607,6 @@ pub fn cmd_profile_summarize_for_test(args: &ProfileSummarizeArgs) -> Result<Str
         ProfileSummaryFormat::Markdown => Ok(render_profile_markdown(&manifest)),
         ProfileSummaryFormat::Json => Ok(serde_json::to_string_pretty(&manifest)?),
     }
-}
-
-fn resolve_profile_target(args: &ProfileRunArgs) -> Result<ResolvedProfileTarget> {
-    let backend = resolve_backend(args.target, args.backend);
-    validate_format_capabilities(backend, args.format)?;
-
-    let device = resolve_profile_device(args)?;
-    Ok(ResolvedProfileTarget { backend, device })
-}
-
-fn build_run_id(target: MobileTarget, function: &str) -> String {
-    format!("{}-{}", target.as_str(), slugify_function_name(function))
-}
-
-fn resolve_backend(target: MobileTarget, backend: ProfileBackend) -> ProfileBackend {
-    match backend {
-        ProfileBackend::Auto => match target {
-            MobileTarget::Android => ProfileBackend::AndroidNative,
-            MobileTarget::Ios => ProfileBackend::IosInstruments,
-        },
-        _ => backend,
-    }
-}
-
-fn validate_format_capabilities(backend: ProfileBackend, format: ProfileFormat) -> Result<()> {
-    if backend == ProfileBackend::RustTracing && format == ProfileFormat::Processed {
-        bail!(
-            "processed output is unsupported for rust-tracing backend; use --format native or both"
-        );
-    }
-    Ok(())
-}
-
-fn resolve_profile_device(args: &ProfileRunArgs) -> Result<Option<ResolvedProfileDevice>> {
-    match (args.device.as_deref(), args.os_version.as_deref()) {
-        (Some(device), Some(os_version)) => {
-            let identifier = format!("{device}-{os_version}");
-            Ok(Some(ResolvedProfileDevice {
-                name: device.to_string(),
-                os: args.target.as_str().to_string(),
-                os_version: os_version.to_string(),
-                identifier,
-                profile: None,
-                source: "direct".into(),
-            }))
-        }
-        (None, None) => {
-            if args.profile.is_none() && args.device_matrix.is_none() {
-                return Ok(None);
-            }
-
-            let platform = match args.target {
-                MobileTarget::Android => DevicePlatform::Android,
-                MobileTarget::Ios => DevicePlatform::Ios,
-            };
-            let resolved = resolve_devices_for_profile(
-                platform,
-                args.profile.as_deref(),
-                args.config.as_deref(),
-                args.device_matrix.as_deref(),
-            )?;
-            if resolved.devices.len() != 1 {
-                bail!(
-                    "profile run requires exactly one resolved device, but profile `{}` from {} produced {} devices; use --device/--os-version or a single-device profile",
-                    resolved.profile,
-                    resolved.source,
-                    resolved.devices.len()
-                );
-            }
-            Ok(Some(resolved_profile_device_from_matrix(
-                resolved.devices.into_iter().next().expect("single device"),
-                resolved.profile,
-                resolved.source,
-            )))
-        }
-        _ => unreachable!("clap enforces paired --device/--os-version"),
-    }
-}
-
-fn resolved_profile_device_from_matrix(
-    device: ResolvedMatrixDevice,
-    profile: String,
-    source: String,
-) -> ResolvedProfileDevice {
-    ResolvedProfileDevice {
-        name: device.name,
-        os: device.os,
-        os_version: device.os_version,
-        identifier: device.identifier,
-        profile: Some(profile),
-        source,
-    }
-}
-
-fn slugify_function_name(function: &str) -> String {
-    let mut slug = String::new();
-    for ch in function.chars() {
-        match ch {
-            ':' | '/' | ' ' => slug.push('-'),
-            '_' | '-' => slug.push(ch),
-            ch if ch.is_ascii_alphanumeric() => slug.push(ch),
-            _ => slug.push('_'),
-        }
-    }
-    slug
 }
 
 #[cfg(test)]
