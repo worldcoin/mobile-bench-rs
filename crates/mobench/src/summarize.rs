@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
+use crate::{BenchmarkOutput, BenchmarkResourceUsage, BenchmarkStats, SummaryReport};
+
 /// A fully-assembled summary ready for rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummarizeReport {
@@ -80,76 +82,35 @@ pub struct ResourceUsage {
 
 /// Parse a summary.json value into a [`SummarizeReport`].
 pub fn parse_summary_value(value: &serde_json::Value) -> Result<SummarizeReport> {
-    if let Some(summary) = value.get("summary") {
-        return parse_summary_object(summary);
-    }
-
-    if let Some(targets) = value.get("targets").and_then(|v| v.as_object()) {
-        let mut platforms = Vec::new();
-        for entry in targets.values() {
-            if let Ok(report) = parse_summary_value(entry) {
-                platforms.extend(report.platforms);
-            }
-        }
-        if !platforms.is_empty() {
-            return Ok(SummarizeReport { platforms });
-        }
-    }
-
-    anyhow::bail!("Missing 'summary' or 'targets' key in JSON");
+    let output = BenchmarkOutput::from_value(value)?;
+    summarize_report_from_benchmark_output(&output)
 }
 
-fn parse_summary_object(summary: &serde_json::Value) -> Result<SummarizeReport> {
-    let summary = summary
-        .as_object()
-        .context("Summary payload must be a JSON object")?;
-
-    let target = summary
-        .get("target")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let iterations = summary
-        .get("iterations")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-
-    let warmup = summary.get("warmup").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
-    let device_summaries = summary
-        .get("device_summaries")
-        .and_then(|v| v.as_array())
-        .context("Missing 'device_summaries'")?;
-
+fn summarize_report_from_benchmark_output(output: &BenchmarkOutput) -> Result<SummarizeReport> {
     let mut platforms = Vec::new();
-
-    for ds in device_summaries {
-        let device_str = ds
-            .get("device")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-
-        let device = parse_device_string(device_str);
-
-        let benchmarks = ds
-            .get("benchmarks")
-            .and_then(|v| v.as_array())
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|b| parse_benchmark_entry(b).ok())
-            .collect();
-
-        platforms.push(PlatformReport {
-            platform: target.clone(),
-            device,
-            benchmarks,
-            iterations,
-            warmup,
-        });
+    for section in output.sections() {
+        platforms.extend(platform_reports_from_summary(&section.summary));
     }
 
     Ok(SummarizeReport { platforms })
+}
+
+fn platform_reports_from_summary(summary: &SummaryReport) -> Vec<PlatformReport> {
+    summary
+        .device_summaries
+        .iter()
+        .map(|device_summary| PlatformReport {
+            platform: summary.target.as_str().to_string(),
+            device: parse_device_string(&device_summary.device),
+            benchmarks: device_summary
+                .benchmarks
+                .iter()
+                .map(benchmark_result_from_stats)
+                .collect(),
+            iterations: summary.iterations,
+            warmup: summary.warmup,
+        })
+        .collect()
 }
 
 fn parse_device_string(s: &str) -> DeviceInfo {
@@ -173,37 +134,34 @@ fn parse_device_string(s: &str) -> DeviceInfo {
     }
 }
 
-fn parse_benchmark_entry(value: &serde_json::Value) -> Result<BenchmarkResult> {
-    let name = value
-        .get("function")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+fn benchmark_result_from_stats(stats: &BenchmarkStats) -> BenchmarkResult {
+    let ns_to_ms = |value: Option<u64>| -> f64 { value.unwrap_or(0) as f64 / 1_000_000.0 };
+    BenchmarkResult {
+        name: stats.function.clone(),
+        label: humanize_benchmark_name(&stats.function),
+        timing: TimingStats {
+            avg_ms: ns_to_ms(stats.mean_ns),
+            median_ms: ns_to_ms(stats.median_ns),
+            best_ms: ns_to_ms(stats.min_ns),
+            worst_ms: ns_to_ms(stats.max_ns),
+            p95_ms: ns_to_ms(stats.p95_ns),
+            std_dev_ms: None,
+        },
+        resource_usage: stats.resource_usage.as_ref().map(resource_usage_from_stats),
+    }
+}
 
-    let label = humanize_benchmark_name(&name);
-
-    let ns_to_ms =
-        |key: &str| -> f64 { value.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) / 1_000_000.0 };
-
-    let timing = TimingStats {
-        avg_ms: ns_to_ms("mean_ns"),
-        median_ms: ns_to_ms("median_ns"),
-        best_ms: ns_to_ms("min_ns"),
-        worst_ms: ns_to_ms("max_ns"),
-        p95_ms: ns_to_ms("p95_ns"),
-        std_dev_ms: value
-            .get("std_dev_ns")
-            .and_then(|v| v.as_f64())
-            .filter(|&v| v > 0.0)
-            .map(|v| v / 1_000_000.0),
-    };
-
-    Ok(BenchmarkResult {
-        name,
-        label,
-        timing,
-        resource_usage: parse_resource_usage(value),
-    })
+fn resource_usage_from_stats(stats: &BenchmarkResourceUsage) -> ResourceUsage {
+    ResourceUsage {
+        cpu_total_ms: stats.cpu_total_ms,
+        peak_memory_kb: stats.peak_memory_kb,
+        peak_memory_growth_kb: stats.peak_memory_growth_kb,
+        process_peak_memory_kb: stats.process_peak_memory_kb,
+        total_pss_kb: stats.total_pss_kb,
+        private_dirty_kb: stats.private_dirty_kb,
+        native_heap_kb: stats.native_heap_kb,
+        java_heap_kb: stats.java_heap_kb,
+    }
 }
 
 /// Produce a human-friendly label from a fully-qualified benchmark name.
@@ -241,7 +199,6 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
     let mut all_platforms = root_report
         .map(|report| report.platforms)
         .unwrap_or_default();
-    let mut raw_candidates = Vec::new();
     let mut covered_summary_dirs = if all_platforms.is_empty() {
         Vec::new()
     } else {
@@ -262,16 +219,6 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
             }
             covered_summary_dirs.push(summary_dir.to_path_buf());
             all_platforms.extend(report.platforms);
-        } else {
-            raw_candidates.push((path, value));
-        }
-    }
-
-    if all_platforms.is_empty() {
-        for (path, value) in raw_candidates {
-            if let Ok(report) = parse_raw_bench_report(&path, &value) {
-                all_platforms.extend(report.platforms);
-            }
         }
     }
 
@@ -452,161 +399,6 @@ fn session_matches_platform_row(
     }
 
     true
-}
-
-fn parse_raw_bench_report(path: &Path, value: &serde_json::Value) -> Result<SummarizeReport> {
-    let entries = match value {
-        serde_json::Value::Array(items) => items
-            .iter()
-            .filter_map(normalize_raw_benchmark_entry)
-            .collect::<Vec<_>>(),
-        _ => normalize_raw_benchmark_entry(value).into_iter().collect(),
-    };
-
-    if entries.is_empty() {
-        anyhow::bail!("Not a raw bench report");
-    }
-
-    let first = entries
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("missing bench report entries"))?;
-    let platform = infer_platform(path, first.get("device").and_then(|v| v.as_str()));
-    let device = first
-        .get("device")
-        .and_then(|v| v.as_str())
-        .map(parse_device_string)
-        .unwrap_or_else(|| default_device_info(&platform));
-    let iterations = first
-        .get("spec")
-        .and_then(|spec| spec.get("iterations"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let warmup = first
-        .get("spec")
-        .and_then(|spec| spec.get("warmup"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let benchmarks = entries
-        .iter()
-        .map(parse_benchmark_entry)
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(SummarizeReport {
-        platforms: vec![PlatformReport {
-            platform,
-            device,
-            benchmarks,
-            iterations,
-            warmup,
-        }],
-    })
-}
-
-fn normalize_raw_benchmark_entry(value: &serde_json::Value) -> Option<serde_json::Value> {
-    let mut value = value.clone();
-    let samples = extract_raw_samples(&value);
-    let stats = crate::compute_sample_stats(&samples);
-    let object = value.as_object_mut()?;
-
-    if !object.contains_key("function")
-        && let Some(function) = object
-            .get("spec")
-            .and_then(|spec| spec.get("name"))
-            .and_then(|name| name.as_str())
-    {
-        object.insert(
-            "function".to_string(),
-            serde_json::Value::String(function.to_string()),
-        );
-    }
-
-    if !object.contains_key("samples")
-        && let Some(samples_ns) = object.get("samples_ns").and_then(|v| v.as_array())
-    {
-        object.insert(
-            "samples".to_string(),
-            serde_json::Value::Array(samples_ns.clone()),
-        );
-    }
-
-    if let Some(stats) = stats {
-        if !object.contains_key("mean_ns") {
-            object.insert(
-                "mean_ns".to_string(),
-                serde_json::Value::from(stats.mean_ns),
-            );
-        }
-        if !object.contains_key("median_ns") {
-            object.insert(
-                "median_ns".to_string(),
-                serde_json::Value::from(stats.median_ns),
-            );
-        }
-        if !object.contains_key("min_ns") {
-            object.insert("min_ns".to_string(), serde_json::Value::from(stats.min_ns));
-        }
-        if !object.contains_key("max_ns") {
-            object.insert("max_ns".to_string(), serde_json::Value::from(stats.max_ns));
-        }
-        if !object.contains_key("p95_ns") {
-            object.insert("p95_ns".to_string(), serde_json::Value::from(stats.p95_ns));
-        }
-    }
-
-    let has_function = object.get("function").and_then(|v| v.as_str()).is_some();
-    let has_samples = object.get("samples").and_then(|v| v.as_array()).is_some();
-    if has_function && has_samples {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-fn extract_raw_samples(value: &serde_json::Value) -> Vec<u64> {
-    let mut samples = crate::extract_samples(value);
-    if samples.is_empty()
-        && let Some(samples_ns) = value.get("samples_ns").and_then(|v| v.as_array())
-    {
-        samples.extend(samples_ns.iter().filter_map(|sample| sample.as_u64()));
-    }
-    samples
-}
-
-fn infer_platform(path: &Path, device: Option<&str>) -> String {
-    if let Some(device) = device {
-        let lower = device.to_ascii_lowercase();
-        if lower.contains("iphone") || lower.contains("ipad") || lower.contains("ios") {
-            return "ios".to_string();
-        }
-        if lower.contains("pixel") || lower.contains("android") {
-            return "android".to_string();
-        }
-    }
-
-    let lower_path = path.to_string_lossy().to_ascii_lowercase();
-    if lower_path.contains("/ios/") || lower_path.contains("\\ios\\") {
-        "ios".to_string()
-    } else if lower_path.contains("/android/") || lower_path.contains("\\android\\") {
-        "android".to_string()
-    } else {
-        "unknown".to_string()
-    }
-}
-
-fn default_device_info(platform: &str) -> DeviceInfo {
-    let os = match platform {
-        "ios" => "iOS",
-        "android" => "Android",
-        _ => "unknown",
-    };
-
-    DeviceInfo {
-        name: "unknown".to_string(),
-        os: os.to_string(),
-        os_version: "unknown".to_string(),
-        chipset: None,
-        ram_gb: None,
-    }
 }
 
 impl ResourceUsage {
@@ -1288,6 +1080,65 @@ mod tests {
             report.platforms[0].benchmarks[0].name,
             "bench_nullifier_proving_only"
         );
+    }
+
+    #[test]
+    fn test_load_results_dir_accepts_raw_bench_report_as_root_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("summary.json"),
+            serde_json::to_string(&sample_bench_report_json()).unwrap(),
+        )
+        .unwrap();
+
+        let report = load_results_dir(dir.path()).unwrap();
+        assert_eq!(report.platforms.len(), 1);
+        assert_eq!(report.platforms[0].device.name, "local");
+        assert_eq!(
+            report.platforms[0].benchmarks[0].name,
+            "bench_nullifier_proving_only"
+        );
+        assert_eq!(report.platforms[0].benchmarks[0].timing.median_ms, 0.002);
+    }
+
+    #[test]
+    fn test_load_results_dir_accepts_raw_bench_report_array_as_root_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("summary.json"),
+            serde_json::to_string(&json!([
+                sample_bench_report_json(),
+                {
+                    "spec": {
+                        "name": "bench_query_proof_generation",
+                        "iterations": 3,
+                        "warmup": 1
+                    },
+                    "samples_ns": [
+                        4_000_u64,
+                        5_000_u64,
+                        6_000_u64
+                    ]
+                }
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let report = load_results_dir(dir.path()).unwrap();
+        assert_eq!(report.platforms.len(), 1);
+        assert_eq!(
+            report.platforms[0]
+                .benchmarks
+                .iter()
+                .map(|benchmark| benchmark.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "bench_nullifier_proving_only",
+                "bench_query_proof_generation"
+            ]
+        );
+        assert_eq!(report.platforms[0].benchmarks[1].timing.median_ms, 0.005);
     }
 
     #[test]

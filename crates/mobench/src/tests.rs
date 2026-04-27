@@ -2200,6 +2200,52 @@ mod ci_merge_tests {
     }
 
     #[test]
+    fn report_summarize_accepts_raw_benchmark_report_array() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let report_path = temp_dir.path().join("bench-report.json");
+        write_file(
+            &report_path,
+            serde_json::to_string_pretty(&json!([
+                {
+                    "spec": {
+                        "name": "bench_mobile::bench_prove",
+                        "iterations": 3,
+                        "warmup": 1
+                    },
+                    "samples": [
+                        { "duration_ns": 1_000_000_u64 },
+                        { "duration_ns": 2_000_000_u64 },
+                        { "duration_ns": 3_000_000_u64 }
+                    ]
+                },
+                {
+                    "spec": {
+                        "name": "bench_mobile::bench_verify",
+                        "iterations": 3,
+                        "warmup": 1
+                    },
+                    "samples_ns": [
+                        4_000_000_u64,
+                        5_000_000_u64,
+                        6_000_000_u64
+                    ]
+                }
+            ]))
+            .expect("serialize raw benchmark report")
+            .as_bytes(),
+        )
+        .expect("write raw report");
+
+        let markdown =
+            cmd_report_summarize(&report_path, None, plots::PlotMode::Off).expect("summarize");
+
+        assert!(markdown.contains("bench_mobile::bench_prove"));
+        assert!(markdown.contains("bench_mobile::bench_verify"));
+        assert!(markdown.contains("2.000ms"));
+        assert!(markdown.contains("5.000ms"));
+    }
+
+    #[test]
     fn render_markdown_summary_uses_h3_heading_and_ios_label() {
         let markdown = render_markdown_summary(&SummaryReport {
             generated_at: "2026-03-27T00:45:55.028899Z".to_string(),
