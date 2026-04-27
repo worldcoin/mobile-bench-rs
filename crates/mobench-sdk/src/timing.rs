@@ -59,7 +59,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = { version = "0.1", default-features = false, features = ["runner-only"] }
+//! mobench-sdk = { version = "0.1.36", default-features = false, features = ["runner-only"] }
 //! ```
 
 use serde::{Deserialize, Serialize};

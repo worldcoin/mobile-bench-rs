@@ -325,7 +325,6 @@ CLI flags override config file values when provided.
 - `docs/codebase/README.md`: current codebase reference map
 - `docs/codebase/PUBLIC_API.md`: public API, semver, feature flag, MSRV, and release-readiness boundaries
 - `docs/MIGRATION_GUIDE.md`: migration notes for CI and reporting changes
-- `docs/specs/production-readiness-roadmap.md`: production-readiness launch gates for crate quality, output contracts, diagnostics, examples, docs, and public launch assets
 - `docs/specs/dx-improvement-spec.md`: historical DX design spec, kept for context only
 - `docs/schemas/`: machine-readable CI/summary schema artifacts
 - `RELEASE_NOTES.md`: published release history and support status
