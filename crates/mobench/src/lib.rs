@@ -132,6 +132,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
+use artifacts::{ArtifactLifecycle, validate_default_specs};
 use benchmark_output::BenchmarkOutput;
 use browserstack::{BrowserStackAuth, BrowserStackClient};
 #[cfg(feature = "bench-support")]
@@ -192,6 +193,7 @@ pub(crate) use reports::{
     resolve_summary_paths, write_summary,
 };
 
+mod artifacts;
 mod benchmark_output;
 mod browserstack;
 mod ci;
@@ -220,9 +222,9 @@ struct BrowserStackConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct IosXcuitestArtifacts {
-    app: PathBuf,
-    test_suite: PathBuf,
+pub(crate) struct IosXcuitestArtifacts {
+    pub(crate) app: PathBuf,
+    pub(crate) test_suite: PathBuf,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1758,7 +1760,7 @@ fn filter_devices_by_tags(devices: Vec<DeviceEntry>, tags: &[String]) -> Result<
     Ok(matched)
 }
 
-fn with_ios_benchmark_timeout_env<T>(
+pub(crate) fn with_ios_benchmark_timeout_env<T>(
     timeout_secs: Option<u64>,
     f: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
@@ -1792,32 +1794,8 @@ pub(crate) fn run_ios_build(
     dry_run: bool,
     ios_completion_timeout_secs: Option<u64>,
 ) -> Result<(PathBuf, PathBuf)> {
-    let ios_completion_timeout_secs =
-        configured_ios_completion_timeout_secs(layout, ios_completion_timeout_secs);
-    let builder =
-        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .dry_run(dry_run)
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
-    let profile = if release {
-        mobench_sdk::BuildProfile::Release
-    } else {
-        mobench_sdk::BuildProfile::Debug
-    };
-    let cfg = mobench_sdk::BuildConfig {
-        target: mobench_sdk::Target::Ios,
-        profile,
-        incremental: true,
-        android_abis: None,
-    };
-    let result =
-        with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || Ok(builder.build(&cfg)?))?;
-    let header = layout
-        .output_dir
-        .join("ios/include")
-        .join(format!("{}.h", layout.library_name));
-    Ok((result.app_path, header))
+    ArtifactLifecycle::new(layout, None, ios_completion_timeout_secs)
+        .run_ios_build(release, dry_run)
 }
 
 fn package_ios_xcuitest_artifacts(
@@ -1825,49 +1803,13 @@ fn package_ios_xcuitest_artifacts(
     release: bool,
     ios_completion_timeout_secs: Option<u64>,
 ) -> Result<IosXcuitestArtifacts> {
-    let ios_completion_timeout_secs =
-        configured_ios_completion_timeout_secs(layout, ios_completion_timeout_secs);
-    let builder =
-        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
-    let profile = if release {
-        mobench_sdk::BuildProfile::Release
-    } else {
-        mobench_sdk::BuildProfile::Debug
-    };
-    let cfg = mobench_sdk::BuildConfig {
-        target: mobench_sdk::Target::Ios,
-        profile,
-        incremental: true,
-        android_abis: None,
-    };
-    with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || Ok(builder.build(&cfg)?))
-        .context("Failed to build iOS xcframework before packaging")?;
-    let app = builder
-        .package_ipa("BenchRunner", mobench_sdk::builders::SigningMethod::AdHoc)
-        .context("Failed to package iOS IPA for BrowserStack")?;
-    let test_suite = builder
-        .package_xcuitest("BenchRunner")
-        .context("Failed to package iOS XCUITest runner for BrowserStack")?;
-    Ok(IosXcuitestArtifacts { app, test_suite })
+    ArtifactLifecycle::new(layout, None, ios_completion_timeout_secs)
+        .package_ios_xcuitest_artifacts(release)
+        .context("Failed to package iOS XCUITest artifacts for BrowserStack")
 }
 
 fn default_ios_xcuitest_artifacts(layout: &ResolvedProjectLayout) -> IosXcuitestArtifacts {
-    IosXcuitestArtifacts {
-        app: layout.output_dir.join("ios/BenchRunner.ipa"),
-        test_suite: layout.output_dir.join("ios/BenchRunnerUITests.zip"),
-    }
-}
-
-fn legacy_ios_xcuitest_artifacts(layout: &ResolvedProjectLayout) -> IosXcuitestArtifacts {
-    IosXcuitestArtifacts {
-        app: layout.project_root.join("target/ios/BenchRunner.ipa"),
-        test_suite: layout
-            .project_root
-            .join("target/ios/BenchRunnerUITests.zip"),
-    }
+    ArtifactLifecycle::new(layout, None, None).default_ios_xcuitest_artifacts()
 }
 
 fn resolve_project_relative_path(project_root: &Path, path: &Path) -> PathBuf {
@@ -1882,15 +1824,7 @@ fn uses_managed_ios_xcuitest_artifacts(
     layout: &ResolvedProjectLayout,
     artifacts: &IosXcuitestArtifacts,
 ) -> bool {
-    let app = resolve_project_relative_path(&layout.project_root, &artifacts.app);
-    let test_suite = resolve_project_relative_path(&layout.project_root, &artifacts.test_suite);
-
-    [
-        default_ios_xcuitest_artifacts(layout),
-        legacy_ios_xcuitest_artifacts(layout),
-    ]
-    .into_iter()
-    .any(|managed| app == managed.app && test_suite == managed.test_suite)
+    ArtifactLifecycle::new(layout, None, None).uses_managed_ios_xcuitest_artifacts(artifacts)
 }
 
 #[derive(Debug, Clone)]
@@ -2298,92 +2232,7 @@ pub(crate) fn persist_mobile_spec(
     spec: &RunSpec,
     release: bool,
 ) -> Result<()> {
-    let root = &layout.project_root;
-    let payload = json!({
-        "function": spec.function,
-        "iterations": spec.iterations,
-        "warmup": spec.warmup,
-    });
-    let contents = serde_json::to_string_pretty(&payload)?;
-
-    // Write to legacy mobile-spec locations for backward compatibility
-    let legacy_targets = [
-        root.join("target/mobile-spec/android/bench_spec.json"),
-        root.join("target/mobile-spec/ios/bench_spec.json"),
-    ];
-    for path in legacy_targets {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating directory {:?}", parent))?;
-        }
-        write_file(&path, contents.as_bytes())?;
-    }
-
-    // IMPORTANT: Also embed the spec directly into the mobile app bundles
-    // This ensures the requested benchmark function is always used, even when
-    // the app is run via BrowserStack where file paths are different.
-    let mobench_output_dir = layout.output_dir.clone();
-    let apps_exist =
-        mobench_output_dir.join("android").exists() || mobench_output_dir.join("ios").exists();
-
-    if let Err(e) = embed_spec_into_apps(&mobench_output_dir, spec) {
-        // Only warn if the apps don't exist yet - they'll be created during build
-        if apps_exist {
-            println!(
-                "Warning: Failed to embed bench spec into app bundles: {}",
-                e
-            );
-        }
-    } else if apps_exist {
-        println!("Embedded bench_spec.json in mobile app bundles");
-    }
-
-    // B3: Embed build metadata (bench_meta.json) for artifact correlation
-    let profile = if release { "release" } else { "debug" };
-    let target_str = match spec.target {
-        MobileTarget::Android => "android",
-        MobileTarget::Ios => "ios",
-    };
-
-    if let Err(e) = embed_meta_into_apps(&mobench_output_dir, spec, target_str, profile) {
-        if apps_exist {
-            println!(
-                "Warning: Failed to embed bench meta into app bundles: {}",
-                e
-            );
-        }
-    } else if apps_exist {
-        println!("Embedded bench_meta.json with build metadata");
-    }
-
-    Ok(())
-}
-
-/// Embeds the benchmark spec into Android assets and iOS bundle resources.
-fn embed_spec_into_apps(output_dir: &Path, spec: &RunSpec) -> Result<()> {
-    let embedded_spec = mobench_sdk::builders::EmbeddedBenchSpec {
-        function: spec.function.clone(),
-        iterations: spec.iterations,
-        warmup: spec.warmup,
-    };
-    mobench_sdk::builders::embed_bench_spec(output_dir, &embedded_spec)
-        .map_err(|e| anyhow!("Failed to embed bench spec: {}", e))
-}
-
-/// Embeds build metadata (bench_meta.json) into Android assets and iOS bundle resources.
-fn embed_meta_into_apps(
-    output_dir: &Path,
-    spec: &RunSpec,
-    target: &str,
-    profile: &str,
-) -> Result<()> {
-    let embedded_spec = mobench_sdk::builders::EmbeddedBenchSpec {
-        function: spec.function.clone(),
-        iterations: spec.iterations,
-        warmup: spec.warmup,
-    };
-    mobench_sdk::builders::embed_bench_meta(output_dir, &embedded_spec, target, profile)
-        .map_err(|e| anyhow!("Failed to embed bench meta: {}", e))
+    artifacts::persist_mobile_spec(&ArtifactLifecycle::new(layout, None, None), spec, release)
 }
 
 pub(crate) fn run_android_build(
@@ -2393,25 +2242,7 @@ pub(crate) fn run_android_build(
     dry_run: bool,
 ) -> Result<mobench_sdk::BuildResult> {
     ensure_android_home();
-    let profile = if release {
-        mobench_sdk::BuildProfile::Release
-    } else {
-        mobench_sdk::BuildProfile::Debug
-    };
-    let cfg = mobench_sdk::BuildConfig {
-        target: mobench_sdk::Target::Android,
-        profile,
-        incremental: true,
-        android_abis: layout.android_abis.clone(),
-    };
-    let builder =
-        mobench_sdk::builders::AndroidBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .dry_run(dry_run)
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
-    let result = builder.build(&cfg)?;
-    Ok(result)
+    ArtifactLifecycle::new(layout, None, None).run_android_build(release, dry_run)
 }
 
 /// Ensure ANDROID_HOME is set, inferring it from ANDROID_NDK_HOME if necessary.
@@ -2572,34 +2403,16 @@ fn cmd_build(
         crate_path: crate_path.as_deref(),
         config_path: None,
     })?;
-    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
-    let ios_completion_timeout_secs =
-        configured_ios_completion_timeout_secs(&layout, ios_completion_timeout_secs);
+    let lifecycle = ArtifactLifecycle::new(&layout, output_dir, ios_completion_timeout_secs);
 
     // Progress mode: simplified output
     if progress {
-        let build_config = mobench_sdk::BuildConfig {
-            target: target.into(),
-            profile: if release {
-                mobench_sdk::BuildProfile::Release
-            } else {
-                mobench_sdk::BuildProfile::Debug
-            },
-            incremental: true,
-            android_abis: layout.android_abis.clone(),
-        };
+        let build_config = lifecycle.build_config(target, release);
 
         match target {
             SdkTarget::Android => {
                 println!("[1/3] Building Rust library...");
-                let builder = mobench_sdk::builders::AndroidBuilder::new(
-                    &layout.project_root,
-                    layout.crate_name.clone(),
-                )
-                .verbose(false)
-                .dry_run(dry_run)
-                .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                let builder = lifecycle.android_builder(false, dry_run);
                 println!("[2/3] Building Android APK...");
                 let result = builder.build(&build_config)?;
                 println!("[3/3] Done!");
@@ -2609,18 +2422,12 @@ fn cmd_build(
             }
             SdkTarget::Ios => {
                 println!("[1/3] Building Rust library...");
-                let builder = mobench_sdk::builders::IosBuilder::new(
-                    &layout.project_root,
-                    layout.crate_name.clone(),
-                )
-                .verbose(false)
-                .dry_run(dry_run)
-                .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                let builder = lifecycle.ios_builder(false, dry_run);
                 println!("[2/3] Building iOS xcframework...");
-                let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                    Ok(builder.build(&build_config)?)
-                })?;
+                let result = with_ios_benchmark_timeout_env(
+                    lifecycle.ios_completion_timeout_secs(),
+                    || Ok(builder.build(&build_config)?),
+                )?;
                 println!("[3/3] Done!");
                 if !dry_run {
                     println!("\n\u{2713} Framework: {:?}", result.app_path);
@@ -2628,31 +2435,17 @@ fn cmd_build(
             }
             SdkTarget::Both => {
                 println!("[1/5] Building Rust library for Android...");
-                let android_builder = mobench_sdk::builders::AndroidBuilder::new(
-                    &layout.project_root,
-                    layout.crate_name.clone(),
-                )
-                .verbose(false)
-                .dry_run(dry_run)
-                .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                let android_builder = lifecycle.android_builder(false, dry_run);
                 println!("[2/5] Building Android APK...");
                 let android_result = android_builder.build(&build_config)?;
 
                 println!("[3/5] Building Rust library for iOS...");
-                let ios_builder = mobench_sdk::builders::IosBuilder::new(
-                    &layout.project_root,
-                    layout.crate_name.clone(),
-                )
-                .verbose(false)
-                .dry_run(dry_run)
-                .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                let ios_builder = lifecycle.ios_builder(false, dry_run);
                 println!("[4/5] Building iOS xcframework...");
-                let ios_result =
-                    with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                        Ok(ios_builder.build(&build_config)?)
-                    })?;
+                let ios_result = with_ios_benchmark_timeout_env(
+                    lifecycle.ios_completion_timeout_secs(),
+                    || Ok(ios_builder.build(&build_config)?),
+                )?;
 
                 println!("[5/5] Done!");
                 if !dry_run {
@@ -2679,36 +2472,18 @@ fn cmd_build(
         println!("  Verbose: enabled");
     }
 
-    println!("  Output: {:?}", effective_output_dir);
+    println!("  Output: {:?}", lifecycle.output_dir());
     println!("  Project root: {:?}", layout.project_root);
     println!("  Crate: {:?}", layout.crate_dir);
 
-    let build_config = mobench_sdk::BuildConfig {
-        target: target.into(),
-        profile: if release {
-            mobench_sdk::BuildProfile::Release
-        } else {
-            mobench_sdk::BuildProfile::Debug
-        },
-        incremental: true,
-        android_abis: layout.android_abis.clone(),
-    };
+    let build_config = lifecycle.build_config(target, release);
 
     match target {
         SdkTarget::Android => {
             println!("\nBuilding for Android...");
             println!("  Building Rust library for Android targets...");
-            let builder = mobench_sdk::builders::AndroidBuilder::new(
-                &layout.project_root,
-                layout.crate_name.clone(),
-            )
-            .verbose(verbose)
-            .dry_run(dry_run)
-            .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
-            let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                Ok(builder.build(&build_config)?)
-            })?;
+            let builder = lifecycle.android_builder(verbose, dry_run);
+            let result = builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
                 println!("\n[checkmark] Android build completed!");
@@ -2718,17 +2493,11 @@ fn cmd_build(
         SdkTarget::Ios => {
             println!("\nBuilding for iOS...");
             println!("  Building Rust library for iOS targets...");
-            let builder = mobench_sdk::builders::IosBuilder::new(
-                &layout.project_root,
-                layout.crate_name.clone(),
-            )
-            .verbose(verbose)
-            .dry_run(dry_run)
-            .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
-            let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                Ok(builder.build(&build_config)?)
-            })?;
+            let builder = lifecycle.ios_builder(verbose, dry_run);
+            let result =
+                with_ios_benchmark_timeout_env(lifecycle.ios_completion_timeout_secs(), || {
+                    Ok(builder.build(&build_config)?)
+                })?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
@@ -2739,14 +2508,7 @@ fn cmd_build(
             // Build Android
             println!("\nBuilding for Android...");
             println!("  Building Rust library for Android targets...");
-            let android_builder = mobench_sdk::builders::AndroidBuilder::new(
-                &layout.project_root,
-                layout.crate_name.clone(),
-            )
-            .verbose(verbose)
-            .dry_run(dry_run)
-            .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            let android_builder = lifecycle.android_builder(verbose, dry_run);
             let android_result = android_builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
@@ -2757,17 +2519,11 @@ fn cmd_build(
             // Build iOS
             println!("\nBuilding for iOS...");
             println!("  Building Rust library for iOS targets...");
-            let ios_builder = mobench_sdk::builders::IosBuilder::new(
-                &layout.project_root,
-                layout.crate_name.clone(),
-            )
-            .verbose(verbose)
-            .dry_run(dry_run)
-            .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
-            let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                Ok(ios_builder.build(&build_config)?)
-            })?;
+            let ios_builder = lifecycle.ios_builder(verbose, dry_run);
+            let ios_result =
+                with_ios_benchmark_timeout_env(lifecycle.ios_completion_timeout_secs(), || {
+                    Ok(ios_builder.build(&build_config)?)
+                })?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
@@ -2857,17 +2613,9 @@ fn cmd_package_ipa(
         crate_path: crate_path.as_deref(),
         config_path: None,
     })?;
-    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
-
-    let builder =
-        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&effective_output_dir);
-
-    let signing_method: mobench_sdk::builders::SigningMethod = method.into();
-    let ipa_path = builder
-        .package_ipa(scheme, signing_method)
+    let lifecycle = ArtifactLifecycle::new(&layout, output_dir, None);
+    let ipa_path = lifecycle
+        .package_ipa(scheme, method)
         .context("Failed to package IPA")?;
 
     println!("\n[checkmark] IPA packaged successfully!");
@@ -2901,15 +2649,8 @@ fn cmd_package_xcuitest(
         crate_path: crate_path.as_deref(),
         config_path: None,
     })?;
-    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
-
-    let builder =
-        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&effective_output_dir);
-
-    let zip_path = builder
+    let lifecycle = ArtifactLifecycle::new(&layout, output_dir, None);
+    let zip_path = lifecycle
         .package_xcuitest(scheme)
         .context("Failed to package XCUITest runner")?;
 
@@ -2945,7 +2686,7 @@ fn cmd_verify(
         config_path: None,
     })?;
     let resolved_benchmarks = discover_benchmarks_for_layout(&layout)?;
-    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
+    let lifecycle = ArtifactLifecycle::new(&layout, output_dir, None);
 
     let mut checks_passed = 0;
     let mut checks_failed = 0;
@@ -2995,39 +2736,25 @@ fn cmd_verify(
         }
     } else {
         // Try default locations
-        let default_paths = [
-            effective_output_dir.join("android/app/src/main/assets/bench_spec.json"),
-            effective_output_dir.join("ios/BenchRunner/BenchRunner/bench_spec.json"),
-            layout
-                .project_root
-                .join("target/mobile-spec/android/bench_spec.json"),
-            layout
-                .project_root
-                .join("target/mobile-spec/ios/bench_spec.json"),
-        ];
-
-        let mut found_any = false;
-        for path in &default_paths {
-            if path.exists() {
-                if !found_any {
-                    println!("OK (found at default locations)");
-                    found_any = true;
+        let specs = validate_default_specs(&lifecycle);
+        for (index, (path, result)) in specs.iter().enumerate() {
+            if index == 0 {
+                println!("OK (found at default locations)");
+            }
+            match result {
+                Ok(spec) => {
+                    println!("        {:?}", path);
+                    println!(
+                        "          Function: {}, Iterations: {}, Warmup: {}",
+                        spec.name, spec.iterations, spec.warmup
+                    );
                 }
-                match validate_spec_file(path) {
-                    Ok(spec) => {
-                        println!("        {:?}", path);
-                        println!(
-                            "          Function: {}, Iterations: {}, Warmup: {}",
-                            spec.name, spec.iterations, spec.warmup
-                        );
-                    }
-                    Err(e) => {
-                        println!("        {:?} - INVALID: {}", path, e);
-                    }
+                Err(e) => {
+                    println!("        {:?} - INVALID: {}", path, e);
                 }
             }
         }
-        if found_any {
+        if !specs.is_empty() {
             checks_passed += 1;
         } else {
             println!("SKIPPED (no spec file found, use --spec-path to specify)");
@@ -3038,85 +2765,7 @@ fn cmd_verify(
     // 3. Check artifacts if requested
     print!("  [3/4] Checking build artifacts... ");
     if check_artifacts {
-        let mut artifacts_ok = true;
-        let mut artifact_details = Vec::new();
-
-        if let Some(ref t) = target {
-            match t {
-                SdkTarget::Android | SdkTarget::Both => {
-                    let apk_path = effective_output_dir
-                        .join("android/app/build/outputs/apk/debug/app-debug.apk");
-                    let apk_release = effective_output_dir
-                        .join("android/app/build/outputs/apk/release/app-release-unsigned.apk");
-                    if apk_path.exists() {
-                        artifact_details.push(format!("Android APK (debug): {:?}", apk_path));
-                    } else if apk_release.exists() {
-                        artifact_details.push(format!("Android APK (release): {:?}", apk_release));
-                    } else {
-                        artifact_details.push("Android APK: NOT FOUND".to_string());
-                        artifacts_ok = false;
-                    }
-
-                    // Check JNI libs
-                    let jni_base = effective_output_dir.join("android/app/src/main/jniLibs");
-                    let abis = configured_android_abis(&layout);
-                    for abi in abis {
-                        let lib_path = jni_base
-                            .join(&abi)
-                            .join(format!("lib{}.so", layout.library_name));
-                        if lib_path.exists() {
-                            artifact_details.push(format!("JNI lib ({}): OK", abi));
-                        }
-                    }
-                }
-                SdkTarget::Ios => {}
-            }
-
-            match t {
-                SdkTarget::Ios | SdkTarget::Both => {
-                    let xcframework = effective_output_dir
-                        .join("ios")
-                        .join(format!("{}.xcframework", layout.library_name));
-                    if xcframework.exists() {
-                        artifact_details.push(format!("iOS xcframework: {:?}", xcframework));
-                    } else {
-                        artifact_details.push("iOS xcframework: NOT FOUND".to_string());
-                        artifacts_ok = false;
-                    }
-
-                    let ipa_path = effective_output_dir.join("ios/BenchRunner.ipa");
-                    if ipa_path.exists() {
-                        artifact_details.push(format!("iOS IPA: {:?}", ipa_path));
-                    }
-
-                    let xcuitest_path = effective_output_dir.join("ios/BenchRunnerUITests.zip");
-                    if xcuitest_path.exists() {
-                        artifact_details.push(format!("XCUITest runner: {:?}", xcuitest_path));
-                    }
-                }
-                SdkTarget::Android => {}
-            }
-        } else {
-            // Check both platforms by default
-            let android_apk =
-                effective_output_dir.join("android/app/build/outputs/apk/debug/app-debug.apk");
-            let ios_xcframework = effective_output_dir
-                .join("ios")
-                .join(format!("{}.xcframework", layout.library_name));
-
-            if android_apk.exists() {
-                artifact_details.push(format!("Android APK: {:?}", android_apk));
-            }
-            if ios_xcframework.exists() {
-                artifact_details.push(format!("iOS xcframework: {:?}", ios_xcframework));
-            }
-
-            if artifact_details.is_empty() {
-                artifacts_ok = false;
-                artifact_details
-                    .push("No artifacts found. Run 'cargo mobench build' first.".to_string());
-            }
-        }
+        let (artifacts_ok, artifact_details) = lifecycle.artifact_details(target);
 
         if artifacts_ok {
             println!("OK");

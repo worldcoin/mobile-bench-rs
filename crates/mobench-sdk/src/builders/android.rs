@@ -58,6 +58,7 @@
 //! ```
 
 use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
+use crate::codegen::GeneratedProject;
 use crate::types::{
     BenchError, BuildConfig, BuildProfile, BuildResult, NativeLibraryArtifact, Target,
 };
@@ -185,7 +186,8 @@ impl AndroidBuilder {
             validate_project_root(&self.project_root, &self.crate_name)?;
         }
 
-        let android_dir = self.output_dir.join("android");
+        let generated_project = GeneratedProject::resolve(&self.output_dir, &self.crate_name);
+        let android_dir = &generated_project.android.project_dir;
         let profile_name = match config.profile {
             BuildProfile::Debug => "debug",
             BuildProfile::Release => "release",
@@ -250,14 +252,8 @@ impl AndroidBuilder {
             // Return a placeholder result for dry-run
             return Ok(BuildResult {
                 platform: Target::Android,
-                app_path: android_dir.join(format!(
-                    "app/build/outputs/apk/{}/app-{}.apk",
-                    profile_name, profile_name
-                )),
-                test_suite_path: Some(android_dir.join(format!(
-                    "app/build/outputs/apk/androidTest/{}/app-{}-androidTest.apk",
-                    profile_name, profile_name
-                ))),
+                app_path: generated_project.apk_path(config.profile),
+                test_suite_path: Some(generated_project.android_test_apk_path(config.profile)),
                 native_libraries: Vec::new(),
             });
         }
@@ -265,14 +261,14 @@ impl AndroidBuilder {
         // Step 0: Ensure Android project scaffolding exists
         // Pass project_root and crate_dir for better benchmark function detection
         crate::codegen::ensure_android_project_with_options(
-            &self.output_dir,
-            &self.crate_name,
+            &generated_project.output_dir,
+            &generated_project.crate_name,
             Some(&self.project_root),
             self.crate_dir.as_deref(),
         )?;
 
         // Step 0.5: Ensure Gradle wrapper exists
-        self.ensure_gradle_wrapper(&android_dir)?;
+        self.ensure_gradle_wrapper(android_dir)?;
 
         // Step 1: Build Rust libraries
         println!("Building Rust libraries for Android...");
@@ -331,7 +327,8 @@ impl AndroidBuilder {
         }
 
         // Check that at least one native library exists in jniLibs
-        let jni_libs_dir = self.output_dir.join("android/app/src/main/jniLibs");
+        let generated_project = GeneratedProject::resolve(&self.output_dir, &self.crate_name);
+        let jni_libs_dir = &generated_project.android.jni_libs_dir;
         let lib_name = format!("lib{}.so", self.crate_name.replace("-", "_"));
         let required_abis = self.resolve_android_abis(config)?;
         let mut found_libs = 0;
@@ -963,7 +960,8 @@ impl AndroidBuilder {
 
     /// Builds the Android APK using Gradle
     fn build_apk(&self, config: &BuildConfig) -> Result<PathBuf, BenchError> {
-        let android_dir = self.output_dir.join("android");
+        let generated_project = GeneratedProject::resolve(&self.output_dir, &self.crate_name);
+        let android_dir = &generated_project.android.project_dir;
 
         if !android_dir.exists() {
             return Err(BenchError::Build(format!(
@@ -975,7 +973,7 @@ impl AndroidBuilder {
         }
 
         // Ensure local.properties exists with sdk.dir
-        self.ensure_local_properties(&android_dir)?;
+        self.ensure_local_properties(android_dir)?;
 
         // Determine Gradle task
         let gradle_task = match config.profile {
@@ -985,7 +983,7 @@ impl AndroidBuilder {
 
         // Run Gradle build
         let mut cmd = Command::new("./gradlew");
-        cmd.arg(gradle_task).current_dir(&android_dir);
+        cmd.arg(gradle_task).current_dir(android_dir);
 
         if self.verbose {
             cmd.arg("--info");
@@ -1034,7 +1032,11 @@ impl AndroidBuilder {
             BuildProfile::Release => "release",
         };
 
-        let apk_dir = android_dir.join("app/build/outputs/apk").join(profile_name);
+        let apk_dir = generated_project
+            .apk_path(config.profile)
+            .parent()
+            .unwrap_or(android_dir)
+            .to_path_buf();
 
         // Try to find APK - check multiple possible filenames
         // Gradle produces different names depending on signing configuration:
@@ -1159,7 +1161,8 @@ impl AndroidBuilder {
 
     /// Builds the Android test APK using Gradle
     fn build_test_apk(&self, config: &BuildConfig) -> Result<PathBuf, BenchError> {
-        let android_dir = self.output_dir.join("android");
+        let generated_project = GeneratedProject::resolve(&self.output_dir, &self.crate_name);
+        let android_dir = &generated_project.android.project_dir;
 
         if !android_dir.exists() {
             return Err(BenchError::Build(format!(
@@ -1176,7 +1179,7 @@ impl AndroidBuilder {
         };
 
         let mut cmd = Command::new("./gradlew");
-        cmd.arg(gradle_task).current_dir(&android_dir);
+        cmd.arg(gradle_task).current_dir(android_dir);
 
         if self.verbose {
             cmd.arg("--info");
@@ -1224,9 +1227,11 @@ impl AndroidBuilder {
             BuildProfile::Release => "release",
         };
 
-        let test_apk_dir = android_dir
-            .join("app/build/outputs/apk/androidTest")
-            .join(profile_name);
+        let test_apk_dir = generated_project
+            .android_test_apk_path(config.profile)
+            .parent()
+            .unwrap_or(android_dir)
+            .to_path_buf();
 
         // Find the test APK - use similar logic to main APK
         let apk_path = self.find_test_apk(&test_apk_dir, profile_name, gradle_task)?;

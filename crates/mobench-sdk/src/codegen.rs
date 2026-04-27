@@ -13,6 +13,102 @@ use include_dir::{Dir, DirEntry, include_dir};
 const ANDROID_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/android");
 const IOS_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/ios");
 const DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS: u64 = 300;
+const IOS_SCHEME: &str = "BenchRunner";
+
+/// Resolved description of the SDK-generated mobile project layout.
+///
+/// Builders use this model instead of rediscovering generated Android/iOS
+/// paths and names independently. It is intentionally path-oriented: template
+/// rendering still owns file contents, while build/package code consumes these
+/// resolved locations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedProject {
+    pub output_dir: PathBuf,
+    pub crate_name: String,
+    pub library_name: String,
+    pub android: GeneratedAndroidProject,
+    pub ios: GeneratedIosProject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedAndroidProject {
+    pub project_dir: PathBuf,
+    pub package_name: String,
+    pub jni_libs_dir: PathBuf,
+    pub debug_apk: PathBuf,
+    pub release_apk: PathBuf,
+    pub debug_test_apk: PathBuf,
+    pub release_test_apk: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedIosProject {
+    pub root_dir: PathBuf,
+    pub project_dir: PathBuf,
+    pub project_yml: PathBuf,
+    pub scheme: String,
+    pub bundle_prefix: String,
+    pub xcframework_path: PathBuf,
+    pub include_dir: PathBuf,
+    pub ipa_path: PathBuf,
+    pub xcuitest_zip_path: PathBuf,
+}
+
+impl GeneratedProject {
+    pub fn resolve(output_dir: impl Into<PathBuf>, crate_name: impl Into<String>) -> Self {
+        let output_dir = output_dir.into();
+        let crate_name = crate_name.into();
+        let library_name = crate_name.replace('-', "_");
+        let bundle_component = sanitize_bundle_id_component(&crate_name);
+        let bundle_prefix = format!("dev.world.{}", bundle_component);
+        let android_dir = output_dir.join("android");
+        let ios_root = output_dir.join("ios");
+        let ios_project_dir = ios_root.join(IOS_SCHEME);
+
+        Self {
+            output_dir,
+            crate_name,
+            library_name: library_name.clone(),
+            android: GeneratedAndroidProject {
+                project_dir: android_dir.clone(),
+                package_name: format!("dev.world.{}", bundle_component),
+                jni_libs_dir: android_dir.join("app/src/main/jniLibs"),
+                debug_apk: android_dir.join("app/build/outputs/apk/debug/app-debug.apk"),
+                release_apk: android_dir
+                    .join("app/build/outputs/apk/release/app-release-unsigned.apk"),
+                debug_test_apk: android_dir
+                    .join("app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"),
+                release_test_apk: android_dir
+                    .join("app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"),
+            },
+            ios: GeneratedIosProject {
+                root_dir: ios_root.clone(),
+                project_dir: ios_project_dir.clone(),
+                project_yml: ios_project_dir.join("project.yml"),
+                scheme: IOS_SCHEME.to_string(),
+                bundle_prefix,
+                xcframework_path: ios_root.join(format!("{}.xcframework", library_name)),
+                include_dir: ios_root.join("include"),
+                ipa_path: ios_root.join(format!("{}.ipa", IOS_SCHEME)),
+                xcuitest_zip_path: ios_root.join(format!("{}UITests.zip", IOS_SCHEME)),
+            },
+        }
+    }
+
+    pub fn apk_path(&self, profile: crate::BuildProfile) -> PathBuf {
+        match profile {
+            crate::BuildProfile::Debug => self.android.debug_apk.clone(),
+            crate::BuildProfile::Release => self.android.release_apk.clone(),
+        }
+    }
+
+    pub fn android_test_apk_path(&self, profile: crate::BuildProfile) -> PathBuf {
+        match profile {
+            crate::BuildProfile::Debug => self.android.debug_test_apk.clone(),
+            crate::BuildProfile::Release => self.android.release_test_apk.clone(),
+        }
+    }
+}
 
 /// Template variable that can be replaced in template files
 #[derive(Debug, Clone)]
@@ -1166,21 +1262,22 @@ pub fn ensure_android_project_with_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
-    let library_name = crate_name.replace('-', "_");
+    let generated_project = GeneratedProject::resolve(output_dir, crate_name);
+    let library_name = &generated_project.library_name;
     if android_project_exists(output_dir)
-        && android_project_matches_library(output_dir, &library_name)
+        && android_project_matches_library(output_dir, library_name)
     {
         return Ok(());
     }
 
     println!("Android project not found, generating scaffolding...");
-    let project_slug = crate_name.replace('-', "_");
+    let project_slug = library_name;
 
     // Resolve the default function by auto-detecting from source
     let effective_root = project_root.unwrap_or_else(|| output_dir.parent().unwrap_or(output_dir));
     let default_function = resolve_default_function(effective_root, crate_name, crate_dir);
 
-    generate_android_project(output_dir, &project_slug, &default_function)?;
+    generate_android_project(output_dir, project_slug, &default_function)?;
     println!(
         "  Generated Android project at {:?}",
         output_dir.join("android")
@@ -1220,9 +1317,10 @@ pub fn ensure_ios_project_with_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
-    let library_name = crate_name.replace('-', "_");
+    let generated_project = GeneratedProject::resolve(output_dir, crate_name);
+    let library_name = &generated_project.library_name;
     let project_exists = ios_project_exists(output_dir);
-    let project_matches = ios_project_matches_library(output_dir, &library_name);
+    let project_matches = ios_project_matches_library(output_dir, library_name);
     if project_exists && !project_matches {
         println!("Existing iOS scaffolding does not match library, regenerating...");
     } else if project_exists {
@@ -1232,13 +1330,7 @@ pub fn ensure_ios_project_with_options(
     }
 
     // Use fixed "BenchRunner" for project/scheme name to match template directory structure
-    let project_pascal = "BenchRunner";
-    // Derive library name and bundle prefix from crate name
-    let library_name = crate_name.replace('-', "_");
-    // Use sanitized bundle ID component (alphanumeric only) to avoid iOS validation issues
-    // e.g., "bench-mobile" or "bench_mobile" -> "benchmobile"
-    let bundle_id_component = sanitize_bundle_id_component(crate_name);
-    let bundle_prefix = format!("dev.world.{}", bundle_id_component);
+    let project_pascal = &generated_project.ios.scheme;
 
     // Resolve the default function by auto-detecting from source
     let effective_root = project_root.unwrap_or_else(|| output_dir.parent().unwrap_or(output_dir));
@@ -1246,9 +1338,9 @@ pub fn ensure_ios_project_with_options(
 
     generate_ios_project(
         output_dir,
-        &library_name,
+        library_name,
         project_pascal,
-        &bundle_prefix,
+        &generated_project.ios.bundle_prefix,
         &default_function,
     )?;
     println!("  Generated iOS project at {:?}", output_dir.join("ios"));
@@ -1260,6 +1352,32 @@ pub fn ensure_ios_project_with_options(
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn generated_project_resolves_shared_android_ios_layout() {
+        let layout = GeneratedProject::resolve("/tmp/mobench-out", "bench-mobile");
+
+        assert_eq!(layout.library_name, "bench_mobile");
+        assert_eq!(
+            layout.android.project_dir,
+            PathBuf::from("/tmp/mobench-out/android")
+        );
+        assert_eq!(layout.android.package_name, "dev.world.benchmobile");
+        assert_eq!(
+            layout.android.debug_apk,
+            PathBuf::from("/tmp/mobench-out/android/app/build/outputs/apk/debug/app-debug.apk")
+        );
+        assert_eq!(layout.ios.scheme, "BenchRunner");
+        assert_eq!(layout.ios.bundle_prefix, "dev.world.benchmobile");
+        assert_eq!(
+            layout.ios.project_yml,
+            PathBuf::from("/tmp/mobench-out/ios/BenchRunner/project.yml")
+        );
+        assert_eq!(
+            layout.ios.xcframework_path,
+            PathBuf::from("/tmp/mobench-out/ios/bench_mobile.xcframework")
+        );
+    }
 
     #[test]
     fn test_generate_bench_mobile_crate() {

@@ -71,6 +71,7 @@
 //! ```
 
 use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
+use crate::codegen::GeneratedProject;
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use std::env;
 use std::fs;
@@ -214,9 +215,10 @@ impl IosBuilder {
             validate_project_root(&self.project_root, &self.crate_name)?;
         }
 
-        let framework_name = self.crate_name.replace("-", "_");
-        let ios_dir = self.output_dir.join("ios");
-        let xcframework_path = ios_dir.join(format!("{}.xcframework", framework_name));
+        let generated_project = GeneratedProject::resolve(&self.output_dir, &self.crate_name);
+        let framework_name = generated_project.library_name.clone();
+        let ios_dir = &generated_project.ios.root_dir;
+        let xcframework_path = generated_project.ios.xcframework_path.clone();
 
         if self.dry_run {
             println!("\n[dry-run] iOS build plan:");
@@ -280,8 +282,8 @@ impl IosBuilder {
         // Step 0: Ensure iOS project scaffolding exists
         // Pass project_root and crate_dir for better benchmark function detection
         crate::codegen::ensure_ios_project_with_options(
-            &self.output_dir,
-            &self.crate_name,
+            &generated_project.output_dir,
+            &generated_project.crate_name,
             Some(&self.project_root),
             self.crate_dir.as_deref(),
         )?;
@@ -311,8 +313,8 @@ impl IosBuilder {
                     framework_name
                 ))
             })?;
-        let include_dir = self.output_dir.join("ios/include");
-        fs::create_dir_all(&include_dir).map_err(|e| {
+        let include_dir = &generated_project.ios.include_dir;
+        fs::create_dir_all(include_dir).map_err(|e| {
             BenchError::Build(format!(
                 "Failed to create include dir at {}: {}. Check output directory permissions.",
                 include_dir.display(),
@@ -1496,7 +1498,12 @@ impl IosBuilder {
     pub fn package_ipa(&self, scheme: &str, method: SigningMethod) -> Result<PathBuf, BenchError> {
         // For repository structure: ios/BenchRunner/BenchRunner.xcodeproj
         // The directory and scheme happen to have the same name
-        let ios_dir = self.output_dir.join("ios").join(scheme);
+        let generated_project = GeneratedProject::resolve(&self.output_dir, &self.crate_name);
+        let ios_dir = if scheme == generated_project.ios.scheme {
+            generated_project.ios.project_dir.clone()
+        } else {
+            generated_project.ios.root_dir.join(scheme)
+        };
         let project_path = ios_dir.join(format!("{}.xcodeproj", scheme));
 
         // Verify Xcode project exists
@@ -1508,11 +1515,15 @@ impl IosBuilder {
             )));
         }
 
-        let export_path = self.output_dir.join("ios");
-        let ipa_path = export_path.join(format!("{}.ipa", scheme));
+        let export_path = &generated_project.ios.root_dir;
+        let ipa_path = if scheme == generated_project.ios.scheme {
+            generated_project.ios.ipa_path.clone()
+        } else {
+            export_path.join(format!("{}.ipa", scheme))
+        };
 
         // Create target/ios directory if it doesn't exist
-        fs::create_dir_all(&export_path).map_err(|e| {
+        fs::create_dir_all(export_path).map_err(|e| {
             BenchError::Build(format!(
                 "Failed to create export directory at {}: {}. Check output directory permissions.",
                 export_path.display(),
@@ -1523,7 +1534,7 @@ impl IosBuilder {
         println!("Building {} for device...", scheme);
 
         // Step 1: Build the app for device (simpler than archiving)
-        let build_dir = self.output_dir.join("ios/build");
+        let build_dir = generated_project.ios.root_dir.join("build");
         // Package the same optimized device binary we ship to BrowserStack.
         // `Release + iphoneos` has proven more stable in CI than the previous
         // implicit Debug destination build.
@@ -1755,7 +1766,7 @@ impl IosBuilder {
             .arg("--keepParent")
             .arg("Payload")
             .arg(&ipa_path)
-            .current_dir(&export_path);
+            .current_dir(export_path);
 
         if self.verbose {
             println!("  Running: {:?}", cmd);
@@ -1782,7 +1793,12 @@ impl IosBuilder {
     /// This requires the app project to be generated first with `build()`.
     /// The resulting zip can be supplied to BrowserStack as the test suite.
     pub fn package_xcuitest(&self, scheme: &str) -> Result<PathBuf, BenchError> {
-        let ios_dir = self.output_dir.join("ios").join(scheme);
+        let generated_project = GeneratedProject::resolve(&self.output_dir, &self.crate_name);
+        let ios_dir = if scheme == generated_project.ios.scheme {
+            generated_project.ios.project_dir.clone()
+        } else {
+            generated_project.ios.root_dir.join(scheme)
+        };
         let project_path = ios_dir.join(format!("{}.xcodeproj", scheme));
 
         if !project_path.exists() {
@@ -1793,8 +1809,8 @@ impl IosBuilder {
             )));
         }
 
-        let export_path = self.output_dir.join("ios");
-        fs::create_dir_all(&export_path).map_err(|e| {
+        let export_path = &generated_project.ios.root_dir;
+        fs::create_dir_all(export_path).map_err(|e| {
             BenchError::Build(format!(
                 "Failed to create export directory at {}: {}. Check output directory permissions.",
                 export_path.display(),
@@ -1802,7 +1818,7 @@ impl IosBuilder {
             ))
         })?;
 
-        let build_dir = self.output_dir.join("ios/build");
+        let build_dir = generated_project.ios.root_dir.join("build");
         println!("Building XCUITest runner for {}...", scheme);
 
         let mut cmd = Command::new("xcodebuild");
@@ -1911,7 +1927,11 @@ impl IosBuilder {
             );
         }
 
-        let zip_path = export_path.join(format!("{}UITests.zip", scheme));
+        let zip_path = if scheme == generated_project.ios.scheme {
+            generated_project.ios.xcuitest_zip_path.clone()
+        } else {
+            export_path.join(format!("{}UITests.zip", scheme))
+        };
         if zip_path.exists() {
             fs::remove_file(&zip_path).map_err(|e| {
                 BenchError::Build(format!(
