@@ -132,6 +132,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
+use benchmark_output::BenchmarkOutput;
 use browserstack::{BrowserStackAuth, BrowserStackClient};
 #[cfg(feature = "bench-support")]
 pub use ci::bench_support;
@@ -191,6 +192,7 @@ pub(crate) use reports::{
     resolve_summary_paths, write_summary,
 };
 
+mod benchmark_output;
 mod browserstack;
 mod ci;
 mod cli;

@@ -13,8 +13,8 @@ use time::format_description::well_known::Rfc3339;
 use crate::browserstack;
 use crate::cli::SummaryFormat;
 use crate::{
-    BenchmarkResourceUsage, BenchmarkStats, DeviceSummary, RunSpec, RunSummary, SummaryReport,
-    ci_env, infer_pr_number_from_github_ref, plots, write_file,
+    BenchmarkOutput, BenchmarkResourceUsage, BenchmarkStats, DeviceSummary, RunSpec, RunSummary,
+    SummaryReport, ci_env, infer_pr_number_from_github_ref, plots, write_file,
 };
 
 #[derive(Debug)]
@@ -265,39 +265,10 @@ pub(crate) fn cmd_report_github(
 }
 
 pub(crate) fn render_summary_markdown_from_output(value: &Value) -> Result<String> {
-    if let Some(summary) = value.get("summary") {
-        let parsed: SummaryReport =
-            serde_json::from_value(summary.clone()).context("parsing summary report")?;
-        return Ok(render_markdown_summary(&parsed));
-    }
-
-    if let Some(targets) = value.get("targets").and_then(|v| v.as_object()) {
-        let mut target_names: Vec<String> = targets.keys().cloned().collect();
-        target_names.sort();
-
-        let mut sections = Vec::new();
-        for name in target_names {
-            let Some(entry) = targets.get(&name) else {
-                continue;
-            };
-            let summary_value = entry
-                .get("summary")
-                .cloned()
-                .unwrap_or_else(|| entry.clone());
-            let parsed: SummaryReport =
-                serde_json::from_value(summary_value).with_context(|| {
-                    format!("parsing summary report for target `{name}` in merged output")
-                })?;
-            sections.push(format!("## {name}\n\n{}", render_markdown_summary(&parsed)));
-        }
-        if !sections.is_empty() {
-            return Ok(sections.join("\n\n"));
-        }
-    }
-
-    let parsed: SummaryReport =
-        serde_json::from_value(value.clone()).context("parsing summary report")?;
-    Ok(render_markdown_summary(&parsed))
+    Ok(render_benchmark_output_markdown(
+        &BenchmarkOutput::from_value(value)?,
+        &[],
+    ))
 }
 
 pub(crate) fn render_summary_markdown_from_output_with_plots(
@@ -318,54 +289,36 @@ pub(crate) fn render_summary_markdown_from_output_with_plots_using_python(
     let rendered_plots =
         plots::render_plot_artifacts(&plot_inputs, output_dir, plot_mode, python_override)?;
 
-    if let Some(summary) = value.get("summary") {
-        let parsed: SummaryReport =
-            serde_json::from_value(summary.clone()).context("parsing summary report")?;
-        let rendered_refs = rendered_plots.iter().collect::<Vec<_>>();
-        return Ok(append_plot_links_to_markdown(
-            render_markdown_summary(&parsed),
-            &rendered_refs,
-        ));
-    }
-
-    if let Some(targets) = value.get("targets").and_then(|v| v.as_object()) {
-        let mut target_names: Vec<String> = targets.keys().cloned().collect();
-        target_names.sort();
-
-        let mut sections = Vec::new();
-        for name in target_names {
-            let Some(entry) = targets.get(&name) else {
-                continue;
-            };
-            let summary_value = entry
-                .get("summary")
-                .cloned()
-                .unwrap_or_else(|| entry.clone());
-            let parsed: SummaryReport =
-                serde_json::from_value(summary_value).with_context(|| {
-                    format!("parsing summary report for target `{name}` in merged output")
-                })?;
-            let rendered_refs = rendered_plots
-                .iter()
-                .filter(|plot| plot.target == name)
-                .collect::<Vec<_>>();
-            sections.push(format!(
-                "## {name}\n\n{}",
-                append_plot_links_to_markdown(render_markdown_summary(&parsed), &rendered_refs)
-            ));
-        }
-        if !sections.is_empty() {
-            return Ok(sections.join("\n\n"));
-        }
-    }
-
-    let parsed: SummaryReport =
-        serde_json::from_value(value.clone()).context("parsing summary report")?;
-    let rendered_refs = rendered_plots.iter().collect::<Vec<_>>();
-    Ok(append_plot_links_to_markdown(
-        render_markdown_summary(&parsed),
-        &rendered_refs,
+    Ok(render_benchmark_output_markdown(
+        &BenchmarkOutput::from_value(value)?,
+        &rendered_plots,
     ))
+}
+
+fn render_benchmark_output_markdown(
+    output: &BenchmarkOutput,
+    rendered_plots: &[plots::RenderedPlot],
+) -> String {
+    let mut sections = Vec::new();
+    for section in output.sections() {
+        let mut markdown = render_markdown_summary(&section.summary);
+        let rendered_refs = rendered_plots
+            .iter()
+            .filter(|plot| {
+                section
+                    .heading
+                    .as_ref()
+                    .is_none_or(|heading| plot.target == *heading)
+            })
+            .collect::<Vec<_>>();
+        markdown = append_plot_links_to_markdown(markdown, &rendered_refs);
+        if let Some(heading) = &section.heading {
+            sections.push(format!("## {heading}\n\n{markdown}"));
+        } else {
+            sections.push(markdown);
+        }
+    }
+    sections.join("\n\n")
 }
 
 fn append_plot_links_to_markdown(

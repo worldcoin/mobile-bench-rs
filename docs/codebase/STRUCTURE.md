@@ -34,6 +34,7 @@ mobile-bench-rs/
 
 - `crates/mobench/src/lib.rs`: crate facade, command dispatch, project layout, build/package commands, and run orchestration
 - `crates/mobench/src/cli.rs`: clap command surface, CLI argument structs, and target value enums
+- `crates/mobench/src/benchmark_output.rs`: normalized Benchmark Output model for accepted report shapes
 - `crates/mobench/src/ci.rs`: CI contract types, `ci` subcommands, programmatic `run_request`, and BrowserStack artifact fetch helpers
 - `crates/mobench/src/reports.rs`: summary construction, markdown/CSV rendering, GitHub report commands, and summary CLI output
 - `crates/mobench/src/compare.rs`: baseline resolution, summary comparison, regression detection, and JUnit/markdown compare output
@@ -93,6 +94,7 @@ target/mobench/profile/<run-id>/
 ## Where to add new work
 
 - new CLI arguments: `crates/mobench/src/cli.rs`
+- new accepted benchmark output/report shapes: `crates/mobench/src/benchmark_output.rs`
 - new prerequisite/config validation behavior: `crates/mobench/src/doctor.rs`
 - new device matrix/profile behavior: `crates/mobench/src/devices.rs`
 - new fixture lifecycle behavior: `crates/mobench/src/fixtures.rs`

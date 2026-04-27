@@ -38,6 +38,7 @@ Responsibilities:
 Important modules:
 - `lib.rs`: crate facade, command dispatch, project layout, build/package commands, and run orchestration
 - `cli.rs`: clap command surface and target/value enums
+- `benchmark_output.rs`: normalized Benchmark Output model for rendering accepted report shapes
 - `ci.rs`: CI contract types, `ci` subcommands, programmatic `run_request`, and BrowserStack artifact fetch helpers
 - `reports.rs`: summary construction, markdown/CSV rendering, GitHub report commands, and summary CLI output
 - `compare.rs`: baseline resolution, summary comparison, regression detection, and JUnit/markdown compare output
