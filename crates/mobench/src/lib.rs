@@ -1628,7 +1628,7 @@ fn configured_ios_runner(
             .transpose()
             .map_err(|err| anyhow!("config_error: {err}"))?
     };
-    mobench_sdk::codegen::resolve_ios_runner(&deployment_target, requested)
+    mobench_sdk::codegen::resolve_ios_runner(deployment_target, requested)
         .map_err(|err| anyhow!("config_error: {err}"))
 }
 
