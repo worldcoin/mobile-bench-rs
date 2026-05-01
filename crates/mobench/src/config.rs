@@ -24,6 +24,7 @@
 //! [ios]
 //! bundle_id = "com.example.bench"
 //! deployment_target = "15.0"
+//! runner = "swiftui"
 //!
 //! [benchmarks]
 //! default_function = "my_crate::my_benchmark"
@@ -380,6 +381,10 @@ bundle_id = "{package}"
 # iOS deployment target version (default: 15.0)
 deployment_target = "15.0"
 
+# iOS app runner: swiftui (iOS 15+) or uikit-legacy (legacy targets).
+# If omitted, mobench chooses uikit-legacy for deployment targets below 15.0.
+# runner = "swiftui"
+
 # Development team ID for code signing (optional, uses ad-hoc signing if not set)
 # team_id = "YOUR_TEAM_ID"
 
@@ -396,6 +401,12 @@ default_warmup = 10
 [browserstack]
 # Timeout in seconds for the generated iOS XCUITest harness to wait for completion
 # ios_completion_timeout_secs = 1200
+
+# Timeout in seconds for the generated Android benchmark watchdog
+# android_benchmark_timeout_secs = 1800
+
+# Heartbeat interval in seconds for Android benchmark progress logging
+# android_heartbeat_interval_secs = 10
 "#,
             crate_name = crate_name,
             library_name = library_name,
@@ -647,9 +658,12 @@ crate = "discovered-bench"
         assert!(toml.contains("min_sdk = 24"));
         assert!(toml.contains("target_sdk = 34"));
         assert!(toml.contains("deployment_target = \"15.0\""));
+        assert!(toml.contains("runner = \"swiftui\""));
         assert!(toml.contains("default_iterations = 100"));
         assert!(toml.contains("default_warmup = 10"));
         assert!(toml.contains("[browserstack]"));
         assert!(toml.contains("ios_completion_timeout_secs"));
+        assert!(toml.contains("android_benchmark_timeout_secs"));
+        assert!(toml.contains("android_heartbeat_interval_secs"));
     }
 }

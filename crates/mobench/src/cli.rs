@@ -111,6 +111,27 @@ pub(crate) enum Command {
             help = "Deprecated compatibility flag for generated XCUITest harness timeout"
         )]
         ios_completion_timeout_secs: Option<u64>,
+        #[arg(
+            long,
+            help = "iOS deployment target for generated app and XCUITest targets"
+        )]
+        ios_deployment_target: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            help = "iOS runner template (swiftui or uikit-legacy)"
+        )]
+        ios_runner: Option<IosRunnerArg>,
+        #[arg(
+            long,
+            help = "Android benchmark watchdog timeout in seconds for the generated harness"
+        )]
+        android_benchmark_timeout_secs: Option<u64>,
+        #[arg(
+            long,
+            help = "Android benchmark heartbeat interval in seconds for the generated harness"
+        )]
+        android_heartbeat_interval_secs: Option<u64>,
         #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
         fetch: bool,
         #[arg(long, default_value = "target/browserstack")]
@@ -217,6 +238,17 @@ pub(crate) enum Command {
             help = "Deprecated compatibility flag for generated XCUITest harness timeout"
         )]
         ios_completion_timeout_secs: Option<u64>,
+        #[arg(
+            long,
+            help = "iOS deployment target for generated app and XCUITest targets"
+        )]
+        ios_deployment_target: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            help = "iOS runner template (swiftui or uikit-legacy)"
+        )]
+        ios_runner: Option<IosRunnerArg>,
         #[arg(
             long,
             help = "Project root containing mobench.toml or the Cargo workspace"
@@ -612,6 +644,27 @@ pub(crate) struct CiRunArgs {
         help = "Deprecated compatibility flag for generated XCUITest harness timeout"
     )]
     pub(crate) ios_completion_timeout_secs: Option<u64>,
+    #[arg(
+        long,
+        help = "iOS deployment target for generated app and XCUITest targets"
+    )]
+    pub(crate) ios_deployment_target: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "iOS runner template (swiftui or uikit-legacy)"
+    )]
+    pub(crate) ios_runner: Option<IosRunnerArg>,
+    #[arg(
+        long,
+        help = "Android benchmark watchdog timeout in seconds for the generated harness"
+    )]
+    pub(crate) android_benchmark_timeout_secs: Option<u64>,
+    #[arg(
+        long,
+        help = "Android benchmark heartbeat interval in seconds for the generated harness"
+    )]
+    pub(crate) android_heartbeat_interval_secs: Option<u64>,
     #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
     pub(crate) fetch: bool,
     #[arg(long, default_value = "target/browserstack")]
@@ -818,6 +871,23 @@ impl From<IosSigningMethodArg> for mobench_sdk::builders::SigningMethod {
         match arg {
             IosSigningMethodArg::Adhoc => mobench_sdk::builders::SigningMethod::AdHoc,
             IosSigningMethodArg::Development => mobench_sdk::builders::SigningMethod::Development,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum, Serialize, Deserialize)]
+#[clap(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+pub enum IosRunnerArg {
+    Swiftui,
+    UikitLegacy,
+}
+
+impl From<IosRunnerArg> for mobench_sdk::codegen::IosRunner {
+    fn from(arg: IosRunnerArg) -> Self {
+        match arg {
+            IosRunnerArg::Swiftui => mobench_sdk::codegen::IosRunner::Swiftui,
+            IosRunnerArg::UikitLegacy => mobench_sdk::codegen::IosRunner::UikitLegacy,
         }
     }
 }
