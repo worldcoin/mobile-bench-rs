@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "mobench"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "clap",
@@ -1254,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-macros"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-sdk"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "include_dir",
  "inventory",
@@ -1884,7 +1884,7 @@ dependencies = [
 
 [[package]]
 name = "sample-fns"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "camino",
  "mobench-sdk",
