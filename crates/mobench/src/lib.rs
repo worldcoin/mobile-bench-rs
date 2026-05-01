@@ -1363,6 +1363,29 @@ fn load_layout_config(
     config::MobenchConfig::discover_from(&discovery_base)
 }
 
+fn load_toml_config_value(path: &Path) -> Result<toml::Value> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("reading config {}", path.display()))?;
+    toml::from_str(&contents).with_context(|| format!("parsing config {}", path.display()))
+}
+
+fn toml_path<'a>(value: &'a toml::Value, path: &[&str]) -> Option<&'a toml::Value> {
+    path.iter()
+        .try_fold(value, |current, key| current.get(*key))
+}
+
+fn toml_string(value: &toml::Value, path: &[&str]) -> Option<String> {
+    toml_path(value, path)
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+}
+
+fn toml_u64(value: &toml::Value, path: &[&str]) -> Option<u64> {
+    toml_path(value, path)
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u64::try_from(value).ok())
+}
+
 fn resolve_project_root_for_layout(
     start_dir: &Path,
     explicit_project_root: Option<PathBuf>,
@@ -1483,6 +1506,10 @@ pub(crate) fn resolve_project_layout(
         Some((config, path)) => (Some(config), Some(path)),
         None => (None, None),
     };
+    let raw_config = config_path
+        .as_deref()
+        .map(load_toml_config_value)
+        .transpose()?;
 
     let project_root = resolve_project_root_for_layout(
         &start_dir,
@@ -1526,13 +1553,15 @@ pub(crate) fn resolve_project_layout(
         .as_ref()
         .map(|cfg| cfg.ios.deployment_target.clone())
         .unwrap_or_else(|| mobench_sdk::codegen::DEFAULT_IOS_DEPLOYMENT_TARGET.to_string());
-    let ios_runner = config.as_ref().and_then(|cfg| cfg.ios.runner.clone());
-    let android_benchmark_timeout_secs = config
+    let ios_runner = raw_config
         .as_ref()
-        .and_then(|cfg| cfg.browserstack.android_benchmark_timeout_secs);
-    let android_heartbeat_interval_secs = config
+        .and_then(|cfg| toml_string(cfg, &["ios", "runner"]));
+    let android_benchmark_timeout_secs = raw_config
         .as_ref()
-        .and_then(|cfg| cfg.browserstack.android_heartbeat_interval_secs);
+        .and_then(|cfg| toml_u64(cfg, &["browserstack", "android_benchmark_timeout_secs"]));
+    let android_heartbeat_interval_secs = raw_config
+        .as_ref()
+        .and_then(|cfg| toml_u64(cfg, &["browserstack", "android_heartbeat_interval_secs"]));
     let output_dir = config
         .as_ref()
         .and_then(|cfg| cfg.project.output_dir.clone())
@@ -1770,14 +1799,6 @@ pub struct RunRequest {
     pub ios_test_suite: Option<PathBuf>,
     /// Deprecated compatibility timeout for generated iOS benchmark harnesses.
     pub ios_completion_timeout_secs: Option<u64>,
-    /// iOS deployment target for generated app and XCUITest targets.
-    pub ios_deployment_target: Option<String>,
-    /// iOS runner template override.
-    pub ios_runner: Option<IosRunnerArg>,
-    /// Android benchmark watchdog timeout in seconds for the generated harness.
-    pub android_benchmark_timeout_secs: Option<u64>,
-    /// Android benchmark heartbeat interval in seconds for the generated harness.
-    pub android_heartbeat_interval_secs: Option<u64>,
     /// Fetch BrowserStack artifacts after completion.
     pub fetch: bool,
     /// Output directory for fetched BrowserStack artifacts.
@@ -1875,6 +1896,10 @@ pub mod bench_support {
 ///
 /// Returns [`RunResult`] containing file paths and process exit semantics.
 pub fn run_request(request: &RunRequest) -> Result<RunResult> {
+    run_request_with_extra_args(request, &[])
+}
+
+fn run_request_with_extra_args(request: &RunRequest, extra_args: &[String]) -> Result<RunResult> {
     fs::create_dir_all(&request.output_dir)
         .with_context(|| format!("creating output dir {}", request.output_dir.display()))?;
 
@@ -1942,27 +1967,10 @@ pub fn run_request(request: &RunRequest) -> Result<RunResult> {
         cmd.arg("--ios-completion-timeout-secs")
             .arg(timeout_secs.to_string());
     }
-    if let Some(deployment_target) = &request.ios_deployment_target {
-        cmd.arg("--ios-deployment-target").arg(deployment_target);
-    }
-    if let Some(runner) = request.ios_runner {
-        let value = match runner {
-            IosRunnerArg::Swiftui => "swiftui",
-            IosRunnerArg::UikitLegacy => "uikit-legacy",
-        };
-        cmd.arg("--ios-runner").arg(value);
-    }
-    if let Some(timeout_secs) = request.android_benchmark_timeout_secs {
-        cmd.arg("--android-benchmark-timeout-secs")
-            .arg(timeout_secs.to_string());
-    }
-    if let Some(interval_secs) = request.android_heartbeat_interval_secs {
-        cmd.arg("--android-heartbeat-interval-secs")
-            .arg(interval_secs.to_string());
-    }
     if let Some(path) = &request.crate_path {
         cmd.arg("--crate-path").arg(path);
     }
+    cmd.args(extra_args);
     if request.fetch {
         cmd.arg("--fetch");
     }
@@ -2584,38 +2592,55 @@ fn cmd_ci_run_single(
         }
     });
 
-    let result = run_request(&RunRequest {
-        target,
-        function: args.function.clone().unwrap_or_default(),
-        crate_path: args.crate_path.clone(),
-        iterations: args.iterations,
-        warmup: args.warmup,
-        device_selection: DeviceSelection {
-            devices: args.devices.clone(),
-            device_matrix: args.device_matrix.clone(),
-            device_tags: args.device_tags.clone(),
+    let mut extra_args = Vec::new();
+    if let Some(deployment_target) = &args.ios_deployment_target {
+        extra_args.push("--ios-deployment-target".to_string());
+        extra_args.push(deployment_target.clone());
+    }
+    if let Some(runner) = args.ios_runner {
+        extra_args.push("--ios-runner".to_string());
+        extra_args.push(ios_runner_arg_name(runner).to_string());
+    }
+    if let Some(timeout_secs) = args.android_benchmark_timeout_secs {
+        extra_args.push("--android-benchmark-timeout-secs".to_string());
+        extra_args.push(timeout_secs.to_string());
+    }
+    if let Some(interval_secs) = args.android_heartbeat_interval_secs {
+        extra_args.push("--android-heartbeat-interval-secs".to_string());
+        extra_args.push(interval_secs.to_string());
+    }
+
+    let result = run_request_with_extra_args(
+        &RunRequest {
+            target,
+            function: args.function.clone().unwrap_or_default(),
+            crate_path: args.crate_path.clone(),
+            iterations: args.iterations,
+            warmup: args.warmup,
+            device_selection: DeviceSelection {
+                devices: args.devices.clone(),
+                device_matrix: args.device_matrix.clone(),
+                device_tags: args.device_tags.clone(),
+            },
+            config: args.config.clone(),
+            baseline: baseline_source,
+            regression_threshold_pct: args.regression_threshold_pct,
+            junit: args.junit.clone(),
+            local_only: args.local_only,
+            release: args.release,
+            ios_app: args.ios_app.clone(),
+            ios_test_suite: args.ios_test_suite.clone(),
+            ios_completion_timeout_secs: args.ios_completion_timeout_secs,
+            fetch: args.fetch,
+            fetch_output_dir: args.fetch_output_dir.clone(),
+            fetch_poll_interval_secs: args.fetch_poll_interval_secs,
+            fetch_timeout_secs: args.fetch_timeout_secs,
+            progress: args.progress,
+            output_dir: output_dir.to_path_buf(),
+            plots: args.plots,
         },
-        config: args.config.clone(),
-        baseline: baseline_source,
-        regression_threshold_pct: args.regression_threshold_pct,
-        junit: args.junit.clone(),
-        local_only: args.local_only,
-        release: args.release,
-        ios_app: args.ios_app.clone(),
-        ios_test_suite: args.ios_test_suite.clone(),
-        ios_completion_timeout_secs: args.ios_completion_timeout_secs,
-        ios_deployment_target: args.ios_deployment_target.clone(),
-        ios_runner: args.ios_runner,
-        android_benchmark_timeout_secs: args.android_benchmark_timeout_secs,
-        android_heartbeat_interval_secs: args.android_heartbeat_interval_secs,
-        fetch: args.fetch,
-        fetch_output_dir: args.fetch_output_dir.clone(),
-        fetch_poll_interval_secs: args.fetch_poll_interval_secs,
-        fetch_timeout_secs: args.fetch_timeout_secs,
-        progress: args.progress,
-        output_dir: output_dir.to_path_buf(),
-        plots: args.plots,
-    })?;
+        &extra_args,
+    )?;
 
     let summary_json = result.report.summary_json;
     let summary_md = result.report.summary_md;
@@ -4035,7 +4060,18 @@ pub(crate) fn persist_mobile_spec(
 
 /// Embeds the benchmark spec into Android assets and iOS bundle resources.
 fn embed_spec_into_apps(output_dir: &Path, spec: &RunSpec) -> Result<()> {
-    let embedded_spec = mobench_sdk::builders::EmbeddedBenchSpec {
+    #[derive(Serialize)]
+    struct EmbeddedRunSpec {
+        function: String,
+        iterations: u32,
+        warmup: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        android_benchmark_timeout_secs: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        android_heartbeat_interval_secs: Option<u64>,
+    }
+
+    let embedded_spec = EmbeddedRunSpec {
         function: spec.function.clone(),
         iterations: spec.iterations,
         warmup: spec.warmup,
@@ -4057,8 +4093,6 @@ fn embed_meta_into_apps(
         function: spec.function.clone(),
         iterations: spec.iterations,
         warmup: spec.warmup,
-        android_benchmark_timeout_secs: spec.android_benchmark_timeout_secs,
-        android_heartbeat_interval_secs: spec.android_heartbeat_interval_secs,
     };
     mobench_sdk::builders::embed_bench_meta(output_dir, &embedded_spec, target, profile)
         .map_err(|e| anyhow!("Failed to embed bench meta: {}", e))

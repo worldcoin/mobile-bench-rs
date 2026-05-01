@@ -409,12 +409,6 @@ pub struct EmbeddedBenchSpec {
     pub iterations: u32,
     /// Number of warmup iterations
     pub warmup: u32,
-    /// Android harness watchdog timeout in seconds.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub android_benchmark_timeout_secs: Option<u64>,
-    /// Android harness heartbeat interval in seconds.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub android_heartbeat_interval_secs: Option<u64>,
 }
 
 /// Build metadata for artifact correlation and traceability.
@@ -772,8 +766,6 @@ members = ["crates/*"]
             function: "test_crate::my_benchmark".to_string(),
             iterations: 100,
             warmup: 10,
-            android_benchmark_timeout_secs: None,
-            android_heartbeat_interval_secs: None,
         };
 
         let meta = create_bench_meta(&spec, "android", "release");
@@ -799,7 +791,16 @@ members = ["crates/*"]
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let spec = EmbeddedBenchSpec {
+        #[derive(serde::Serialize)]
+        struct AndroidSpec {
+            function: String,
+            iterations: u32,
+            warmup: u32,
+            android_benchmark_timeout_secs: Option<u64>,
+            android_heartbeat_interval_secs: Option<u64>,
+        }
+
+        let spec = AndroidSpec {
             function: "test_crate::first_run".to_string(),
             iterations: 7,
             warmup: 1,
@@ -865,8 +866,6 @@ members = ["crates/*"]
             function: "my_func".to_string(),
             iterations: 50,
             warmup: 5,
-            android_benchmark_timeout_secs: None,
-            android_heartbeat_interval_secs: None,
         };
 
         let meta = create_bench_meta(&spec, "ios", "debug");
