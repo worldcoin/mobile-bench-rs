@@ -2706,6 +2706,10 @@ fn execute_local_android_capture(
         warmup: DEFAULT_PROFILE_WARMUP,
         devices: Vec::new(),
         ios_completion_timeout_secs: None,
+        ios_deployment_target: None,
+        ios_runner: None,
+        android_benchmark_timeout_secs: None,
+        android_heartbeat_interval_secs: None,
         browserstack: None,
         ios_xcuitest: None,
     };
@@ -2976,6 +2980,10 @@ fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManife
         warmup: DEFAULT_PROFILE_WARMUP,
         devices: Vec::new(),
         ios_completion_timeout_secs: None,
+        ios_deployment_target: None,
+        ios_runner: None,
+        android_benchmark_timeout_secs: None,
+        android_heartbeat_interval_secs: None,
         browserstack: None,
         ios_xcuitest: None,
     };
@@ -2986,7 +2994,7 @@ fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManife
     ensure_local_ios_simulator_booted(&simulator)?;
     manifest.capture_metadata.device = Some(simulator.identifier());
 
-    run_ios_build(&layout, false, false, None)?;
+    run_ios_build(&layout, false, false, None, None, None)?;
     let app_path = build_local_ios_simulator_app(&layout, &simulator)?;
     install_local_ios_app(&simulator, &app_path)?;
 

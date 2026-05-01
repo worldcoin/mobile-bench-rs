@@ -206,6 +206,7 @@ min_sdk = 24
 [ios]
 bundle_id = "com.example.bench"
 deployment_target = "15.0"
+# runner = "swiftui"       # or "uikit-legacy" for legacy iOS deployment targets
 
 [benchmarks]
 default_function = "my_crate::my_benchmark"
@@ -217,6 +218,7 @@ Resolution precedence is: explicit CLI flags (`--project-root`, `--crate-path`) 
 
 CLI flags override config file values when provided.
 - In `cargo mobench run --config <FILE>` mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
+- iOS deployment targets below 15.0 use the UIKit legacy runner by default; forcing `runner = "swiftui"` below 15.0 fails early. Legacy targets such as iPhone 7 on iOS 10 also require an older Xcode lane capable of building for that OS.
 - For regression comparisons, `--baseline` should point to a previous run summary; if it resolves to the same output path, mobench snapshots the prior file before writing the candidate summary.
 - In the reusable GitHub workflow, the default baseline source is the latest successful run on the repository default branch when matching artifacts are available.
 - `cargo mobench verify --smoke-test` is only supported for benchmark crates linked into the `mobench` CLI binary. External crates discovered through `mobench.toml`, `--project-root`, or `--crate-path` should use `cargo mobench list` and `cargo mobench verify --check-artifacts`.

@@ -24,6 +24,7 @@
 //! [ios]
 //! bundle_id = "com.example.bench"
 //! deployment_target = "15.0"
+//! runner = "swiftui"
 //!
 //! [benchmarks]
 //! default_function = "my_crate::my_benchmark"
@@ -134,6 +135,11 @@ pub struct IosConfig {
     /// Defaults to "15.0".
     pub deployment_target: String,
 
+    /// iOS app runner template (`swiftui` or `uikit-legacy`).
+    ///
+    /// If unset, mobench chooses SwiftUI for iOS 15+ and UIKit legacy below iOS 15.
+    pub runner: Option<String>,
+
     /// Development team ID for code signing.
     ///
     /// If not specified, ad-hoc signing is used.
@@ -145,6 +151,7 @@ impl Default for IosConfig {
         Self {
             bundle_id: "dev.world.bench".to_string(),
             deployment_target: "15.0".to_string(),
+            runner: None,
             team_id: None,
         }
     }
@@ -186,6 +193,10 @@ impl Default for BenchmarksConfig {
 pub struct BrowserStackConfig {
     /// Timeout in seconds for the generated iOS XCUITest harness to wait for benchmark completion.
     pub ios_completion_timeout_secs: Option<u64>,
+    /// Timeout in seconds for the generated Android instrumentation harness.
+    pub android_benchmark_timeout_secs: Option<u64>,
+    /// Heartbeat interval in seconds for the generated Android instrumentation harness.
+    pub android_heartbeat_interval_secs: Option<u64>,
 }
 
 impl MobenchConfig {
@@ -319,6 +330,7 @@ impl MobenchConfig {
             ios: IosConfig {
                 bundle_id: package,
                 deployment_target: "15.0".to_string(),
+                runner: None,
                 team_id: None,
             },
             benchmarks: BenchmarksConfig {
@@ -380,6 +392,10 @@ bundle_id = "{package}"
 # iOS deployment target version (default: 15.0)
 deployment_target = "15.0"
 
+# iOS app runner: swiftui (iOS 15+) or uikit-legacy (legacy targets).
+# If omitted, mobench chooses uikit-legacy for deployment targets below 15.0.
+# runner = "swiftui"
+
 # Development team ID for code signing (optional, uses ad-hoc signing if not set)
 # team_id = "YOUR_TEAM_ID"
 
@@ -396,6 +412,12 @@ default_warmup = 10
 [browserstack]
 # Timeout in seconds for the generated iOS XCUITest harness to wait for completion
 # ios_completion_timeout_secs = 1200
+
+# Timeout in seconds for the generated Android benchmark watchdog
+# android_benchmark_timeout_secs = 1800
+
+# Heartbeat interval in seconds for Android benchmark progress logging
+# android_heartbeat_interval_secs = 10
 "#,
             crate_name = crate_name,
             library_name = library_name,
@@ -525,9 +547,12 @@ mod tests {
         assert_eq!(config.android.min_sdk, 24);
         assert_eq!(config.android.target_sdk, 34);
         assert_eq!(config.ios.deployment_target, "15.0");
+        assert_eq!(config.ios.runner, None);
         assert_eq!(config.benchmarks.default_iterations, 100);
         assert_eq!(config.benchmarks.default_warmup, 10);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, None);
+        assert_eq!(config.browserstack.android_benchmark_timeout_secs, None);
+        assert_eq!(config.browserstack.android_heartbeat_interval_secs, None);
     }
 
     #[test]
@@ -537,7 +562,10 @@ mod tests {
         assert_eq!(config.project.library_name, Some("my_bench".to_string()));
         assert_eq!(config.android.package, "dev.world.mybench");
         assert_eq!(config.ios.bundle_id, "dev.world.mybench");
+        assert_eq!(config.ios.runner, None);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, None);
+        assert_eq!(config.browserstack.android_benchmark_timeout_secs, None);
+        assert_eq!(config.browserstack.android_heartbeat_interval_secs, None);
     }
 
     #[test]
@@ -558,6 +586,7 @@ target_sdk = 33
 [ios]
 bundle_id = "com.test.bench"
 deployment_target = "14.0"
+runner = "uikit-legacy"
 
 [benchmarks]
 default_function = "test_bench::test_fn"
@@ -566,6 +595,8 @@ default_warmup = 5
 
 [browserstack]
 ios_completion_timeout_secs = 1200
+android_benchmark_timeout_secs = 60
+android_heartbeat_interval_secs = 5
 "#;
 
         let mut file = std::fs::File::create(&config_path).unwrap();
@@ -580,6 +611,7 @@ ios_completion_timeout_secs = 1200
         assert_eq!(config.android.target_sdk, 33);
         assert_eq!(config.ios.bundle_id, "com.test.bench");
         assert_eq!(config.ios.deployment_target, "14.0");
+        assert_eq!(config.ios.runner.as_deref(), Some("uikit-legacy"));
         assert_eq!(
             config.benchmarks.default_function,
             Some("test_bench::test_fn".to_string())
@@ -587,6 +619,8 @@ ios_completion_timeout_secs = 1200
         assert_eq!(config.benchmarks.default_iterations, 50);
         assert_eq!(config.benchmarks.default_warmup, 5);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, Some(1200));
+        assert_eq!(config.browserstack.android_benchmark_timeout_secs, Some(60));
+        assert_eq!(config.browserstack.android_heartbeat_interval_secs, Some(5));
     }
 
     #[test]
@@ -647,9 +681,12 @@ crate = "discovered-bench"
         assert!(toml.contains("min_sdk = 24"));
         assert!(toml.contains("target_sdk = 34"));
         assert!(toml.contains("deployment_target = \"15.0\""));
+        assert!(toml.contains("runner = \"swiftui\""));
         assert!(toml.contains("default_iterations = 100"));
         assert!(toml.contains("default_warmup = 10"));
         assert!(toml.contains("[browserstack]"));
         assert!(toml.contains("ios_completion_timeout_secs"));
+        assert!(toml.contains("android_benchmark_timeout_secs"));
+        assert!(toml.contains("android_heartbeat_interval_secs"));
     }
 }

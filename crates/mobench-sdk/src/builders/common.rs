@@ -409,6 +409,12 @@ pub struct EmbeddedBenchSpec {
     pub iterations: u32,
     /// Number of warmup iterations
     pub warmup: u32,
+    /// Android harness watchdog timeout in seconds.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub android_benchmark_timeout_secs: Option<u64>,
+    /// Android harness heartbeat interval in seconds.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub android_heartbeat_interval_secs: Option<u64>,
 }
 
 /// Build metadata for artifact correlation and traceability.
@@ -766,6 +772,8 @@ members = ["crates/*"]
             function: "test_crate::my_benchmark".to_string(),
             iterations: 100,
             warmup: 10,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
         };
 
         let meta = create_bench_meta(&spec, "android", "release");
@@ -795,6 +803,8 @@ members = ["crates/*"]
             function: "test_crate::first_run".to_string(),
             iterations: 7,
             warmup: 1,
+            android_benchmark_timeout_secs: Some(30),
+            android_heartbeat_interval_secs: Some(5),
         };
 
         embed_bench_spec(&temp_dir, &spec).expect("embed spec");
@@ -812,6 +822,11 @@ members = ["crates/*"]
 
         let contents = std::fs::read_to_string(android_spec).unwrap();
         assert!(contents.contains("test_crate::first_run"));
+        assert!(contents.contains("android_benchmark_timeout_secs"));
+        assert!(contents.contains("android_heartbeat_interval_secs"));
+        let json: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(json["android_benchmark_timeout_secs"], 30);
+        assert_eq!(json["android_heartbeat_interval_secs"], 5);
 
         std::fs::remove_dir_all(&temp_dir).unwrap();
     }
@@ -850,6 +865,8 @@ members = ["crates/*"]
             function: "my_func".to_string(),
             iterations: 50,
             warmup: 5,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
         };
 
         let meta = create_bench_meta(&spec, "ios", "debug");
