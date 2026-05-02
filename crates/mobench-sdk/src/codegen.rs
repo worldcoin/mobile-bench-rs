@@ -1732,6 +1732,8 @@ mod tests {
         assert!(android.contains("startForegroundService(intent)"));
         assert!(android.contains("startForeground(FOREGROUND_NOTIFICATION_ID"));
         assert!(android.contains("fun isBenchmarkComplete()"));
+        assert!(android.contains("BENCH_RESULT_OK"));
+        assert!(!android.contains("private const val RESULT_OK"));
         assert!(android.contains("BENCH_JSON ${json}"));
         assert!(android.contains("BENCH_HEARTBEAT_JSON $json"));
         assert!(android.contains("BENCH_FAILURE_JSON $encoded"));

@@ -45,9 +45,9 @@ private const val RESULT_FAILURE_JSON_EXTRA = "bench_failure_json"
 private const val RESULT_HEARTBEAT_JSON_EXTRA = "bench_heartbeat_json"
 private const val RESULT_PID_EXTRA = "bench_pid"
 private const val RESULT_PROCESS_NAME_EXTRA = "bench_process_name"
-private const val RESULT_OK = 1
-private const val RESULT_ERROR = 2
-private const val RESULT_HEARTBEAT = 3
+private const val BENCH_RESULT_OK = 1
+private const val BENCH_RESULT_ERROR = 2
+private const val BENCH_RESULT_HEARTBEAT = 3
 private const val FOREGROUND_NOTIFICATION_ID = 1001
 private const val FOREGROUND_CHANNEL_ID = "mobench_benchmark"
 private const val FOREGROUND_CHANNEL_NAME = "Mobench benchmark"
@@ -86,12 +86,12 @@ class MainActivity : AppCompatActivity() {
         val resultReceiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 when (resultCode) {
-                    RESULT_HEARTBEAT -> {
+                    BENCH_RESULT_HEARTBEAT -> {
                         workerPid = resultData?.getInt(RESULT_PID_EXTRA)?.takeIf { it > 0 }
                         workerProcessName = resultData?.getString(RESULT_PROCESS_NAME_EXTRA)
                         lastProgressAtMs = android.os.SystemClock.elapsedRealtime()
                     }
-                    RESULT_OK -> {
+                    BENCH_RESULT_OK -> {
                         val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
                             ?: "Benchmark worker completed"
                         resultText?.text = display
@@ -354,7 +354,10 @@ class BenchmarkWorkerService : Service() {
                     result.errorMessage?.let { putString(RESULT_ERROR_EXTRA, it) }
                     result.failureJson?.let { putString(RESULT_FAILURE_JSON_EXTRA, it) }
                 }
-                resultReceiver?.send(if (result.errorMessage == null) RESULT_OK else RESULT_ERROR, bundle)
+                resultReceiver?.send(
+                    if (result.errorMessage == null) BENCH_RESULT_OK else BENCH_RESULT_ERROR,
+                    bundle
+                )
             } finally {
                 heartbeat.stop()
                 stopBenchmarkForeground()
@@ -509,7 +512,7 @@ private class WorkerHeartbeat(
                     .put("process_name", currentProcessName())
                     .put("memory", currentMemoryJson())
                 android.util.Log.i("BenchRunner", "BENCH_HEARTBEAT_JSON $json")
-                receiver?.send(RESULT_HEARTBEAT, Bundle().apply {
+                receiver?.send(BENCH_RESULT_HEARTBEAT, Bundle().apply {
                     putString(RESULT_HEARTBEAT_JSON_EXTRA, json.toString())
                     putInt(RESULT_PID_EXTRA, Process.myPid())
                     putString(RESULT_PROCESS_NAME_EXTRA, currentProcessName())
