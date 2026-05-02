@@ -1762,7 +1762,7 @@ fn xcuitest_device_payload(device: &str) -> XcuitestDeviceRequest {
     } else {
         XcuitestDeviceRequest::LatestAvailable {
             device: device.to_string(),
-            os_version: None,
+            os_version: Some("1[2-9]".to_string()),
         }
     }
 }
@@ -2917,7 +2917,7 @@ Test completed
 
         let value = serde_json::to_value(&request).expect("serialize xcuitest build request");
         assert_eq!(value["devices"][0]["device"], "iPhone 7");
-        assert!(value["devices"][0].get("os_version").is_none());
+        assert_eq!(value["devices"][0]["os_version"], "1[2-9]");
     }
 
     #[test]
