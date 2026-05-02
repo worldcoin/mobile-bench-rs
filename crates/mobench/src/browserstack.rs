@@ -282,7 +282,10 @@ impl BrowserStackClient {
         let body = XcuitestBuildRequest {
             app: app_url.to_string(),
             test_suite: test_suite_url.to_string(),
-            devices: devices.iter().map(|device| xcuitest_device_payload(device)).collect(),
+            devices: devices
+                .iter()
+                .map(|device| xcuitest_device_payload(device))
+                .collect(),
             device_logs: true,
             app_profiling: true,
             build_name: self.project.clone(),
@@ -1752,12 +1755,10 @@ enum XcuitestDeviceRequest {
 }
 
 fn xcuitest_device_payload(device: &str) -> XcuitestDeviceRequest {
-    if device.rsplit_once('-').is_some_and(|(_, version)| {
-        version
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_digit())
-    }) {
+    if device
+        .rsplit_once('-')
+        .is_some_and(|(_, version)| version.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+    {
         XcuitestDeviceRequest::Versioned(device.to_string())
     } else {
         XcuitestDeviceRequest::LatestAvailable {

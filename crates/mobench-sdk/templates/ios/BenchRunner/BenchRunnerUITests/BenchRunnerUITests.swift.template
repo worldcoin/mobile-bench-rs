@@ -17,20 +17,57 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         return defaultBenchmarkTimeout
     }
 
+    private func isBenchmarkCompleted(_ element: XCUIElement) -> Bool {
+        guard element.exists else {
+            return false
+        }
+
+        let rawLabel = element.label
+        let rawValue = element.value as? String ?? ""
+        return rawLabel == "completed" || rawValue == "completed"
+    }
+
+    private func reportPayload(from element: XCUIElement) -> String {
+        guard element.exists else {
+            return ""
+        }
+
+        let rawValue = element.value as? String ?? ""
+        let rawLabel = element.label
+        if rawValue.hasPrefix("{") || rawValue.contains("\"error\"") {
+            return rawValue
+        }
+        if rawLabel.hasPrefix("{") || rawLabel.contains("\"error\"") {
+            return rawLabel
+        }
+
+        return ""
+    }
+
     func testLaunchAndCaptureBenchmarkReport() {
         let app = XCUIApplication()
         app.launch()
 
         // Poll instead of using one long wait so BrowserStack receives regular XCUITest output.
         let completedIndicator = app.staticTexts["benchmarkCompleted"]
+        let reportElement = app.staticTexts["benchmarkReportJSON"]
         let deadline = Date().addingTimeInterval(benchmarkTimeout)
-        var completed = completedIndicator.exists
-        while !completed && Date() < deadline {
+        var completed = false
+        var jsonString = ""
+
+        while Date() < deadline {
+            completed = completed || isBenchmarkCompleted(completedIndicator)
+            if jsonString.isEmpty {
+                jsonString = reportPayload(from: reportElement)
+            }
+            if completed && !jsonString.isEmpty {
+                break
+            }
+
             let elapsed = benchmarkTimeout - deadline.timeIntervalSinceNow
             NSLog("BENCH_HEARTBEAT_JSON {\"schema_version\":1,\"platform\":\"ios\",\"elapsed_ms\":\(Int(elapsed * 1000))}")
             print("BENCH_HEARTBEAT_JSON {\"schema_version\":1,\"platform\":\"ios\",\"elapsed_ms\":\(Int(elapsed * 1000))}")
-            Thread.sleep(forTimeInterval: 10.0)
-            completed = completedIndicator.exists
+            Thread.sleep(forTimeInterval: min(10.0, max(0.5, deadline.timeIntervalSinceNow)))
         }
         XCTAssertTrue(completed, "Benchmark should complete within \(benchmarkTimeout) seconds")
 
@@ -39,20 +76,8 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         Thread.sleep(forTimeInterval: 5.0)
 
         // Extract the benchmark report JSON from the hidden element
-        let reportElement = app.staticTexts["benchmarkReportJSON"]
         XCTAssertTrue(reportElement.exists, "Benchmark report JSON element should exist after completion")
-
-        // Prefer accessibilityValue for legacy UIKit labels; fall back to label for older templates.
-        let rawLabel = reportElement.label
-        let rawValue = reportElement.value as? String ?? ""
-        let jsonString: String
-        if rawValue.hasPrefix("{") || rawValue.contains("\"error\"") {
-            jsonString = rawValue
-        } else if rawLabel.hasPrefix("{") || rawLabel.contains("\"error\"") {
-            jsonString = rawLabel
-        } else {
-            jsonString = ""
-        }
+        jsonString = jsonString.isEmpty ? reportPayload(from: reportElement) : jsonString
 
         // Log with markers that mobench fetch can parse from instrumentation logs
         // Using NSLog to ensure it goes to device logs that BrowserStack captures

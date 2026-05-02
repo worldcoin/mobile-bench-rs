@@ -89,6 +89,8 @@ final class BenchmarkViewController: UIViewController {
         completionLabel.translatesAutoresizingMaskIntoConstraints = false
         completionLabel.text = ""
         completionLabel.accessibilityIdentifier = "benchmarkCompleted"
+        completionLabel.accessibilityLabel = ""
+        completionLabel.accessibilityValue = ""
         completionLabel.isAccessibilityElement = false
         completionLabel.textColor = .clear
         view.addSubview(completionLabel)
@@ -141,6 +143,8 @@ final class BenchmarkViewController: UIViewController {
                 self.jsonLabel.accessibilityLabel = "benchmarkReportJSON"
                 self.jsonLabel.accessibilityValue = result.jsonReport
                 self.completionLabel.text = "completed"
+                self.completionLabel.accessibilityLabel = "completed"
+                self.completionLabel.accessibilityValue = "completed"
                 self.completionLabel.isAccessibilityElement = true
             }
 

@@ -1761,7 +1761,10 @@ mod tests {
             "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
         );
         assert!(ios_test.contains("BENCH_HEARTBEAT_JSON"));
-        assert!(ios_test.contains("reportElement.value as? String"));
+        assert!(ios_test.contains("isBenchmarkCompleted"));
+        assert!(ios_test.contains("rawLabel == \"completed\" || rawValue == \"completed\""));
+        assert!(ios_test.contains("reportPayload(from: reportElement)"));
+        assert!(ios_test.contains("element.value as? String"));
         assert!(
             ios_test.contains("\\\"error\\\""),
             "iOS XCUITest template should fail when the benchmark report is an error payload"
@@ -1831,6 +1834,8 @@ mod tests {
         assert!(legacy.contains("benchmarkCompleted"));
         assert!(legacy.contains("benchmarkReportJSON"));
         assert!(legacy.contains("accessibilityValue = result.jsonReport"));
+        assert!(legacy.contains("completionLabel.accessibilityLabel = \"completed\""));
+        assert!(legacy.contains("completionLabel.accessibilityValue = \"completed\""));
         assert!(legacy.contains("BENCH_REPORT_JSON_START"));
         assert!(legacy.contains("BENCH_REPORT_JSON_END"));
     }
