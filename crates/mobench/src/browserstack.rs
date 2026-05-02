@@ -282,7 +282,7 @@ impl BrowserStackClient {
         let body = XcuitestBuildRequest {
             app: app_url.to_string(),
             test_suite: test_suite_url.to_string(),
-            devices: devices.to_vec(),
+            devices: devices.iter().map(|device| xcuitest_device_payload(device)).collect(),
             device_logs: true,
             app_profiling: true,
             build_name: self.project.clone(),
@@ -1730,7 +1730,7 @@ struct BuildRequest {
 struct XcuitestBuildRequest {
     app: String,
     test_suite: String,
-    devices: Vec<String>,
+    devices: Vec<XcuitestDeviceRequest>,
     device_logs: bool,
     app_profiling: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1738,6 +1738,33 @@ struct XcuitestBuildRequest {
     idle_timeout: u64,
     #[serde(rename = "only-testing", skip_serializing_if = "Option::is_none")]
     only_testing: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum XcuitestDeviceRequest {
+    Versioned(String),
+    LatestAvailable {
+        device: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        os_version: Option<String>,
+    },
+}
+
+fn xcuitest_device_payload(device: &str) -> XcuitestDeviceRequest {
+    if device.rsplit_once('-').is_some_and(|(_, version)| {
+        version
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_digit())
+    }) {
+        XcuitestDeviceRequest::Versioned(device.to_string())
+    } else {
+        XcuitestDeviceRequest::LatestAvailable {
+            device: device.to_string(),
+            os_version: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2861,7 +2888,7 @@ Test completed
         let request = XcuitestBuildRequest {
             app: "bs://app".into(),
             test_suite: "bs://suite".into(),
-            devices: vec!["iPhone 15-17".into()],
+            devices: vec![xcuitest_device_payload("iPhone 15-17")],
             device_logs: true,
             build_name: Some("mobench".into()),
             only_testing: Some(vec!["BenchRunnerUITests/test".into()]),
@@ -2872,6 +2899,25 @@ Test completed
         let value = serde_json::to_value(&request).expect("serialize xcuitest build request");
         assert_eq!(value["appProfiling"], true);
         assert_eq!(value["idleTimeout"], XCUITEST_IDLE_TIMEOUT_SECS);
+        assert_eq!(value["devices"][0], "iPhone 15-17");
+    }
+
+    #[test]
+    fn xcuitest_build_request_serializes_unversioned_devices_as_latest_available_objects() {
+        let request = XcuitestBuildRequest {
+            app: "bs://app".into(),
+            test_suite: "bs://suite".into(),
+            devices: vec![xcuitest_device_payload("iPhone 7")],
+            device_logs: true,
+            build_name: Some("mobench".into()),
+            only_testing: Some(vec!["BenchRunnerUITests/test".into()]),
+            app_profiling: true,
+            idle_timeout: XCUITEST_IDLE_TIMEOUT_SECS,
+        };
+
+        let value = serde_json::to_value(&request).expect("serialize xcuitest build request");
+        assert_eq!(value["devices"][0]["device"], "iPhone 7");
+        assert!(value["devices"][0].get("os_version").is_none());
     }
 
     #[test]
