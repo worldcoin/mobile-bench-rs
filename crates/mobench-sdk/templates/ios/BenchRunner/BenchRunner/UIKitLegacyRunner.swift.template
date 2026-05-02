@@ -137,8 +137,9 @@ final class BenchmarkViewController: UIViewController {
 
             DispatchQueue.main.async {
                 self.reportView.text = result.displayText
-                self.jsonLabel.text = result.jsonReport
-                self.jsonLabel.accessibilityLabel = result.jsonReport
+                self.jsonLabel.text = "benchmarkReportJSON"
+                self.jsonLabel.accessibilityLabel = "benchmarkReportJSON"
+                self.jsonLabel.accessibilityValue = result.jsonReport
                 self.completionLabel.text = "completed"
                 self.completionLabel.isAccessibilityElement = true
             }
