@@ -71,6 +71,7 @@ pub struct DeviceValidationError {
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
 const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
+const XCUITEST_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
 
 #[derive(Debug, Clone)]
@@ -285,6 +286,7 @@ impl BrowserStackClient {
             device_logs: true,
             app_profiling: true,
             build_name: self.project.clone(),
+            idle_timeout: XCUITEST_IDLE_TIMEOUT_SECS,
             // Specify the test method to run (required by BrowserStack for XCUITest)
             only_testing: Some(vec![
                 "BenchRunnerUITests/BenchRunnerUITests/testLaunchAndCaptureBenchmarkReport"
@@ -1733,6 +1735,7 @@ struct XcuitestBuildRequest {
     app_profiling: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
+    idle_timeout: u64,
     #[serde(rename = "only-testing", skip_serializing_if = "Option::is_none")]
     only_testing: Option<Vec<String>>,
 }
@@ -2863,10 +2866,12 @@ Test completed
             build_name: Some("mobench".into()),
             only_testing: Some(vec!["BenchRunnerUITests/test".into()]),
             app_profiling: true,
+            idle_timeout: XCUITEST_IDLE_TIMEOUT_SECS,
         };
 
         let value = serde_json::to_value(&request).expect("serialize xcuitest build request");
         assert_eq!(value["appProfiling"], true);
+        assert_eq!(value["idleTimeout"], XCUITEST_IDLE_TIMEOUT_SECS);
     }
 
     #[test]

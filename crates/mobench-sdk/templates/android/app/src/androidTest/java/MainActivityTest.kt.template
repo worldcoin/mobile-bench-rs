@@ -1,6 +1,8 @@
 package {{PACKAGE_NAME}}
 
+import android.os.Bundle
 import android.util.Log
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
@@ -48,7 +50,8 @@ class MainActivityTest {
                 break
             }
 
-            Log.i("BenchRunnerTest", "Waiting for benchmark output...")
+            val elapsedMs = timeoutMs - (deadline - System.currentTimeMillis())
+            emitWaitHeartbeat(elapsedMs, timeoutMs, pollMs)
             try {
                 Thread.sleep(pollMs)
             } catch (e: InterruptedException) {
@@ -70,5 +73,18 @@ class MainActivityTest {
 
         onView(withId(R.id.result_text))
             .check(matches(withText(containsString("Samples"))))
+    }
+
+    private fun emitWaitHeartbeat(elapsedMs: Long, timeoutMs: Long, pollMs: Long) {
+        val message = "Waiting for benchmark output: elapsed=${elapsedMs}ms timeout=${timeoutMs}ms"
+        Log.i("BenchRunnerTest", message)
+
+        val bundle = Bundle().apply {
+            putString("mobench_status", message)
+            putLong("mobench_elapsed_ms", elapsedMs)
+            putLong("mobench_timeout_ms", timeoutMs)
+            putLong("mobench_next_poll_ms", pollMs)
+        }
+        InstrumentationRegistry.getInstrumentation().sendStatus(0, bundle)
     }
 }

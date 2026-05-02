@@ -1746,6 +1746,7 @@ mod tests {
             "../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
         );
         assert!(android_test.contains("Log.i(\"BenchRunnerTest\""));
+        assert!(android_test.contains("InstrumentationRegistry.getInstrumentation().sendStatus"));
         assert!(android_test.contains("Thread.sleep(pollMs)"));
         assert!(android_test.contains("TimeUnit.SECONDS.toMillis(10)"));
         assert!(android_test.contains("activity.isBenchmarkComplete()"));
@@ -1757,6 +1758,7 @@ mod tests {
         let ios_test = include_str!(
             "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
         );
+        assert!(ios_test.contains("BENCH_HEARTBEAT_JSON"));
         assert!(
             ios_test.contains("\\\"error\\\""),
             "iOS XCUITest template should fail when the benchmark report is an error payload"

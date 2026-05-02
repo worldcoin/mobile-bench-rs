@@ -151,6 +151,17 @@ fn minimum_supported_ios_deployment_target_for_xcode(
 pub fn validate_xcode_supports_ios_deployment_target(
     deployment_target: &IosDeploymentTarget,
 ) -> Result<(), BenchError> {
+    if std::env::var("MOBENCH_ALLOW_UNSUPPORTED_IOS_DEPLOYMENT_TARGET")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        println!(
+            "Warning: skipping Xcode iOS deployment target compatibility check because \
+             MOBENCH_ALLOW_UNSUPPORTED_IOS_DEPLOYMENT_TARGET is set."
+        );
+        return Ok(());
+    }
+
     let xcode = selected_xcode_version()?;
     let supported_floor = minimum_supported_ios_deployment_target_for_xcode(&xcode)?;
     if deployment_target < &supported_floor {

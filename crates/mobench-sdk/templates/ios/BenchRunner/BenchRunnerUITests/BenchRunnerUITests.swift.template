@@ -21,10 +21,17 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        // Wait for the benchmark to actually COMPLETE, not just start
-        // The app sets a "benchmarkCompleted" element when done
+        // Poll instead of using one long wait so BrowserStack receives regular XCUITest output.
         let completedIndicator = app.staticTexts["benchmarkCompleted"]
-        let completed = completedIndicator.waitForExistence(timeout: benchmarkTimeout)
+        let deadline = Date().addingTimeInterval(benchmarkTimeout)
+        var completed = completedIndicator.exists
+        while !completed && Date() < deadline {
+            let elapsed = benchmarkTimeout - deadline.timeIntervalSinceNow
+            NSLog("BENCH_HEARTBEAT_JSON {\"schema_version\":1,\"platform\":\"ios\",\"elapsed_ms\":\(Int(elapsed * 1000))}")
+            print("BENCH_HEARTBEAT_JSON {\"schema_version\":1,\"platform\":\"ios\",\"elapsed_ms\":\(Int(elapsed * 1000))}")
+            Thread.sleep(forTimeInterval: 10.0)
+            completed = completedIndicator.exists
+        }
         XCTAssertTrue(completed, "Benchmark should complete within \(benchmarkTimeout) seconds")
 
         // Wait 5 seconds so BrowserStack video captures the results
