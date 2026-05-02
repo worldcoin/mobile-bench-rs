@@ -1783,6 +1783,10 @@ mod tests {
             "iOS template should not require generated bindings to expose processPeakMemoryKb"
         );
         assert!(
+            !ios.contains(".sortedKeys"),
+            "iOS template should not use JSONSerialization.sortedKeys because it requires iOS 11+"
+        );
+        assert!(
             !ios.contains(r"\.processPeakMemoryKb"),
             "iOS template should not require generated bindings to expose processPeakMemoryKb"
         );

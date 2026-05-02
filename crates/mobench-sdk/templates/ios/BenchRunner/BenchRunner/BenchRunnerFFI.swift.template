@@ -272,7 +272,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
 
         // Serialize to JSON string
         do {
-            let data = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+            let data = try JSONSerialization.data(withJSONObject: json, options: [])
             return String(data: data, encoding: .utf8) ?? "{}"
         } catch {
             print("[BenchRunner] ERROR: Failed to serialize JSON report: \(error)")
@@ -365,7 +365,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         ]
 
         do {
-            let data = try JSONSerialization.data(withJSONObject: errorDict, options: [.sortedKeys])
+            let data = try JSONSerialization.data(withJSONObject: errorDict, options: [])
             return String(data: data, encoding: .utf8) ?? "{\"error\": true}"
         } catch {
             return "{\"error\": true, \"message\": \"Failed to serialize error\"}"
