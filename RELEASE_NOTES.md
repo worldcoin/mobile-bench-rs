@@ -15,9 +15,18 @@ Crates.io release history:
 
 No user-facing unreleased changes yet.
 
-## v0.1.41
+## v0.1.42
 
 Status: current supported release.
+
+- Fixed `cargo mobench ci run`/`mobench run` build helpers so config-selected
+  `native-c-abi` backends are propagated into Android and iOS CI builds and
+  iOS BrowserStack packaging. This prevents CI runs from rebuilding native C
+  ABI projects with the default UniFFI backend.
+
+## v0.1.41
+
+Status: superseded by `v0.1.42`.
 
 - Added `[project].ffi_backend` with `uniffi` as the compatibility default and
   `native-c-abi` for direct mobench JSON C ABI benchmark runners.
@@ -43,7 +52,9 @@ Status: current supported release.
 
 ## Support Policy
 
-- `v0.1.41` is the current published supported release.
+- `v0.1.42` is the current published supported release.
+- `v0.1.41` is superseded by
+  `v0.1.42`.
 - `v0.1.37` is superseded by
   `v0.1.41`.
 - `v0.1.36` is the immediately previous supported release, superseded by
@@ -59,7 +70,8 @@ Status: current supported release.
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Current supported release |
+| `v0.1.42` | 2026-05-14 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Current supported release |
+| `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Superseded by `v0.1.42` |
 | `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Superseded by `v0.1.41` |
 | `v0.1.36` | 2026-04-27 | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Superseded by `v0.1.37` |
 | `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Superseded by `v0.1.36` |

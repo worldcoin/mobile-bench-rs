@@ -24,7 +24,7 @@ Add mobench-sdk to your project:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.41"
+mobench-sdk = "0.1.42"
 ```
 
 For benchmark crates that only need `#[benchmark]`, registry discovery, and
@@ -32,7 +32,7 @@ runtime execution, use the narrower registry feature:
 
 ```toml
 [dependencies]
-mobench-sdk = { version = "0.1.41", default-features = false, features = ["registry"] }
+mobench-sdk = { version = "0.1.42", default-features = false, features = ["registry"] }
 ```
 
 Mark functions to benchmark:
