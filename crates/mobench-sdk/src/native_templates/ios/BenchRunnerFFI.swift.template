@@ -1,0 +1,357 @@
+import Foundation
+import Darwin
+
+private let defaultFunction = "{{DEFAULT_FUNCTION}}"
+private let defaultIterations: UInt32 = 20
+private let defaultWarmup: UInt32 = 3
+
+struct BenchParams {
+    let function: String
+    let iterations: UInt32
+    let warmup: UInt32
+
+    private struct EncodedBenchSpec: Decodable {
+        let function: String
+        let iterations: UInt32
+        let warmup: UInt32
+    }
+
+    static func fromBundle() -> BenchParams? {
+        guard let url = Bundle.main.url(forResource: "bench_spec", withExtension: "json") else {
+            print("[BenchRunner] No bench_spec.json found in bundle, will use process info or defaults")
+            return nil
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            let decoded = try JSONDecoder().decode(EncodedBenchSpec.self, from: data)
+            print("[BenchRunner] Loaded config from bench_spec.json: function=\(decoded.function), iterations=\(decoded.iterations), warmup=\(decoded.warmup)")
+            return BenchParams(function: decoded.function, iterations: decoded.iterations, warmup: decoded.warmup)
+        } catch {
+            print("[BenchRunner] ERROR: Failed to parse bench_spec.json: \(error)")
+            return nil
+        }
+    }
+
+    static func fromProcessInfo() -> BenchParams {
+        let info = ProcessInfo.processInfo
+        var function = defaultFunction
+        var iterations = defaultIterations
+        var warmup = defaultWarmup
+
+        if let envFunction = info.environment["BENCH_FUNCTION"], !envFunction.isEmpty {
+            function = envFunction
+        }
+        if let envIterations = info.environment["BENCH_ITERATIONS"], let parsed = UInt32(envIterations) {
+            iterations = parsed
+        }
+        if let envWarmup = info.environment["BENCH_WARMUP"], let parsed = UInt32(envWarmup) {
+            warmup = parsed
+        }
+
+        for arg in info.arguments {
+            if arg.hasPrefix("--bench-function="), let value = arg.split(separator: "=", maxSplits: 1).last {
+                function = String(value)
+            } else if arg.hasPrefix("--bench-iterations="),
+                      let value = arg.split(separator: "=", maxSplits: 1).last,
+                      let parsed = UInt32(value) {
+                iterations = parsed
+            } else if arg.hasPrefix("--bench-warmup="),
+                      let value = arg.split(separator: "=", maxSplits: 1).last,
+                      let parsed = UInt32(value) {
+                warmup = parsed
+            }
+        }
+
+        print("[BenchRunner] Resolved params: function=\(function), iterations=\(iterations), warmup=\(warmup)")
+        return BenchParams(function: function, iterations: iterations, warmup: warmup)
+    }
+
+    static func resolved() -> BenchParams {
+        if let bundled = fromBundle() {
+            return bundled
+        }
+        return fromProcessInfo()
+    }
+}
+
+struct BenchmarkResult {
+    let displayText: String
+    let jsonReport: String
+}
+
+enum {{PROJECT_NAME_PASCAL}}FFI {
+    static func runCurrentBenchmark() -> BenchmarkResult {
+        let params = BenchParams.resolved()
+        return run(params: params)
+    }
+
+    static func run(params: BenchParams) -> BenchmarkResult {
+        do {
+            let processMemorySampler = ProcessMemorySampler()
+            processMemorySampler.start()
+            let rawReport: [String: Any]
+            do {
+                rawReport = try NativeBenchRunner.run(params: params)
+            } catch {
+                _ = processMemorySampler.stop()
+                throw error
+            }
+            let runProcessPeakMemoryKb = processMemorySampler.stop()
+            let report = generateJSONReport(rawReport, runProcessPeakMemoryKb: runProcessPeakMemoryKb)
+            let displayText = formatBenchReport(report)
+            let jsonReport = serializeJSON(report)
+            return BenchmarkResult(displayText: displayText, jsonReport: jsonReport)
+        } catch {
+            print("[BenchRunner] ERROR: Benchmark failed: \(error)")
+            let message = error.localizedDescription
+            return BenchmarkResult(
+                displayText: "Benchmark error: \(message)",
+                jsonReport: "{\"error\": true, \"message\": \"\(escapeJSON(message))\"}"
+            )
+        }
+    }
+
+    private static func generateJSONReport(_ rawReport: [String: Any], runProcessPeakMemoryKb: UInt64?) -> [String: Any] {
+        var json = rawReport
+        let spec = json["spec"] as? [String: Any] ?? [:]
+        let function = spec["name"] as? String ?? defaultFunction
+        json["function"] = function
+
+        let samples = json["samples"] as? [[String: Any]] ?? []
+        let durations = samples.compactMap { coerceToUInt64($0["duration_ns"] ?? 0) }
+        json["samples_ns"] = durations
+
+        if !durations.isEmpty {
+            let sum = durations.reduce(0, +)
+            let mean = sum / UInt64(durations.count)
+            json["stats"] = [
+                "min_ns": durations.min() ?? 0,
+                "max_ns": durations.max() ?? 0,
+                "avg_ns": Double(sum) / Double(durations.count),
+                "mean_ns": mean,
+                "median_ns": median(durations)
+            ] as [String: Any]
+            json["mean_ns"] = mean
+            json["min_ns"] = durations.min() ?? 0
+            json["max_ns"] = durations.max() ?? 0
+        }
+
+        let cpuSamplesMs = samples.compactMap { sample in
+            sample["cpu_time_ms"].flatMap(coerceToUInt64)
+        }
+        let peakSamplesKb = samples.compactMap { sample in
+            sample["peak_memory_kb"].flatMap(coerceToUInt64)
+        }
+        let processPeakSamplesKb = samples.compactMap { sample in
+            sample["process_peak_memory_kb"].flatMap(coerceToUInt64)
+        }
+        var resources: [String: Any] = [
+            "platform": "ios",
+            "memory_process": "benchmark_app",
+            "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
+        ]
+        if !cpuSamplesMs.isEmpty {
+            let total = cpuSamplesMs.reduce(0, +)
+            resources["cpu_total_ms"] = total
+            resources["cpu_median_ms"] = median(cpuSamplesMs)
+            resources["elapsed_cpu_ms"] = total
+        }
+        if let peak = peakSamplesKb.max() {
+            resources["peak_memory_kb"] = peak
+            resources["peak_memory_growth_kb"] = peak
+        }
+        if let processPeak = processPeakSamplesKb.max() ?? runProcessPeakMemoryKb {
+            resources["process_peak_memory_kb"] = processPeak
+        }
+        json["resources"] = resources
+        return json
+    }
+
+    private static func formatBenchReport(_ report: [String: Any]) -> String {
+        let spec = report["spec"] as? [String: Any] ?? [:]
+        let function = spec["name"] as? String ?? defaultFunction
+        let iterations = coerceToUInt64(spec["iterations"] ?? defaultIterations) ?? UInt64(defaultIterations)
+        let warmup = coerceToUInt64(spec["warmup"] ?? defaultWarmup) ?? UInt64(defaultWarmup)
+        let samples = report["samples"] as? [[String: Any]] ?? []
+
+        var output = "=== Benchmark Results ===\n\n"
+        output += "Function: \(function)\n"
+        output += "Iterations: \(iterations)\n"
+        output += "Warmup: \(warmup)\n\n"
+        output += "Samples (\(samples.count)):\n"
+        for (index, sample) in samples.enumerated() {
+            let duration = coerceToUInt64(sample["duration_ns"] ?? 0) ?? 0
+            output += "  \(index + 1). \(formatDuration(duration))\n"
+        }
+
+        if let stats = report["stats"] as? [String: Any] {
+            output += "\nStatistics:\n"
+            output += "  Min: \(formatDuration(coerceToUInt64(stats["min_ns"] ?? 0) ?? 0))\n"
+            output += "  Max: \(formatDuration(coerceToUInt64(stats["max_ns"] ?? 0) ?? 0))\n"
+            output += "  Avg: \(formatDuration(coerceToUInt64(stats["mean_ns"] ?? 0) ?? 0))\n"
+        }
+
+        return output
+    }
+
+    private static func serializeJSON(_ value: [String: Any]) -> String {
+        do {
+            let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+            return String(data: data, encoding: .utf8) ?? "{}"
+        } catch {
+            print("[BenchRunner] ERROR: Failed to serialize JSON report: \(error)")
+            return "{}"
+        }
+    }
+
+    private static func formatDuration(_ ns: UInt64) -> String {
+        let ms = Double(ns) / 1_000_000.0
+        if ms >= 1000.0 {
+            return String(format: "%.3fs", ms / 1000.0)
+        }
+        return String(format: "%.3fms", ms)
+    }
+}
+
+private enum NativeBenchRunner {
+    static func run(params: BenchParams) throws -> [String: Any] {
+        let spec: [String: Any] = [
+            "name": params.function,
+            "iterations": params.iterations,
+            "warmup": params.warmup
+        ]
+        let specData = try JSONSerialization.data(withJSONObject: spec, options: [])
+        var out = MobenchBuf()
+        let status: Int32 = specData.withUnsafeBytes { bytes in
+            let ptr = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self)
+            return mobench_run_benchmark_json(ptr, UInt(specData.count), &out)
+        }
+
+        if status != 0 {
+            let message = mobench_last_error_message().map { String(cString: $0) } ?? "native benchmark failed"
+            mobench_free_buf(&out)
+            throw NativeBenchError.execution(message)
+        }
+
+        defer {
+            mobench_free_buf(&out)
+        }
+        guard let ptr = out.ptr, out.len > 0 else {
+            throw NativeBenchError.execution("native benchmark returned an empty report")
+        }
+        let data = Data(bytes: ptr, count: Int(out.len))
+        let decoded = try JSONSerialization.jsonObject(with: data, options: [])
+        guard let report = decoded as? [String: Any] else {
+            throw NativeBenchError.execution("native benchmark returned non-object JSON")
+        }
+        return report
+    }
+}
+
+private enum NativeBenchError: LocalizedError {
+    case execution(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .execution(let message):
+            return message
+        }
+    }
+}
+
+private final class ProcessMemorySampler {
+    private let sampleInterval: TimeInterval
+    private let queue = DispatchQueue(label: "mobench-process-memory-sampler")
+    private var timer: DispatchSourceTimer?
+    private var peakKb: UInt64 = 0
+
+    init(sampleInterval: TimeInterval = 0.01) {
+        self.sampleInterval = sampleInterval
+    }
+
+    func start() {
+        queue.sync {
+            guard timer == nil else {
+                return
+            }
+
+            recordCurrentLocked()
+            let source = DispatchSource.makeTimerSource(queue: queue)
+            source.schedule(deadline: .now(), repeating: sampleInterval)
+            source.setEventHandler { [weak self] in
+                self?.recordCurrentLocked()
+            }
+            source.resume()
+            timer = source
+        }
+    }
+
+    func stop() -> UInt64? {
+        queue.sync {
+            timer?.cancel()
+            timer = nil
+            recordCurrentLocked()
+            return peakKb > 0 ? peakKb : nil
+        }
+    }
+
+    private func recordCurrentLocked() {
+        if let currentKb = currentProcessResidentMemoryKb(), currentKb > peakKb {
+            peakKb = currentKb
+        }
+    }
+}
+
+private func currentProcessResidentMemoryKb() -> UInt64? {
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+    let result = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+        }
+    }
+
+    guard result == KERN_SUCCESS else {
+        return nil
+    }
+    return UInt64(info.resident_size / 1024)
+}
+
+private func median(_ values: [UInt64]) -> UInt64 {
+    let sorted = values.sorted()
+    if sorted.isEmpty {
+        return 0
+    }
+    if sorted.count % 2 == 0 {
+        return (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+    }
+    return sorted[sorted.count / 2]
+}
+
+private func coerceToUInt64(_ value: Any) -> UInt64? {
+    if let value = value as? UInt64 {
+        return value
+    }
+    if let value = value as? UInt32 {
+        return UInt64(value)
+    }
+    if let value = value as? UInt {
+        return UInt64(value)
+    }
+    if let value = value as? Int64, value >= 0 {
+        return UInt64(value)
+    }
+    if let value = value as? Int, value >= 0 {
+        return UInt64(value)
+    }
+    if let value = value as? NSNumber, value.int64Value >= 0 {
+        return UInt64(value.uint64Value)
+    }
+    return nil
+}
+
+private func escapeJSON(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+}

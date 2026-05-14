@@ -33,6 +33,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The default configuration file name.
@@ -82,6 +83,28 @@ pub struct ProjectConfig {
     ///
     /// Defaults to `target/mobench/` if not specified.
     pub output_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawMobenchConfig {
+    project: RawProjectConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawProjectConfig {
+    ffi_backend: Option<mobench_sdk::FfiBackend>,
+}
+
+pub(crate) fn load_ffi_backend_from_file(path: &Path) -> Result<mobench_sdk::FfiBackend> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read config file: {:?}", path))?;
+
+    let config: RawMobenchConfig = toml::from_str(&contents)
+        .with_context(|| format!("Failed to parse config file: {:?}", path))?;
+
+    Ok(config.project.ffi_backend.unwrap_or_default())
 }
 
 /// Android-specific configuration.
@@ -205,8 +228,10 @@ impl MobenchConfig {
     /// * `Ok(MobenchConfig)` - Successfully loaded configuration
     /// * `Err` - If the file cannot be read or parsed
     pub fn load_from_file(path: &Path) -> Result<Self> {
-        let contents = std::fs::read_to_string(path)
+        let contents = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {:?}", path))?;
+
+        load_ffi_backend_from_file(path)?;
 
         let config: MobenchConfig = toml::from_str(&contents)
             .with_context(|| format!("Failed to parse config file: {:?}", path))?;
@@ -275,7 +300,7 @@ impl MobenchConfig {
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
         let contents = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
-        std::fs::write(path, contents)
+        fs::write(path, contents)
             .with_context(|| format!("Failed to write config file: {:?}", path))?;
 
         Ok(())
@@ -359,6 +384,10 @@ library_name = "{library_name}"
 
 # Output directory for build artifacts (default: target/mobench/)
 # output_dir = "target/mobench"
+
+# FFI backend for generated mobile runners: "uniffi" (default) or "native-c-abi".
+# Use "native-c-abi" for ProveKit-style benchmarks that need to avoid UniFFI overhead.
+# ffi_backend = "uniffi"
 
 [android]
 # Android package name
@@ -451,6 +480,14 @@ impl ConfigResolver {
         self.config
             .as_ref()
             .and_then(|c| c.project.output_dir.as_deref())
+    }
+
+    /// Returns the FFI backend from config, defaulting to UniFFI.
+    pub fn ffi_backend(&self) -> mobench_sdk::FfiBackend {
+        self.config_path
+            .as_deref()
+            .and_then(|path| load_ffi_backend_from_file(path).ok())
+            .unwrap_or_default()
     }
 
     /// Returns the default function from config.
@@ -549,6 +586,7 @@ mod tests {
 [project]
 crate = "test-bench"
 library_name = "test_bench"
+ffi_backend = "native-c-abi"
 
 [android]
 package = "com.test.bench"
@@ -575,6 +613,10 @@ ios_completion_timeout_secs = 1200
 
         assert_eq!(config.project.crate_name, Some("test-bench".to_string()));
         assert_eq!(config.project.library_name, Some("test_bench".to_string()));
+        assert_eq!(
+            load_ffi_backend_from_file(&config_path).unwrap(),
+            mobench_sdk::FfiBackend::NativeCAbi
+        );
         assert_eq!(config.android.package, "com.test.bench");
         assert_eq!(config.android.min_sdk, 21);
         assert_eq!(config.android.target_sdk, 33);
@@ -587,6 +629,30 @@ ios_completion_timeout_secs = 1200
         assert_eq!(config.benchmarks.default_iterations, 50);
         assert_eq!(config.benchmarks.default_warmup, 5);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, Some(1200));
+    }
+
+    #[test]
+    fn test_invalid_ffi_backend_is_clear_config_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("mobench.toml");
+
+        std::fs::write(
+            &config_path,
+            r#"
+[project]
+crate = "test-bench"
+ffi_backend = "jni-magic"
+"#,
+        )
+        .unwrap();
+
+        let error = load_ffi_backend_from_file(&config_path).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Failed to parse config file"));
+        assert!(format!("{error:?}").contains("unknown variant `jni-magic`"));
+
+        let error = MobenchConfig::load_from_file(&config_path).unwrap_err();
+        assert!(error.to_string().contains("Failed to parse config file"));
     }
 
     #[test]
@@ -640,10 +706,35 @@ crate = "discovered-bench"
     }
 
     #[test]
+    fn test_config_resolver_loads_ffi_backend_from_config_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("mobench.toml");
+
+        std::fs::write(
+            &config_path,
+            r#"
+[project]
+crate = "test-bench"
+ffi_backend = "native-c-abi"
+"#,
+        )
+        .unwrap();
+
+        let config = MobenchConfig::load_from_file(&config_path).unwrap();
+        let resolver = ConfigResolver {
+            config: Some(config),
+            config_path: Some(config_path),
+        };
+
+        assert_eq!(resolver.ffi_backend(), mobench_sdk::FfiBackend::NativeCAbi);
+    }
+
+    #[test]
     fn test_generate_starter_toml() {
         let toml = MobenchConfig::generate_starter_toml("my-bench");
         assert!(toml.contains("crate = \"my-bench\""));
         assert!(toml.contains("library_name = \"my_bench\""));
+        assert!(toml.contains("ffi_backend = \"uniffi\""));
         assert!(toml.contains("min_sdk = 24"));
         assert!(toml.contains("target_sdk = 34"));
         assert!(toml.contains("deployment_target = \"15.0\""));

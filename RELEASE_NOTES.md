@@ -15,6 +15,20 @@ Crates.io release history:
 
 No user-facing unreleased changes yet.
 
+## v0.1.41
+
+Status: current supported release.
+
+- Added `[project].ffi_backend` with `uniffi` as the compatibility default and
+  `native-c-abi` for direct mobench JSON C ABI benchmark runners.
+- Added `mobench_sdk::export_native_c_abi!()` and `MobenchBuf` so registry-based
+  benchmark crates can export `mobench_run_benchmark_json`,
+  `mobench_free_buf`, and `mobench_last_error_message`.
+- Android and iOS builders now branch on the selected FFI backend, skip UniFFI
+  binding generation for `native-c-abi`, and generate native JSON C ABI runner
+  templates that keep BrowserStack log/result extraction compatible. iOS
+  frameworks receive a native C ABI header when that backend is selected.
+
 ## v0.1.37
 
 Status: current supported release.
@@ -29,7 +43,9 @@ Status: current supported release.
 
 ## Support Policy
 
-- `v0.1.37` is the current published supported release.
+- `v0.1.41` is the current published supported release.
+- `v0.1.37` is superseded by
+  `v0.1.41`.
 - `v0.1.36` is the immediately previous supported release, superseded by
   `v0.1.37`.
 - `v0.1.35` is superseded by
@@ -43,7 +59,8 @@ Status: current supported release.
 
 | Version | Published | Published crates | Status |
 |---------|-----------|------------------|--------|
-| `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Current supported release |
+| `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Current supported release |
+| `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Superseded by `v0.1.41` |
 | `v0.1.36` | 2026-04-27 | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Superseded by `v0.1.37` |
 | `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Superseded by `v0.1.36` |
 | `v0.1.34` | 2026-04-23 | `mobench 0.1.34`, `mobench-sdk 0.1.34`, `mobench-macros 0.1.34` | Superseded by `v0.1.35` |

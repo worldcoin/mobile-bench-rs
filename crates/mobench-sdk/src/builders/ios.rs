@@ -78,6 +78,42 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn native_c_abi_header(framework_name: &str) -> String {
+    let guard = format!(
+        "{}_MOBENCH_NATIVE_C_ABI_H",
+        framework_name.to_ascii_uppercase()
+    )
+    .replace('-', "_");
+    format!(
+        r#"#ifndef {guard}
+#define {guard}
+
+#include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {{
+#endif
+
+typedef struct MobenchBuf {{
+    uint8_t *ptr;
+    uintptr_t len;
+    uintptr_t cap;
+}} MobenchBuf;
+
+int32_t mobench_run_benchmark_json(const uint8_t *spec_ptr, uintptr_t spec_len, MobenchBuf *out);
+void mobench_free_buf(MobenchBuf *buf);
+const char *mobench_last_error_message(void);
+
+#ifdef __cplusplus
+}}
+#endif
+
+#endif /* {guard} */
+"#,
+    )
+}
+
 /// iOS builder that handles the complete build pipeline.
 ///
 /// This builder automates the process of compiling Rust code to iOS static
@@ -119,6 +155,8 @@ pub struct IosBuilder {
     crate_dir: Option<PathBuf>,
     /// Whether to run in dry-run mode (print what would be done without making changes)
     dry_run: bool,
+    /// FFI backend used by generated mobile runner scaffolding.
+    ffi_backend: crate::FfiBackend,
 }
 
 impl IosBuilder {
@@ -153,6 +191,7 @@ impl IosBuilder {
             verbose: false,
             crate_dir: None,
             dry_run: false,
+            ffi_backend: crate::FfiBackend::Uniffi,
         }
     }
 
@@ -191,6 +230,14 @@ impl IosBuilder {
     /// making any changes. Useful for previewing the build process.
     pub fn dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
+        self
+    }
+
+    /// Selects the generated runner FFI backend.
+    ///
+    /// The default is UniFFI to preserve existing builder behavior.
+    pub fn ffi_backend(mut self, ffi_backend: crate::FfiBackend) -> Self {
+        self.ffi_backend = ffi_backend;
         self
     }
 
@@ -249,11 +296,18 @@ impl IosBuilder {
                     ""
                 }
             );
-            println!("  Step 2: Generate UniFFI Swift bindings");
-            println!(
-                "    Output: {:?}",
-                ios_dir.join("BenchRunner/BenchRunner/Generated")
-            );
+            if self.ffi_backend.uses_uniffi() {
+                println!("  Step 2: Generate UniFFI Swift bindings");
+                println!(
+                    "    Output: {:?}",
+                    ios_dir.join("BenchRunner/BenchRunner/Generated")
+                );
+            } else {
+                println!(
+                    "  Step 2: Skip UniFFI Swift bindings (backend: {})",
+                    self.ffi_backend
+                );
+            }
             println!("  Step 3: Create xcframework at {:?}", xcframework_path);
             println!("    - ios-arm64/{}.framework (device)", framework_name);
             println!(
@@ -279,20 +333,28 @@ impl IosBuilder {
 
         // Step 0: Ensure iOS project scaffolding exists
         // Pass project_root and crate_dir for better benchmark function detection
-        crate::codegen::ensure_ios_project_with_options(
+        crate::codegen::ensure_ios_project_with_backend_options(
             &self.output_dir,
             &self.crate_name,
             Some(&self.project_root),
             self.crate_dir.as_deref(),
+            self.ffi_backend,
         )?;
 
         // Step 1: Build Rust libraries
         println!("Building Rust libraries for iOS...");
         self.build_rust_libraries(config)?;
 
-        // Step 2: Generate UniFFI bindings
-        println!("Generating UniFFI Swift bindings...");
-        self.generate_uniffi_bindings()?;
+        // Step 2: Generate UniFFI bindings when the selected backend needs them
+        if self.ffi_backend.uses_uniffi() {
+            println!("Generating UniFFI Swift bindings...");
+            self.generate_uniffi_bindings()?;
+        } else {
+            println!(
+                "Skipping UniFFI Swift bindings for {} backend",
+                self.ffi_backend
+            );
+        }
 
         // Step 3: Create xcframework
         println!("Creating xcframework...");
@@ -303,14 +365,6 @@ impl IosBuilder {
         self.codesign_xcframework(&xcframework_path)?;
 
         // Copy header to include/ for consumers (handy for CLI uploads)
-        let header_src = self
-            .find_uniffi_header(&format!("{}FFI.h", framework_name))
-            .ok_or_else(|| {
-                BenchError::Build(format!(
-                    "UniFFI header {}FFI.h not found after generation",
-                    framework_name
-                ))
-            })?;
         let include_dir = self.output_dir.join("ios/include");
         fs::create_dir_all(&include_dir).map_err(|e| {
             BenchError::Build(format!(
@@ -320,12 +374,29 @@ impl IosBuilder {
             ))
         })?;
         let header_dest = include_dir.join(format!("{}.h", framework_name));
-        fs::copy(&header_src, &header_dest).map_err(|e| {
-            BenchError::Build(format!(
-                "Failed to copy UniFFI header to {:?}: {}. Check output directory permissions.",
-                header_dest, e
-            ))
-        })?;
+        if self.ffi_backend.uses_uniffi() {
+            let header_src = self
+                .find_uniffi_header(&format!("{}FFI.h", framework_name))
+                .ok_or_else(|| {
+                    BenchError::Build(format!(
+                        "UniFFI header {}FFI.h not found after generation",
+                        framework_name
+                    ))
+                })?;
+            fs::copy(&header_src, &header_dest).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to copy UniFFI header to {:?}: {}. Check output directory permissions.",
+                    header_dest, e
+                ))
+            })?;
+        } else {
+            fs::write(&header_dest, native_c_abi_header(&framework_name)).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to write native C ABI header to {:?}: {}. Check output directory permissions.",
+                    header_dest, e
+                ))
+            })?;
+        }
 
         // Step 5: Generate Xcode project if needed
         self.generate_xcode_project()?;
@@ -418,13 +489,14 @@ impl IosBuilder {
             ));
         }
 
-        // Check Swift bindings
-        let swift_bindings = self
-            .output_dir
-            .join("ios/BenchRunner/BenchRunner/Generated")
-            .join(format!("{}.swift", framework_name));
-        if !swift_bindings.exists() {
-            missing.push(format!("Swift bindings: {}", swift_bindings.display()));
+        if self.ffi_backend.uses_uniffi() {
+            let swift_bindings = self
+                .output_dir
+                .join("ios/BenchRunner/BenchRunner/Generated")
+                .join(format!("{}.swift", framework_name));
+            if !swift_bindings.exists() {
+                missing.push(format!("Swift bindings: {}", swift_bindings.display()));
+            }
         }
 
         if !missing.is_empty() {
@@ -845,6 +917,7 @@ impl IosBuilder {
             &xcframework_path.join("ios-arm64"),
             framework_name,
             "ios",
+            self.ffi_backend,
         )?;
 
         // Simulator slice (arm64 + x86_64 combined via lipo for both Apple Silicon and Intel Macs)
@@ -853,6 +926,7 @@ impl IosBuilder {
             profile_dir,
             &xcframework_path.join("ios-arm64_x86_64-simulator"),
             framework_name,
+            self.ffi_backend,
         )?;
 
         // Create xcframework Info.plist
@@ -868,6 +942,7 @@ impl IosBuilder {
         output_dir: &Path,
         framework_name: &str,
         platform: &str,
+        ffi_backend: crate::FfiBackend,
     ) -> Result<(), BenchError> {
         let framework_dir = output_dir.join(format!("{}.framework", framework_name));
         let headers_dir = framework_dir.join("Headers");
@@ -903,23 +978,33 @@ impl IosBuilder {
             ))
         })?;
 
-        // Copy UniFFI-generated header into the framework
+        // Copy or generate the backend-specific header into the framework
         let header_name = format!("{}FFI.h", framework_name);
-        let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
-            BenchError::Build(format!(
-                "UniFFI header {} not found; run binding generation before building",
-                header_name
-            ))
-        })?;
         let dest_header = headers_dir.join(&header_name);
-        fs::copy(&header_path, &dest_header).map_err(|e| {
-            BenchError::Build(format!(
-                "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
-                header_path.display(),
-                dest_header.display(),
-                e
-            ))
-        })?;
+        if ffi_backend.uses_uniffi() {
+            let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
+                BenchError::Build(format!(
+                    "UniFFI header {} not found; run binding generation before building",
+                    header_name
+                ))
+            })?;
+            fs::copy(&header_path, &dest_header).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
+                    header_path.display(),
+                    dest_header.display(),
+                    e
+                ))
+            })?;
+        } else {
+            fs::write(&dest_header, native_c_abi_header(framework_name)).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to write native C ABI header to {}: {}. Check output directory permissions.",
+                    dest_header.display(),
+                    e
+                ))
+            })?;
+        }
 
         // Create module.modulemap
         let modulemap_content = format!(
@@ -948,6 +1033,7 @@ impl IosBuilder {
         profile_dir: &str,
         output_dir: &Path,
         framework_name: &str,
+        ffi_backend: crate::FfiBackend,
     ) -> Result<(), BenchError> {
         let framework_dir = output_dir.join(format!("{}.framework", framework_name));
         let headers_dir = framework_dir.join("Headers");
@@ -1034,23 +1120,33 @@ impl IosBuilder {
             );
         }
 
-        // Copy UniFFI-generated header into the framework
+        // Copy or generate the backend-specific header into the framework
         let header_name = format!("{}FFI.h", framework_name);
-        let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
-            BenchError::Build(format!(
-                "UniFFI header {} not found; run binding generation before building",
-                header_name
-            ))
-        })?;
         let dest_header = headers_dir.join(&header_name);
-        fs::copy(&header_path, &dest_header).map_err(|e| {
-            BenchError::Build(format!(
-                "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
-                header_path.display(),
-                dest_header.display(),
-                e
-            ))
-        })?;
+        if ffi_backend.uses_uniffi() {
+            let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
+                BenchError::Build(format!(
+                    "UniFFI header {} not found; run binding generation before building",
+                    header_name
+                ))
+            })?;
+            fs::copy(&header_path, &dest_header).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
+                    header_path.display(),
+                    dest_header.display(),
+                    e
+                ))
+            })?;
+        } else {
+            fs::write(&dest_header, native_c_abi_header(framework_name)).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to write native C ABI header to {}: {}. Check output directory permissions.",
+                    dest_header.display(),
+                    e
+                ))
+            })?;
+        }
 
         // Create module.modulemap
         let modulemap_content = format!(

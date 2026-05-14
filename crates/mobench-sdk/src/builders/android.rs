@@ -105,6 +105,8 @@ pub struct AndroidBuilder {
     crate_dir: Option<PathBuf>,
     /// Whether to run in dry-run mode (print what would be done without making changes)
     dry_run: bool,
+    /// FFI backend used by generated mobile runner scaffolding.
+    ffi_backend: crate::FfiBackend,
 }
 
 const DEFAULT_ANDROID_ABIS: &[&str] = &["arm64-v8a"];
@@ -125,6 +127,7 @@ impl AndroidBuilder {
             verbose: false,
             crate_dir: None,
             dry_run: false,
+            ffi_backend: crate::FfiBackend::Uniffi,
         }
     }
 
@@ -163,6 +166,14 @@ impl AndroidBuilder {
     /// making any changes. Useful for previewing the build process.
     pub fn dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
+        self
+    }
+
+    /// Selects the generated runner FFI backend.
+    ///
+    /// The default is UniFFI to preserve existing builder behavior.
+    pub fn ffi_backend(mut self, ffi_backend: crate::FfiBackend) -> Self {
+        self.ffi_backend = ffi_backend;
         self
     }
 
@@ -211,11 +222,18 @@ impl AndroidBuilder {
                     ""
                 }
             );
-            println!("  Step 2: Generate UniFFI Kotlin bindings");
-            println!(
-                "    Output: {:?}",
-                android_dir.join("app/src/main/java/uniffi")
-            );
+            if self.ffi_backend.uses_uniffi() {
+                println!("  Step 2: Generate UniFFI Kotlin bindings");
+                println!(
+                    "    Output: {:?}",
+                    android_dir.join("app/src/main/java/uniffi")
+                );
+            } else {
+                println!(
+                    "  Step 2: Skip UniFFI Kotlin bindings (backend: {})",
+                    self.ffi_backend
+                );
+            }
             println!("  Step 3: Copy .so files to jniLibs directories");
             println!(
                 "    Destination: {:?}",
@@ -264,11 +282,12 @@ impl AndroidBuilder {
 
         // Step 0: Ensure Android project scaffolding exists
         // Pass project_root and crate_dir for better benchmark function detection
-        crate::codegen::ensure_android_project_with_options(
+        crate::codegen::ensure_android_project_with_backend_options(
             &self.output_dir,
             &self.crate_name,
             Some(&self.project_root),
             self.crate_dir.as_deref(),
+            self.ffi_backend,
         )?;
 
         // Step 0.5: Ensure Gradle wrapper exists
@@ -278,9 +297,16 @@ impl AndroidBuilder {
         println!("Building Rust libraries for Android...");
         self.build_rust_libraries(config)?;
 
-        // Step 2: Generate UniFFI bindings
-        println!("Generating UniFFI Kotlin bindings...");
-        self.generate_uniffi_bindings()?;
+        // Step 2: Generate UniFFI bindings when the selected backend needs them
+        if self.ffi_backend.uses_uniffi() {
+            println!("Generating UniFFI Kotlin bindings...");
+            self.generate_uniffi_bindings()?;
+        } else {
+            println!(
+                "Skipping UniFFI Kotlin bindings for {} backend",
+                self.ffi_backend
+            );
+        }
 
         // Step 3: Copy .so files to jniLibs
         println!("Copying native libraries to jniLibs...");
