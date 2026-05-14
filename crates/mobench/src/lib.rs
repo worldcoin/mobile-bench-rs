@@ -260,6 +260,7 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) crate_name: String,
     pub(crate) library_name: String,
     pub(crate) android_abis: Option<Vec<String>>,
+    pub(crate) ffi_backend: mobench_sdk::FfiBackend,
     pub(crate) ios_completion_timeout_secs: Option<u64>,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) output_dir: PathBuf,
@@ -405,6 +406,8 @@ pub fn run() -> Result<()> {
             ios_app,
             ios_test_suite,
             ios_completion_timeout_secs,
+            ios_deployment_target: _,
+            ios_runner: _,
             fetch,
             fetch_output_dir,
             fetch_poll_interval_secs,
@@ -1034,6 +1037,8 @@ pub fn run() -> Result<()> {
             target,
             release,
             ios_completion_timeout_secs,
+            ios_deployment_target: _,
+            ios_runner: _,
             project_root,
             output_dir,
             crate_path,
@@ -1426,6 +1431,11 @@ pub(crate) fn resolve_project_layout(
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
     let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
+    let ffi_backend = config_path
+        .as_deref()
+        .map(config::load_ffi_backend_from_file)
+        .transpose()?
+        .unwrap_or_default();
     let ios_completion_timeout_secs = config
         .as_ref()
         .and_then(|cfg| cfg.browserstack.ios_completion_timeout_secs);
@@ -1450,6 +1460,7 @@ pub(crate) fn resolve_project_layout(
         crate_name,
         library_name,
         android_abis,
+        ffi_backend,
         ios_completion_timeout_secs,
         config_path,
         output_dir,
@@ -2387,6 +2398,8 @@ fn cmd_ci_run_single(
     output_dir: &Path,
     metadata: &CiContractMetadata,
 ) -> Result<i32> {
+    let _ = (&args.ios_deployment_target, &args.ios_runner);
+
     let default_baseline_path = previous_baseline_path(output_dir);
     let baseline_source = args.baseline.clone().or_else(|| {
         if default_baseline_path.exists() {
@@ -5242,7 +5255,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/3] Building Android APK...");
                 let result = builder.build(&build_config)?;
                 println!("[3/3] Done!");
@@ -5259,7 +5273,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/3] Building iOS xcframework...");
                 let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                     Ok(builder.build(&build_config)?)
@@ -5278,7 +5293,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/5] Building Android APK...");
                 let android_result = android_builder.build(&build_config)?;
 
@@ -5290,7 +5306,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[4/5] Building iOS xcframework...");
                 let ios_result =
                     with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
@@ -5348,7 +5365,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(builder.build(&build_config)?)
             })?;
@@ -5368,7 +5386,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(builder.build(&build_config)?)
             })?;
@@ -5389,7 +5408,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let android_result = android_builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
@@ -5407,7 +5427,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(ios_builder.build(&build_config)?)
             })?;
@@ -7740,6 +7761,34 @@ project = "proj"
     }
 
     #[test]
+    fn ci_run_accepts_deprecated_ios_runner_flags() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "ci",
+            "run",
+            "--target",
+            "ios",
+            "--function",
+            "sample_fns::fibonacci",
+            "--ios-deployment-target",
+            "10.0",
+            "--ios-runner",
+            "uikit-legacy",
+        ]);
+
+        match cli.command {
+            Command::Ci {
+                command: CiCommand::Run(args),
+            } => {
+                assert_eq!(args.target, CiTarget::Ios);
+                assert_eq!(args.ios_deployment_target.as_deref(), Some("10.0"));
+                assert_eq!(args.ios_runner.as_deref(), Some("uikit-legacy"));
+            }
+            _ => panic!("expected ci run command"),
+        }
+    }
+
+    #[test]
     fn build_parses_ios_completion_timeout_secs() {
         let cli = Cli::parse_from([
             "mobench",
@@ -7756,6 +7805,32 @@ project = "proj"
                 ..
             } => {
                 assert_eq!(ios_completion_timeout_secs, Some(750));
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn build_accepts_deprecated_ios_runner_flags() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "build",
+            "--target",
+            "ios",
+            "--ios-deployment-target",
+            "10.0",
+            "--ios-runner",
+            "uikit-legacy",
+        ]);
+
+        match cli.command {
+            Command::Build {
+                ios_deployment_target,
+                ios_runner,
+                ..
+            } => {
+                assert_eq!(ios_deployment_target.as_deref(), Some("10.0"));
+                assert_eq!(ios_runner.as_deref(), Some("uikit-legacy"));
             }
             _ => panic!("expected build command"),
         }

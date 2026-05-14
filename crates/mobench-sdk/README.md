@@ -24,7 +24,7 @@ Add mobench-sdk to your project:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.37"
+mobench-sdk = "0.1.41"
 ```
 
 For benchmark crates that only need `#[benchmark]`, registry discovery, and
@@ -32,7 +32,7 @@ runtime execution, use the narrower registry feature:
 
 ```toml
 [dependencies]
-mobench-sdk = { version = "0.1.37", default-features = false, features = ["registry"] }
+mobench-sdk = { version = "0.1.41", default-features = false, features = ["registry"] }
 ```
 
 Mark functions to benchmark:
@@ -399,6 +399,7 @@ mobench automatically loads `mobench.toml` from the current directory or parent 
 crate = "zk-mobile-bench"
 library_name = "zk_mobile_bench"
 # output_dir = "target/mobench"  # default
+# ffi_backend = "uniffi"          # or "native-c-abi"
 
 [android]
 package = "com.example.bench"
@@ -414,6 +415,11 @@ default_function = "my_crate::my_benchmark"
 default_iterations = 100
 default_warmup = 10
 ```
+
+`ffi_backend = "native-c-abi"` selects the direct mobench JSON C ABI path for
+benchmarks where UniFFI overhead should not be included in timing or memory
+measurements. Export the ABI from the benchmark crate with
+`mobench_sdk::export_native_c_abi!()`.
 
 Resolution precedence is: `--project-root` / `--crate-path` → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 

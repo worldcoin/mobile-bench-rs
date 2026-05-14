@@ -12,6 +12,10 @@ use include_dir::{Dir, DirEntry, include_dir};
 
 const ANDROID_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/android");
 const IOS_TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates/ios");
+const NATIVE_ANDROID_MAIN_ACTIVITY_TEMPLATE: &str =
+    include_str!("native_templates/android/MainActivity.kt.template");
+const NATIVE_IOS_BENCH_RUNNER_FFI_TEMPLATE: &str =
+    include_str!("native_templates/ios/BenchRunnerFFI.swift.template");
 const DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS: u64 = 300;
 
 /// Template variable that can be replaced in template files
@@ -345,6 +349,21 @@ pub fn generate_android_project(
     project_slug: &str,
     default_function: &str,
 ) -> Result<(), BenchError> {
+    generate_android_project_with_backend(
+        output_dir,
+        project_slug,
+        default_function,
+        crate::FfiBackend::Uniffi,
+    )
+}
+
+/// Generates Android project structure from templates for a specific FFI backend.
+pub fn generate_android_project_with_backend(
+    output_dir: &Path,
+    project_slug: &str,
+    default_function: &str,
+    ffi_backend: crate::FfiBackend,
+) -> Result<(), BenchError> {
     let target_dir = output_dir.join("android");
     reset_generated_project_dir(&target_dir)?;
     let library_name = project_slug.replace('-', "_");
@@ -388,8 +407,26 @@ pub fn generate_android_project(
     // Move Kotlin files to the correct package directory structure
     // The package "dev.world.{project_slug}" maps to directory "dev/world/{project_slug}/"
     move_kotlin_files_to_package_dir(&target_dir, &package_name)?;
+    if !ffi_backend.uses_uniffi() {
+        write_native_android_main_activity(&target_dir, &package_name, &vars)?;
+    }
 
     Ok(())
+}
+
+fn write_native_android_main_activity(
+    target_dir: &Path,
+    package_name: &str,
+    vars: &[TemplateVar],
+) -> Result<(), BenchError> {
+    let relative_package = package_name.replace('.', "/");
+    let path = target_dir
+        .join("app/src/main/java")
+        .join(relative_package)
+        .join("MainActivity.kt");
+    let rendered = render_template(NATIVE_ANDROID_MAIN_ACTIVITY_TEMPLATE, vars);
+    validate_no_unreplaced_placeholders(&rendered, Path::new("MainActivity.kt"))?;
+    fs::write(&path, rendered).map_err(BenchError::Io)
 }
 
 fn collect_preserved_files(
@@ -550,6 +587,25 @@ pub fn generate_ios_project(
     bundle_prefix: &str,
     default_function: &str,
 ) -> Result<(), BenchError> {
+    generate_ios_project_with_backend(
+        output_dir,
+        project_slug,
+        project_pascal,
+        bundle_prefix,
+        default_function,
+        crate::FfiBackend::Uniffi,
+    )
+}
+
+/// Generates iOS project structure from templates for a specific FFI backend.
+pub fn generate_ios_project_with_backend(
+    output_dir: &Path,
+    project_slug: &str,
+    project_pascal: &str,
+    bundle_prefix: &str,
+    default_function: &str,
+    ffi_backend: crate::FfiBackend,
+) -> Result<(), BenchError> {
     let ios_benchmark_timeout_secs = resolve_ios_benchmark_timeout_secs(
         std::env::var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS")
             .ok()
@@ -562,6 +618,7 @@ pub fn generate_ios_project(
         bundle_prefix,
         default_function,
         ios_benchmark_timeout_secs,
+        ffi_backend,
     )
 }
 
@@ -572,6 +629,7 @@ fn generate_ios_project_with_timeout(
     bundle_prefix: &str,
     default_function: &str,
     ios_benchmark_timeout_secs: u64,
+    ffi_backend: crate::FfiBackend,
 ) -> Result<(), BenchError> {
     let target_dir = output_dir.join("ios");
     let preserved_resources = collect_preserved_ios_resources(&target_dir)?;
@@ -616,8 +674,69 @@ fn generate_ios_project_with_timeout(
         },
     ];
     render_dir(&IOS_TEMPLATES, &target_dir, &vars)?;
+    if !ffi_backend.uses_uniffi() {
+        write_native_ios_bench_runner_ffi(&target_dir, project_pascal, &vars)?;
+    }
     restore_preserved_ios_resources(&target_dir, &preserved_resources)?;
     Ok(())
+}
+
+fn write_native_ios_bench_runner_ffi(
+    target_dir: &Path,
+    project_pascal: &str,
+    vars: &[TemplateVar],
+) -> Result<(), BenchError> {
+    let app_dir = target_dir.join("BenchRunner").join(project_pascal);
+    let path = app_dir.join("BenchRunnerFFI.swift");
+    let generated_dir = app_dir.join("Generated");
+    fs::create_dir_all(&generated_dir).map_err(BenchError::Io)?;
+    let library_name = vars
+        .iter()
+        .find(|var| var.name == "LIBRARY_NAME")
+        .map(|var| var.value.as_str())
+        .unwrap_or("bench_mobile");
+    let header_path = generated_dir.join(format!("{library_name}FFI.h"));
+    fs::write(&header_path, native_c_abi_header(library_name)).map_err(BenchError::Io)?;
+
+    let rendered = render_template(NATIVE_IOS_BENCH_RUNNER_FFI_TEMPLATE, vars);
+    validate_no_unreplaced_placeholders(&rendered, Path::new("BenchRunnerFFI.swift"))?;
+    fs::write(&path, rendered).map_err(BenchError::Io)
+}
+
+fn native_c_abi_header(framework_name: &str) -> String {
+    let guard = format!(
+        "{}_MOBENCH_NATIVE_C_ABI_H",
+        framework_name.to_ascii_uppercase()
+    )
+    .replace('-', "_");
+    format!(
+        r#"#ifndef {guard}
+#define {guard}
+
+#include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {{
+#endif
+
+typedef struct MobenchBuf {{
+    uint8_t *ptr;
+    uintptr_t len;
+    uintptr_t cap;
+}} MobenchBuf;
+
+int32_t mobench_run_benchmark_json(const uint8_t *spec_ptr, uintptr_t spec_len, MobenchBuf *out);
+void mobench_free_buf(MobenchBuf *buf);
+const char *mobench_last_error_message(void);
+
+#ifdef __cplusplus
+}}
+#endif
+
+#endif
+"#
+    )
 }
 
 fn resolve_ios_benchmark_timeout_secs(value: Option<&str>) -> u64 {
@@ -1166,6 +1285,23 @@ pub fn ensure_android_project_with_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
+    ensure_android_project_with_backend_options(
+        output_dir,
+        crate_name,
+        project_root,
+        crate_dir,
+        crate::FfiBackend::Uniffi,
+    )
+}
+
+/// Auto-generates Android project scaffolding for the selected FFI backend.
+pub fn ensure_android_project_with_backend_options(
+    output_dir: &Path,
+    crate_name: &str,
+    project_root: Option<&Path>,
+    crate_dir: Option<&Path>,
+    ffi_backend: crate::FfiBackend,
+) -> Result<(), BenchError> {
     let library_name = crate_name.replace('-', "_");
     if android_project_exists(output_dir)
         && android_project_matches_library(output_dir, &library_name)
@@ -1173,14 +1309,22 @@ pub fn ensure_android_project_with_options(
         return Ok(());
     }
 
-    println!("Android project not found, generating scaffolding...");
+    println!(
+        "Android project not found, generating scaffolding for {} backend...",
+        ffi_backend
+    );
     let project_slug = crate_name.replace('-', "_");
 
     // Resolve the default function by auto-detecting from source
     let effective_root = project_root.unwrap_or_else(|| output_dir.parent().unwrap_or(output_dir));
     let default_function = resolve_default_function(effective_root, crate_name, crate_dir);
 
-    generate_android_project(output_dir, &project_slug, &default_function)?;
+    generate_android_project_with_backend(
+        output_dir,
+        &project_slug,
+        &default_function,
+        ffi_backend,
+    )?;
     println!(
         "  Generated Android project at {:?}",
         output_dir.join("android")
@@ -1220,15 +1364,41 @@ pub fn ensure_ios_project_with_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
 ) -> Result<(), BenchError> {
+    ensure_ios_project_with_backend_options(
+        output_dir,
+        crate_name,
+        project_root,
+        crate_dir,
+        crate::FfiBackend::Uniffi,
+    )
+}
+
+/// Auto-generates iOS project scaffolding for the selected FFI backend.
+pub fn ensure_ios_project_with_backend_options(
+    output_dir: &Path,
+    crate_name: &str,
+    project_root: Option<&Path>,
+    crate_dir: Option<&Path>,
+    ffi_backend: crate::FfiBackend,
+) -> Result<(), BenchError> {
     let library_name = crate_name.replace('-', "_");
     let project_exists = ios_project_exists(output_dir);
     let project_matches = ios_project_matches_library(output_dir, &library_name);
     if project_exists && !project_matches {
-        println!("Existing iOS scaffolding does not match library, regenerating...");
+        println!(
+            "Existing iOS scaffolding does not match library, regenerating for {} backend...",
+            ffi_backend
+        );
     } else if project_exists {
-        println!("Refreshing generated iOS scaffolding...");
+        println!(
+            "Refreshing generated iOS scaffolding for {} backend...",
+            ffi_backend
+        );
     } else {
-        println!("iOS project not found, generating scaffolding...");
+        println!(
+            "iOS project not found, generating scaffolding for {} backend...",
+            ffi_backend
+        );
     }
 
     // Use fixed "BenchRunner" for project/scheme name to match template directory structure
@@ -1244,12 +1414,13 @@ pub fn ensure_ios_project_with_options(
     let effective_root = project_root.unwrap_or_else(|| output_dir.parent().unwrap_or(output_dir));
     let default_function = resolve_default_function(effective_root, crate_name, crate_dir);
 
-    generate_ios_project(
+    generate_ios_project_with_backend(
         output_dir,
         &library_name,
         project_pascal,
         &bundle_prefix,
         &default_function,
+        ffi_backend,
     )?;
     println!("  Generated iOS project at {:?}", output_dir.join("ios"));
     println!("  Default benchmark function: {}", default_function);
@@ -1446,6 +1617,41 @@ mod tests {
         assert!(
             !old_package_dir.exists(),
             "old package tree should be removed when regenerating the Android scaffold"
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_android_native_backend_runner_template() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-android-native-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_android_project_with_backend(
+            &temp_dir,
+            "native_benchmark",
+            "native_benchmark::bench_prove",
+            crate::FfiBackend::NativeCAbi,
+        )
+        .unwrap();
+
+        let main_activity = fs::read_to_string(
+            temp_dir.join("android/app/src/main/java/dev/world/nativebenchmark/MainActivity.kt"),
+        )
+        .unwrap();
+        assert!(main_activity.contains("com.sun.jna.Native"));
+        assert!(main_activity.contains("mobench_run_benchmark_json"));
+        assert!(main_activity.contains("BENCH_JSON"));
+        assert!(main_activity.contains("bench_spec.json"));
+        assert!(
+            !main_activity.contains("uniffi."),
+            "native Android runner must not import UniFFI bindings:\n{}",
+            main_activity
+        );
+        assert!(
+            !main_activity.contains("runBenchmark("),
+            "native Android runner must call the JSON C ABI, not UniFFI runBenchmark"
         );
 
         fs::remove_dir_all(&temp_dir).ok();
@@ -1802,6 +2008,46 @@ pub fn public_bench() {
     }
 
     #[test]
+    fn test_generate_ios_native_backend_runner_template() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-native-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_ios_project_with_backend(
+            &temp_dir,
+            "native_benchmark",
+            "BenchRunner",
+            "dev.world.nativebenchmark",
+            "native_benchmark::bench_prove",
+            crate::FfiBackend::NativeCAbi,
+        )
+        .unwrap();
+
+        let ffi =
+            fs::read_to_string(temp_dir.join("ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift"))
+                .unwrap();
+        assert!(ffi.contains("mobench_run_benchmark_json"));
+        assert!(ffi.contains("mobench_free_buf"));
+        assert!(ffi.contains("BENCH_FUNCTION"));
+        assert!(
+            !ffi.contains("runBenchmark(spec:"),
+            "native iOS runner must call the JSON C ABI, not UniFFI runBenchmark"
+        );
+        assert!(
+            !ffi.contains("let report: BenchReport"),
+            "native iOS runner should operate on JSON, not UniFFI BenchReport"
+        );
+
+        let header = fs::read_to_string(
+            temp_dir.join("ios/BenchRunner/BenchRunner/Generated/native_benchmarkFFI.h"),
+        )
+        .unwrap();
+        assert!(header.contains("mobench_run_benchmark_json"));
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
     fn test_ensure_ios_project_refreshes_existing_content_view_template() {
         let temp_dir = env::temp_dir().join("mobench-sdk-ios-refresh-test");
         let _ = fs::remove_dir_all(&temp_dir);
@@ -1894,6 +2140,7 @@ pub fn public_bench() {
             "dev.world.samplefns",
             "sample_fns::example_benchmark",
             1200,
+            crate::FfiBackend::Uniffi,
         );
 
         assert!(result.is_ok(), "generate_ios_project should succeed");

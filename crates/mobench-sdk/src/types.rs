@@ -22,6 +22,8 @@ pub use crate::timing::{
     SemanticPhase, TimingError as RunnerError,
 };
 
+use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 /// Error types for mobench-sdk operations.
@@ -130,6 +132,43 @@ pub enum Target {
     Ios,
     /// Both Android and iOS platforms.
     Both,
+}
+
+/// Mobile FFI backend used by generated benchmark runners.
+///
+/// UniFFI remains the default because it is the historical mobench path. Use
+/// [`FfiBackend::NativeCAbi`] when the generated app should call the generic
+/// mobench JSON C ABI directly, avoiding binding-generator overhead in the
+/// measured path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FfiBackend {
+    /// Generate and call UniFFI Kotlin/Swift bindings.
+    #[default]
+    Uniffi,
+    /// Call `mobench_run_benchmark_json` through a small native C ABI bridge.
+    NativeCAbi,
+}
+
+impl FfiBackend {
+    /// Returns the configuration string for this backend.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FfiBackend::Uniffi => "uniffi",
+            FfiBackend::NativeCAbi => "native-c-abi",
+        }
+    }
+
+    /// Returns true when this backend needs UniFFI binding generation.
+    pub fn uses_uniffi(&self) -> bool {
+        matches!(self, FfiBackend::Uniffi)
+    }
+}
+
+impl fmt::Display for FfiBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl Target {
