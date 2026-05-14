@@ -2985,7 +2985,8 @@ pub(crate) fn run_ios_build(
             .verbose(true)
             .dry_run(dry_run)
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -3017,7 +3018,8 @@ fn package_ios_xcuitest_artifacts(
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -5065,7 +5067,8 @@ pub(crate) fn run_android_build(
             .verbose(true)
             .dry_run(dry_run)
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
     let result = builder.build(&cfg)?;
     Ok(result)
 }
@@ -7047,6 +7050,7 @@ resolver = "2"
             br#"[project]
 crate = "zk-mobile-bench"
 library_name = "zk_mobile_bench"
+ffi_backend = "native-c-abi"
 
 [android]
 abis = ["arm64-v8a", "x86_64"]
@@ -7361,6 +7365,7 @@ project = "proj"
         assert_eq!(layout.crate_dir, crate_dir);
         assert_eq!(layout.crate_name, "zk-mobile-bench");
         assert_eq!(layout.library_name, "zk_mobile_bench");
+        assert_eq!(layout.ffi_backend, mobench_sdk::FfiBackend::NativeCAbi);
         assert_eq!(
             layout.android_abis,
             Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()])
