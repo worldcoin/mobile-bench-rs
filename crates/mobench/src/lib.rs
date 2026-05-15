@@ -1460,12 +1460,13 @@ pub(crate) fn resolve_project_layout(
     let ios_completion_timeout_secs = config
         .as_ref()
         .and_then(|cfg| cfg.browserstack.ios_completion_timeout_secs);
-    let android_benchmark_timeout_secs = config
-        .as_ref()
-        .and_then(|cfg| cfg.browserstack.android_benchmark_timeout_secs);
-    let android_heartbeat_interval_secs = config
-        .as_ref()
-        .and_then(|cfg| cfg.browserstack.android_heartbeat_interval_secs);
+    let android_browserstack = config_path
+        .as_deref()
+        .map(config::load_android_browserstack_settings_from_file)
+        .transpose()?
+        .unwrap_or_default();
+    let android_benchmark_timeout_secs = android_browserstack.benchmark_timeout_secs;
+    let android_heartbeat_interval_secs = android_browserstack.heartbeat_interval_secs;
     let output_dir = config
         .as_ref()
         .and_then(|cfg| cfg.project.output_dir.clone())
@@ -1664,10 +1665,6 @@ pub struct RunRequest {
     pub ios_test_suite: Option<PathBuf>,
     /// Deprecated compatibility timeout for generated iOS benchmark harnesses.
     pub ios_completion_timeout_secs: Option<u64>,
-    /// Deprecated compatibility timeout for generated Android benchmark harnesses.
-    pub android_benchmark_timeout_secs: Option<u64>,
-    /// Deprecated compatibility heartbeat interval for generated Android benchmark harnesses.
-    pub android_heartbeat_interval_secs: Option<u64>,
     /// Fetch BrowserStack artifacts after completion.
     pub fetch: bool,
     /// Output directory for fetched BrowserStack artifacts.
@@ -1831,14 +1828,6 @@ pub fn run_request(request: &RunRequest) -> Result<RunResult> {
     if let Some(timeout_secs) = request.ios_completion_timeout_secs {
         cmd.arg("--ios-completion-timeout-secs")
             .arg(timeout_secs.to_string());
-    }
-    if let Some(timeout_secs) = request.android_benchmark_timeout_secs {
-        cmd.arg("--android-benchmark-timeout-secs")
-            .arg(timeout_secs.to_string());
-    }
-    if let Some(heartbeat_interval_secs) = request.android_heartbeat_interval_secs {
-        cmd.arg("--android-heartbeat-interval-secs")
-            .arg(heartbeat_interval_secs.to_string());
     }
     if let Some(path) = &request.crate_path {
         cmd.arg("--crate-path").arg(path);
@@ -2471,36 +2460,40 @@ fn cmd_ci_run_single(
         }
     });
 
-    let result = run_request(&RunRequest {
-        target,
-        function: args.function.clone().unwrap_or_default(),
-        crate_path: args.crate_path.clone(),
-        iterations: args.iterations,
-        warmup: args.warmup,
-        device_selection: DeviceSelection {
-            devices: args.devices.clone(),
-            device_matrix: args.device_matrix.clone(),
-            device_tags: args.device_tags.clone(),
+    let result = with_android_benchmark_env(
+        args.android_benchmark_timeout_secs,
+        args.android_heartbeat_interval_secs,
+        || {
+            run_request(&RunRequest {
+                target,
+                function: args.function.clone().unwrap_or_default(),
+                crate_path: args.crate_path.clone(),
+                iterations: args.iterations,
+                warmup: args.warmup,
+                device_selection: DeviceSelection {
+                    devices: args.devices.clone(),
+                    device_matrix: args.device_matrix.clone(),
+                    device_tags: args.device_tags.clone(),
+                },
+                config: args.config.clone(),
+                baseline: baseline_source,
+                regression_threshold_pct: args.regression_threshold_pct,
+                junit: args.junit.clone(),
+                local_only: args.local_only,
+                release: args.release,
+                ios_app: args.ios_app.clone(),
+                ios_test_suite: args.ios_test_suite.clone(),
+                ios_completion_timeout_secs: args.ios_completion_timeout_secs,
+                fetch: args.fetch,
+                fetch_output_dir: args.fetch_output_dir.clone(),
+                fetch_poll_interval_secs: args.fetch_poll_interval_secs,
+                fetch_timeout_secs: args.fetch_timeout_secs,
+                progress: args.progress,
+                output_dir: output_dir.to_path_buf(),
+                plots: args.plots,
+            })
         },
-        config: args.config.clone(),
-        baseline: baseline_source,
-        regression_threshold_pct: args.regression_threshold_pct,
-        junit: args.junit.clone(),
-        local_only: args.local_only,
-        release: args.release,
-        ios_app: args.ios_app.clone(),
-        ios_test_suite: args.ios_test_suite.clone(),
-        ios_completion_timeout_secs: args.ios_completion_timeout_secs,
-        android_benchmark_timeout_secs: args.android_benchmark_timeout_secs,
-        android_heartbeat_interval_secs: args.android_heartbeat_interval_secs,
-        fetch: args.fetch,
-        fetch_output_dir: args.fetch_output_dir.clone(),
-        fetch_poll_interval_secs: args.fetch_poll_interval_secs,
-        fetch_timeout_secs: args.fetch_timeout_secs,
-        progress: args.progress,
-        output_dir: output_dir.to_path_buf(),
-        plots: args.plots,
-    })?;
+    )?;
 
     let summary_json = result.report.summary_json;
     let summary_md = result.report.summary_md;
