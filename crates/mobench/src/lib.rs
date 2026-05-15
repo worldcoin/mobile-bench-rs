@@ -2398,7 +2398,12 @@ fn cmd_ci_run_single(
     output_dir: &Path,
     metadata: &CiContractMetadata,
 ) -> Result<i32> {
-    let _ = (&args.ios_deployment_target, &args.ios_runner);
+    let _ = (
+        &args.ios_deployment_target,
+        &args.ios_runner,
+        &args.android_benchmark_timeout_secs,
+        &args.android_heartbeat_interval_secs,
+    );
 
     let default_baseline_path = previous_baseline_path(output_dir);
     let baseline_source = args.baseline.clone().or_else(|| {
@@ -7788,6 +7793,34 @@ project = "proj"
                 assert_eq!(args.target, CiTarget::Ios);
                 assert_eq!(args.ios_deployment_target.as_deref(), Some("10.0"));
                 assert_eq!(args.ios_runner.as_deref(), Some("uikit-legacy"));
+            }
+            _ => panic!("expected ci run command"),
+        }
+    }
+
+    #[test]
+    fn ci_run_accepts_deprecated_android_runner_flags() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "ci",
+            "run",
+            "--target",
+            "android",
+            "--function",
+            "sample_fns::fibonacci",
+            "--android-benchmark-timeout-secs",
+            "7200",
+            "--android-heartbeat-interval-secs",
+            "10",
+        ]);
+
+        match cli.command {
+            Command::Ci {
+                command: CiCommand::Run(args),
+            } => {
+                assert_eq!(args.target, CiTarget::Android);
+                assert_eq!(args.android_benchmark_timeout_secs, Some(7200));
+                assert_eq!(args.android_heartbeat_interval_secs, Some(10));
             }
             _ => panic!("expected ci run command"),
         }

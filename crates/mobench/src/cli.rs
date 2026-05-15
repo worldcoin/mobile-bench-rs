@@ -648,6 +648,18 @@ pub(crate) struct CiRunArgs {
         help = "Deprecated compatibility flag; use [ios].runner in mobench.toml"
     )]
     pub(crate) ios_runner: Option<String>,
+    #[arg(
+        long,
+        hide = true,
+        help = "Deprecated compatibility flag for Android BrowserStack benchmark timeout"
+    )]
+    pub(crate) android_benchmark_timeout_secs: Option<u64>,
+    #[arg(
+        long,
+        hide = true,
+        help = "Deprecated compatibility flag for Android BrowserStack heartbeat interval"
+    )]
+    pub(crate) android_heartbeat_interval_secs: Option<u64>,
     #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
     pub(crate) fetch: bool,
     #[arg(long, default_value = "target/browserstack")]
