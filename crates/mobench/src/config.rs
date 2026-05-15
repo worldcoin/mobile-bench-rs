@@ -89,12 +89,26 @@ pub struct ProjectConfig {
 #[serde(default)]
 struct RawMobenchConfig {
     project: RawProjectConfig,
+    browserstack: RawBrowserStackConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawProjectConfig {
     ffi_backend: Option<mobench_sdk::FfiBackend>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawBrowserStackConfig {
+    android_benchmark_timeout_secs: Option<u64>,
+    android_heartbeat_interval_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct AndroidBrowserStackSettings {
+    pub(crate) benchmark_timeout_secs: Option<u64>,
+    pub(crate) heartbeat_interval_secs: Option<u64>,
 }
 
 pub(crate) fn load_ffi_backend_from_file(path: &Path) -> Result<mobench_sdk::FfiBackend> {
@@ -105,6 +119,21 @@ pub(crate) fn load_ffi_backend_from_file(path: &Path) -> Result<mobench_sdk::Ffi
         .with_context(|| format!("Failed to parse config file: {:?}", path))?;
 
     Ok(config.project.ffi_backend.unwrap_or_default())
+}
+
+pub(crate) fn load_android_browserstack_settings_from_file(
+    path: &Path,
+) -> Result<AndroidBrowserStackSettings> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read config file: {:?}", path))?;
+
+    let config: RawMobenchConfig = toml::from_str(&contents)
+        .with_context(|| format!("Failed to parse config file: {:?}", path))?;
+
+    Ok(AndroidBrowserStackSettings {
+        benchmark_timeout_secs: config.browserstack.android_benchmark_timeout_secs,
+        heartbeat_interval_secs: config.browserstack.android_heartbeat_interval_secs,
+    })
 }
 
 /// Android-specific configuration.
@@ -209,10 +238,6 @@ impl Default for BenchmarksConfig {
 pub struct BrowserStackConfig {
     /// Timeout in seconds for the generated iOS XCUITest harness to wait for benchmark completion.
     pub ios_completion_timeout_secs: Option<u64>,
-    /// Timeout in seconds for the generated Android instrumentation harness to wait for benchmark completion.
-    pub android_benchmark_timeout_secs: Option<u64>,
-    /// Heartbeat interval in seconds while the generated Android instrumentation harness waits.
-    pub android_heartbeat_interval_secs: Option<u64>,
 }
 
 impl MobenchConfig {
@@ -641,14 +666,10 @@ android_heartbeat_interval_secs = 15
         assert_eq!(config.benchmarks.default_iterations, 50);
         assert_eq!(config.benchmarks.default_warmup, 5);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, Some(1200));
-        assert_eq!(
-            config.browserstack.android_benchmark_timeout_secs,
-            Some(7200)
-        );
-        assert_eq!(
-            config.browserstack.android_heartbeat_interval_secs,
-            Some(15)
-        );
+        let android_browserstack =
+            load_android_browserstack_settings_from_file(&config_path).unwrap();
+        assert_eq!(android_browserstack.benchmark_timeout_secs, Some(7200));
+        assert_eq!(android_browserstack.heartbeat_interval_secs, Some(15));
     }
 
     #[test]
