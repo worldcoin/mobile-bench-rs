@@ -17,8 +17,8 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MainActivityTest {
 
-    private val benchmarkTimeoutMs = TimeUnit.MINUTES.toMillis(30)
-    private val heartbeatMs = TimeUnit.SECONDS.toMillis(10)
+    private val benchmarkTimeoutMs = TimeUnit.SECONDS.toMillis({{ANDROID_BENCHMARK_TIMEOUT_SECS}})
+    private val heartbeatMs = TimeUnit.SECONDS.toMillis({{ANDROID_HEARTBEAT_INTERVAL_SECS}})
 
     @get:Rule
     val activityRule = ActivityScenarioRule(MainActivity::class.java)

@@ -123,6 +123,18 @@ pub(crate) enum Command {
             help = "Deprecated compatibility flag; use [ios].runner in mobench.toml"
         )]
         ios_runner: Option<String>,
+        #[arg(
+            long,
+            hide = true,
+            help = "Deprecated compatibility flag for Android BrowserStack benchmark timeout"
+        )]
+        android_benchmark_timeout_secs: Option<u64>,
+        #[arg(
+            long,
+            hide = true,
+            help = "Deprecated compatibility flag for Android BrowserStack heartbeat interval"
+        )]
+        android_heartbeat_interval_secs: Option<u64>,
         #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
         fetch: bool,
         #[arg(long, default_value = "target/browserstack")]

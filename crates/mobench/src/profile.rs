@@ -2706,12 +2706,14 @@ fn execute_local_android_capture(
         warmup: DEFAULT_PROFILE_WARMUP,
         devices: Vec::new(),
         ios_completion_timeout_secs: None,
+        android_benchmark_timeout_secs: None,
+        android_heartbeat_interval_secs: None,
         browserstack: None,
         ios_xcuitest: None,
     };
     persist_mobile_spec(&layout, &spec, false)?;
 
-    let build = run_android_build(&layout, "", false, false)?;
+    let build = run_android_build(&layout, "", false, false, None, None)?;
     let android_root = layout.output_dir.join("android");
     let package_name = read_android_application_id(&android_root)?;
     let warmup_mode = manifest
@@ -2976,6 +2978,8 @@ fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManife
         warmup: DEFAULT_PROFILE_WARMUP,
         devices: Vec::new(),
         ios_completion_timeout_secs: None,
+        android_benchmark_timeout_secs: None,
+        android_heartbeat_interval_secs: None,
         browserstack: None,
         ios_xcuitest: None,
     };
