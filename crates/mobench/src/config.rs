@@ -209,6 +209,10 @@ impl Default for BenchmarksConfig {
 pub struct BrowserStackConfig {
     /// Timeout in seconds for the generated iOS XCUITest harness to wait for benchmark completion.
     pub ios_completion_timeout_secs: Option<u64>,
+    /// Timeout in seconds for the generated Android instrumentation harness to wait for benchmark completion.
+    pub android_benchmark_timeout_secs: Option<u64>,
+    /// Heartbeat interval in seconds while the generated Android instrumentation harness waits.
+    pub android_heartbeat_interval_secs: Option<u64>,
 }
 
 impl MobenchConfig {
@@ -425,6 +429,12 @@ default_warmup = 10
 [browserstack]
 # Timeout in seconds for the generated iOS XCUITest harness to wait for completion
 # ios_completion_timeout_secs = 1200
+
+# Timeout in seconds for the generated Android instrumentation harness to wait for completion
+# android_benchmark_timeout_secs = 1800
+
+# Heartbeat interval in seconds while Android instrumentation waits for completion
+# android_heartbeat_interval_secs = 10
 "#,
             crate_name = crate_name,
             library_name = library_name,
@@ -604,6 +614,8 @@ default_warmup = 5
 
 [browserstack]
 ios_completion_timeout_secs = 1200
+android_benchmark_timeout_secs = 7200
+android_heartbeat_interval_secs = 15
 "#;
 
         let mut file = std::fs::File::create(&config_path).unwrap();
@@ -629,6 +641,14 @@ ios_completion_timeout_secs = 1200
         assert_eq!(config.benchmarks.default_iterations, 50);
         assert_eq!(config.benchmarks.default_warmup, 5);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, Some(1200));
+        assert_eq!(
+            config.browserstack.android_benchmark_timeout_secs,
+            Some(7200)
+        );
+        assert_eq!(
+            config.browserstack.android_heartbeat_interval_secs,
+            Some(15)
+        );
     }
 
     #[test]

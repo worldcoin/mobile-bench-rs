@@ -17,6 +17,8 @@ const NATIVE_ANDROID_MAIN_ACTIVITY_TEMPLATE: &str =
 const NATIVE_IOS_BENCH_RUNNER_FFI_TEMPLATE: &str =
     include_str!("native_templates/ios/BenchRunnerFFI.swift.template");
 const DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS: u64 = 1800;
+const DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS: u64 = 10;
 
 /// Template variable that can be replaced in template files
 #[derive(Debug, Clone)]
@@ -364,6 +366,32 @@ pub fn generate_android_project_with_backend(
     default_function: &str,
     ffi_backend: crate::FfiBackend,
 ) -> Result<(), BenchError> {
+    let android_benchmark_timeout_secs = resolve_positive_u64_env(
+        "MOBENCH_ANDROID_BENCHMARK_TIMEOUT_SECS",
+        DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS,
+    );
+    let android_heartbeat_interval_secs = resolve_positive_u64_env(
+        "MOBENCH_ANDROID_HEARTBEAT_INTERVAL_SECS",
+        DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS,
+    );
+    generate_android_project_with_options(
+        output_dir,
+        project_slug,
+        default_function,
+        ffi_backend,
+        android_benchmark_timeout_secs,
+        android_heartbeat_interval_secs,
+    )
+}
+
+fn generate_android_project_with_options(
+    output_dir: &Path,
+    project_slug: &str,
+    default_function: &str,
+    ffi_backend: crate::FfiBackend,
+    android_benchmark_timeout_secs: u64,
+    android_heartbeat_interval_secs: u64,
+) -> Result<(), BenchError> {
     let target_dir = output_dir.join("android");
     reset_generated_project_dir(&target_dir)?;
     let library_name = project_slug.replace('-', "_");
@@ -400,6 +428,14 @@ pub fn generate_android_project_with_backend(
         TemplateVar {
             name: "DEFAULT_FUNCTION",
             value: default_function.to_string(),
+        },
+        TemplateVar {
+            name: "ANDROID_BENCHMARK_TIMEOUT_SECS",
+            value: android_benchmark_timeout_secs.to_string(),
+        },
+        TemplateVar {
+            name: "ANDROID_HEARTBEAT_INTERVAL_SECS",
+            value: android_heartbeat_interval_secs.to_string(),
         },
     ];
     render_dir(&ANDROID_TEMPLATES, &target_dir, &vars)?;
@@ -744,6 +780,14 @@ fn resolve_ios_benchmark_timeout_secs(value: Option<&str>) -> u64 {
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|secs| *secs > 0)
         .unwrap_or(DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS)
+}
+
+fn resolve_positive_u64_env(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(default)
 }
 
 /// Generates bench-config.toml configuration file
@@ -1711,7 +1755,12 @@ mod tests {
         );
         assert!(android_test.contains("Log.i(\"BenchRunnerTest\""));
         assert!(android_test.contains("Thread.sleep(heartbeatMs)"));
-        assert!(android_test.contains("TimeUnit.SECONDS.toMillis(10)"));
+        assert!(
+            android_test.contains("TimeUnit.SECONDS.toMillis({{ANDROID_HEARTBEAT_INTERVAL_SECS}})")
+        );
+        assert!(
+            android_test.contains("TimeUnit.SECONDS.toMillis({{ANDROID_BENCHMARK_TIMEOUT_SECS}})")
+        );
         assert!(android_test.contains("activity.isBenchmarkComplete()"));
 
         let ios_test = include_str!(
@@ -1765,6 +1814,39 @@ mod tests {
         assert!(ios.contains("\"memory_process\": \"benchmark_app\""));
         assert!(ios.contains("generateJSONReport(report, runProcessPeakMemoryKb:"));
         assert!(ios.contains("processPeakSamplesKb.max() ?? runProcessPeakMemoryKb"));
+    }
+
+    #[test]
+    fn generated_android_test_uses_configured_timeout_and_heartbeat() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-android-timeout-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        unsafe {
+            std::env::set_var("MOBENCH_ANDROID_BENCHMARK_TIMEOUT_SECS", "7200");
+            std::env::set_var("MOBENCH_ANDROID_HEARTBEAT_INTERVAL_SECS", "15");
+        }
+        let result = generate_android_project_with_backend(
+            &temp_dir,
+            "my-bench-project",
+            "sample_fns::fibonacci",
+            crate::FfiBackend::NativeCAbi,
+        );
+        unsafe {
+            std::env::remove_var("MOBENCH_ANDROID_BENCHMARK_TIMEOUT_SECS");
+            std::env::remove_var("MOBENCH_ANDROID_HEARTBEAT_INTERVAL_SECS");
+        }
+        result.expect("generate Android project");
+
+        let android_test =
+            fs::read_to_string(temp_dir.join(
+                "android/app/src/androidTest/java/dev/world/mybenchproject/MainActivityTest.kt",
+            ))
+            .expect("read MainActivityTest.kt");
+
+        assert!(android_test.contains("TimeUnit.SECONDS.toMillis(7200)"));
+        assert!(android_test.contains("TimeUnit.SECONDS.toMillis(15)"));
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
