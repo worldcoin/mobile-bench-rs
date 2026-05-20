@@ -314,6 +314,15 @@ impl BrowserStackClient {
         )
     }
 
+    fn is_transient_api_error(error: &anyhow::Error) -> bool {
+        let message = format!("{error:#}").to_ascii_lowercase();
+        message.contains("status 5")
+            || message.contains("gateway timeout")
+            || message.contains("request timeout")
+            || message.contains("operation timed out")
+            || message.contains("under heavy load")
+    }
+
     pub fn get_json(&self, path: &str) -> Result<Value> {
         let resp = self
             .http
@@ -436,10 +445,22 @@ impl BrowserStackClient {
         let poll_interval = Duration::from_secs(poll_interval_secs);
 
         loop {
-            let status = match platform {
-                "espresso" => self.get_espresso_build_status(build_id)?,
-                "xcuitest" => self.get_xcuitest_build_status(build_id)?,
+            let status_result = match platform {
+                "espresso" => self.get_espresso_build_status(build_id),
+                "xcuitest" => self.get_xcuitest_build_status(build_id),
                 _ => return Err(anyhow!("unsupported platform: {}", platform)),
+            };
+            let status = match status_result {
+                Ok(status) => status,
+                Err(error) if Self::is_transient_api_error(&error) && start.elapsed() < timeout => {
+                    println!(
+                        "Transient BrowserStack status poll error for build {build_id}: {error:#}; retrying in {}s",
+                        poll_interval.as_secs()
+                    );
+                    std::thread::sleep(poll_interval);
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
 
             match status.status.to_lowercase().as_str() {
@@ -2109,6 +2130,19 @@ mod tests {
 
         let url = client.api("endpoint");
         assert_eq!(url, "https://test.example.com/endpoint");
+    }
+
+    #[test]
+    fn browserstack_poll_errors_classify_transient_api_failures() {
+        assert!(BrowserStackClient::is_transient_api_error(&anyhow!(
+            "BrowserStack API app-automate/espresso/v2/builds/abc failed (status 504 Gateway Timeout):"
+        )));
+        assert!(BrowserStackClient::is_transient_api_error(&anyhow!(
+            "request timeout while polling BrowserStack"
+        )));
+        assert!(!BrowserStackClient::is_transient_api_error(&anyhow!(
+            "BrowserStack API app-automate/espresso/v2/builds/abc failed (status 401 Unauthorized): bad credentials"
+        )));
     }
 
     #[test]
