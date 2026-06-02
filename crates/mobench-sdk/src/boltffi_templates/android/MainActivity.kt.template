@@ -1,0 +1,154 @@
+package {{PACKAGE_NAME}}
+
+import android.os.Bundle
+import android.os.Debug
+import android.os.Process
+import android.os.SystemClock
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import {{BOLTFFI_KOTLIN_PACKAGE}}.runBenchmarkJson
+import org.json.JSONArray
+import org.json.JSONObject
+
+class MainActivity : AppCompatActivity() {
+    companion object {
+        private const val DEFAULT_FUNCTION = "{{DEFAULT_FUNCTION}}"
+        private const val DEFAULT_ITERATIONS = 20u
+        private const val DEFAULT_WARMUP = 3u
+        private const val FUNCTION_EXTRA = "bench_function"
+        private const val ITERATIONS_EXTRA = "bench_iterations"
+        private const val WARMUP_EXTRA = "bench_warmup"
+        private const val SPEC_ASSET = "bench_spec.json"
+    }
+
+    private data class BenchParams(
+        val function: String,
+        val iterations: UInt,
+        val warmup: UInt,
+    )
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        val display = try {
+            val rawReport = runBenchmarkWithBoltFfi(resolveBenchParams())
+            val report = enrichBenchReport(rawReport)
+            android.util.Log.i("BenchRunner", "BENCH_JSON ${report}")
+            formatBenchReport(report)
+        } catch (e: Exception) {
+            android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
+            "Benchmark error: ${e.message}"
+        }
+
+        findViewById<TextView>(R.id.result_text)?.text = display
+        Thread.sleep(5000)
+    }
+
+    private fun runBenchmarkWithBoltFfi(params: BenchParams): JSONObject {
+        val spec = JSONObject()
+            .put("name", params.function)
+            .put("iterations", params.iterations.toInt())
+            .put("warmup", params.warmup.toInt())
+        return JSONObject(runBenchmarkJson(specJson = spec.toString()))
+    }
+
+    private fun enrichBenchReport(rawReport: JSONObject): JSONObject {
+        val json = JSONObject(rawReport.toString())
+        val spec = json.optJSONObject("spec") ?: JSONObject()
+        json.put("function", spec.optString("name", DEFAULT_FUNCTION))
+
+        val samples = json.optJSONArray("samples") ?: JSONArray()
+        val samplesNs = JSONArray()
+        val durations = mutableListOf<Long>()
+        for (index in 0 until samples.length()) {
+            val duration = samples.optJSONObject(index)?.optLong("duration_ns", 0L) ?: 0L
+            samplesNs.put(duration)
+            durations.add(duration)
+        }
+        json.put("samples_ns", samplesNs)
+
+        if (durations.isNotEmpty()) {
+            val min = durations.minOrNull() ?: 0L
+            val max = durations.maxOrNull() ?: 0L
+            val avg = durations.sum().toDouble() / durations.size.toDouble()
+            json.put("stats", JSONObject().put("min_ns", min).put("max_ns", max).put("avg_ns", avg))
+        }
+
+        val memInfo = Debug.MemoryInfo()
+        Debug.getMemoryInfo(memInfo)
+        json.put(
+            "resources",
+            JSONObject()
+                .put("elapsed_cpu_ms", Process.getElapsedCpuTime())
+                .put("uptime_ms", SystemClock.elapsedRealtime())
+                .put("total_pss_kb", memInfo.totalPss)
+                .put("private_dirty_kb", memInfo.totalPrivateDirty)
+                .put("native_heap_kb", Debug.getNativeHeapAllocatedSize() / 1024)
+        )
+        return json
+    }
+
+    private fun formatBenchReport(report: JSONObject): String = buildString {
+        val spec = report.optJSONObject("spec") ?: JSONObject()
+        val samples = report.optJSONArray("samples_ns") ?: JSONArray()
+        appendLine("=== Benchmark Results ===")
+        appendLine()
+        appendLine("Function: ${spec.optString("name", DEFAULT_FUNCTION)}")
+        appendLine("Iterations: ${spec.optInt("iterations", DEFAULT_ITERATIONS.toInt())}")
+        appendLine("Warmup: ${spec.optInt("warmup", DEFAULT_WARMUP.toInt())}")
+        appendLine()
+        appendLine("Samples (${samples.length()}):")
+        for (index in 0 until samples.length()) {
+            appendLine("  ${index + 1}. ${formatDuration(samples.optLong(index, 0L))}")
+        }
+        report.optJSONObject("stats")?.let { stats ->
+            appendLine()
+            appendLine("Statistics:")
+            appendLine("  Min: ${formatDuration(stats.optLong("min_ns", 0L))}")
+            appendLine("  Max: ${formatDuration(stats.optLong("max_ns", 0L))}")
+            appendLine("  Avg: ${formatDuration(stats.optDouble("avg_ns", 0.0).toLong())}")
+        }
+    }
+
+    private fun formatDuration(ns: Long): String {
+        val ms = ns.toDouble() / 1_000_000.0
+        return if (ms >= 1000.0) String.format("%.3fs", ms / 1000.0) else String.format("%.3fms", ms)
+    }
+
+    private fun resolveBenchParams(): BenchParams {
+        val assetParams = loadBenchParamsFromAssets()
+        val defaults = assetParams ?: BenchParams(DEFAULT_FUNCTION, DEFAULT_ITERATIONS, DEFAULT_WARMUP)
+        val intentFunction = intent?.getStringExtra(FUNCTION_EXTRA)?.takeUnless { it.isBlank() }
+        val intentIterations = intent?.let {
+            val value = it.getIntExtra(ITERATIONS_EXTRA, -1)
+            if (value >= 0) value.toUInt() else null
+        }
+        val intentWarmup = intent?.let {
+            val value = it.getIntExtra(WARMUP_EXTRA, -1)
+            if (value >= 0) value.toUInt() else null
+        }
+        return BenchParams(
+            intentFunction ?: defaults.function,
+            intentIterations ?: defaults.iterations,
+            intentWarmup ?: defaults.warmup,
+        )
+    }
+
+    private fun loadBenchParamsFromAssets(): BenchParams? {
+        return try {
+            val raw = assets.open(SPEC_ASSET).bufferedReader().use { it.readText() }
+            val json = JSONObject(raw)
+            BenchParams(
+                json.optString("function", DEFAULT_FUNCTION),
+                json.optInt("iterations", DEFAULT_ITERATIONS.toInt()).toUInt(),
+                json.optInt("warmup", DEFAULT_WARMUP.toInt()).toUInt(),
+            )
+        } catch (_: java.io.FileNotFoundException) {
+            null
+        } catch (e: Exception) {
+            android.util.Log.e("BenchRunner", "Failed to parse bench_spec.json from assets", e)
+            null
+        }
+    }
+}

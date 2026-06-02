@@ -619,7 +619,11 @@ pub fn run() -> Result<()> {
                             println!("[2/4] Building Android APK...");
                         } else {
                             println!("Building for Android...");
-                            println!("  Building Rust library for Android targets...");
+                            if layout.ffi_backend.uses_boltffi() {
+                                println!("  Generating and packaging BoltFFI Android artifacts...");
+                            } else {
+                                println!("  Building Rust library for Android targets...");
+                            }
                         }
                         let ndk = std::env::var("ANDROID_NDK_HOME").context(
                             "ANDROID_NDK_HOME must be set for Android builds. Example: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>",
@@ -665,7 +669,11 @@ pub fn run() -> Result<()> {
                             println!("[2/4] Building iOS xcframework...");
                         } else {
                             println!("Building for iOS...");
-                            println!("  Building Rust library for iOS targets...");
+                            if layout.ffi_backend.uses_boltffi() {
+                                println!("  Generating and packaging BoltFFI iOS artifacts...");
+                            } else {
+                                println!("  Building Rust library for iOS targets...");
+                            }
                         }
                         let (xcframework, header) = run_ios_build(
                             &layout,
@@ -5500,7 +5508,11 @@ fn cmd_build(
     match target {
         SdkTarget::Android => {
             println!("\nBuilding for Android...");
-            println!("  Building Rust library for Android targets...");
+            if layout.ffi_backend.uses_boltffi() {
+                println!("  Generating and packaging BoltFFI Android artifacts...");
+            } else {
+                println!("  Building Rust library for Android targets...");
+            }
             let builder = mobench_sdk::builders::AndroidBuilder::new(
                 &layout.project_root,
                 layout.crate_name.clone(),
@@ -5523,7 +5535,11 @@ fn cmd_build(
         }
         SdkTarget::Ios => {
             println!("\nBuilding for iOS...");
-            println!("  Building Rust library for iOS targets...");
+            if layout.ffi_backend.uses_boltffi() {
+                println!("  Generating and packaging BoltFFI iOS artifacts...");
+            } else {
+                println!("  Building Rust library for iOS targets...");
+            }
             let builder = mobench_sdk::builders::IosBuilder::new(
                 &layout.project_root,
                 layout.crate_name.clone(),
@@ -5545,7 +5561,11 @@ fn cmd_build(
         SdkTarget::Both => {
             // Build Android
             println!("\nBuilding for Android...");
-            println!("  Building Rust library for Android targets...");
+            if layout.ffi_backend.uses_boltffi() {
+                println!("  Generating and packaging BoltFFI Android artifacts...");
+            } else {
+                println!("  Building Rust library for Android targets...");
+            }
             let android_builder = mobench_sdk::builders::AndroidBuilder::new(
                 &layout.project_root,
                 layout.crate_name.clone(),
@@ -5568,7 +5588,11 @@ fn cmd_build(
 
             // Build iOS
             println!("\nBuilding for iOS...");
-            println!("  Building Rust library for iOS targets...");
+            if layout.ffi_backend.uses_boltffi() {
+                println!("  Generating and packaging BoltFFI iOS artifacts...");
+            } else {
+                println!("  Building Rust library for iOS targets...");
+            }
             let ios_builder = mobench_sdk::builders::IosBuilder::new(
                 &layout.project_root,
                 layout.crate_name.clone(),

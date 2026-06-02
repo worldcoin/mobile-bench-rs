@@ -414,8 +414,9 @@ library_name = "{library_name}"
 # Output directory for build artifacts (default: target/mobench/)
 # output_dir = "target/mobench"
 
-# FFI backend for generated mobile runners: "uniffi" (default) or "native-c-abi".
-# Use "native-c-abi" for ProveKit-style benchmarks that need to avoid UniFFI overhead.
+# FFI backend for generated mobile runners: "uniffi" (default), "native-c-abi", or "boltffi".
+# Use "boltffi" for BoltFFI-generated Kotlin/Swift bindings, or "native-c-abi"
+# for direct C ABI calls that avoid binding-generator overhead.
 # ffi_backend = "uniffi"
 
 [android]
@@ -768,6 +769,30 @@ ffi_backend = "native-c-abi"
         };
 
         assert_eq!(resolver.ffi_backend(), mobench_sdk::FfiBackend::NativeCAbi);
+    }
+
+    #[test]
+    fn test_config_resolver_loads_boltffi_backend_from_config_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("mobench.toml");
+
+        std::fs::write(
+            &config_path,
+            r#"
+[project]
+crate = "test-bench"
+ffi_backend = "boltffi"
+"#,
+        )
+        .unwrap();
+
+        let config = MobenchConfig::load_from_file(&config_path).unwrap();
+        let resolver = ConfigResolver {
+            config: Some(config),
+            config_path: Some(config_path),
+        };
+
+        assert_eq!(resolver.ffi_backend(), mobench_sdk::FfiBackend::BoltFfi);
     }
 
     #[test]

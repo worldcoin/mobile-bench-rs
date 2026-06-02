@@ -271,6 +271,37 @@ impl IosBuilder {
                 "  Step 0: Check/generate iOS project scaffolding at {:?}",
                 ios_dir.join("BenchRunner")
             );
+            if self.ffi_backend.uses_boltffi() {
+                let crate_dir = self.find_crate_dir()?;
+                println!(
+                    "  Step 1: Write BoltFFI config at {:?}",
+                    crate_dir.join("boltffi.toml")
+                );
+                println!("  Step 2: Generate Swift bindings and package xcframework with BoltFFI");
+                println!(
+                    "    Command: boltffi pack apple --layout split {}",
+                    if matches!(config.profile, BuildProfile::Release) {
+                        "--release"
+                    } else {
+                        ""
+                    }
+                );
+                println!(
+                    "    Swift output: {:?}",
+                    ios_dir.join("BenchRunner/BenchRunner/Generated/BoltFFIGenerated")
+                );
+                println!("    xcframework output: {:?}", xcframework_path);
+                println!("  Step 3: Generate Xcode project with xcodegen (if project.yml exists)");
+                println!("    Command: xcodegen generate");
+
+                return Ok(BuildResult {
+                    platform: Target::Ios,
+                    app_path: xcframework_path,
+                    test_suite_path: None,
+                    native_libraries: Vec::new(),
+                });
+            }
+
             println!("  Step 1: Build Rust libraries for iOS targets");
             println!(
                 "    Command: cargo build --target aarch64-apple-ios --lib {}",
@@ -340,6 +371,22 @@ impl IosBuilder {
             self.crate_dir.as_deref(),
             self.ffi_backend,
         )?;
+
+        if self.ffi_backend.uses_boltffi() {
+            println!("Generating and packaging BoltFFI iOS bindings...");
+            self.write_boltffi_config()?;
+            let xcframework_path = self.run_boltffi_pack_apple(config)?;
+            self.generate_xcode_project()?;
+
+            let result = BuildResult {
+                platform: Target::Ios,
+                app_path: xcframework_path,
+                test_suite_path: None,
+                native_libraries: Vec::new(),
+            };
+            self.validate_build_artifacts(&result, config)?;
+            return Ok(result);
+        }
 
         // Step 1: Build Rust libraries
         println!("Building Rust libraries for iOS...");
@@ -413,6 +460,39 @@ impl IosBuilder {
         Ok(result)
     }
 
+    fn write_boltffi_config(&self) -> Result<(), BenchError> {
+        let crate_dir = self.find_crate_dir()?;
+        let library_name = self.crate_name.replace('-', "_");
+        let package_component = crate::codegen::sanitize_bundle_id_component(&library_name);
+        let kotlin_package = format!("com.mobench.{package_component}");
+        crate::codegen::write_boltffi_config_with_output_dir(
+            &crate_dir,
+            &library_name,
+            &self.crate_name,
+            "BenchRunner",
+            &kotlin_package,
+            &["arm64".to_string()],
+            &self.output_dir,
+        )
+    }
+
+    fn run_boltffi_pack_apple(&self, config: &BuildConfig) -> Result<PathBuf, BenchError> {
+        let crate_dir = self.find_crate_dir()?;
+        let framework_name = self.crate_name.replace('-', "_");
+        let xcframework_path = self
+            .output_dir
+            .join("ios")
+            .join(format!("{framework_name}.xcframework"));
+        let mut cmd = Command::new("boltffi");
+        cmd.arg("pack").arg("apple").arg("--layout").arg("split");
+        if matches!(config.profile, BuildProfile::Release) {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&crate_dir);
+        run_command(cmd, "boltffi pack apple")?;
+        Ok(xcframework_path)
+    }
+
     /// Validates that all expected build artifacts exist after a successful build
     fn validate_build_artifacts(
         &self,
@@ -429,6 +509,31 @@ impl IosBuilder {
         // Check xcframework exists
         if !result.app_path.exists() {
             missing.push(format!("XCFramework: {}", result.app_path.display()));
+        }
+
+        if self.ffi_backend.uses_boltffi() {
+            let swift_bindings = self
+                .output_dir
+                .join("ios/BenchRunner/BenchRunner/Generated/BoltFFIGenerated")
+                .join(format!("{}BoltFFI.swift", pascalize_first(&framework_name)));
+            if !swift_bindings.exists() {
+                missing.push(format!(
+                    "BoltFFI Swift bindings: {}",
+                    swift_bindings.display()
+                ));
+            }
+
+            if !missing.is_empty() {
+                return Err(BenchError::Build(format!(
+                    "BoltFFI iOS build validation failed.\n\nMissing artifacts:\n{}\n\nCheck the boltffi pack apple output above.",
+                    missing
+                        .iter()
+                        .map(|s| format!("  - {}", s))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )));
+            }
+            return Ok(());
         }
 
         // Check framework slices exist within xcframework
@@ -1550,6 +1655,14 @@ fn codesign_bundle(app_path: &Path, identity: &str) -> Result<(), BenchError> {
         )));
     }
     Ok(())
+}
+
+fn pascalize_first(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
 }
 
 /// iOS code signing methods for IPA packaging

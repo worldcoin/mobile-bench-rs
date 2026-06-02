@@ -210,6 +210,69 @@ impl AndroidBuilder {
                 android_dir
             );
             println!("  Step 0.5: Ensure Gradle wrapper exists (run 'gradle wrapper' if needed)");
+            if self.ffi_backend.uses_boltffi() {
+                let crate_dir = self.find_crate_dir()?;
+                println!(
+                    "  Step 1: Write BoltFFI config at {:?}",
+                    crate_dir.join("boltffi.toml")
+                );
+                println!("  Step 2: Generate and package BoltFFI Android bindings");
+                println!(
+                    "    Command: boltffi pack android {}",
+                    if matches!(config.profile, BuildProfile::Release) {
+                        "--release"
+                    } else {
+                        ""
+                    }
+                );
+                println!(
+                    "    Kotlin output: {:?}",
+                    android_dir.join("app/src/main/java")
+                );
+                println!(
+                    "    Native output: {:?}",
+                    android_dir.join("app/src/main/jniLibs")
+                );
+                println!("  Step 3: Build Android APK with Gradle");
+                println!(
+                    "    Command: ./gradlew assemble{}",
+                    if profile_name == "release" {
+                        "Release"
+                    } else {
+                        "Debug"
+                    }
+                );
+                println!(
+                    "    Output: {:?}",
+                    android_dir.join(format!(
+                        "app/build/outputs/apk/{}/app-{}.apk",
+                        profile_name, profile_name
+                    ))
+                );
+                println!("  Step 4: Build Android test APK");
+                println!(
+                    "    Command: ./gradlew assemble{}AndroidTest",
+                    if profile_name == "release" {
+                        "Release"
+                    } else {
+                        "Debug"
+                    }
+                );
+
+                return Ok(BuildResult {
+                    platform: Target::Android,
+                    app_path: android_dir.join(format!(
+                        "app/build/outputs/apk/{}/app-{}.apk",
+                        profile_name, profile_name
+                    )),
+                    test_suite_path: Some(android_dir.join(format!(
+                        "app/build/outputs/apk/androidTest/{}/app-{}-androidTest.apk",
+                        profile_name, profile_name
+                    ))),
+                    native_libraries: Vec::new(),
+                });
+            }
+
             println!(
                 "  Step 1: Build Rust libraries for Android ABIs ({})",
                 android_abis.join(", ")
@@ -293,6 +356,27 @@ impl AndroidBuilder {
         // Step 0.5: Ensure Gradle wrapper exists
         self.ensure_gradle_wrapper(&android_dir)?;
 
+        if self.ffi_backend.uses_boltffi() {
+            println!("Generating and packaging BoltFFI Android bindings...");
+            self.write_boltffi_config(config)?;
+            self.run_boltffi_pack_android(config)?;
+
+            println!("Building Android APK with Gradle...");
+            let apk_path = self.build_apk(config)?;
+
+            println!("Building Android test APK...");
+            let test_suite_path = self.build_test_apk(config)?;
+
+            let result = BuildResult {
+                platform: Target::Android,
+                app_path: apk_path,
+                test_suite_path: Some(test_suite_path),
+                native_libraries: self.collect_packaged_native_libraries(config)?,
+            };
+            self.validate_build_artifacts(&result, config)?;
+            return Ok(result);
+        }
+
         // Step 1: Build Rust libraries
         println!("Building Rust libraries for Android...");
         self.build_rust_libraries(config)?;
@@ -330,6 +414,62 @@ impl AndroidBuilder {
         self.validate_build_artifacts(&result, config)?;
 
         Ok(result)
+    }
+
+    fn write_boltffi_config(&self, config: &BuildConfig) -> Result<(), BenchError> {
+        let crate_dir = self.find_crate_dir()?;
+        let library_name = self.crate_name.replace('-', "_");
+        let package_component = crate::codegen::sanitize_bundle_id_component(&library_name);
+        let kotlin_package = format!("com.mobench.{package_component}");
+        let architectures = self
+            .resolve_android_abis(config)?
+            .iter()
+            .map(|abi| android_abi_to_boltffi_architecture(abi))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        crate::codegen::write_boltffi_config_with_output_dir(
+            &crate_dir,
+            &library_name,
+            &self.crate_name,
+            "BenchRunner",
+            &kotlin_package,
+            &architectures,
+            &self.output_dir,
+        )
+    }
+
+    fn run_boltffi_pack_android(&self, config: &BuildConfig) -> Result<(), BenchError> {
+        let crate_dir = self.find_crate_dir()?;
+        let mut cmd = Command::new("boltffi");
+        cmd.arg("pack").arg("android");
+        if matches!(config.profile, BuildProfile::Release) {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&crate_dir);
+        run_command(cmd, "boltffi pack android")
+    }
+
+    fn collect_packaged_native_libraries(
+        &self,
+        config: &BuildConfig,
+    ) -> Result<Vec<NativeLibraryArtifact>, BenchError> {
+        let jni_libs_dir = self.output_dir.join("android/app/src/main/jniLibs");
+        let library_name = format!("lib{}.so", self.crate_name.replace("-", "_"));
+        let mut native_libraries = Vec::new();
+
+        for abi in self.resolve_android_abis(config)? {
+            let packaged_path = jni_libs_dir.join(&abi).join(&library_name);
+            if packaged_path.exists() {
+                native_libraries.push(NativeLibraryArtifact {
+                    abi,
+                    library_name: library_name.clone(),
+                    unstripped_path: packaged_path.clone(),
+                    packaged_path,
+                });
+            }
+        }
+
+        Ok(native_libraries)
     }
 
     /// Validates that all expected build artifacts exist after a successful build
@@ -1320,6 +1460,17 @@ fn android_abi_to_rust_target(abi: &str) -> Option<&'static str> {
         "armeabi-v7a" => Some("armv7-linux-androideabi"),
         "x86_64" => Some("x86_64-linux-android"),
         _ => None,
+    }
+}
+
+fn android_abi_to_boltffi_architecture(abi: &str) -> Result<String, BenchError> {
+    match abi {
+        "arm64-v8a" => Ok("arm64".to_string()),
+        "armeabi-v7a" => Ok("armv7".to_string()),
+        "x86_64" => Ok("x86_64".to_string()),
+        _ => Err(BenchError::Build(format!(
+            "Unsupported Android ABI '{abi}' for BoltFFI. Supported values: arm64-v8a, armeabi-v7a, x86_64"
+        ))),
     }
 }
 

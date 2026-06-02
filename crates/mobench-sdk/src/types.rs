@@ -138,8 +138,8 @@ pub enum Target {
 ///
 /// UniFFI remains the default because it is the historical mobench path. Use
 /// [`FfiBackend::NativeCAbi`] when the generated app should call the generic
-/// mobench JSON C ABI directly, avoiding binding-generator overhead in the
-/// measured path.
+/// mobench JSON C ABI directly, or [`FfiBackend::BoltFfi`] when the generated
+/// app should call BoltFFI-generated Kotlin/Swift bindings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FfiBackend {
@@ -148,6 +148,9 @@ pub enum FfiBackend {
     Uniffi,
     /// Call `mobench_run_benchmark_json` through a small native C ABI bridge.
     NativeCAbi,
+    /// Generate and call BoltFFI Kotlin/Swift bindings.
+    #[serde(rename = "boltffi", alias = "bolt-ffi")]
+    BoltFfi,
 }
 
 impl FfiBackend {
@@ -156,12 +159,23 @@ impl FfiBackend {
         match self {
             FfiBackend::Uniffi => "uniffi",
             FfiBackend::NativeCAbi => "native-c-abi",
+            FfiBackend::BoltFfi => "boltffi",
         }
     }
 
     /// Returns true when this backend needs UniFFI binding generation.
     pub fn uses_uniffi(&self) -> bool {
         matches!(self, FfiBackend::Uniffi)
+    }
+
+    /// Returns true when this backend needs BoltFFI binding generation.
+    pub fn uses_boltffi(&self) -> bool {
+        matches!(self, FfiBackend::BoltFfi)
+    }
+
+    /// Returns true when this backend calls the direct mobench C ABI bridge.
+    pub fn uses_native_c_abi(&self) -> bool {
+        matches!(self, FfiBackend::NativeCAbi)
     }
 }
 
