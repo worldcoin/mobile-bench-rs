@@ -1623,17 +1623,32 @@ pub fn ensure_android_project_with_backend_options(
     ffi_backend: crate::FfiBackend,
 ) -> Result<(), BenchError> {
     let library_name = crate_name.replace('-', "_");
-    if android_project_exists(output_dir)
-        && android_project_matches_library(output_dir, &library_name)
-        && android_project_matches_backend(output_dir, ffi_backend)
-    {
-        return Ok(());
+    let project_exists = android_project_exists(output_dir);
+    let project_matches_library = android_project_matches_library(output_dir, &library_name);
+    let project_matches_backend = android_project_matches_backend(output_dir, ffi_backend);
+
+    if project_exists && !project_matches_library {
+        println!(
+            "Existing Android scaffolding does not match library, regenerating for {} backend...",
+            ffi_backend
+        );
+    } else if project_exists && !project_matches_backend {
+        println!(
+            "Existing Android scaffolding does not match FFI backend, regenerating for {} backend...",
+            ffi_backend
+        );
+    } else if project_exists {
+        println!(
+            "Refreshing generated Android scaffolding for {} backend...",
+            ffi_backend
+        );
+    } else {
+        println!(
+            "Android project not found, generating scaffolding for {} backend...",
+            ffi_backend
+        );
     }
 
-    println!(
-        "Android project not found, generating scaffolding for {} backend...",
-        ffi_backend
-    );
     let project_slug = crate_name.replace('-', "_");
 
     // Resolve the default function by auto-detecting from source
@@ -2054,6 +2069,47 @@ mod tests {
             !boltffi_main.contains("uniffi."),
             "backend changes should regenerate the Android runner:\n{}",
             boltffi_main
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_android_project_refreshes_existing_backend_scaffolding() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-android-refresh-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        generate_android_project_with_backend(
+            &temp_dir,
+            "refresh_benchmark",
+            "refresh_benchmark::bench_prove",
+            crate::FfiBackend::BoltFfi,
+        )
+        .unwrap();
+
+        let main_activity_path =
+            temp_dir.join("android/app/src/main/java/dev/world/refreshbenchmark/MainActivity.kt");
+        let stale_main = fs::read_to_string(&main_activity_path)
+            .unwrap()
+            .replace("BENCH_JSON_START", "STALE_BENCH_JSON_START");
+        fs::write(&main_activity_path, stale_main).unwrap();
+
+        ensure_android_project_with_backend_options(
+            &temp_dir,
+            "refresh_benchmark",
+            None,
+            None,
+            crate::FfiBackend::BoltFfi,
+        )
+        .unwrap();
+
+        let refreshed_main = fs::read_to_string(&main_activity_path).unwrap();
+        assert!(refreshed_main.contains("BENCH_JSON_START"));
+        assert!(
+            !refreshed_main.contains("STALE_BENCH_JSON_START"),
+            "existing same-backend scaffolding should be refreshed:\n{}",
+            refreshed_main
         );
 
         fs::remove_dir_all(&temp_dir).ok();
