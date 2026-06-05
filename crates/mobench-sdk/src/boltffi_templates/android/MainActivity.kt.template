@@ -11,6 +11,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
+    @Volatile private var benchmarkComplete = false
+
     companion object {
         private const val DEFAULT_FUNCTION = "{{DEFAULT_FUNCTION}}"
         private const val DEFAULT_ITERATIONS = 20u
@@ -42,8 +44,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<TextView>(R.id.result_text)?.text = display
+        benchmarkComplete = true
         Thread.sleep(5000)
     }
+
+    fun isBenchmarkComplete(): Boolean = benchmarkComplete
 
     private fun runBenchmarkWithBoltFfi(params: BenchParams): JSONObject {
         val spec = JSONObject()

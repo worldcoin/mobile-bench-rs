@@ -1991,6 +1991,7 @@ mod tests {
         .unwrap();
         assert!(main_activity.contains("import com.mobench.boltbenchmark.runBenchmarkJson"));
         assert!(main_activity.contains("runBenchmarkJson(specJson = spec.toString())"));
+        assert!(main_activity.contains("fun isBenchmarkComplete()"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(
             !main_activity.contains("uniffi."),

@@ -279,7 +279,7 @@ impl IosBuilder {
                 );
                 println!("  Step 2: Generate Swift bindings and package xcframework with BoltFFI");
                 println!(
-                    "    Command: boltffi pack apple --layout split {}",
+                    "    Command: boltffi pack apple --layout split --regenerate {}",
                     if matches!(config.profile, BuildProfile::Release) {
                         "--release"
                     } else {
@@ -484,7 +484,11 @@ impl IosBuilder {
             .join("ios")
             .join(format!("{framework_name}.xcframework"));
         let mut cmd = Command::new("boltffi");
-        cmd.arg("pack").arg("apple").arg("--layout").arg("split");
+        cmd.arg("pack")
+            .arg("apple")
+            .arg("--layout")
+            .arg("split")
+            .arg("--regenerate");
         if matches!(config.profile, BuildProfile::Release) {
             cmd.arg("--release");
         }
@@ -515,7 +519,7 @@ impl IosBuilder {
             let swift_bindings = self
                 .output_dir
                 .join("ios/BenchRunner/BenchRunner/Generated/BoltFFIGenerated")
-                .join(boltffi_swift_bindings_filename(&self.crate_name));
+                .join(boltffi_swift_bindings_path_fragment(&self.crate_name));
             if !swift_bindings.exists() {
                 missing.push(format!(
                     "BoltFFI Swift bindings: {}",
@@ -1669,6 +1673,10 @@ fn boltffi_swift_bindings_filename(crate_name: &str) -> String {
     format!("{}BoltFFI.swift", pascalize_first(crate_name))
 }
 
+fn boltffi_swift_bindings_path_fragment(crate_name: &str) -> PathBuf {
+    PathBuf::from("BoltFFI").join(boltffi_swift_bindings_filename(crate_name))
+}
+
 /// iOS code signing methods for IPA packaging
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigningMethod {
@@ -2312,6 +2320,10 @@ mod tests {
         assert_eq!(
             boltffi_swift_bindings_filename("sample_fns"),
             "Sample_fnsBoltFFI.swift"
+        );
+        assert_eq!(
+            boltffi_swift_bindings_path_fragment("ffi-benchmark"),
+            PathBuf::from("BoltFFI/Ffi-benchmarkBoltFFI.swift")
         );
     }
 

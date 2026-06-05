@@ -218,7 +218,7 @@ impl AndroidBuilder {
                 );
                 println!("  Step 2: Generate and package BoltFFI Android bindings");
                 println!(
-                    "    Command: boltffi pack android {}",
+                    "    Command: boltffi pack android --regenerate {}",
                     if matches!(config.profile, BuildProfile::Release) {
                         "--release"
                     } else {
@@ -441,7 +441,7 @@ impl AndroidBuilder {
     fn run_boltffi_pack_android(&self, config: &BuildConfig) -> Result<(), BenchError> {
         let crate_dir = self.find_crate_dir()?;
         let mut cmd = Command::new("boltffi");
-        cmd.arg("pack").arg("android");
+        cmd.arg("pack").arg("android").arg("--regenerate");
         if matches!(config.profile, BuildProfile::Release) {
             cmd.arg("--release");
         }
