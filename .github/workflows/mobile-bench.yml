@@ -17,6 +17,26 @@ on:
         required: false
         type: string
         default: "low-spec"
+      ios_device:
+        description: "Custom iOS device name"
+        required: false
+        type: string
+        default: ""
+      ios_os_version:
+        description: "Custom iOS OS version"
+        required: false
+        type: string
+        default: ""
+      android_device:
+        description: "Custom Android device name"
+        required: false
+        type: string
+        default: ""
+      android_os_version:
+        description: "Custom Android OS version"
+        required: false
+        type: string
+        default: ""
       crate_path:
         description: "Benchmark crate fixture path"
         required: false
@@ -90,6 +110,10 @@ jobs:
       functions: ${{ inputs.functions }}
       platform: ${{ inputs.platform }}
       device_profile: ${{ inputs.device_profile }}
+      ios_device: ${{ inputs.ios_device }}
+      ios_os_version: ${{ inputs.ios_os_version }}
+      android_device: ${{ inputs.android_device }}
+      android_os_version: ${{ inputs.android_os_version }}
       iterations: ${{ inputs.iterations }}
       warmup: ${{ inputs.warmup }}
       mobench_version: ${{ inputs.mobench_version }}
