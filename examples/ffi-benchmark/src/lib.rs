@@ -158,6 +158,14 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
     Ok(report.into())
 }
 
+/// Run a benchmark through BoltFFI using the same JSON bridge as generated runners.
+#[boltffi::export]
+pub fn run_benchmark_json(spec_json: &str) -> Result<String, String> {
+    let spec: BenchSpec = serde_json::from_str(spec_json).map_err(|err| err.to_string())?;
+    let report = run_benchmark(spec).map_err(|err| err.to_string())?;
+    serde_json::to_string(&report).map_err(|err| err.to_string())
+}
+
 /// Compute fibonacci number iteratively.
 pub fn fibonacci(n: u32) -> u64 {
     match n {
@@ -311,6 +319,15 @@ mod tests {
             warmup: 0,
         };
         let report = run_benchmark(spec).unwrap();
+        assert_eq!(report.samples.len(), 2);
+    }
+
+    #[test]
+    fn test_run_benchmark_via_boltffi_json() {
+        let spec = r#"{"name":"ffi_benchmark::bench_checksum","iterations":2,"warmup":0}"#;
+        let report_json = run_benchmark_json(spec).unwrap();
+        let report: BenchReport = serde_json::from_str(&report_json).unwrap();
+        assert_eq!(report.spec.name, "ffi_benchmark::bench_checksum");
         assert_eq!(report.samples.len(), 2);
     }
 

@@ -47,6 +47,11 @@ on:
         required: false
         type: string
         default: ""
+      ffi_backend:
+        description: "mobench FFI backend to configure for the fixture (uniffi | native-c-abi | boltffi)"
+        required: false
+        type: string
+        default: ""
       pr_number:
         description: "PR number for sticky comment publishing"
         required: false
@@ -89,6 +94,7 @@ jobs:
       warmup: ${{ inputs.warmup }}
       mobench_version: ${{ inputs.mobench_version }}
       mobench_ref: ${{ inputs.mobench_ref }}
+      ffi_backend: ${{ inputs.ffi_backend }}
       build_release: true
       pr_number: ${{ inputs.pr_number }}
       requested_by: ${{ inputs.requested_by }}
