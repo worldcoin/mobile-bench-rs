@@ -364,6 +364,7 @@ jobs:
           device_spec="${IOS_DEVICE}-${IOS_OS_VERSION}"
           echo "Running iOS benchmarks on: ${device_spec}"
           rm -rf target/mobench/ci/ios
+          rm -rf target/browserstack
 
           cargo-mobench ci run \
             --target ios \
@@ -652,6 +653,7 @@ jobs:
           device_spec="${ANDROID_DEVICE}-${ANDROID_OS_VERSION}"
           echo "Running Android benchmarks on: ${device_spec}"
           rm -rf target/mobench/ci/android
+          rm -rf target/browserstack
 
           cargo-mobench ci run \
             --target android \

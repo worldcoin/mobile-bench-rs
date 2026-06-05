@@ -677,6 +677,45 @@ impl BrowserStackClient {
         }
     }
 
+    pub(crate) fn extract_results_from_session_artifacts_with_retry<F, G, S>(
+        &self,
+        mut fetch_session_json: F,
+        mut fetch_text: G,
+        attempts: usize,
+        mut sleep_between_attempts: S,
+    ) -> Result<(Vec<Value>, PerformanceMetrics)>
+    where
+        F: FnMut() -> Result<Value>,
+        G: FnMut(&str) -> Result<String>,
+        S: FnMut(),
+    {
+        let attempts = attempts.max(1);
+        let mut last_error = None;
+
+        for attempt in 1..=attempts {
+            let result = fetch_session_json().and_then(|session_json| {
+                self.extract_results_from_session_artifacts(&session_json, |url| fetch_text(url))
+            });
+            match result {
+                Ok(results) => return Ok(results),
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt < attempts {
+                        sleep_between_attempts();
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "No benchmark results found in session artifacts after {} attempt(s): {}",
+            attempts,
+            last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "unknown error".to_string())
+        ))
+    }
+
     /// Extract benchmark JSON from iOS logs using START/END markers.
     /// iOS uses NSLog which may split the JSON across multiple log lines.
     fn extract_ios_bench_json(logs: &str) -> Option<Value> {
@@ -903,13 +942,12 @@ impl BrowserStackClient {
             }
 
             if device_benchmark_results.is_none() {
-                match self
-                    .get_session_json(build_id, &device.session_id, platform)
-                    .and_then(|session_json| {
-                        self.extract_results_from_session_artifacts(&session_json, |url| {
-                            self.download_text_url(url)
-                        })
-                    }) {
+                match self.extract_results_from_session_artifacts_with_retry(
+                    || self.get_session_json(build_id, &device.session_id, platform),
+                    |url| self.download_text_url(url),
+                    6,
+                    || std::thread::sleep(std::time::Duration::from_secs(5)),
+                ) {
                     Ok((results, perf_metrics)) => {
                         println!(
                             "    Found {} benchmark result(s) from session artifacts",
@@ -3223,6 +3261,56 @@ BENCH_REPORT_JSON_END
                 .and_then(|v| v.as_array())
                 .map(std::vec::Vec::len),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn extract_results_from_session_artifacts_retries_until_logs_are_available() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let mut session_attempts = 0;
+        let mut sleeps = 0;
+
+        let (results, _) = client
+            .extract_results_from_session_artifacts_with_retry(
+                || {
+                    session_attempts += 1;
+                    if session_attempts == 1 {
+                        Ok(json!({ "testcases": { "data": [] } }))
+                    } else {
+                        Ok(json!({
+                            "device_log_url": "https://example.com/device.log"
+                        }))
+                    }
+                },
+                |url| match url {
+                    "https://example.com/device.log" => Ok(
+                        r#"
+                        2026-01-20 12:34:57 I/BenchRunner: BENCH_JSON {"spec":{"name":"bench_android","iterations":2,"warmup":1},"samples_ns":[10,20]}
+                        "#
+                        .to_string(),
+                    ),
+                    other => Err(anyhow!("unexpected artifact url: {other}")),
+                },
+                3,
+                || {
+                    sleeps += 1;
+                },
+            )
+            .unwrap();
+
+        assert_eq!(session_attempts, 2);
+        assert_eq!(sleeps, 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].get("function").and_then(|v| v.as_str()),
+            Some("bench_android")
         );
     }
 }
