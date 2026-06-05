@@ -744,6 +744,13 @@ fn generate_ios_project_with_timeout(
             name: "IOS_BENCHMARK_TIMEOUT_SECS",
             value: ios_benchmark_timeout_secs.to_string(),
         },
+        TemplateVar {
+            name: "BRIDGING_HEADER_IMPORTS",
+            value: match ffi_backend {
+                crate::FfiBackend::BoltFfi => String::new(),
+                _ => format!("#import \"{}FFI.h\"", project_slug.replace('-', "_")),
+            },
+        },
     ];
     render_dir(&IOS_TEMPLATES, &target_dir, &vars)?;
     match ffi_backend {
@@ -2511,6 +2518,11 @@ pub fn public_bench() {
         )
         .unwrap();
         assert!(header.contains("mobench_run_benchmark_json"));
+        let bridging_header = fs::read_to_string(
+            temp_dir.join("ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h"),
+        )
+        .unwrap();
+        assert!(bridging_header.contains("#import \"native_benchmarkFFI.h\""));
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -2543,6 +2555,14 @@ pub fn public_bench() {
         assert!(
             !ffi.contains("mobench_run_benchmark_json"),
             "BoltFFI iOS runner must not call the native C ABI bridge"
+        );
+        let bridging_header = fs::read_to_string(
+            temp_dir.join("ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h"),
+        )
+        .unwrap();
+        assert!(
+            !bridging_header.contains("#import"),
+            "BoltFFI iOS runner should import the generated C module from Swift, not a UniFFI-style bridging header"
         );
 
         let boltffi_toml = fs::read_to_string(temp_dir.join("boltffi.toml")).unwrap();

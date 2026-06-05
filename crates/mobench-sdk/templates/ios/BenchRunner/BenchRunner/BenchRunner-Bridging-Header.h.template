@@ -5,4 +5,4 @@
 //  Bridge to import C FFI from Rust (UniFFI-generated)
 //
 
-#import "{{LIBRARY_NAME}}FFI.h"
+{{BRIDGING_HEADER_IMPORTS}}
