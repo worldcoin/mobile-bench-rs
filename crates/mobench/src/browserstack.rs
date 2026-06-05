@@ -583,6 +583,8 @@ impl BrowserStackClient {
             Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
         }
 
+        Self::extend_unique_results(&mut results, Self::extract_android_chunked_bench_json(logs));
+
         // Also look for Android-style BENCH_JSON marker
         let bench_json_marker = "BENCH_JSON ";
         for line in logs.lines() {
@@ -732,6 +734,47 @@ impl BrowserStackClient {
 
         // Try to extract valid JSON from the section
         Self::extract_json_from_ios_log_section(json_section)
+    }
+
+    /// Extract chunked Android benchmark JSON from logcat output.
+    ///
+    /// Logcat truncates long lines, so generated Android runners emit large reports
+    /// as BENCH_JSON_START, repeated BENCH_JSON_CHUNK lines, then BENCH_JSON_END.
+    fn extract_android_chunked_bench_json(logs: &str) -> Vec<Value> {
+        let start_marker = "BENCH_JSON_START";
+        let chunk_marker = "BENCH_JSON_CHUNK ";
+        let end_marker = "BENCH_JSON_END";
+        let mut results = Vec::new();
+        let mut current = None::<String>;
+
+        for line in logs.lines() {
+            if line.contains(start_marker) {
+                current = Some(String::new());
+                continue;
+            }
+
+            let Some(buffer) = current.as_mut() else {
+                continue;
+            };
+
+            if let Some(idx) = line.find(chunk_marker) {
+                buffer.push_str(line[idx + chunk_marker.len()..].trim_end_matches('\r'));
+                continue;
+            }
+
+            if line.contains(end_marker) {
+                let json = std::mem::take(buffer);
+                current = None;
+                if let Ok(value) = serde_json::from_str::<Value>(&json) {
+                    Self::extend_unique_results(
+                        &mut results,
+                        Self::normalize_benchmark_values(value),
+                    );
+                }
+            }
+        }
+
+        results
     }
 
     /// Extract valid JSON from an iOS log section that may contain log prefixes/timestamps.
@@ -938,6 +981,44 @@ impl BrowserStackClient {
                 }
                 Err(e) => {
                     println!("    Failed to fetch live logs: {}", e);
+                }
+            }
+
+            if device_benchmark_results.is_none()
+                && let Some(log_url) = device
+                    .device_logs
+                    .as_deref()
+                    .filter(|url| !url.trim().is_empty())
+            {
+                match self.download_text_url(log_url) {
+                    Ok(logs) => {
+                        match self.extract_benchmark_results(&logs) {
+                            Ok(results) => {
+                                println!(
+                                    "    Found {} benchmark result(s) from device log URL",
+                                    results.len()
+                                );
+                                device_benchmark_results = Some(results);
+                            }
+                            Err(e) => {
+                                println!("    No benchmark results in device log URL: {}", e);
+                            }
+                        }
+
+                        if device_performance_metrics.sample_count == 0
+                            && let Ok(perf_metrics) = self.extract_performance_metrics(&logs)
+                            && perf_metrics.sample_count > 0
+                        {
+                            println!(
+                                "    Found {} performance metric snapshot(s) from device log URL",
+                                perf_metrics.sample_count
+                            );
+                            device_performance_metrics = perf_metrics;
+                        }
+                    }
+                    Err(e) => {
+                        println!("    Warning: Failed to fetch device log URL: {e}");
+                    }
                 }
             }
 
@@ -3261,6 +3342,98 @@ BENCH_REPORT_JSON_END
                 .and_then(|v| v.as_array())
                 .map(std::vec::Vec::len),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn extract_benchmark_results_reassembles_android_chunked_json_logs() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let json = r#"{"spec":{"name":"bench_android","iterations":2,"warmup":1},"samples":[{"duration_ns":10,"process_peak_memory_kb":42},{"duration_ns":20,"process_peak_memory_kb":43}]}"#;
+        let split = json.len() / 2;
+        let logs = format!(
+            r#"
+            2026-01-20 I/BenchRunner: BENCH_JSON_START
+            2026-01-20 I/BenchRunner: BENCH_JSON_CHUNK {}
+            2026-01-20 I/BenchRunner: BENCH_JSON_CHUNK {}
+            2026-01-20 I/BenchRunner: BENCH_JSON_END
+            "#,
+            &json[..split],
+            &json[split..]
+        );
+
+        let results = client.extract_benchmark_results(&logs).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].get("function").and_then(|v| v.as_str()),
+            Some("bench_android")
+        );
+        assert_eq!(results[0].get("mean_ns").and_then(|v| v.as_u64()), Some(15));
+        assert_eq!(
+            results[0]
+                .get("samples")
+                .and_then(|v| v.as_array())
+                .and_then(|samples| samples.first())
+                .and_then(|sample| sample.get("process_peak_memory_kb"))
+                .and_then(|memory| memory.as_u64()),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn extract_results_from_session_artifacts_reads_espresso_testcase_device_logs() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let session_json = json!({
+            "testcases": {
+                "data": [
+                    {
+                        "testcases": [
+                            {
+                                "device_log": "https://api.browserstack.com/app-automate/espresso/builds/build123/sessions/tests/test123/devicelogs",
+                                "instrumentation_log": "https://api.browserstack.com/app-automate/espresso/builds/build123/sessions/tests/test123/instrumentationlogs"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        let (results, _) = client
+            .extract_results_from_session_artifacts(&session_json, |url| match url {
+                "https://api.browserstack.com/app-automate/espresso/builds/build123/sessions/tests/test123/devicelogs" => Ok(
+                    r#"
+                    2026-01-20 I/BenchRunner: BENCH_JSON_START
+                    2026-01-20 I/BenchRunner: BENCH_JSON_CHUNK {"spec":{"name":"bench_android","iterations":2,"warmup":1},"samples_ns":[10,20]}
+                    2026-01-20 I/BenchRunner: BENCH_JSON_END
+                    "#
+                    .to_string(),
+                ),
+                "https://api.browserstack.com/app-automate/espresso/builds/build123/sessions/tests/test123/instrumentationlogs" => {
+                    Ok("instrumentation output without app logcat".to_string())
+                }
+                other => Err(anyhow!("unexpected artifact url: {other}")),
+            })
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].get("function").and_then(|v| v.as_str()),
+            Some("bench_android")
         );
     }
 
