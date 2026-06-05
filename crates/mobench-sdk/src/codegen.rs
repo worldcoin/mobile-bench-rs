@@ -925,7 +925,7 @@ architectures = [{android_architectures}]
 package = "{kotlin_package}"
 output = "{android_kotlin}"
 library_name = "{library_name}"
-desktop_loader = "none"
+desktop_loader = "system"
 api_style = "top_level"
 
 [targets.android.header]
@@ -2006,6 +2006,7 @@ mod tests {
         assert!(boltffi_toml.contains("name = \"bolt_benchmark\""));
         assert!(boltffi_toml.contains("crate = \"bolt_benchmark\""));
         assert!(boltffi_toml.contains("package = \"com.mobench.boltbenchmark\""));
+        assert!(boltffi_toml.contains("desktop_loader = \"system\""));
         assert!(boltffi_toml.contains("output = \"target/mobench/android/app/src/main/java\""));
 
         fs::remove_dir_all(&temp_dir).ok();

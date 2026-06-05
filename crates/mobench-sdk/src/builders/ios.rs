@@ -515,7 +515,7 @@ impl IosBuilder {
             let swift_bindings = self
                 .output_dir
                 .join("ios/BenchRunner/BenchRunner/Generated/BoltFFIGenerated")
-                .join(format!("{}BoltFFI.swift", pascalize_first(&framework_name)));
+                .join(boltffi_swift_bindings_filename(&self.crate_name));
             if !swift_bindings.exists() {
                 missing.push(format!(
                     "BoltFFI Swift bindings: {}",
@@ -1665,6 +1665,10 @@ fn pascalize_first(value: &str) -> String {
     }
 }
 
+fn boltffi_swift_bindings_filename(crate_name: &str) -> String {
+    format!("{}BoltFFI.swift", pascalize_first(crate_name))
+}
+
 /// iOS code signing methods for IPA packaging
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigningMethod {
@@ -2297,6 +2301,18 @@ mod tests {
         let builder =
             IosBuilder::new("/tmp/test-project", "test-bench-mobile").output_dir("/custom/output");
         assert_eq!(builder.output_dir, PathBuf::from("/custom/output"));
+    }
+
+    #[test]
+    fn test_boltffi_swift_bindings_filename_uses_crate_name() {
+        assert_eq!(
+            boltffi_swift_bindings_filename("ffi-benchmark"),
+            "Ffi-benchmarkBoltFFI.swift"
+        );
+        assert_eq!(
+            boltffi_swift_bindings_filename("sample_fns"),
+            "Sample_fnsBoltFFI.swift"
+        );
     }
 
     #[cfg(target_os = "macos")]
