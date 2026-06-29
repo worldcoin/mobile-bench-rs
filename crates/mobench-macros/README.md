@@ -1,44 +1,43 @@
 # mobench-macros
 
-Procedural macros for the [mobench](https://crates.io/crates/mobench) mobile benchmarking framework.
+Procedural macros for the [mobench](https://crates.io/crates/mobench) mobile
+benchmarking toolkit.
 
-This crate provides the `#[benchmark]` attribute macro that automatically registers functions for mobile benchmarking. It uses compile-time registration via the `inventory` crate to build a registry of benchmark functions.
+This crate provides the `#[benchmark]` attribute macro. The macro preserves the
+annotated Rust function, validates the benchmark signature at compile time, and
+registers it through `inventory` so `mobench-sdk` and the `cargo mobench` CLI
+can discover and run it.
 
-Benchmarks annotated with these macros are discovered through the CLI's config-first resolver, so non-legacy crate layouts work with `mobench.toml`, `--project-root`, and `--crate-path`.
+Current release: **0.1.42**.
 
-## Features
+## Install
 
-- **`#[benchmark]` attribute**: Mark functions as benchmarks
-- **Automatic registration**: No manual registry maintenance required
-- **Type safety**: Compile-time validation of benchmark functions
-- **Zero runtime overhead**: Registration happens at compile time
-
-## Usage
-
-Add this to your `Cargo.toml`:
+Most users should depend on `mobench-sdk`, which re-exports the macro:
 
 ```toml
 [dependencies]
-mobench-macros = "0.1.37"
-mobench-sdk = "0.1.37"  # For the runtime
+mobench-sdk = "0.1.42"
+inventory = "0.3"
 ```
 
-### Basic Example
+Direct macro use is also supported:
+
+```toml
+[dependencies]
+mobench-macros = "0.1.42"
+mobench-sdk = { version = "0.1.42", default-features = false, features = ["registry"] }
+inventory = "0.3"
+```
+
+## Basic Example
 
 ```rust
-use mobench_macros::benchmark;
+use mobench_sdk::benchmark;
 
 #[benchmark]
-fn fibonacci_benchmark() {
+pub fn fibonacci_benchmark() {
     let result = fibonacci(30);
     std::hint::black_box(result);
-}
-
-#[benchmark]
-fn sorting_benchmark() {
-    let mut data = vec![5, 2, 8, 1, 9];
-    data.sort();
-    std::hint::black_box(data);
 }
 
 fn fibonacci(n: u32) -> u64 {
@@ -50,195 +49,89 @@ fn fibonacci(n: u32) -> u64 {
 }
 ```
 
-### With mobench-sdk
+## Setup, Teardown, and Per-Iteration Input
 
-The macros work seamlessly with mobench-sdk:
-
-```rust
-use mobench_macros::benchmark;
-use mobench_sdk::{run_benchmark, BenchSpec};
-
-#[benchmark]
-fn my_expensive_operation() {
-    // Your benchmark code
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Run the benchmark
-    let spec = BenchSpec::new("my_expensive_operation", 100, 10)?;
-    let report = run_benchmark(spec)?;
-
-    println!("Mean: {} ns", report.mean_ns());
-    Ok(())
-}
-```
-
-## How It Works
-
-The `#[benchmark]` macro:
-
-1. **Preserves your function**: The original function remains unchanged
-2. **Generates registration code**: Creates an `inventory::submit!` call
-3. **Wraps in closure**: Converts your function into a callable closure
-4. **Registers at compile time**: Adds to the global benchmark registry
-
-### Macro Expansion
-
-When you write:
+Setup code runs outside measured timing:
 
 ```rust
-#[benchmark]
-fn my_benchmark() {
-    expensive_operation();
-}
-```
-
-The macro expands to something like:
-
-```rust
-fn my_benchmark() {
-    expensive_operation();
-}
-
-inventory::submit! {
-    BenchFunction {
-        name: "my_benchmark",
-        runner: |spec| {
-            run_closure(spec, || {
-                my_benchmark();
-                Ok(())
-            })
-        }
-    }
-}
-```
-
-## Setup and Teardown
-
-For benchmarks that need expensive setup that shouldn't be measured:
-
-```rust
-use mobench_macros::benchmark;
+use mobench_sdk::benchmark;
 
 fn setup_data() -> Vec<u8> {
-    vec![0u8; 1_000_000]  // Not measured
+    vec![42; 1024 * 1024]
 }
 
 #[benchmark(setup = setup_data)]
-fn hash_benchmark(data: &Vec<u8>) {
-    std::hint::black_box(compute_hash(data));  // Only this is measured
+pub fn checksum(data: &Vec<u8>) {
+    let sum: u64 = data.iter().map(|b| *b as u64).sum();
+    std::hint::black_box(sum);
 }
 ```
 
-### Per-Iteration Setup
-
-For benchmarks that mutate their input (e.g., sorting):
+Use `per_iteration` when the benchmark mutates or consumes its input:
 
 ```rust
-fn generate_random_vec() -> Vec<i32> {
-    (0..1000).collect()
+use mobench_sdk::benchmark;
+
+fn unsorted_vec() -> Vec<i32> {
+    (0..1000).rev().collect()
 }
 
-#[benchmark(setup = generate_random_vec, per_iteration)]
-fn sort_benchmark(data: Vec<i32>) {
-    let mut data = data;
+#[benchmark(setup = unsorted_vec, per_iteration)]
+pub fn sort_vec(mut data: Vec<i32>) {
     data.sort();
     std::hint::black_box(data);
 }
 ```
 
-### Setup and Teardown
+Teardown can clean up resources after measured iterations:
 
 ```rust
-fn setup_db() -> Database { Database::connect("test.db") }
-fn cleanup_db(db: Database) { db.close(); }
+use mobench_sdk::benchmark;
+
+fn setup_db() -> Database {
+    Database::connect("bench.db")
+}
+
+fn cleanup_db(db: Database) {
+    db.close();
+}
 
 #[benchmark(setup = setup_db, teardown = cleanup_db)]
-fn db_query(db: &Database) {
-    db.query("SELECT * FROM users");
+pub fn query(db: &Database) {
+    db.query("SELECT 1");
 }
 ```
 
-## Requirements
+## Signature Rules
 
-- Functions must be regular functions (not async)
-- Without setup: no parameters allowed
-- With setup: exactly one parameter (reference to setup result, or owned for per_iteration)
-- Functions should use `std::hint::black_box()` to prevent optimization of results
+- Simple benchmarks take no parameters and return `()`.
+- Setup benchmarks take one parameter matching the setup function output.
+- `per_iteration` setup passes the setup value by value.
+- Non-`per_iteration` setup passes the setup value by reference.
+- Benchmark functions should be `pub` when they need to be linked into generated
+  mobile runners.
 
-## Best Practices
+## How It Works
 
-### Prevent Compiler Optimization
-
-Always use `black_box` for benchmark results:
+`#[benchmark]` expands to registration code similar to:
 
 ```rust
-use mobench_macros::benchmark;
-
-#[benchmark]
-fn good_benchmark() {
-    let result = expensive_computation();
-    std::hint::black_box(result); // ✓ Prevents optimization
-}
-
-#[benchmark]
-fn bad_benchmark() {
-    let result = expensive_computation(); // ✗ May be optimized away
-}
-```
-
-### Benchmark Naming
-
-Use descriptive names that indicate what's being measured:
-
-```rust
-#[benchmark]
-fn hash_1kb_data() { /* ... */ }
-
-#[benchmark]
-fn parse_json_small() { /* ... */ }
-
-#[benchmark]
-fn encrypt_aes_256() { /* ... */ }
-```
-
-### Isolate Benchmarks
-
-Keep benchmarks focused on one operation:
-
-```rust
-// Good: Measures one thing
-#[benchmark]
-fn sha256_hash() {
-    let hash = sha256(&DATA);
-    std::hint::black_box(hash);
-}
-
-// Bad: Measures multiple things
-#[benchmark]
-fn hash_and_encode() {
-    let hash = sha256(&DATA);
-    let encoded = base64_encode(hash);
-    std::hint::black_box(encoded);
+inventory::submit! {
+    mobench_sdk::BenchFunction {
+        name: "my_crate::my_benchmark",
+        runner: |spec| {
+            mobench_sdk::timing::run_closure(spec, || {
+                my_benchmark();
+                Ok(())
+            })
+        },
+    }
 }
 ```
 
-## Part of mobench
-
-This crate is part of the mobench ecosystem for mobile benchmarking:
-
-- **[mobench](https://crates.io/crates/mobench)** - CLI tool for running benchmarks
-- **[mobench-sdk](https://crates.io/crates/mobench-sdk)** - Core SDK with timing harness, build automation, and codegen
-- **[mobench-macros](https://crates.io/crates/mobench-macros)** - This crate (proc macros)
-
-## See Also
-
-- [mobench-sdk](https://crates.io/crates/mobench-sdk) for the complete SDK
-- [mobench](https://crates.io/crates/mobench) for the CLI tool
-- [inventory](https://crates.io/crates/inventory) for the registration mechanism
+The `cargo mobench list`, `verify`, `run`, and `ci run` commands use that
+registry through the SDK runtime.
 
 ## License
 
-Licensed under the MIT License. See [LICENSE.md](../../LICENSE.md) for details.
-
-Copyright (c) 2026 World Foundation
+MIT licensed, World Foundation 2026.

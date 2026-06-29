@@ -1,9 +1,27 @@
 flowchart LR
-    user["Benchmark crate"] --> macro["mobench-macros\n#[benchmark]"]
-    macro --> registry["mobench-sdk registry\ninventory"]
-    registry --> runner["mobench-sdk runner\nBenchSpec -> BenchReport"]
-    runner --> templates["Generated Android/iOS runners"]
-    cli["mobench CLI"] --> builders["SDK builders"]
-    builders --> templates
-    cli --> reports["JSON / Markdown / CSV / plots"]
-    templates --> reports
+    crate["Benchmark crate"]
+    macros["mobench-macros\n#[benchmark]"]
+    registry["mobench-sdk registry\ninventory"]
+    timing["timing harness\nBenchSpec -> BenchReport"]
+    backend["Generated runner backend\nuniffi or native-c-abi"]
+    runners["Generated Android/iOS runners"]
+    cli["mobench CLI\nrun, build, ci, report, profile"]
+    builders["SDK builders and templates"]
+    device["Local device/emulator\nor BrowserStack"]
+    outputs["JSON / Markdown / CSV / plots"]
+    profiling["Local native profiling\nprofile.json + flamegraphs"]
+
+    crate --> macros
+    macros --> registry
+    registry --> timing
+    timing --> backend
+    backend --> runners
+
+    cli --> builders
+    builders --> backend
+    builders --> runners
+
+    runners --> device
+    device --> outputs
+    cli --> outputs
+    cli --> profiling

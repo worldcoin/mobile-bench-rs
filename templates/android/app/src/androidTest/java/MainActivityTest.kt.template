@@ -1,12 +1,15 @@
 package {{PACKAGE_NAME}}
 
+import android.util.Log
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.espresso.matcher.ViewMatchers.withText
+import java.util.concurrent.TimeUnit
 import org.hamcrest.Matchers.containsString
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -14,11 +17,38 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MainActivityTest {
 
+    private val benchmarkTimeoutMs = TimeUnit.SECONDS.toMillis({{ANDROID_BENCHMARK_TIMEOUT_SECS}})
+    private val heartbeatMs = TimeUnit.SECONDS.toMillis({{ANDROID_HEARTBEAT_INTERVAL_SECS}})
+
     @get:Rule
     val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
     @Test
     fun showsBenchOutput() {
+        val deadline = System.currentTimeMillis() + benchmarkTimeoutMs
+        var completed = false
+
+        while (System.currentTimeMillis() < deadline) {
+            activityRule.scenario.onActivity { activity ->
+                completed = activity.isBenchmarkComplete()
+            }
+            if (completed) {
+                break
+            }
+
+            Log.i("BenchRunnerTest", "Waiting for benchmark output...")
+            try {
+                Thread.sleep(heartbeatMs)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                fail("Interrupted while waiting for benchmark output")
+            }
+        }
+
+        if (!completed) {
+            fail("Timed out waiting for benchmark output")
+        }
+
         onView(withId(R.id.result_text))
             .check(matches(withText(containsString("Samples"))))
     }

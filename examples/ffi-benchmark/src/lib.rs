@@ -82,6 +82,7 @@ pub enum BenchError {
 
 // Generate UniFFI scaffolding from proc macros
 uniffi::setup_scaffolding!();
+mobench_sdk::export_native_c_abi!();
 
 // Conversion from mobench-sdk types
 impl From<mobench_sdk::BenchSpec> for BenchSpec {
@@ -347,6 +348,28 @@ mod tests {
         assert_eq!(ffi_sample.process_peak_memory_kb, Some(17));
         let json = serde_json::to_value(&ffi_sample).unwrap();
         assert_eq!(json["process_peak_memory_kb"], 17);
+    }
+
+    #[test]
+    fn test_run_benchmark_via_native_c_abi() {
+        let spec = br#"{"name":"ffi_benchmark::bench_checksum","iterations":2,"warmup":0}"#;
+        let mut out = mobench_sdk::MobenchBuf::default();
+
+        let status = unsafe { mobench_run_benchmark_json(spec.as_ptr(), spec.len(), &mut out) };
+
+        assert_eq!(status, 0);
+        assert!(!out.ptr.is_null());
+        assert!(out.len > 0);
+
+        let report_bytes = unsafe { std::slice::from_raw_parts(out.ptr, out.len) };
+        let report: mobench_sdk::RunnerReport = serde_json::from_slice(report_bytes).unwrap();
+        assert_eq!(report.spec.name, "ffi_benchmark::bench_checksum");
+        assert_eq!(report.samples.len(), 2);
+
+        unsafe { mobench_free_buf(&mut out) };
+        assert!(out.ptr.is_null());
+        assert_eq!(out.len, 0);
+        assert_eq!(out.cap, 0);
     }
 
     #[test]

@@ -485,6 +485,12 @@ pub(crate) enum ConfigCommand {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum PlotFixture {
+    Basic,
+    Ffi,
+}
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum FixtureCommand {
     /// Create starter fixture files for CI runs.
@@ -521,6 +527,16 @@ pub(crate) enum FixtureCommand {
         profile: Option<String>,
         #[arg(long, value_enum, default_value_t = CheckOutputFormat::Text)]
         format: CheckOutputFormat,
+    },
+    /// Render and verify checked-in plot fixtures.
+    VerifyPlots {
+        #[arg(value_enum)]
+        fixture: PlotFixture,
+        #[arg(
+            long,
+            help = "Output directory for rendered fixture artifacts (defaults under target/mobench/plot-fixtures)"
+        )]
+        output_dir: Option<PathBuf>,
     },
     /// Compute deterministic fixture cache key from config/toolchain inputs.
     CacheKey {

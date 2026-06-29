@@ -1,9 +1,17 @@
 package {{PACKAGE_NAME}}
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Debug
-import android.os.Process
-import android.os.SystemClock
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.ResultReceiver
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
@@ -13,21 +21,26 @@ import uniffi.{{UNIFFI_NAMESPACE}}.BenchReport
 import uniffi.{{UNIFFI_NAMESPACE}}.BenchSpec
 import uniffi.{{UNIFFI_NAMESPACE}}.runBenchmark
 
+private const val DEFAULT_FUNCTION = "{{DEFAULT_FUNCTION}}"
+private const val DEFAULT_ITERATIONS = 20u
+private const val DEFAULT_WARMUP = 3u
+private const val FUNCTION_EXTRA = "bench_function"
+private const val ITERATIONS_EXTRA = "bench_iterations"
+private const val WARMUP_EXTRA = "bench_warmup"
+private const val SPEC_ASSET = "bench_spec.json"
+private const val RUN_BENCHMARK_ACTION = "{{PACKAGE_NAME}}.RUN_BENCHMARK"
+private const val RESULT_RECEIVER_EXTRA = "bench_result_receiver"
+private const val RESULT_DISPLAY_EXTRA = "bench_display"
+private const val RESULT_ERROR_EXTRA = "bench_error"
+private const val RESULT_OK = 1
+private const val RESULT_ERROR = 2
+private const val FOREGROUND_NOTIFICATION_ID = 1001
+private const val FOREGROUND_CHANNEL_ID = "mobench_benchmark"
+private const val FOREGROUND_CHANNEL_NAME = "Mobench benchmark"
+
 class MainActivity : AppCompatActivity() {
 
-    companion object {
-        private const val DEFAULT_FUNCTION = "{{DEFAULT_FUNCTION}}"
-        private const val DEFAULT_ITERATIONS = 20u
-        private const val DEFAULT_WARMUP = 3u
-        private const val FUNCTION_EXTRA = "bench_function"
-        private const val ITERATIONS_EXTRA = "bench_iterations"
-        private const val WARMUP_EXTRA = "bench_warmup"
-        private const val SPEC_ASSET = "bench_spec.json"
-
-        init {
-            System.loadLibrary("{{LIBRARY_NAME}}")
-        }
-    }
+    @Volatile private var benchmarkComplete = false
 
     private data class BenchParams(
         val function: String,
@@ -39,123 +52,48 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        val resultText = findViewById<TextView>(R.id.result_text)
+        resultText?.text = "Running benchmark..."
+
         val params = resolveBenchParams()
-        val display = try {
-            val spec = BenchSpec(
-                name = params.function,
-                iterations = params.iterations,
-                warmup = params.warmup
-            )
-            val report = runBenchmark(spec)
-            // Debug: Log first sample's raw nanoseconds
-            if (report.samples.isNotEmpty()) {
-                android.util.Log.d("MainActivity", "First sample duration_ns: ${report.samples[0].durationNs}")
+        val resultReceiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
+                    ?: resultData?.getString(RESULT_ERROR_EXTRA)
+                    ?: "Benchmark worker returned no result"
+                resultText?.text = display
+                benchmarkComplete = true
+
+                if (resultCode == RESULT_OK) {
+                    android.util.Log.i("BenchRunner", "Benchmark worker completed")
+                } else {
+                    android.util.Log.e("BenchRunner", display)
+                }
             }
-            logBenchReport(report)
-            formatBenchReport(report)
-        } catch (e: BenchException) {
-            // Generic handler for all benchmark errors (InvalidIterations, UnknownFunction, etc.)
-            android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
-            "Benchmark error: ${e.message}"
+        }
+
+        try {
+            val intent = Intent(this, BenchmarkWorkerService::class.java).apply {
+                action = RUN_BENCHMARK_ACTION
+                putExtra(FUNCTION_EXTRA, params.function)
+                putExtra(ITERATIONS_EXTRA, params.iterations.toInt())
+                putExtra(WARMUP_EXTRA, params.warmup.toInt())
+                putExtra(RESULT_RECEIVER_EXTRA, resultReceiver)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
         } catch (e: Exception) {
-            android.util.Log.e("BenchRunner", "Unexpected error during benchmark execution", e)
-            "Unexpected error: ${e.message}"
-        }
-
-        findViewById<TextView>(R.id.result_text)?.text = display
-
-        // Keep the report visible briefly so local smoke runs and remote automation
-        // have a stable window to read the results.
-        android.util.Log.i("BenchRunner", "Displaying results for 5 seconds for capture output...")
-        Thread.sleep(5000)
-        android.util.Log.i("BenchRunner", "Display hold complete")
-    }
-
-    /**
-     * Formats a duration in nanoseconds to a human-readable string.
-     * Uses milliseconds (ms) by default, switches to seconds (s) if >= 1000ms.
-     */
-    private fun formatDuration(ns: Long): String {
-        val ms = ns.toDouble() / 1_000_000.0
-        return if (ms >= 1000.0) {
-            val secs = ms / 1000.0
-            String.format("%.3fs", secs)
-        } else {
-            String.format("%.3fms", ms)
+            android.util.Log.e("BenchRunner", "Failed to run benchmark worker", e)
+            resultText?.text = "Failed to run benchmark worker: ${e.message}"
+            benchmarkComplete = true
         }
     }
 
-    private fun formatBenchReport(report: BenchReport): String = buildString {
-        appendLine("=== Benchmark Results ===")
-        appendLine()
-        appendLine("Function: ${report.spec.name}")
-        appendLine("Iterations: ${report.spec.iterations}")
-        appendLine("Warmup: ${report.spec.warmup}")
-        appendLine()
-        appendLine("Samples (${report.samples.size}):")
-        report.samples.forEachIndexed { index, sample ->
-            appendLine("  ${index + 1}. ${formatDuration(sample.durationNs.toLong())}")
-        }
-
-        if (report.samples.isNotEmpty()) {
-            val durations = report.samples.map { it.durationNs.toLong() }
-            val min = durations.minOrNull() ?: 0L
-            val max = durations.maxOrNull() ?: 0L
-            val avg = durations.sum().toDouble() / durations.size.toDouble()
-            appendLine()
-            appendLine("Statistics:")
-            appendLine("  Min: ${formatDuration(min)}")
-            appendLine("  Max: ${formatDuration(max)}")
-            appendLine("  Avg: ${formatDuration(avg.toLong())}")
-        }
-    }
-
-    private fun logBenchReport(report: BenchReport) {
-        val json = JSONObject()
-        val spec = JSONObject()
-        spec.put("name", report.spec.name)
-        spec.put("iterations", report.spec.iterations.toInt())
-        spec.put("warmup", report.spec.warmup.toInt())
-        json.put("spec", spec)
-
-        val samples = report.samples.map { it.durationNs.toLong() }
-        val sampleArray = JSONArray()
-        samples.forEach { sampleArray.put(it) }
-        json.put("samples_ns", sampleArray)
-
-        val phases = JSONArray()
-        report.phases.forEach { phase ->
-            val phaseJson = JSONObject()
-            phaseJson.put("name", phase.name)
-            phaseJson.put("duration_ns", phase.durationNs.toLong())
-            phases.put(phaseJson)
-        }
-        json.put("phases", phases)
-
-        if (samples.isNotEmpty()) {
-            val min = samples.minOrNull() ?: 0L
-            val max = samples.maxOrNull() ?: 0L
-            val avg = samples.sum().toDouble() / samples.size.toDouble()
-            val stats = JSONObject()
-            stats.put("min_ns", min)
-            stats.put("max_ns", max)
-            stats.put("avg_ns", avg.toDouble())
-            json.put("stats", stats)
-        }
-
-        val memInfo = Debug.MemoryInfo()
-        Debug.getMemoryInfo(memInfo)
-        val resources = JSONObject()
-        resources.put("elapsed_cpu_ms", Process.getElapsedCpuTime())
-        resources.put("uptime_ms", SystemClock.elapsedRealtime())
-        resources.put("total_pss_kb", memInfo.totalPss)
-        resources.put("private_dirty_kb", memInfo.totalPrivateDirty)
-        resources.put("native_heap_kb", Debug.getNativeHeapAllocatedSize() / 1024)
-        val usedHeap = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()
-        resources.put("java_heap_kb", usedHeap / 1024)
-        json.put("resources", resources)
-
-        android.util.Log.i("BenchRunner", "BENCH_JSON ${json}")
+    fun isBenchmarkComplete(): Boolean {
+        return benchmarkComplete
     }
 
     private fun resolveBenchParams(): BenchParams {
@@ -252,5 +190,488 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.e("BenchRunner", "Failed to parse bench_spec.json from assets", e)
             null
         }
+    }
+}
+
+class BenchmarkWorkerService : Service() {
+
+    private data class BenchParams(
+        val function: String,
+        val iterations: UInt,
+        val warmup: UInt,
+    )
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action != RUN_BENCHMARK_ACTION) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+
+        val resultReceiver = intent.resultReceiverExtra()
+        val params = BenchParams(
+            function = intent.getStringExtra(FUNCTION_EXTRA)?.takeUnless { it.isBlank() } ?: DEFAULT_FUNCTION,
+            iterations = intent.getIntExtra(ITERATIONS_EXTRA, DEFAULT_ITERATIONS.toInt()).toUInt(),
+            warmup = intent.getIntExtra(WARMUP_EXTRA, DEFAULT_WARMUP.toInt()).toUInt(),
+        )
+
+        startBenchmarkForeground()
+
+        Thread {
+            try {
+                val result = runBenchmarkInWorker(params)
+                val bundle = Bundle().apply {
+                    putString(RESULT_DISPLAY_EXTRA, result.displayText)
+                    result.errorMessage?.let { putString(RESULT_ERROR_EXTRA, it) }
+                }
+                resultReceiver?.send(if (result.errorMessage == null) RESULT_OK else RESULT_ERROR, bundle)
+            } finally {
+                stopBenchmarkForeground()
+                stopSelf(startId)
+            }
+        }.apply {
+            name = "mobench-benchmark-worker"
+            start()
+        }
+
+        return START_NOT_STICKY
+    }
+
+    private fun startBenchmarkForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(
+                NotificationChannel(
+                    FOREGROUND_CHANNEL_ID,
+                    FOREGROUND_CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
+        }
+
+        startForeground(FOREGROUND_NOTIFICATION_ID, buildBenchmarkNotification())
+    }
+
+    @Suppress("DEPRECATION")
+    private fun stopBenchmarkForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        } else {
+            stopForeground(true)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun buildBenchmarkNotification(): Notification {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, FOREGROUND_CHANNEL_ID)
+        } else {
+            Notification.Builder(this)
+                .setPriority(Notification.PRIORITY_LOW)
+        }
+
+        return builder
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("Running benchmark")
+            .setContentText("Mobench isolated worker is measuring this run")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .build()
+    }
+
+    private fun runBenchmarkInWorker(params: BenchParams): WorkerBenchmarkResult {
+        BenchNativeLibrary.ensureLoaded()
+        val display = try {
+            val spec = BenchSpec(
+                name = params.function,
+                iterations = params.iterations,
+                warmup = params.warmup
+            )
+            val processMemorySampler = ProcessMemorySampler()
+            var runProcessPeakMemoryKb: Long?
+            processMemorySampler.start()
+            val report = try {
+                runBenchmark(spec)
+            } finally {
+                runProcessPeakMemoryKb = processMemorySampler.stop()
+            }
+            // Debug: Log first sample's raw nanoseconds
+            if (report.samples.isNotEmpty()) {
+                android.util.Log.d("BenchmarkWorker", "First sample duration_ns: ${report.samples[0].durationNs}")
+            }
+            val json = buildBenchReportJson(report, runProcessPeakMemoryKb)
+            android.util.Log.i("BenchRunner", "BENCH_JSON ${json}")
+            formatBenchReport(report)
+        } catch (e: BenchException) {
+            android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
+            return WorkerBenchmarkResult(
+                displayText = "Benchmark error: ${e.message}",
+                errorMessage = "Benchmark error: ${e.message}"
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("BenchRunner", "Unexpected error during benchmark execution", e)
+            return WorkerBenchmarkResult(
+                displayText = "Unexpected error: ${e.message}",
+                errorMessage = "Unexpected error: ${e.message}"
+            )
+        }
+
+        return WorkerBenchmarkResult(displayText = display, errorMessage = null)
+    }
+}
+
+private data class WorkerBenchmarkResult(
+    val displayText: String,
+    val errorMessage: String?,
+)
+
+private object BenchNativeLibrary {
+    init {
+        System.loadLibrary("{{LIBRARY_NAME}}")
+    }
+
+    fun ensureLoaded() = Unit
+}
+
+@Suppress("DEPRECATION")
+private fun Intent.resultReceiverExtra(): ResultReceiver? {
+    return if (Build.VERSION.SDK_INT >= 33) {
+        getParcelableExtra(RESULT_RECEIVER_EXTRA, ResultReceiver::class.java)
+    } else {
+        getParcelableExtra(RESULT_RECEIVER_EXTRA) as? ResultReceiver
+    }
+}
+
+private class ProcessMemorySampler(private val sampleIntervalMs: Long = 1000L) {
+    @Volatile private var running = false
+    @Volatile private var peakKb = 0L
+    private var samplerThread: Thread? = null
+
+    fun start() {
+        if (running) {
+            return
+        }
+
+        running = true
+        recordCurrent()
+        samplerThread = Thread {
+            while (running) {
+                recordCurrent()
+                try {
+                    Thread.sleep(sampleIntervalMs)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+            recordCurrent()
+        }.apply {
+            name = "mobench-process-memory-sampler"
+            isDaemon = true
+            start()
+        }
+    }
+
+    fun stop(): Long? {
+        running = false
+        try {
+            samplerThread?.join(sampleIntervalMs * 2)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        recordCurrent()
+        return peakKb.takeIf { it > 0L }
+    }
+
+    @Synchronized
+    private fun recordCurrent() {
+        currentProcessPssKb()?.let { observedKb ->
+            if (observedKb > peakKb) {
+                peakKb = observedKb
+            }
+        }
+    }
+}
+
+private fun currentProcessPssKb(): Long? {
+    readProcMemoryKb("/proc/self/smaps_rollup", "Pss:")?.let { return it }
+    readProcMemoryKb("/proc/self/status", "VmHWM:")?.let { return it }
+    readProcMemoryKb("/proc/self/status", "VmRSS:")?.let { return it }
+
+    val memInfo = Debug.MemoryInfo()
+    return try {
+        Debug.getMemoryInfo(memInfo)
+        memInfo.totalPss.toLong().takeIf { it > 0L }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Unable to read process memory from Debug.getMemoryInfo", e)
+        null
+    }
+}
+
+private fun readProcMemoryKb(path: String, label: String): Long? {
+    return try {
+        java.io.File(path).bufferedReader().use { reader ->
+            var line: String? = reader.readLine()
+            while (line != null) {
+                if (line.startsWith(label)) {
+                    return@use parseMemoryKb(line)
+                }
+                line = reader.readLine()
+            }
+            null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private fun parseMemoryKb(line: String): Long? {
+    val value = line
+        .substringAfter(':', "")
+        .trim()
+        .split(' ')
+        .firstOrNull { it.isNotBlank() }
+    return value?.toLongOrNull()?.takeIf { it > 0L }
+}
+
+private fun median(values: List<Long>): Long {
+    val sorted = values.sorted()
+    if (sorted.isEmpty()) {
+        return 0L
+    }
+    val middle = sorted.size / 2
+    return if (sorted.size % 2 == 0) {
+        (sorted[middle - 1] + sorted[middle]) / 2
+    } else {
+        sorted[middle]
+    }
+}
+
+/**
+ * Formats a duration in nanoseconds to a human-readable string.
+ * Uses milliseconds (ms) by default, switches to seconds (s) if >= 1000ms.
+ */
+private fun formatDuration(ns: Long): String {
+    val ms = ns.toDouble() / 1_000_000.0
+    return if (ms >= 1000.0) {
+        val secs = ms / 1000.0
+        String.format("%.3fs", secs)
+    } else {
+        String.format("%.3fms", ms)
+    }
+}
+
+private fun formatBenchReport(report: BenchReport): String = buildString {
+    appendLine("=== Benchmark Results ===")
+    appendLine()
+    appendLine("Function: ${report.spec.name}")
+    appendLine("Iterations: ${report.spec.iterations}")
+    appendLine("Warmup: ${report.spec.warmup}")
+    appendLine()
+    appendLine("Samples (${report.samples.size}):")
+    report.samples.forEachIndexed { index, sample ->
+        appendLine("  ${index + 1}. ${formatDuration(sample.durationNs.toLong())}")
+    }
+
+    if (report.samples.isNotEmpty()) {
+        val durations = report.samples.map { it.durationNs.toLong() }
+        val min = durations.minOrNull() ?: 0L
+        val max = durations.maxOrNull() ?: 0L
+        val avg = durations.sum().toDouble() / durations.size.toDouble()
+        appendLine()
+        appendLine("Statistics:")
+        appendLine("  Min: ${formatDuration(min)}")
+        appendLine("  Max: ${formatDuration(max)}")
+        appendLine("  Avg: ${formatDuration(avg.toLong())}")
+    }
+}
+
+private fun buildBenchReportJson(report: BenchReport, runProcessPeakMemoryKb: Long?): JSONObject {
+    val json = JSONObject()
+    val spec = JSONObject()
+    spec.put("name", report.spec.name)
+    spec.put("iterations", report.spec.iterations.toInt())
+    spec.put("warmup", report.spec.warmup.toInt())
+    json.put("spec", spec)
+
+    val durationSamplesNs = report.samples.map { it.durationNs.toLong() }
+    val samplesNs = JSONArray()
+    durationSamplesNs.forEach { samplesNs.put(it) }
+    json.put("samples_ns", samplesNs)
+
+    val samples = JSONArray()
+    report.samples.forEach { sample ->
+        val sampleJson = JSONObject()
+        sampleJson.put("duration_ns", sample.durationNs.toLong())
+        optionalCpuTimeMs(sample)?.let { sampleJson.put("cpu_time_ms", it) }
+        optionalPeakMemoryKb(sample)?.let { sampleJson.put("peak_memory_kb", it) }
+        optionalProcessPeakMemoryKb(sample)?.let { sampleJson.put("process_peak_memory_kb", it) }
+        samples.put(sampleJson)
+    }
+    json.put("samples", samples)
+
+    val phases = JSONArray()
+    optionalPhases(report).forEach { phase ->
+        val phaseJson = JSONObject()
+        optionalStringProperty(phase, "name", "getName")?.let { phaseJson.put("name", it) }
+        optionalNumericProperty(phase, "durationNs", "getDurationNs")?.let {
+            phaseJson.put("duration_ns", it)
+        }
+        phases.put(phaseJson)
+    }
+    json.put("phases", phases)
+
+    if (durationSamplesNs.isNotEmpty()) {
+        val min = durationSamplesNs.minOrNull() ?: 0L
+        val max = durationSamplesNs.maxOrNull() ?: 0L
+        val avg = durationSamplesNs.sum().toDouble() / durationSamplesNs.size.toDouble()
+        val stats = JSONObject()
+        stats.put("min_ns", min)
+        stats.put("max_ns", max)
+        stats.put("avg_ns", avg.toDouble())
+        json.put("stats", stats)
+    }
+
+    val cpuSamplesMs = report.samples.mapNotNull { optionalCpuTimeMs(it) }
+    val peakSamplesKb = report.samples.mapNotNull { optionalPeakMemoryKb(it) }
+    val processPeakSamplesKb = report.samples.mapNotNull { optionalProcessPeakMemoryKb(it) }
+    val memInfo = Debug.MemoryInfo()
+    Debug.getMemoryInfo(memInfo)
+    val resources = JSONObject()
+    resources.put("platform", "android")
+    resources.put("timestamp_ms", System.currentTimeMillis())
+    resources.put("memory_process", "isolated_worker")
+    if (cpuSamplesMs.isNotEmpty()) {
+        val cpuTotalMs = cpuSamplesMs.sum()
+        resources.put("cpu_total_ms", cpuTotalMs)
+        resources.put("cpu_median_ms", median(cpuSamplesMs))
+        resources.put("elapsed_cpu_ms", cpuTotalMs)
+    }
+    if (peakSamplesKb.isNotEmpty()) {
+        val peakGrowthKb = peakSamplesKb.maxOrNull() ?: 0L
+        resources.put("peak_memory_kb", peakGrowthKb)
+        resources.put("peak_memory_growth_kb", peakGrowthKb)
+    }
+    val processPeakMemoryKb = processPeakSamplesKb.maxOrNull() ?: runProcessPeakMemoryKb
+    processPeakMemoryKb?.let {
+        resources.put("process_peak_memory_kb", it)
+        resources.put("isolated_process_peak_memory_kb", it)
+    }
+    resources.put("total_pss_kb", memInfo.totalPss)
+    resources.put("private_dirty_kb", memInfo.totalPrivateDirty)
+    resources.put("native_heap_kb", Debug.getNativeHeapAllocatedSize() / 1024)
+    val usedHeap = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()
+    resources.put("java_heap_kb", usedHeap / 1024)
+    json.put("resources", resources)
+
+    return json
+}
+
+private fun optionalProcessPeakMemoryKb(sample: Any): Long? {
+    return optionalNumericProperty(sample, "processPeakMemoryKb", "getProcessPeakMemoryKb")
+}
+
+private fun optionalCpuTimeMs(sample: Any): Long? {
+    return optionalNumericProperty(sample, "cpuTimeMs", "getCpuTimeMs")
+}
+
+private fun optionalPeakMemoryKb(sample: Any): Long? {
+    return optionalNumericProperty(sample, "peakMemoryKb", "getPeakMemoryKb")
+}
+
+private fun optionalPhases(report: Any): List<Any> {
+    return optionalCollectionProperty(report, "phases", "getPhases")
+}
+
+private fun optionalCollectionProperty(instance: Any, propertyName: String, getterName: String): List<Any> {
+    try {
+        val getter = instance.javaClass.methods.firstOrNull {
+            it.name == getterName && it.parameterTypes.isEmpty()
+        }
+        coerceToList(getter?.invoke(instance))?.let { return it }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional collection getter unavailable: $propertyName")
+    }
+
+    try {
+        val field = instance.javaClass.declaredFields.firstOrNull { it.name == propertyName }
+        if (field != null) {
+            field.isAccessible = true
+            coerceToList(field.get(instance))?.let { return it }
+        }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional collection field unavailable: $propertyName")
+    }
+
+    return emptyList()
+}
+
+private fun coerceToList(value: Any?): List<Any>? {
+    return when (value) {
+        null -> null
+        is Iterable<*> -> value.filterNotNull()
+        is Array<*> -> value.filterNotNull()
+        else -> null
+    }
+}
+
+private fun optionalNumericProperty(instance: Any, propertyName: String, getterName: String): Long? {
+    try {
+        val getter = instance.javaClass.methods.firstOrNull {
+            it.name == getterName && it.parameterTypes.isEmpty()
+        }
+        coerceToLong(getter?.invoke(instance))?.let { return it }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional property getter unavailable: $propertyName")
+    }
+
+    try {
+        val field = instance.javaClass.declaredFields.firstOrNull { it.name == propertyName }
+        if (field != null) {
+            field.isAccessible = true
+            coerceToLong(field.get(instance))?.let { return it }
+        }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional property field unavailable: $propertyName")
+    }
+
+    return null
+}
+
+private fun optionalStringProperty(instance: Any, propertyName: String, getterName: String): String? {
+    try {
+        val getter = instance.javaClass.methods.firstOrNull {
+            it.name == getterName && it.parameterTypes.isEmpty()
+        }
+        getter?.invoke(instance)?.toString()?.let { return it }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional string getter unavailable: $propertyName")
+    }
+
+    try {
+        val field = instance.javaClass.declaredFields.firstOrNull { it.name == propertyName }
+        if (field != null) {
+            field.isAccessible = true
+            field.get(instance)?.toString()?.let { return it }
+        }
+    } catch (e: Exception) {
+        android.util.Log.d("BenchRunner", "Optional string field unavailable: $propertyName")
+    }
+
+    return null
+}
+
+private fun coerceToLong(value: Any?): Long? {
+    return when (value) {
+        null -> null
+        is Long -> value
+        is Int -> value.toLong()
+        is Short -> value.toLong()
+        is Byte -> value.toLong()
+        is Number -> value.toLong()
+        else -> value.toString().toLongOrNull()
     }
 }

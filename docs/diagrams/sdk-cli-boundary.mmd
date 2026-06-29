@@ -1,20 +1,37 @@
 flowchart TB
+    user["Downstream benchmark crate"]
+    ci["CI workflow"]
+
     subgraph SDK["mobench-sdk"]
-        timing["timing harness"]
-        registry["benchmark registry"]
+        timing["Timing harness\nBenchSpec, BenchSample, BenchReport"]
+        registry["Benchmark registry\ninventory discovery"]
+        authoring["Authoring helpers\nbenchmark macro re-export\nprofile_phase"]
         builders["Android/iOS builders"]
-        codegen["template/codegen"]
-        ffi["FFI-safe types"]
+        codegen["Templates and codegen"]
+        backends["Runner backends\nuniffi\nnative-c-abi"]
+        nativeabi["Native C ABI exports\nMobenchBuf + JSON runner"]
     end
 
     subgraph CLI["mobench CLI"]
-        config["config and project resolution"]
-        orchestration["build/run/profile orchestration"]
-        providers["BrowserStack and local providers"]
-        reporting["summary, plots, PR reports"]
+        config["Config and project resolution"]
+        orchestration["Build, run, verify,\npackage, CI orchestration"]
+        providers["Local and BrowserStack providers"]
+        fetching["BrowserStack fetch"]
+        reporting["Summary, CSV, plots,\nPR comments, regressions"]
+        profiling["Profile run, summarize, diff"]
     end
 
-    SDK --> CLI
+    user --> authoring
+    authoring --> registry
+    registry --> timing
+    timing --> backends
+    nativeabi --> backends
+    builders --> codegen
+    codegen --> backends
+
     CLI --> SDK
-    user["Downstream benchmark crate"] --> SDK
-    ci["CI workflow"] --> CLI
+    SDK --> CLI
+    ci --> CLI
+    providers --> reporting
+    fetching --> reporting
+    profiling --> reporting

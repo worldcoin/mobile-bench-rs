@@ -20,7 +20,11 @@ From the repository root:
 ```bash
 cargo test -p basic-benchmark
 cargo mobench list --crate-path examples/basic-benchmark
-cargo mobench run --target android --function basic_benchmark::fibonacci --local-only
+cargo mobench run \
+  --crate-path examples/basic-benchmark \
+  --target android \
+  --function basic_benchmark::bench_fibonacci \
+  --local-only
 ```
 
 Use the `cargo mobench run` command as a host/local smoke test. Building and
