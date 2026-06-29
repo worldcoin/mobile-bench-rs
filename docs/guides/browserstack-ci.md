@@ -72,6 +72,34 @@ Invalid devices (1):
             - Google Pixel 7 Pro-13.0
 ```
 
+### Legacy iOS Devices
+
+mobench supports two generated iOS runner templates:
+
+- `swiftui`: the default iOS 15+ runner used by current CI lanes.
+- `uikit-legacy`: a UIKit runner without SwiftUI or Swift concurrency for lower deployment targets.
+
+The current/default Xcode lane is treated as iOS 15+. Older BrowserStack iOS devices require both the legacy runner and an old enough Xcode toolchain. BrowserStack App Automate currently lists iPhone 7 as iOS 10, so an iPhone 7 legacy lane needs an Xcode installation capable of building/installing for iOS 10/11/12.
+
+Example `mobench.toml`:
+
+```toml
+[ios]
+deployment_target = "10.0"
+runner = "uikit-legacy"
+```
+
+Example device matrix entry:
+
+```yaml
+devices:
+  - name: "iPhone 7-10"
+    os: "ios"
+    tags: ["legacy-ios"]
+```
+
+mobench fails early if the selected BrowserStack iOS device version is lower than the app deployment target, for example `iPhone 7-10` with `deployment_target = "15.0"`. It also checks the selected local Xcode version before iOS builds and reports when a legacy deployment target needs an older Xcode lane.
+
 ### Verify Benchmark Setup
 
 ```bash

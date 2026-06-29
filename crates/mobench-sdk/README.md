@@ -409,6 +409,7 @@ target_sdk = 34
 [ios]
 bundle_id = "com.example.bench"
 deployment_target = "15.0"
+# runner = "swiftui"       # or "uikit-legacy" for legacy iOS targets
 
 [benchmarks]
 default_function = "my_crate::my_benchmark"

@@ -20,9 +20,153 @@ const BOLTFFI_ANDROID_MAIN_ACTIVITY_TEMPLATE: &str =
     include_str!("boltffi_templates/android/MainActivity.kt.template");
 const BOLTFFI_IOS_BENCH_RUNNER_FFI_TEMPLATE: &str =
     include_str!("boltffi_templates/ios/BenchRunnerFFI.swift.template");
-const DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS: u64 = 1800;
 const DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS: u64 = 10;
+
+pub const DEFAULT_IOS_DEPLOYMENT_TARGET: &str = "15.0";
+pub const SWIFTUI_RUNNER_MIN_IOS: &str = "15.0";
+
+/// Supported generated iOS application runner templates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IosRunner {
+    /// Current SwiftUI runner. This is the default for iOS 15+.
+    Swiftui,
+    /// UIKit-based runner for legacy deployment targets.
+    UikitLegacy,
+}
+
+impl IosRunner {
+    pub fn parse(value: &str) -> Result<Self, BenchError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "swiftui" => Ok(Self::Swiftui),
+            "uikit-legacy" | "uikit_legacy" => Ok(Self::UikitLegacy),
+            other => Err(BenchError::Build(format!(
+                "Unsupported iOS runner `{other}`. Supported values: swiftui, uikit-legacy"
+            ))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Swiftui => "swiftui",
+            Self::UikitLegacy => "uikit-legacy",
+        }
+    }
+}
+
+/// Parsed iOS deployment target used for explicit compatibility decisions.
+#[derive(Debug, Clone, Eq)]
+pub struct IosDeploymentTarget {
+    raw: String,
+    major: u16,
+    minor: u16,
+}
+
+impl PartialEq for IosDeploymentTarget {
+    fn eq(&self, other: &Self) -> bool {
+        (self.major, self.minor) == (other.major, other.minor)
+    }
+}
+
+impl Ord for IosDeploymentTarget {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.major, self.minor).cmp(&(other.major, other.minor))
+    }
+}
+
+impl PartialOrd for IosDeploymentTarget {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl IosDeploymentTarget {
+    pub fn parse(raw: &str) -> Result<Self, BenchError> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(BenchError::Build(
+                "iOS deployment target must not be empty".to_string(),
+            ));
+        }
+
+        let mut parts = raw.split('.');
+        let major_raw = parts.next().unwrap_or_default();
+        let minor_raw = parts.next().unwrap_or("0");
+        if parts.next().is_some() {
+            return Err(BenchError::Build(format!(
+                "Invalid iOS deployment target `{raw}`. Expected VERSION like 15.0"
+            )));
+        }
+
+        Ok(Self {
+            raw: raw.to_string(),
+            major: parse_ios_version_part(raw, major_raw, "major")?,
+            minor: parse_ios_version_part(raw, minor_raw, "minor")?,
+        })
+    }
+
+    pub fn default_target() -> Self {
+        Self::parse(DEFAULT_IOS_DEPLOYMENT_TARGET)
+            .expect("default iOS deployment target should be valid")
+    }
+}
+
+fn parse_ios_version_part(raw: &str, part: &str, label: &str) -> Result<u16, BenchError> {
+    if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(BenchError::Build(format!(
+            "Invalid iOS deployment target `{raw}`: {label} version component must be numeric"
+        )));
+    }
+
+    part.parse::<u16>().map_err(|err| {
+        BenchError::Build(format!(
+            "Invalid iOS deployment target `{raw}`: failed to parse {label} component: {err}"
+        ))
+    })
+}
+
+impl std::fmt::Display for IosDeploymentTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+/// Fully resolved iOS project generation options.
+#[derive(Debug, Clone)]
+pub struct IosProjectOptions {
+    pub deployment_target: IosDeploymentTarget,
+    pub runner: IosRunner,
+    pub ios_benchmark_timeout_secs: u64,
+}
+
+impl Default for IosProjectOptions {
+    fn default() -> Self {
+        Self {
+            deployment_target: IosDeploymentTarget::default_target(),
+            runner: IosRunner::Swiftui,
+            ios_benchmark_timeout_secs: DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS,
+        }
+    }
+}
+
+pub fn resolve_ios_runner(
+    deployment_target: &IosDeploymentTarget,
+    requested_runner: Option<IosRunner>,
+) -> Result<IosRunner, BenchError> {
+    let swiftui_floor = IosDeploymentTarget::parse(SWIFTUI_RUNNER_MIN_IOS)?;
+    match requested_runner {
+        Some(IosRunner::Swiftui) if deployment_target < &swiftui_floor => {
+            Err(BenchError::Build(format!(
+                "iOS runner `swiftui` requires deployment target {SWIFTUI_RUNNER_MIN_IOS}+; \
+                 requested deployment target is {deployment_target}. Use `uikit-legacy` for older iOS targets."
+            )))
+        }
+        Some(runner) => Ok(runner),
+        None if deployment_target < &swiftui_floor => Ok(IosRunner::UikitLegacy),
+        None => Ok(IosRunner::Swiftui),
+    }
+}
 
 /// Template variable that can be replaced in template files
 #[derive(Debug, Clone)]
@@ -659,13 +803,21 @@ pub fn generate_ios_project(
     bundle_prefix: &str,
     default_function: &str,
 ) -> Result<(), BenchError> {
-    generate_ios_project_with_backend(
+    generate_ios_project_with_backend_options(
         output_dir,
         project_slug,
         project_pascal,
         bundle_prefix,
         default_function,
         crate::FfiBackend::Uniffi,
+        IosProjectOptions {
+            ios_benchmark_timeout_secs: resolve_ios_benchmark_timeout_secs(
+                std::env::var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS")
+                    .ok()
+                    .as_deref(),
+            ),
+            ..IosProjectOptions::default()
+        },
     )
 }
 
@@ -678,22 +830,25 @@ pub fn generate_ios_project_with_backend(
     default_function: &str,
     ffi_backend: crate::FfiBackend,
 ) -> Result<(), BenchError> {
-    let ios_benchmark_timeout_secs = resolve_ios_benchmark_timeout_secs(
-        std::env::var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS")
-            .ok()
-            .as_deref(),
-    );
-    generate_ios_project_with_timeout(
+    generate_ios_project_with_backend_options(
         output_dir,
         project_slug,
         project_pascal,
         bundle_prefix,
         default_function,
-        ios_benchmark_timeout_secs,
         ffi_backend,
+        IosProjectOptions {
+            ios_benchmark_timeout_secs: resolve_ios_benchmark_timeout_secs(
+                std::env::var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS")
+                    .ok()
+                    .as_deref(),
+            ),
+            ..IosProjectOptions::default()
+        },
     )
 }
 
+#[cfg(test)]
 fn generate_ios_project_with_timeout(
     output_dir: &Path,
     project_slug: &str,
@@ -703,6 +858,30 @@ fn generate_ios_project_with_timeout(
     ios_benchmark_timeout_secs: u64,
     ffi_backend: crate::FfiBackend,
 ) -> Result<(), BenchError> {
+    generate_ios_project_with_backend_options(
+        output_dir,
+        project_slug,
+        project_pascal,
+        bundle_prefix,
+        default_function,
+        ffi_backend,
+        IosProjectOptions {
+            ios_benchmark_timeout_secs,
+            ..IosProjectOptions::default()
+        },
+    )
+}
+
+pub fn generate_ios_project_with_backend_options(
+    output_dir: &Path,
+    project_slug: &str,
+    project_pascal: &str,
+    bundle_prefix: &str,
+    default_function: &str,
+    ffi_backend: crate::FfiBackend,
+    options: IosProjectOptions,
+) -> Result<(), BenchError> {
+    let runner = resolve_ios_runner(&options.deployment_target, Some(options.runner))?;
     let target_dir = output_dir.join("ios");
     let preserved_resources = collect_preserved_ios_resources(&target_dir)?;
     reset_generated_project_dir(&target_dir)?;
@@ -742,7 +921,15 @@ fn generate_ios_project_with_timeout(
         },
         TemplateVar {
             name: "IOS_BENCHMARK_TIMEOUT_SECS",
-            value: ios_benchmark_timeout_secs.to_string(),
+            value: options.ios_benchmark_timeout_secs.to_string(),
+        },
+        TemplateVar {
+            name: "IOS_DEPLOYMENT_TARGET",
+            value: options.deployment_target.to_string(),
+        },
+        TemplateVar {
+            name: "IOS_RUNNER",
+            value: runner.as_str().to_string(),
         },
         TemplateVar {
             name: "BRIDGING_HEADER_IMPORTS",
@@ -752,7 +939,7 @@ fn generate_ios_project_with_timeout(
             },
         },
     ];
-    render_dir(&IOS_TEMPLATES, &target_dir, &vars)?;
+    render_ios_dir(&IOS_TEMPLATES, &target_dir, &vars, runner)?;
     match ffi_backend {
         crate::FfiBackend::Uniffi => {}
         crate::FfiBackend::NativeCAbi => {
@@ -1132,6 +1319,32 @@ const TEMPLATE_EXTENSIONS: &[&str] = &[
 ];
 
 fn render_dir(dir: &Dir, out_root: &Path, vars: &[TemplateVar]) -> Result<(), BenchError> {
+    render_dir_filtered(dir, out_root, vars, &|_| false)
+}
+
+fn render_ios_dir(
+    dir: &Dir,
+    out_root: &Path,
+    vars: &[TemplateVar],
+    runner: IosRunner,
+) -> Result<(), BenchError> {
+    render_dir_filtered(dir, out_root, vars, &|path| match runner {
+        IosRunner::Swiftui => {
+            path == Path::new("BenchRunner/BenchRunner/UIKitLegacyRunner.swift.template")
+        }
+        IosRunner::UikitLegacy => {
+            path == Path::new("BenchRunner/BenchRunner/BenchRunnerApp.swift.template")
+                || path == Path::new("BenchRunner/BenchRunner/ContentView.swift.template")
+        }
+    })
+}
+
+fn render_dir_filtered(
+    dir: &Dir,
+    out_root: &Path,
+    vars: &[TemplateVar],
+    skip_file: &dyn Fn(&Path) -> bool,
+) -> Result<(), BenchError> {
     for entry in dir.entries() {
         match entry {
             DirEntry::Dir(sub) => {
@@ -1139,10 +1352,13 @@ fn render_dir(dir: &Dir, out_root: &Path, vars: &[TemplateVar]) -> Result<(), Be
                 if sub.path().components().any(|c| c.as_os_str() == ".gradle") {
                     continue;
                 }
-                render_dir(sub, out_root, vars)?;
+                render_dir_filtered(sub, out_root, vars, skip_file)?;
             }
             DirEntry::File(file) => {
                 if file.path().components().any(|c| c.as_os_str() == ".gradle") {
+                    continue;
+                }
+                if skip_file(file.path()) {
                     continue;
                 }
                 // file.path() returns the full relative path from the embedded dir root
@@ -1706,6 +1922,7 @@ pub fn ensure_ios_project_with_options(
         project_root,
         crate_dir,
         crate::FfiBackend::Uniffi,
+        IosProjectOptions::default(),
     )
 }
 
@@ -1716,6 +1933,7 @@ pub fn ensure_ios_project_with_backend_options(
     project_root: Option<&Path>,
     crate_dir: Option<&Path>,
     ffi_backend: crate::FfiBackend,
+    options: IosProjectOptions,
 ) -> Result<(), BenchError> {
     let library_name = crate_name.replace('-', "_");
     let project_exists = ios_project_exists(output_dir);
@@ -1750,13 +1968,14 @@ pub fn ensure_ios_project_with_backend_options(
     let effective_root = project_root.unwrap_or_else(|| output_dir.parent().unwrap_or(output_dir));
     let default_function = resolve_default_function(effective_root, crate_name, crate_dir);
 
-    generate_ios_project_with_backend(
+    generate_ios_project_with_backend_options(
         output_dir,
         &library_name,
         project_pascal,
         &bundle_prefix,
         &default_function,
         ffi_backend,
+        options,
     )?;
     println!("  Generated iOS project at {:?}", output_dir.join("ios"));
     println!("  Default benchmark function: {}", default_function);
@@ -2203,7 +2422,7 @@ mod tests {
             "../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
         );
         assert!(android_test.contains("Log.i(\"BenchRunnerTest\""));
-        assert!(android_test.contains("Thread.sleep(heartbeatMs)"));
+        assert!(android_test.contains("Thread.sleep(pollMs)"));
         assert!(
             android_test.contains("TimeUnit.SECONDS.toMillis({{ANDROID_HEARTBEAT_INTERVAL_SECS}})")
         );
