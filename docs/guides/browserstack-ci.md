@@ -59,15 +59,69 @@ Example `device-matrix.yaml`:
 
 ```yaml
 devices:
-  - name: "Google Pixel 7-13.0"
-    os: "android"
-    os_version: "13.0"
-    tags: ["default", "pixel"]
-  - name: "iPhone 14-16"
-    os: "ios"
-    os_version: "16"
-    tags: ["default", "iphone"]
+- name: "Google Pixel 7-13.0"
+os: "android"
+os_version: "13.0"
+tags: ["default", "pixel"]
+- name: "iPhone 14-16"
+os: "ios"
+os_version: "16"
+tags: ["default", "iphone"]
 ```
+
+Invalid device specs return suggestions:
+
+```text
+Invalid devices (1):
+  [ERROR] Google Pixle 7-13.0: Device not found
+          Suggestions:
+            - Google Pixel 7-13.0
+            - Google Pixel 7 Pro-13.0
+```
+
+### Legacy iOS Devices
+
+mobench supports two generated iOS runner templates:
+
+- `swiftui`: default iOS 15+ runner for current CI lanes.
+- `uikit-legacy`: UIKit runner without SwiftUI or Swift concurrency for lower deployment targets.
+
+Older BrowserStack iOS devices require both the legacy runner and an older
+Xcode toolchain. BrowserStack App Automate currently lists iPhone 7 as iOS 10,
+so an iPhone 7 legacy lane needs Xcode capable of building and installing for
+iOS 10/11/12.
+
+```toml
+[ios]
+deployment_target = "10.0"
+runner = "uikit-legacy"
+```
+
+```yaml
+devices:
+- name: "iPhone 7-10"
+os: "ios"
+tags: ["legacy-ios"]
+```
+
+mobench fails early if the selected BrowserStack iOS device version is lower
+than the app deployment target, for example `iPhone 7-10` with
+`deployment_target = "15.0"`. It also checks the selected local Xcode version
+before iOS builds and reports when a legacy deployment target needs an older
+Xcode lane.
+
+### Verify Benchmark Setup
+
+```bash
+cargo mobench verify --target android --check-artifacts
+cargo mobench verify --target android --check-artifacts --function my_benchmark
+cargo mobench report summarize --summary target/mobench/ci/summary.json
+```
+
+`cargo mobench verify --smoke-test` is only supported for benchmark crates
+linked into the `mobench` CLI binary. External crates discovered through
+`mobench.toml`, `--project-root`, or `--crate-path` should use
+`cargo mobench list` and `cargo mobench verify --check-artifacts`.
 
 ## One-Command CI Run
 

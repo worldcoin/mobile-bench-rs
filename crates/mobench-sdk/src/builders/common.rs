@@ -791,10 +791,21 @@ members = ["crates/*"]
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let spec = EmbeddedBenchSpec {
+        #[derive(serde::Serialize)]
+        struct AndroidSpec {
+            function: String,
+            iterations: u32,
+            warmup: u32,
+            android_benchmark_timeout_secs: Option<u64>,
+            android_heartbeat_interval_secs: Option<u64>,
+        }
+
+        let spec = AndroidSpec {
             function: "test_crate::first_run".to_string(),
             iterations: 7,
             warmup: 1,
+            android_benchmark_timeout_secs: Some(30),
+            android_heartbeat_interval_secs: Some(5),
         };
 
         embed_bench_spec(&temp_dir, &spec).expect("embed spec");
@@ -812,6 +823,11 @@ members = ["crates/*"]
 
         let contents = std::fs::read_to_string(android_spec).unwrap();
         assert!(contents.contains("test_crate::first_run"));
+        assert!(contents.contains("android_benchmark_timeout_secs"));
+        assert!(contents.contains("android_heartbeat_interval_secs"));
+        let json: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(json["android_benchmark_timeout_secs"], 30);
+        assert_eq!(json["android_heartbeat_interval_secs"], 5);
 
         std::fs::remove_dir_all(&temp_dir).unwrap();
     }

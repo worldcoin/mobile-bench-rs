@@ -42,6 +42,19 @@ pub struct BenchmarkResult {
     pub timing: TimingStats,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_usage: Option<ResourceUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<BenchmarkFailure>,
+}
+
+/// Structured benchmark failure loaded from `failure.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkFailure {
+    pub kind: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_reason: Option<String>,
 }
 
 /// Timing statistics across all iterations (in milliseconds).
@@ -180,7 +193,12 @@ fn parse_benchmark_entry(value: &serde_json::Value) -> Result<BenchmarkResult> {
         .unwrap_or("unknown")
         .to_string();
 
-    let label = humanize_benchmark_name(&name);
+    let failure = parse_failure(value);
+    let label = if failure.is_some() {
+        name.clone()
+    } else {
+        humanize_benchmark_name(&name)
+    };
 
     let ns_to_ms =
         |key: &str| -> f64 { value.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) / 1_000_000.0 };
@@ -203,6 +221,7 @@ fn parse_benchmark_entry(value: &serde_json::Value) -> Result<BenchmarkResult> {
         label,
         timing,
         resource_usage: parse_resource_usage(value),
+        failure,
     })
 }
 
@@ -262,6 +281,8 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
             }
             covered_summary_dirs.push(summary_dir.to_path_buf());
             all_platforms.extend(report.platforms);
+        } else if let Ok(report) = parse_raw_failure_report(&path, &value) {
+            all_platforms.extend(report.platforms);
         } else {
             raw_candidates.push((path, value));
         }
@@ -270,6 +291,8 @@ pub fn load_results_dir(dir: &Path) -> Result<SummarizeReport> {
     if all_platforms.is_empty() {
         for (path, value) in raw_candidates {
             if let Ok(report) = parse_raw_bench_report(&path, &value) {
+                all_platforms.extend(report.platforms);
+            } else if let Ok(report) = parse_raw_failure_report(&path, &value) {
                 all_platforms.extend(report.platforms);
             }
         }
@@ -502,6 +525,75 @@ fn parse_raw_bench_report(path: &Path, value: &serde_json::Value) -> Result<Summ
     })
 }
 
+fn parse_raw_failure_report(path: &Path, value: &serde_json::Value) -> Result<SummarizeReport> {
+    let entries = match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(normalize_failure_entry)
+            .collect::<Vec<_>>(),
+        _ => normalize_failure_entry(value).into_iter().collect(),
+    };
+    if entries.is_empty() {
+        anyhow::bail!("Not a benchmark failure report");
+    }
+
+    let first = entries
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing failure entries"))?;
+    let platform = first
+        .get("platform")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| infer_platform(path, first.get("device").and_then(|v| v.as_str())));
+    let device = first
+        .get("device")
+        .and_then(|v| v.as_str())
+        .map(parse_device_string)
+        .unwrap_or_else(|| default_device_info(&platform));
+    let benchmarks = entries
+        .iter()
+        .map(parse_benchmark_entry)
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(SummarizeReport {
+        platforms: vec![PlatformReport {
+            platform,
+            device,
+            benchmarks,
+            iterations: 0,
+            warmup: 0,
+        }],
+    })
+}
+
+fn normalize_failure_entry(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let object = value.as_object()?;
+    let kind = object.get("kind").and_then(|value| value.as_str())?;
+    let function = object
+        .get("function_name")
+        .or_else(|| object.get("function"))
+        .and_then(|value| value.as_str())?;
+    let mut normalized = value.clone();
+    let normalized_object = normalized.as_object_mut()?;
+    normalized_object.insert(
+        "function".to_string(),
+        serde_json::Value::String(function.to_string()),
+    );
+    normalized_object.insert(
+        "failure".to_string(),
+        serde_json::json!({
+            "kind": kind,
+            "message": object.get("message").and_then(|value| value.as_str()).unwrap_or("no message"),
+            "elapsed_ms": object.get("elapsed_ms").and_then(|value| value.as_u64()),
+            "exit_reason": object
+                .get("android_exit_info")
+                .and_then(|info| info.get("reason"))
+                .and_then(|value| value.as_str()),
+        }),
+    );
+    Some(normalized)
+}
+
 fn normalize_raw_benchmark_entry(value: &serde_json::Value) -> Option<serde_json::Value> {
     let mut value = value.clone();
     let samples = extract_raw_samples(&value);
@@ -660,6 +752,36 @@ fn parse_resource_usage(value: &serde_json::Value) -> Option<ResourceUsage> {
         .or_else(|| value.get("resources").and_then(parse_resource_usage_object))
 }
 
+fn parse_failure(value: &serde_json::Value) -> Option<BenchmarkFailure> {
+    let failure = value.get("failure").unwrap_or(value);
+    let kind = failure.get("kind").and_then(|value| value.as_str())?;
+    let message = failure
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or("no message")
+        .to_string();
+    let exit_reason = failure
+        .get("exit_reason")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            value
+                .get("android_exit_info")
+                .and_then(|info| info.get("reason"))
+                .and_then(|reason| reason.as_str())
+                .map(ToOwned::to_owned)
+        });
+    Some(BenchmarkFailure {
+        kind: kind.to_string(),
+        message,
+        elapsed_ms: failure
+            .get("elapsed_ms")
+            .and_then(json_value_to_u64)
+            .or_else(|| value.get("elapsed_ms").and_then(json_value_to_u64)),
+        exit_reason,
+    })
+}
+
 fn parse_resource_usage_object(value: &serde_json::Value) -> Option<ResourceUsage> {
     let object = value.as_object()?;
 
@@ -795,7 +917,11 @@ fn render_platform_table(platform: &PlatformReport) -> String {
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic);
 
+    let has_failures = platform.benchmarks.iter().any(|b| b.failure.is_some());
     let mut headers = vec!["Benchmark", "Avg ms", "Best", "Worst", "Median", "P95"];
+    if has_failures {
+        headers.extend(["Status", "Failure", "Exit reason"]);
+    }
     if has_resource_usage {
         headers.extend(["CPU total", "Peak growth", "Process peak"]);
     }
@@ -806,14 +932,50 @@ fn render_platform_table(platform: &PlatformReport) -> String {
     );
 
     for bench in &platform.benchmarks {
-        let mut row = vec![
-            Cell::new(&bench.label),
-            Cell::new(format!("{:.1}", bench.timing.avg_ms)).add_attribute(Attribute::Bold),
-            Cell::new(format!("{:.1}", bench.timing.best_ms)),
-            Cell::new(format!("{:.1}", bench.timing.worst_ms)),
-            Cell::new(format!("{:.1}", bench.timing.median_ms)),
-            Cell::new(format!("{:.1}", bench.timing.p95_ms)),
-        ];
+        let mut row = if bench.failure.is_some() {
+            vec![
+                Cell::new(&bench.label),
+                Cell::new("—").add_attribute(Attribute::Bold),
+                Cell::new("—"),
+                Cell::new("—"),
+                Cell::new("—"),
+                Cell::new("—"),
+            ]
+        } else {
+            vec![
+                Cell::new(&bench.label),
+                Cell::new(format!("{:.1}", bench.timing.avg_ms)).add_attribute(Attribute::Bold),
+                Cell::new(format!("{:.1}", bench.timing.best_ms)),
+                Cell::new(format!("{:.1}", bench.timing.worst_ms)),
+                Cell::new(format!("{:.1}", bench.timing.median_ms)),
+                Cell::new(format!("{:.1}", bench.timing.p95_ms)),
+            ]
+        };
+
+        if has_failures {
+            if let Some(failure) = &bench.failure {
+                row.push(Cell::new("failed"));
+                row.push(Cell::new(format!(
+                    "{}: {} ({})",
+                    failure.kind,
+                    failure.message,
+                    failure
+                        .elapsed_ms
+                        .map(|value| format!("{value}ms"))
+                        .unwrap_or_else(|| "elapsed unknown".to_string())
+                )));
+                row.push(Cell::new(
+                    failure
+                        .exit_reason
+                        .clone()
+                        .unwrap_or_else(|| "unavailable".to_string()),
+                ));
+            } else {
+                row.push(Cell::new("passed"));
+                row.push(Cell::new("—"));
+                row.push(Cell::new("—"));
+            }
+        }
 
         if has_resource_usage {
             if let Some(ru) = &bench.resource_usage {
@@ -873,29 +1035,64 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
             .benchmarks
             .iter()
             .any(|b| b.resource_usage.is_some());
+        let has_failures = platform.benchmarks.iter().any(|b| b.failure.is_some());
 
-        if has_ru {
-            output.push_str(
-                "| Benchmark | Avg ms | Best | Worst | Median | P95 | CPU total | Peak growth | Process peak |\n",
-            );
-            output.push_str(
-                "|-----------|--------|------|-------|--------|-----|-----------|-------------|--------------|\n",
-            );
+        if has_ru || has_failures {
+            output.push_str("| Benchmark | Avg ms | Best | Worst | Median | P95 |");
+            if has_failures {
+                output.push_str(" Status | Failure | Exit reason |");
+            }
+            if has_ru {
+                output.push_str(" CPU total | Peak growth | Process peak |");
+            }
+            output.push('\n');
+            output.push_str("|-----------|--------|------|-------|--------|-----|");
+            if has_failures {
+                output.push_str("--------|---------|-------------|");
+            }
+            if has_ru {
+                output.push_str("-----------|-------------|--------------|");
+            }
+            output.push('\n');
         } else {
             output.push_str("| Benchmark | Avg ms | Best | Worst | Median | P95 |\n");
             output.push_str("|-----------|--------|------|-------|--------|-----|\n");
         }
 
         for bench in &platform.benchmarks {
-            let mut row = format!(
-                "| {} | **{:.1}** | {:.1} | {:.1} | {:.1} | {:.1} |",
-                bench.label,
-                bench.timing.avg_ms,
-                bench.timing.best_ms,
-                bench.timing.worst_ms,
-                bench.timing.median_ms,
-                bench.timing.p95_ms,
-            );
+            let mut row = if bench.failure.is_some() {
+                format!("| {} | **—** | — | — | — | — |", bench.label)
+            } else {
+                format!(
+                    "| {} | **{:.1}** | {:.1} | {:.1} | {:.1} | {:.1} |",
+                    bench.label,
+                    bench.timing.avg_ms,
+                    bench.timing.best_ms,
+                    bench.timing.worst_ms,
+                    bench.timing.median_ms,
+                    bench.timing.p95_ms,
+                )
+            };
+
+            if has_failures {
+                if let Some(failure) = &bench.failure {
+                    row.push_str(&format!(
+                        " failed | {}: {} ({}) | {} |",
+                        failure.kind,
+                        failure.message.replace('|', "\\|"),
+                        failure
+                            .elapsed_ms
+                            .map(|value| format!("{value}ms"))
+                            .unwrap_or_else(|| "elapsed unknown".to_string()),
+                        failure
+                            .exit_reason
+                            .clone()
+                            .unwrap_or_else(|| "unavailable".to_string())
+                    ));
+                } else {
+                    row.push_str(" passed | — | — |");
+                }
+            }
 
             if has_ru {
                 if let Some(ru) = &bench.resource_usage {
@@ -1148,6 +1345,47 @@ mod tests {
     }
 
     #[test]
+    fn test_load_results_dir_preserves_android_failure_json() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let failure_dir = temp.path().join("android/passport");
+        std::fs::create_dir_all(&failure_dir).expect("create failure dir");
+        std::fs::write(
+            failure_dir.join("failure.json"),
+            serde_json::to_string_pretty(&json!({
+                "schema_version": 1,
+                "platform": "android",
+                "device": "Vivo Y21-11.0",
+                "function_name": "provekit::passport",
+                "kind": "timeout",
+                "message": "Timed out waiting 30s for benchmark completion",
+                "elapsed_ms": 30000,
+                "android_exit_info": {
+                    "reason": "low_memory",
+                    "raw_reason": 3
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("write failure");
+
+        let report = load_results_dir(temp.path()).expect("load failure report");
+        let platform = &report.platforms[0];
+        let benchmark = &platform.benchmarks[0];
+        let failure = benchmark.failure.as_ref().expect("failure summary");
+        assert_eq!(platform.platform, "android");
+        assert_eq!(platform.device.name, "Vivo Y21");
+        assert_eq!(benchmark.name, "provekit::passport");
+        assert_eq!(failure.kind, "timeout");
+        assert_eq!(failure.elapsed_ms, Some(30000));
+        assert_eq!(failure.exit_reason.as_deref(), Some("low_memory"));
+
+        let markdown = render_markdown(&report);
+        assert!(markdown.contains("provekit::passport"));
+        assert!(markdown.contains("timeout"));
+        assert!(markdown.contains("low_memory"));
+    }
+
+    #[test]
     fn test_load_results_dir_backfills_resource_usage_from_nested_summaries() {
         let fixture_dir =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-artifact-root");
@@ -1323,6 +1561,7 @@ mod tests {
                         native_heap_kb: Some(120000),
                         java_heap_kb: Some(45000),
                     }),
+                    failure: None,
                 }],
                 iterations: 30,
                 warmup: 5,
@@ -1359,6 +1598,7 @@ mod tests {
                         std_dev_ms: Some(35.2),
                     },
                     resource_usage: None,
+                    failure: None,
                 }],
                 iterations: 30,
                 warmup: 5,
@@ -1599,6 +1839,7 @@ mod tests {
                             std_dev_ms: None,
                         },
                         resource_usage: None,
+                        failure: None,
                     }],
                     iterations: 5,
                     warmup: 1,
@@ -1624,6 +1865,7 @@ mod tests {
                             std_dev_ms: None,
                         },
                         resource_usage: None,
+                        failure: None,
                     }],
                     iterations: 5,
                     warmup: 1,

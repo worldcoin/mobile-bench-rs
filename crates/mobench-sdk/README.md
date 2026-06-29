@@ -130,6 +130,10 @@ Generated mobile runners read backend configuration from `mobench.toml`:
 crate = "my-bench-crate"
 library_name = "my_bench_crate"
 ffi_backend = "uniffi" # default; also supports "native-c-abi" and "boltffi"
+
+[ios]
+deployment_target = "15.0"
+# runner = "swiftui" # or "uikit-legacy" for legacy iOS targets
 ```
 
 Use `uniffi` for the historical generated Kotlin/Swift binding path.
@@ -154,6 +158,11 @@ Use `boltffi` when you want generated Android and iOS runners to call
 BoltFFI-generated Kotlin/Swift bindings. Benchmark crates should export a
 `run_benchmark_json(spec_json: &str) -> Result<String, String>` function with
 `#[boltffi::export]`.
+
+iOS deployment targets below 15.0 select the UIKit legacy runner by default.
+Forcing `runner = "swiftui"` below 15.0 fails early. Legacy BrowserStack
+targets such as iPhone 7 on iOS 10 also require an older Xcode lane capable of
+building for that OS.
 
 ## Semantic Profiling Phases
 

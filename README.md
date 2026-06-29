@@ -370,6 +370,7 @@ min_sdk = 24
 [ios]
 bundle_id = "com.example.bench"
 deployment_target = "15.0"
+# runner = "swiftui" # or "uikit-legacy" for legacy iOS targets
 
 [benchmarks]
 default_function = "my_crate::my_benchmark"
@@ -382,6 +383,11 @@ Swift binding path. Use `ffi_backend = "native-c-abi"` when the generated app
 should call mobench direct JSON C ABI and avoid UniFFI binding-generation
 overhead in the measured path. Use `ffi_backend = "boltffi"` when generated
 runners should call BoltFFI-generated Kotlin/Swift bindings.
+
+iOS deployment targets below 15.0 select the UIKit legacy runner by default.
+Forcing `runner = "swiftui"` below 15.0 fails early. Legacy BrowserStack
+targets such as iPhone 7 on iOS 10 also require an older Xcode lane capable of
+building for that OS.
 
 Native C ABI benchmark crates export the ABI once from the crate root:
 

@@ -8,7 +8,7 @@ targets:
   {{PROJECT_NAME_PASCAL}}:
     type: application
     platform: iOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "{{IOS_DEPLOYMENT_TARGET}}"
     sources:
       - path: {{PROJECT_NAME_PASCAL}}
     resources:
@@ -33,7 +33,7 @@ targets:
   {{PROJECT_NAME_PASCAL}}UITests:
     type: bundle.ui-testing
     platform: iOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "{{IOS_DEPLOYMENT_TARGET}}"
     sources:
       - path: {{PROJECT_NAME_PASCAL}}UITests
     info:

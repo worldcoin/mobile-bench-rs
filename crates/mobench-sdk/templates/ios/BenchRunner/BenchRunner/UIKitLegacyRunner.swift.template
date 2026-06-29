@@ -1,0 +1,163 @@
+import UIKit
+
+private struct ProfileLaunchOptions {
+    let benchDelayMs: UInt64
+    let resultHoldMs: UInt64
+    let repeatUntilMs: UInt64
+    let warmupOnly: Bool
+
+    static func resolved() -> ProfileLaunchOptions {
+        let info = ProcessInfo.processInfo
+
+        var benchDelayMs = UInt64(info.environment["MOBENCH_BENCH_DELAY_MS"] ?? "0") ?? 0
+        var resultHoldMs = UInt64(
+            info.environment["MOBENCH_PROFILE_RESULT_HOLD_MS"] ?? "5000"
+        ) ?? 5000
+        var repeatUntilMs = UInt64(
+            info.environment["MOBENCH_PROFILE_REPEAT_UNTIL_MS"] ?? "0"
+        ) ?? 0
+        var warmupOnly = info.environment["MOBENCH_PROFILE_WARMUP_ONLY"] == "1"
+
+        for arg in info.arguments {
+            if arg.hasPrefix("--mobench-profile-bench-delay-ms="),
+               let value = arg.split(separator: "=", maxSplits: 1).last,
+               let parsed = UInt64(value) {
+                benchDelayMs = parsed
+            } else if arg.hasPrefix("--mobench-profile-result-hold-ms="),
+                      let value = arg.split(separator: "=", maxSplits: 1).last,
+                      let parsed = UInt64(value) {
+                resultHoldMs = parsed
+            } else if arg.hasPrefix("--mobench-profile-repeat-until-ms="),
+                      let value = arg.split(separator: "=", maxSplits: 1).last,
+                      let parsed = UInt64(value) {
+                repeatUntilMs = parsed
+            } else if arg == "--mobench-profile-warmup-only"
+                || arg == "--mobench-profile-warmup-only=1" {
+                warmupOnly = true
+            }
+        }
+
+        NSLog(
+            "[BenchRunner] Profile launch options: delayMs=%llu, repeatUntilMs=%llu, resultHoldMs=%llu, warmupOnly=%@",
+            benchDelayMs,
+            repeatUntilMs,
+            resultHoldMs,
+            warmupOnly ? "true" : "false"
+        )
+
+        return ProfileLaunchOptions(
+            benchDelayMs: benchDelayMs,
+            resultHoldMs: resultHoldMs,
+            repeatUntilMs: repeatUntilMs,
+            warmupOnly: warmupOnly
+        )
+    }
+}
+
+@main
+final class AppDelegate: UIResponder, UIApplicationDelegate {
+    var window: UIWindow?
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = BenchmarkViewController()
+        window.makeKeyAndVisible()
+        self.window = window
+        return true
+    }
+}
+
+final class BenchmarkViewController: UIViewController {
+    private let reportView = UITextView()
+    private let completionLabel = UILabel()
+    private let jsonLabel = UILabel()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .white
+
+        reportView.translatesAutoresizingMaskIntoConstraints = false
+        reportView.isEditable = false
+        reportView.font = UIFont(name: "Menlo", size: 14) ?? UIFont.systemFont(ofSize: 14)
+        reportView.text = "Running benchmarks..."
+        reportView.accessibilityIdentifier = "benchmarkReport"
+        view.addSubview(reportView)
+
+        completionLabel.translatesAutoresizingMaskIntoConstraints = false
+        completionLabel.text = ""
+        completionLabel.accessibilityIdentifier = "benchmarkCompleted"
+        completionLabel.isAccessibilityElement = false
+        completionLabel.textColor = .clear
+        view.addSubview(completionLabel)
+
+        jsonLabel.translatesAutoresizingMaskIntoConstraints = false
+        jsonLabel.text = ""
+        jsonLabel.accessibilityIdentifier = "benchmarkReportJSON"
+        jsonLabel.isAccessibilityElement = true
+        jsonLabel.textColor = .clear
+        view.addSubview(jsonLabel)
+
+        NSLayoutConstraint.activate([
+            reportView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            reportView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            reportView.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
+            reportView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            completionLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            completionLabel.topAnchor.constraint(equalTo: view.topAnchor),
+            completionLabel.widthAnchor.constraint(equalToConstant: 1),
+            completionLabel.heightAnchor.constraint(equalToConstant: 1),
+            jsonLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            jsonLabel.topAnchor.constraint(equalTo: completionLabel.bottomAnchor),
+            jsonLabel.widthAnchor.constraint(equalToConstant: 1),
+            jsonLabel.heightAnchor.constraint(equalToConstant: 1),
+        ])
+
+        runBenchmark()
+    }
+
+    private func runBenchmark() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let options = ProfileLaunchOptions.resolved()
+            if options.benchDelayMs > 0 {
+                Thread.sleep(forTimeInterval: Double(options.benchDelayMs) / 1_000.0)
+            }
+
+            let repeatDeadline = Date().addingTimeInterval(
+                Double(options.repeatUntilMs) / 1_000.0
+            )
+            var repeatedRuns = 1
+            var result = {{PROJECT_NAME_PASCAL}}FFI.runCurrentBenchmark()
+            while !options.warmupOnly && options.repeatUntilMs > 0 && Date() < repeatDeadline {
+                result = {{PROJECT_NAME_PASCAL}}FFI.runCurrentBenchmark()
+                repeatedRuns += 1
+            }
+
+            DispatchQueue.main.async {
+                self.reportView.text = result.displayText
+                self.jsonLabel.text = result.jsonReport
+                self.jsonLabel.accessibilityLabel = result.jsonReport
+                self.completionLabel.text = "completed"
+                self.completionLabel.isAccessibilityElement = true
+            }
+
+            NSLog("BENCH_REPORT_JSON_START")
+            NSLog("%@", result.jsonReport)
+            NSLog("BENCH_REPORT_JSON_END")
+            if repeatedRuns > 1 {
+                NSLog("Repeated benchmark %d time(s) during profile capture", repeatedRuns)
+            }
+
+            if options.warmupOnly {
+                NSLog("Warmup-only profile run complete")
+                return
+            }
+
+            NSLog("Displaying results for \(options.resultHoldMs) ms for capture output...")
+            Thread.sleep(forTimeInterval: Double(options.resultHoldMs) / 1_000.0)
+            NSLog("Display hold complete")
+        }
+    }
+}

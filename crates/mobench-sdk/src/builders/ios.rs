@@ -71,12 +71,91 @@
 //! ```
 
 use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
+use crate::codegen::{IosDeploymentTarget, IosProjectOptions, IosRunner, resolve_ios_runner};
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+fn resolve_ios_benchmark_timeout_secs_from_env() -> u64 {
+    env::var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(crate::codegen::DEFAULT_IOS_BENCHMARK_TIMEOUT_SECS)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XcodeVersion {
+    pub major: u16,
+    pub minor: u16,
+    pub raw: String,
+}
+
+fn parse_xcode_version(output: &str) -> Option<XcodeVersion> {
+    let line = output.lines().find(|line| line.starts_with("Xcode "))?;
+    let raw_version = line.trim_start_matches("Xcode ").trim();
+    let mut parts = raw_version.split('.');
+    let major = parts.next()?.parse::<u16>().ok()?;
+    let minor = parts
+        .next()
+        .and_then(|part| part.parse::<u16>().ok())
+        .unwrap_or(0);
+    Some(XcodeVersion {
+        major,
+        minor,
+        raw: raw_version.to_string(),
+    })
+}
+
+fn selected_xcode_version() -> Result<XcodeVersion, BenchError> {
+    let output = Command::new("xcodebuild")
+        .arg("-version")
+        .output()
+        .map_err(|err| {
+            BenchError::Build(format!(
+                "Failed to run `xcodebuild -version`: {err}. Install/select Xcode before building iOS artifacts."
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(BenchError::Build(format!(
+            "`xcodebuild -version` failed with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    parse_xcode_version(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
+        BenchError::Build(format!(
+            "Unable to parse Xcode version from `{}`",
+            String::from_utf8_lossy(&output.stdout).trim()
+        ))
+    })
+}
+
+pub fn minimum_supported_ios_deployment_target_for_xcode(
+    xcode: &XcodeVersion,
+) -> Result<IosDeploymentTarget, BenchError> {
+    let floor = if xcode.major >= 16 { "13.0" } else { "12.0" };
+    IosDeploymentTarget::parse(floor)
+}
+
+pub fn validate_xcode_supports_ios_deployment_target(
+    deployment_target: &IosDeploymentTarget,
+) -> Result<(), BenchError> {
+    let xcode = selected_xcode_version()?;
+    let supported_floor = minimum_supported_ios_deployment_target_for_xcode(&xcode)?;
+    if deployment_target < &supported_floor {
+        return Err(BenchError::Build(format!(
+            "iOS deployment target {deployment_target} requires an older Xcode toolchain; \
+selected Xcode {} supports iOS {}+ in mobench's supported lanes. \
+Use a legacy CI lane with older Xcode, or raise `[ios].deployment_target`.",
+            xcode.raw, supported_floor
+        )));
+    }
+    Ok(())
+}
 
 fn native_c_abi_header(framework_name: &str) -> String {
     let guard = format!(
@@ -157,6 +236,10 @@ pub struct IosBuilder {
     dry_run: bool,
     /// FFI backend used by generated mobile runner scaffolding.
     ffi_backend: crate::FfiBackend,
+    /// iOS deployment target emitted into generated app and XCUITest targets.
+    deployment_target: IosDeploymentTarget,
+    /// Optional requested runner. If omitted, runner is selected from deployment target.
+    runner: Option<IosRunner>,
 }
 
 impl IosBuilder {
@@ -192,6 +275,8 @@ impl IosBuilder {
             crate_dir: None,
             dry_run: false,
             ffi_backend: crate::FfiBackend::Uniffi,
+            deployment_target: IosDeploymentTarget::default_target(),
+            runner: None,
         }
     }
 
@@ -241,6 +326,18 @@ impl IosBuilder {
         self
     }
 
+    /// Sets iOS deployment target for generated app and XCUITest targets.
+    pub fn deployment_target(mut self, deployment_target: IosDeploymentTarget) -> Self {
+        self.deployment_target = deployment_target;
+        self
+    }
+
+    /// Sets iOS runner template explicitly.
+    pub fn runner(mut self, runner: Option<IosRunner>) -> Self {
+        self.runner = runner;
+        self
+    }
+
     /// Builds the iOS app with the given configuration
     ///
     /// This performs the following steps:
@@ -259,6 +356,10 @@ impl IosBuilder {
         // Validate project root before starting build
         if self.crate_dir.is_none() {
             validate_project_root(&self.project_root, &self.crate_name)?;
+        }
+        let runner = resolve_ios_runner(&self.deployment_target, self.runner)?;
+        if !self.dry_run {
+            validate_xcode_supports_ios_deployment_target(&self.deployment_target)?;
         }
 
         let framework_name = self.crate_name.replace("-", "_");
@@ -370,6 +471,11 @@ impl IosBuilder {
             Some(&self.project_root),
             self.crate_dir.as_deref(),
             self.ffi_backend,
+            IosProjectOptions {
+                deployment_target: self.deployment_target.clone(),
+                runner,
+                ios_benchmark_timeout_secs: resolve_ios_benchmark_timeout_secs_from_env(),
+            },
         )?;
 
         if self.ffi_backend.uses_boltffi() {
