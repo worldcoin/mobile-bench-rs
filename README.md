@@ -18,10 +18,11 @@ Current workspace release and crates.io line: **v0.1.42**.
   templates.
 - `mobench` CLI orchestration for build, run, CI, reporting, BrowserStack,
   device resolution, and local native profiling.
-- Two generated mobile runner backends:
+- Three generated mobile runner backends:
   - `uniffi` (default): generated Kotlin/Swift bindings for compatibility.
   - `native-c-abi`: direct mobench JSON C ABI for engine benchmarks where FFI
     binding overhead should stay out of measured timing and memory.
+  - `boltffi`: generated Kotlin/Swift bindings through BoltFFI.
 - Stable machine-readable artifacts: JSON summaries, Markdown summaries, CSV
   rows, optional plot SVGs, profiling manifests, trace-event JSON, and native
   flamegraph bundles.
@@ -60,7 +61,7 @@ flowchart LR
     macros["mobench-macros\n#[benchmark]"]
     registry["mobench-sdk registry\ninventory"]
     timing["timing harness\nBenchSpec -> BenchReport"]
-    backend["Generated runner backend\nuniffi or native-c-abi"]
+    backend["Generated runner backend\nuniffi native-c-abi boltffi"]
     runners["Generated Android/iOS runners"]
     cli["mobench CLI\nrun, build, ci, report, profile"]
     builders["SDK builders and templates"]
@@ -98,7 +99,7 @@ sequenceDiagram
     Dev->>CLI: cargo mobench run or ci run
     CLI->>CLI: resolve flags, config, project root, crate, devices
     CLI->>SDK: build native libraries and bench_spec.json
-    SDK->>Runner: generate Android/iOS runner using uniffi or native-c-abi
+    SDK->>Runner: generate Android/iOS runner using uniffi, native-c-abi, or boltffi
     CLI->>Device: install locally or upload APK/IPA/XCUITest
     Device->>Runner: launch with spec from extras, env, args, or bundle asset
     Runner->>SDK: run_benchmark(BenchSpec)
@@ -189,7 +190,7 @@ flowchart TB
         authoring["Authoring helpers\nbenchmark macro re-export\nprofile_phase"]
         builders["Android/iOS builders"]
         codegen["Templates and codegen"]
-        backends["Runner backends\nuniffi\nnative-c-abi"]
+        backends["Runner backends\nuniffi\nnative-c-abi\nboltffi"]
         nativeabi["Native C ABI exports\nMobenchBuf + JSON runner"]
     end
 
@@ -360,7 +361,7 @@ pub fn sort_benchmark(mut data: Vec<i32>) {
 [project]
 crate = "zk-mobile-bench"
 library_name = "zk_mobile_bench"
-ffi_backend = "uniffi" # default; also supports "native-c-abi"
+ffi_backend = "uniffi" # default; also supports "native-c-abi" and "boltffi"
 
 [android]
 package = "com.example.bench"
@@ -378,8 +379,9 @@ default_warmup = 10
 
 Use `ffi_backend = "uniffi"` when you want the historical generated Kotlin and
 Swift binding path. Use `ffi_backend = "native-c-abi"` when the generated app
-should call mobench's direct JSON C ABI and avoid UniFFI binding-generation
-overhead in the measured path.
+should call mobench direct JSON C ABI and avoid UniFFI binding-generation
+overhead in the measured path. Use `ffi_backend = "boltffi"` when generated
+runners should call BoltFFI-generated Kotlin/Swift bindings.
 
 Native C ABI benchmark crates export the ABI once from the crate root:
 
@@ -393,6 +395,15 @@ The export provides:
 - `mobench_free_buf`
 - `mobench_last_error_message`
 - `MobenchBuf`
+
+BoltFFI benchmark crates export a JSON entrypoint:
+
+```rust
+#[boltffi::export]
+pub fn run_benchmark_json(spec_json: &str) -> Result<String, String> {
+    // Call your mobench runner and return serialized report JSON.
+}
+```
 
 ## CI Outputs
 

@@ -91,6 +91,10 @@ library_name = "zk_mobile_bench"
 output_dir = "target/mobench"
 ffi_backend = "uniffi" # default; also supports "native-c-abi" and "boltffi"
 
+# FFI backend for generated mobile runners: "uniffi" (default), "native-c-abi", or "boltffi".
+# Use "boltffi" for BoltFFI-generated bindings, or "native-c-abi" for direct C ABI calls.
+# ffi_backend = "uniffi"
+
 [android]
 package = "com.example.bench"
 min_sdk = 24

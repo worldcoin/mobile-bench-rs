@@ -29,7 +29,9 @@ Publication date: 2026-06-29.
 - Prevented CI and run flows from rebuilding native C ABI projects with the
   default UniFFI backend.
 - Kept BrowserStack log/result extraction compatible across `uniffi` and
-  `native-c-abi` generated runners.
+ `native-c-abi` generated runners.
+- Documented the merged `boltffi` generated runner backend alongside
+ `uniffi` and `native-c-abi`.
 - Refreshed the root README, crate READMEs, release docs, and Mermaid diagrams
   for the current backend matrix, profiling artifact layout, and CI output
   contract.
