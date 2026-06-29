@@ -155,6 +155,15 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
     Ok(report.into())
 }
 
+#[boltffi::export]
+pub fn run_benchmark_json(spec_json: &str) -> Result<String, String> {
+    let spec: BenchSpec = serde_json::from_str(spec_json)
+        .map_err(|error| format!("failed to parse BenchSpec JSON: {error}"))?;
+    let report = run_benchmark(spec).map_err(|error| error.to_string())?;
+    serde_json::to_string(&report)
+        .map_err(|error| format!("failed to serialize BenchReport JSON: {error}"))
+}
+
 /// Compute fibonacci number iteratively.
 pub fn fibonacci(n: u32) -> u64 {
     match n {
@@ -251,5 +260,14 @@ mod tests {
         };
         let result = run_benchmark(spec);
         assert!(matches!(result, Err(BenchError::InvalidIterations)));
+    }
+
+    #[test]
+    fn test_run_benchmark_via_boltffi_json() {
+        let report_json =
+            run_benchmark_json(r#"{"name":"fibonacci","iterations":3,"warmup":1}"#).unwrap();
+        let report: BenchReport = serde_json::from_str(&report_json).unwrap();
+        assert_eq!(report.spec.name, "fibonacci");
+        assert_eq!(report.samples.len(), 3);
     }
 }

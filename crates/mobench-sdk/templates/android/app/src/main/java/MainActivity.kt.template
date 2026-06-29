@@ -434,7 +434,7 @@ class BenchmarkWorkerService : Service() {
                 android.util.Log.d("BenchmarkWorker", "First sample duration_ns: ${report.samples[0].durationNs}")
             }
             val json = buildBenchReportJson(report, runProcessPeakMemoryKb)
-            android.util.Log.i("BenchRunner", "BENCH_JSON ${json}")
+            logBenchJson(json.toString())
             formatBenchReport(report)
         } catch (e: BenchException) {
             android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
@@ -476,6 +476,18 @@ class BenchmarkWorkerService : Service() {
 
         return WorkerBenchmarkResult(displayText = display, errorMessage = null, failureJson = null)
     }
+}
+
+private fun logBenchJson(json: String) {
+    val chunkSize = 3000
+    android.util.Log.i("BenchRunner", "BENCH_JSON_START")
+    var offset = 0
+    while (offset < json.length) {
+        val end = minOf(offset + chunkSize, json.length)
+        android.util.Log.i("BenchRunner", "BENCH_JSON_CHUNK ${json.substring(offset, end)}")
+        offset = end
+    }
+    android.util.Log.i("BenchRunner", "BENCH_JSON_END")
 }
 
 private data class WorkerBenchmarkResult(

@@ -119,32 +119,25 @@ fn selected_xcode_version() -> Result<XcodeVersion, BenchError> {
                 "Failed to run `xcodebuild -version`: {err}. Install/select Xcode before building iOS artifacts."
             ))
         })?;
-
     if !output.status.success() {
         return Err(BenchError::Build(format!(
-            "`xcodebuild -version` failed: {}",
+            "`xcodebuild -version` failed with status {}: {}",
+            output.status,
             String::from_utf8_lossy(&output.stderr)
         )));
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_xcode_version(&stdout).ok_or_else(|| {
+    parse_xcode_version(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
         BenchError::Build(format!(
-            "Failed to parse selected Xcode version from `xcodebuild -version` output:\n{stdout}"
+            "Unable to parse Xcode version from `{}`",
+            String::from_utf8_lossy(&output.stdout).trim()
         ))
     })
 }
 
-fn minimum_supported_ios_deployment_target_for_xcode(
+pub fn minimum_supported_ios_deployment_target_for_xcode(
     xcode: &XcodeVersion,
 ) -> Result<IosDeploymentTarget, BenchError> {
-    let floor = if xcode.major >= 15 {
-        "15.0"
-    } else if xcode.major == 14 {
-        "11.0"
-    } else {
-        "10.0"
-    };
+    let floor = if xcode.major >= 16 { "13.0" } else { "12.0" };
     IosDeploymentTarget::parse(floor)
 }
 
@@ -156,12 +149,48 @@ pub fn validate_xcode_supports_ios_deployment_target(
     if deployment_target < &supported_floor {
         return Err(BenchError::Build(format!(
             "iOS deployment target {deployment_target} requires an older Xcode toolchain; \
-             selected Xcode {} supports iOS {}+ in mobench's supported lanes. \
-             Use a legacy CI lane with an older Xcode capable of iOS 10/11/12, or raise `[ios].deployment_target`.",
+selected Xcode {} supports iOS {}+ in mobench's supported lanes. \
+Use a legacy CI lane with older Xcode, or raise `[ios].deployment_target`.",
             xcode.raw, supported_floor
         )));
     }
     Ok(())
+}
+
+fn native_c_abi_header(framework_name: &str) -> String {
+    let guard = format!(
+        "{}_MOBENCH_NATIVE_C_ABI_H",
+        framework_name.to_ascii_uppercase()
+    )
+    .replace('-', "_");
+    format!(
+        r#"#ifndef {guard}
+#define {guard}
+
+#include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {{
+#endif
+
+typedef struct MobenchBuf {{
+    uint8_t *ptr;
+    uintptr_t len;
+    uintptr_t cap;
+}} MobenchBuf;
+
+int32_t mobench_run_benchmark_json(const uint8_t *spec_ptr, uintptr_t spec_len, MobenchBuf *out);
+void mobench_free_buf(MobenchBuf *buf);
+const char *mobench_last_error_message(void);
+
+#ifdef __cplusplus
+}}
+#endif
+
+#endif /* {guard} */
+"#,
+    )
 }
 
 /// iOS builder that handles the complete build pipeline.
@@ -205,9 +234,11 @@ pub struct IosBuilder {
     crate_dir: Option<PathBuf>,
     /// Whether to run in dry-run mode (print what would be done without making changes)
     dry_run: bool,
-    /// iOS deployment target to emit into the generated Xcode project.
+    /// FFI backend used by generated mobile runner scaffolding.
+    ffi_backend: crate::FfiBackend,
+    /// iOS deployment target emitted into generated app and XCUITest targets.
     deployment_target: IosDeploymentTarget,
-    /// Optional requested runner. If omitted, the runner is selected from the deployment target.
+    /// Optional requested runner. If omitted, runner is selected from deployment target.
     runner: Option<IosRunner>,
 }
 
@@ -243,6 +274,7 @@ impl IosBuilder {
             verbose: false,
             crate_dir: None,
             dry_run: false,
+            ffi_backend: crate::FfiBackend::Uniffi,
             deployment_target: IosDeploymentTarget::default_target(),
             runner: None,
         }
@@ -286,13 +318,21 @@ impl IosBuilder {
         self
     }
 
-    /// Sets the iOS deployment target for generated app and XCUITest targets.
+    /// Selects the generated runner FFI backend.
+    ///
+    /// The default is UniFFI to preserve existing builder behavior.
+    pub fn ffi_backend(mut self, ffi_backend: crate::FfiBackend) -> Self {
+        self.ffi_backend = ffi_backend;
+        self
+    }
+
+    /// Sets iOS deployment target for generated app and XCUITest targets.
     pub fn deployment_target(mut self, deployment_target: IosDeploymentTarget) -> Self {
         self.deployment_target = deployment_target;
         self
     }
 
-    /// Sets the iOS runner template explicitly.
+    /// Sets iOS runner template explicitly.
     pub fn runner(mut self, runner: Option<IosRunner>) -> Self {
         self.runner = runner;
         self
@@ -332,6 +372,37 @@ impl IosBuilder {
                 "  Step 0: Check/generate iOS project scaffolding at {:?}",
                 ios_dir.join("BenchRunner")
             );
+            if self.ffi_backend.uses_boltffi() {
+                let crate_dir = self.find_crate_dir()?;
+                println!(
+                    "  Step 1: Write BoltFFI config at {:?}",
+                    crate_dir.join("boltffi.toml")
+                );
+                println!("  Step 2: Generate Swift bindings and package xcframework with BoltFFI");
+                println!(
+                    "    Command: boltffi pack apple --layout split --regenerate {}",
+                    if matches!(config.profile, BuildProfile::Release) {
+                        "--release"
+                    } else {
+                        ""
+                    }
+                );
+                println!(
+                    "    Swift output: {:?}",
+                    ios_dir.join("BenchRunner/BenchRunner/Generated/BoltFFIGenerated")
+                );
+                println!("    xcframework output: {:?}", xcframework_path);
+                println!("  Step 3: Generate Xcode project with xcodegen (if project.yml exists)");
+                println!("    Command: xcodegen generate");
+
+                return Ok(BuildResult {
+                    platform: Target::Ios,
+                    app_path: xcframework_path,
+                    test_suite_path: None,
+                    native_libraries: Vec::new(),
+                });
+            }
+
             println!("  Step 1: Build Rust libraries for iOS targets");
             println!(
                 "    Command: cargo build --target aarch64-apple-ios --lib {}",
@@ -357,11 +428,18 @@ impl IosBuilder {
                     ""
                 }
             );
-            println!("  Step 2: Generate UniFFI Swift bindings");
-            println!(
-                "    Output: {:?}",
-                ios_dir.join("BenchRunner/BenchRunner/Generated")
-            );
+            if self.ffi_backend.uses_uniffi() {
+                println!("  Step 2: Generate UniFFI Swift bindings");
+                println!(
+                    "    Output: {:?}",
+                    ios_dir.join("BenchRunner/BenchRunner/Generated")
+                );
+            } else {
+                println!(
+                    "  Step 2: Skip UniFFI Swift bindings (backend: {})",
+                    self.ffi_backend
+                );
+            }
             println!("  Step 3: Create xcframework at {:?}", xcframework_path);
             println!("    - ios-arm64/{}.framework (device)", framework_name);
             println!(
@@ -387,11 +465,12 @@ impl IosBuilder {
 
         // Step 0: Ensure iOS project scaffolding exists
         // Pass project_root and crate_dir for better benchmark function detection
-        crate::codegen::ensure_ios_project_with_project_options(
+        crate::codegen::ensure_ios_project_with_backend_options(
             &self.output_dir,
             &self.crate_name,
             Some(&self.project_root),
             self.crate_dir.as_deref(),
+            self.ffi_backend,
             IosProjectOptions {
                 deployment_target: self.deployment_target.clone(),
                 runner,
@@ -399,13 +478,36 @@ impl IosBuilder {
             },
         )?;
 
+        if self.ffi_backend.uses_boltffi() {
+            println!("Generating and packaging BoltFFI iOS bindings...");
+            self.write_boltffi_config()?;
+            let xcframework_path = self.run_boltffi_pack_apple(config)?;
+            self.generate_xcode_project()?;
+
+            let result = BuildResult {
+                platform: Target::Ios,
+                app_path: xcframework_path,
+                test_suite_path: None,
+                native_libraries: Vec::new(),
+            };
+            self.validate_build_artifacts(&result, config)?;
+            return Ok(result);
+        }
+
         // Step 1: Build Rust libraries
         println!("Building Rust libraries for iOS...");
         self.build_rust_libraries(config)?;
 
-        // Step 2: Generate UniFFI bindings
-        println!("Generating UniFFI Swift bindings...");
-        self.generate_uniffi_bindings()?;
+        // Step 2: Generate UniFFI bindings when the selected backend needs them
+        if self.ffi_backend.uses_uniffi() {
+            println!("Generating UniFFI Swift bindings...");
+            self.generate_uniffi_bindings()?;
+        } else {
+            println!(
+                "Skipping UniFFI Swift bindings for {} backend",
+                self.ffi_backend
+            );
+        }
 
         // Step 3: Create xcframework
         println!("Creating xcframework...");
@@ -416,14 +518,6 @@ impl IosBuilder {
         self.codesign_xcframework(&xcframework_path)?;
 
         // Copy header to include/ for consumers (handy for CLI uploads)
-        let header_src = self
-            .find_uniffi_header(&format!("{}FFI.h", framework_name))
-            .ok_or_else(|| {
-                BenchError::Build(format!(
-                    "UniFFI header {}FFI.h not found after generation",
-                    framework_name
-                ))
-            })?;
         let include_dir = self.output_dir.join("ios/include");
         fs::create_dir_all(&include_dir).map_err(|e| {
             BenchError::Build(format!(
@@ -433,12 +527,29 @@ impl IosBuilder {
             ))
         })?;
         let header_dest = include_dir.join(format!("{}.h", framework_name));
-        fs::copy(&header_src, &header_dest).map_err(|e| {
-            BenchError::Build(format!(
-                "Failed to copy UniFFI header to {:?}: {}. Check output directory permissions.",
-                header_dest, e
-            ))
-        })?;
+        if self.ffi_backend.uses_uniffi() {
+            let header_src = self
+                .find_uniffi_header(&format!("{}FFI.h", framework_name))
+                .ok_or_else(|| {
+                    BenchError::Build(format!(
+                        "UniFFI header {}FFI.h not found after generation",
+                        framework_name
+                    ))
+                })?;
+            fs::copy(&header_src, &header_dest).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to copy UniFFI header to {:?}: {}. Check output directory permissions.",
+                    header_dest, e
+                ))
+            })?;
+        } else {
+            fs::write(&header_dest, native_c_abi_header(&framework_name)).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to write native C ABI header to {:?}: {}. Check output directory permissions.",
+                    header_dest, e
+                ))
+            })?;
+        }
 
         // Step 5: Generate Xcode project if needed
         self.generate_xcode_project()?;
@@ -453,6 +564,43 @@ impl IosBuilder {
         self.validate_build_artifacts(&result, config)?;
 
         Ok(result)
+    }
+
+    fn write_boltffi_config(&self) -> Result<(), BenchError> {
+        let crate_dir = self.find_crate_dir()?;
+        let library_name = self.crate_name.replace('-', "_");
+        let package_component = crate::codegen::sanitize_bundle_id_component(&library_name);
+        let kotlin_package = format!("com.mobench.{package_component}");
+        crate::codegen::write_boltffi_config_with_output_dir(
+            &crate_dir,
+            &library_name,
+            &self.crate_name,
+            "BenchRunner",
+            &kotlin_package,
+            &["arm64".to_string()],
+            &self.output_dir,
+        )
+    }
+
+    fn run_boltffi_pack_apple(&self, config: &BuildConfig) -> Result<PathBuf, BenchError> {
+        let crate_dir = self.find_crate_dir()?;
+        let framework_name = self.crate_name.replace('-', "_");
+        let xcframework_path = self
+            .output_dir
+            .join("ios")
+            .join(format!("{framework_name}.xcframework"));
+        let mut cmd = Command::new("boltffi");
+        cmd.arg("pack")
+            .arg("apple")
+            .arg("--layout")
+            .arg("split")
+            .arg("--regenerate");
+        if matches!(config.profile, BuildProfile::Release) {
+            cmd.arg("--release");
+        }
+        cmd.current_dir(&crate_dir);
+        run_command(cmd, "boltffi pack apple")?;
+        Ok(xcframework_path)
     }
 
     /// Validates that all expected build artifacts exist after a successful build
@@ -471,6 +619,31 @@ impl IosBuilder {
         // Check xcframework exists
         if !result.app_path.exists() {
             missing.push(format!("XCFramework: {}", result.app_path.display()));
+        }
+
+        if self.ffi_backend.uses_boltffi() {
+            let swift_bindings = self
+                .output_dir
+                .join("ios/BenchRunner/BenchRunner/Generated/BoltFFIGenerated")
+                .join(boltffi_swift_bindings_path_fragment(&self.crate_name));
+            if !swift_bindings.exists() {
+                missing.push(format!(
+                    "BoltFFI Swift bindings: {}",
+                    swift_bindings.display()
+                ));
+            }
+
+            if !missing.is_empty() {
+                return Err(BenchError::Build(format!(
+                    "BoltFFI iOS build validation failed.\n\nMissing artifacts:\n{}\n\nCheck the boltffi pack apple output above.",
+                    missing
+                        .iter()
+                        .map(|s| format!("  - {}", s))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )));
+            }
+            return Ok(());
         }
 
         // Check framework slices exist within xcframework
@@ -531,13 +704,14 @@ impl IosBuilder {
             ));
         }
 
-        // Check Swift bindings
-        let swift_bindings = self
-            .output_dir
-            .join("ios/BenchRunner/BenchRunner/Generated")
-            .join(format!("{}.swift", framework_name));
-        if !swift_bindings.exists() {
-            missing.push(format!("Swift bindings: {}", swift_bindings.display()));
+        if self.ffi_backend.uses_uniffi() {
+            let swift_bindings = self
+                .output_dir
+                .join("ios/BenchRunner/BenchRunner/Generated")
+                .join(format!("{}.swift", framework_name));
+            if !swift_bindings.exists() {
+                missing.push(format!("Swift bindings: {}", swift_bindings.display()));
+            }
         }
 
         if !missing.is_empty() {
@@ -958,6 +1132,7 @@ impl IosBuilder {
             &xcframework_path.join("ios-arm64"),
             framework_name,
             "ios",
+            self.ffi_backend,
         )?;
 
         // Simulator slice (arm64 + x86_64 combined via lipo for both Apple Silicon and Intel Macs)
@@ -966,6 +1141,7 @@ impl IosBuilder {
             profile_dir,
             &xcframework_path.join("ios-arm64_x86_64-simulator"),
             framework_name,
+            self.ffi_backend,
         )?;
 
         // Create xcframework Info.plist
@@ -981,6 +1157,7 @@ impl IosBuilder {
         output_dir: &Path,
         framework_name: &str,
         platform: &str,
+        ffi_backend: crate::FfiBackend,
     ) -> Result<(), BenchError> {
         let framework_dir = output_dir.join(format!("{}.framework", framework_name));
         let headers_dir = framework_dir.join("Headers");
@@ -1016,23 +1193,33 @@ impl IosBuilder {
             ))
         })?;
 
-        // Copy UniFFI-generated header into the framework
+        // Copy or generate the backend-specific header into the framework
         let header_name = format!("{}FFI.h", framework_name);
-        let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
-            BenchError::Build(format!(
-                "UniFFI header {} not found; run binding generation before building",
-                header_name
-            ))
-        })?;
         let dest_header = headers_dir.join(&header_name);
-        fs::copy(&header_path, &dest_header).map_err(|e| {
-            BenchError::Build(format!(
-                "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
-                header_path.display(),
-                dest_header.display(),
-                e
-            ))
-        })?;
+        if ffi_backend.uses_uniffi() {
+            let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
+                BenchError::Build(format!(
+                    "UniFFI header {} not found; run binding generation before building",
+                    header_name
+                ))
+            })?;
+            fs::copy(&header_path, &dest_header).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
+                    header_path.display(),
+                    dest_header.display(),
+                    e
+                ))
+            })?;
+        } else {
+            fs::write(&dest_header, native_c_abi_header(framework_name)).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to write native C ABI header to {}: {}. Check output directory permissions.",
+                    dest_header.display(),
+                    e
+                ))
+            })?;
+        }
 
         // Create module.modulemap
         let modulemap_content = format!(
@@ -1061,6 +1248,7 @@ impl IosBuilder {
         profile_dir: &str,
         output_dir: &Path,
         framework_name: &str,
+        ffi_backend: crate::FfiBackend,
     ) -> Result<(), BenchError> {
         let framework_dir = output_dir.join(format!("{}.framework", framework_name));
         let headers_dir = framework_dir.join("Headers");
@@ -1147,23 +1335,33 @@ impl IosBuilder {
             );
         }
 
-        // Copy UniFFI-generated header into the framework
+        // Copy or generate the backend-specific header into the framework
         let header_name = format!("{}FFI.h", framework_name);
-        let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
-            BenchError::Build(format!(
-                "UniFFI header {} not found; run binding generation before building",
-                header_name
-            ))
-        })?;
         let dest_header = headers_dir.join(&header_name);
-        fs::copy(&header_path, &dest_header).map_err(|e| {
-            BenchError::Build(format!(
-                "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
-                header_path.display(),
-                dest_header.display(),
-                e
-            ))
-        })?;
+        if ffi_backend.uses_uniffi() {
+            let header_path = self.find_uniffi_header(&header_name).ok_or_else(|| {
+                BenchError::Build(format!(
+                    "UniFFI header {} not found; run binding generation before building",
+                    header_name
+                ))
+            })?;
+            fs::copy(&header_path, &dest_header).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to copy UniFFI header from {} to {}: {}. Check output directory permissions.",
+                    header_path.display(),
+                    dest_header.display(),
+                    e
+                ))
+            })?;
+        } else {
+            fs::write(&dest_header, native_c_abi_header(framework_name)).map_err(|e| {
+                BenchError::Build(format!(
+                    "Failed to write native C ABI header to {}: {}. Check output directory permissions.",
+                    dest_header.display(),
+                    e
+                ))
+            })?;
+        }
 
         // Create module.modulemap
         let modulemap_content = format!(
@@ -1569,6 +1767,22 @@ fn codesign_bundle(app_path: &Path, identity: &str) -> Result<(), BenchError> {
     Ok(())
 }
 
+fn pascalize_first(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
+}
+
+fn boltffi_swift_bindings_filename(crate_name: &str) -> String {
+    format!("{}BoltFFI.swift", pascalize_first(crate_name))
+}
+
+fn boltffi_swift_bindings_path_fragment(crate_name: &str) -> PathBuf {
+    PathBuf::from("BoltFFI").join(boltffi_swift_bindings_filename(crate_name))
+}
+
 /// iOS code signing methods for IPA packaging
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigningMethod {
@@ -1607,7 +1821,6 @@ impl IosBuilder {
     /// # Ok::<(), mobench_sdk::BenchError>(())
     /// ```
     pub fn package_ipa(&self, scheme: &str, method: SigningMethod) -> Result<PathBuf, BenchError> {
-        validate_xcode_supports_ios_deployment_target(&self.deployment_target)?;
         // For repository structure: ios/BenchRunner/BenchRunner.xcodeproj
         // The directory and scheme happen to have the same name
         let ios_dir = self.output_dir.join("ios").join(scheme);
@@ -1896,7 +2109,6 @@ impl IosBuilder {
     /// This requires the app project to be generated first with `build()`.
     /// The resulting zip can be supplied to BrowserStack as the test suite.
     pub fn package_xcuitest(&self, scheme: &str) -> Result<PathBuf, BenchError> {
-        validate_xcode_supports_ios_deployment_target(&self.deployment_target)?;
         let ios_dir = self.output_dir.join("ios").join(scheme);
         let project_path = ios_dir.join(format!("{}.xcodeproj", scheme));
 
@@ -2206,23 +2418,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_xcode_version_reads_major_minor() {
-        let parsed = parse_xcode_version("Xcode 16.2\nBuild version 16C5032a\n").unwrap();
-        assert_eq!(parsed.major, 16);
-        assert_eq!(parsed.minor, 2);
-        assert_eq!(parsed.raw, "16.2");
-    }
-
-    #[test]
-    fn xcode_floor_rejects_legacy_target_on_current_lane() {
-        let xcode = XcodeVersion {
-            major: 16,
-            minor: 2,
-            raw: "16.2".to_string(),
-        };
-        let floor = minimum_supported_ios_deployment_target_for_xcode(&xcode).unwrap();
-        assert_eq!(floor.to_string(), "15.0");
-        assert!(IosDeploymentTarget::parse("10.0").unwrap() < floor);
+    fn test_boltffi_swift_bindings_filename_uses_crate_name() {
+        assert_eq!(
+            boltffi_swift_bindings_filename("ffi-benchmark"),
+            "Ffi-benchmarkBoltFFI.swift"
+        );
+        assert_eq!(
+            boltffi_swift_bindings_filename("sample_fns"),
+            "Sample_fnsBoltFFI.swift"
+        );
+        assert_eq!(
+            boltffi_swift_bindings_path_fragment("ffi-benchmark"),
+            PathBuf::from("BoltFFI/Ffi-benchmarkBoltFFI.swift")
+        );
     }
 
     #[cfg(target_os = "macos")]

@@ -198,6 +198,8 @@ mobench supports a `mobench.toml` configuration file for project settings:
 [project]
 crate = "zk-mobile-bench"
 library_name = "zk_mobile_bench"
+# Defaults to "uniffi"; use "native-c-abi" to benchmark direct C ABI calls.
+ffi_backend = "uniffi"
 
 [android]
 package = "com.example.bench"
@@ -213,6 +215,11 @@ default_function = "my_crate::my_benchmark"
 default_iterations = 100
 default_warmup = 10
 ```
+
+The `native-c-abi` backend is intended for ProveKit-style engine benchmarks
+where UniFFI binding generation would distort timing or memory measurements.
+Benchmark crates that use it should export the JSON ABI with
+`mobench_sdk::export_native_c_abi!()`.
 
 Resolution precedence is: explicit CLI flags (`--project-root`, `--crate-path`) → explicit `--config` → discovered `mobench.toml` → Cargo workspace root → git root → legacy `bench-mobile` fallback.
 

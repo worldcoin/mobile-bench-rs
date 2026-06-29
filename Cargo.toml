@@ -13,7 +13,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
-version = "0.1.39"
+version = "0.1.42"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -24,6 +24,7 @@ thiserror = "1"
 serde_yaml = "0.9"
 toml = "0.8"
 uniffi = "0.28"
+boltffi = "0.25.2"
 time = { version = "0.3", features = ["formatting"] }
 
 # Phase 1: Registry and proc macros
@@ -34,5 +35,5 @@ proc-macro2 = "1"
 
 # Phase 1: Template embedding
 include_dir = "0.7"
-mobench-macros = { version = "0.1.39", path = "crates/mobench-macros" }
-mobench-sdk = { version = "0.1.39", path = "crates/mobench-sdk", default-features = false }
+mobench-macros = { version = "0.1.42", path = "crates/mobench-macros" }
+mobench-sdk = { version = "0.1.42", path = "crates/mobench-sdk", default-features = false }

@@ -19,3 +19,6 @@ uniffi = { workspace = true, features = ["cli"] }
 
 [build-dependencies]
 uniffi = { workspace = true, features = ["build"] }
+
+[dev-dependencies]
+serde_json.workspace = true

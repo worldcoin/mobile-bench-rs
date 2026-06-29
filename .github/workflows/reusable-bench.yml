@@ -71,6 +71,11 @@ on:
         description: "Git ref for mobile-bench-rs (overrides mobench_version when set)"
         required: false
         type: string
+      ffi_backend:
+        description: "mobench FFI backend to configure in caller/mobench.toml"
+        required: false
+        type: string
+        default: ""
       pr_number:
         description: "PR number for reporting"
         required: false
@@ -229,6 +234,59 @@ jobs:
             echo "No uniffi_bindgen entry in caller/Cargo.lock; skipping global uniffi-bindgen install"
           fi
 
+      - name: Install BoltFFI
+        if: inputs.ffi_backend == 'boltffi' || inputs.ffi_backend == 'bolt-ffi'
+        shell: bash
+        run: cargo install boltffi_cli --version 0.25.2 --locked
+
+      - name: Configure mobench FFI backend
+        if: inputs.ffi_backend != ''
+        working-directory: caller
+        shell: bash
+        env:
+          FFI_BACKEND: ${{ inputs.ffi_backend }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          backend = os.environ["FFI_BACKEND"]
+          path = Path("mobench.toml")
+          lines = path.read_text().splitlines() if path.exists() else []
+
+          out = []
+          in_project = False
+          saw_project = False
+          wrote_backend = False
+
+          for line in lines:
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  if in_project and not wrote_backend:
+                      out.append(f'ffi_backend = "{backend}"')
+                      wrote_backend = True
+                  in_project = stripped == "[project]"
+                  saw_project = saw_project or in_project
+
+              if in_project and stripped.startswith("ffi_backend"):
+                  out.append(f'ffi_backend = "{backend}"')
+                  wrote_backend = True
+              else:
+                  out.append(line)
+
+          if saw_project:
+              if in_project and not wrote_backend:
+                  out.append(f'ffi_backend = "{backend}"')
+          else:
+              if out and out[-1] != "":
+                  out.append("")
+              out.extend(["[project]", f'ffi_backend = "{backend}"'])
+
+          path.write_text("\n".join(out) + "\n")
+          print(path.read_text())
+          PY
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -306,6 +364,7 @@ jobs:
           device_spec="${IOS_DEVICE}-${IOS_OS_VERSION}"
           echo "Running iOS benchmarks on: ${device_spec}"
           rm -rf target/mobench/ci/ios
+          rm -rf target/browserstack
 
           cargo-mobench ci run \
             --target ios \
@@ -486,6 +545,59 @@ jobs:
             echo "No uniffi_bindgen entry in caller/Cargo.lock; skipping global uniffi-bindgen install"
           fi
 
+      - name: Install BoltFFI
+        if: inputs.ffi_backend == 'boltffi' || inputs.ffi_backend == 'bolt-ffi'
+        shell: bash
+        run: cargo install boltffi_cli --version 0.25.2 --locked
+
+      - name: Configure mobench FFI backend
+        if: inputs.ffi_backend != ''
+        working-directory: caller
+        shell: bash
+        env:
+          FFI_BACKEND: ${{ inputs.ffi_backend }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          backend = os.environ["FFI_BACKEND"]
+          path = Path("mobench.toml")
+          lines = path.read_text().splitlines() if path.exists() else []
+
+          out = []
+          in_project = False
+          saw_project = False
+          wrote_backend = False
+
+          for line in lines:
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  if in_project and not wrote_backend:
+                      out.append(f'ffi_backend = "{backend}"')
+                      wrote_backend = True
+                  in_project = stripped == "[project]"
+                  saw_project = saw_project or in_project
+
+              if in_project and stripped.startswith("ffi_backend"):
+                  out.append(f'ffi_backend = "{backend}"')
+                  wrote_backend = True
+              else:
+                  out.append(line)
+
+          if saw_project:
+              if in_project and not wrote_backend:
+                  out.append(f'ffi_backend = "{backend}"')
+          else:
+              if out and out[-1] != "":
+                  out.append("")
+              out.extend(["[project]", f'ffi_backend = "{backend}"'])
+
+          path.write_text("\n".join(out) + "\n")
+          print(path.read_text())
+          PY
+
       - name: Resolve Android device
         id: resolve_device
         working-directory: caller
@@ -541,6 +653,7 @@ jobs:
           device_spec="${ANDROID_DEVICE}-${ANDROID_OS_VERSION}"
           echo "Running Android benchmarks on: ${device_spec}"
           rm -rf target/mobench/ci/android
+          rm -rf target/browserstack
 
           cargo-mobench ci run \
             --target android \

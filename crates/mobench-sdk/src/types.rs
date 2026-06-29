@@ -22,6 +22,8 @@ pub use crate::timing::{
     SemanticPhase, TimingError as RunnerError,
 };
 
+use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 /// Error types for mobench-sdk operations.
@@ -130,6 +132,57 @@ pub enum Target {
     Ios,
     /// Both Android and iOS platforms.
     Both,
+}
+
+/// Mobile FFI backend used by generated benchmark runners.
+///
+/// UniFFI remains the default because it is the historical mobench path. Use
+/// [`FfiBackend::NativeCAbi`] when the generated app should call the generic
+/// mobench JSON C ABI directly, or [`FfiBackend::BoltFfi`] when the generated
+/// app should call BoltFFI-generated Kotlin/Swift bindings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FfiBackend {
+    /// Generate and call UniFFI Kotlin/Swift bindings.
+    #[default]
+    Uniffi,
+    /// Call `mobench_run_benchmark_json` through a small native C ABI bridge.
+    NativeCAbi,
+    /// Generate and call BoltFFI Kotlin/Swift bindings.
+    #[serde(rename = "boltffi", alias = "bolt-ffi")]
+    BoltFfi,
+}
+
+impl FfiBackend {
+    /// Returns the configuration string for this backend.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FfiBackend::Uniffi => "uniffi",
+            FfiBackend::NativeCAbi => "native-c-abi",
+            FfiBackend::BoltFfi => "boltffi",
+        }
+    }
+
+    /// Returns true when this backend needs UniFFI binding generation.
+    pub fn uses_uniffi(&self) -> bool {
+        matches!(self, FfiBackend::Uniffi)
+    }
+
+    /// Returns true when this backend needs BoltFFI binding generation.
+    pub fn uses_boltffi(&self) -> bool {
+        matches!(self, FfiBackend::BoltFfi)
+    }
+
+    /// Returns true when this backend calls the direct mobench C ABI bridge.
+    pub fn uses_native_c_abi(&self) -> bool {
+        matches!(self, FfiBackend::NativeCAbi)
+    }
+}
+
+impl fmt::Display for FfiBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl Target {
