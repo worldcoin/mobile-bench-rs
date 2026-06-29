@@ -521,6 +521,10 @@ library_name = "zk_mobile_bench"
 # Output directory for build artifacts (default: target/mobench/)
 # output_dir = "target/mobench"
 
+# FFI backend for generated mobile runners: "uniffi" (default), "native-c-abi", or "boltffi".
+# Use "boltffi" for BoltFFI-generated bindings, or "native-c-abi" for direct C ABI calls.
+# ffi_backend = "uniffi"
+
 [android]
 # Android package name
 package = "com.example.bench"

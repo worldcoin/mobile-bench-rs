@@ -159,6 +159,7 @@ dependencies = [
  "inventory",
  "mobench-sdk",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "uniffi",
 ]
@@ -224,6 +225,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "boltffi"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5662bb1904d8a0791e1e9c61610d1529b47c107b71d7f56a11d71c9de8bfff06"
+dependencies = [
+ "boltffi_core",
+ "boltffi_macros",
+]
+
+[[package]]
+name = "boltffi_core"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bffbb19cfaadaa61c77d8bd41eeafca02428706a16c624ad0c3debf300cd0cb3"
+dependencies = [
+ "boltffi_macros",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "boltffi_ffi_rules"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d6063a40071db98255f369887c9927b09423709771fb8b4def5ff02c99394ae"
+
+[[package]]
+name = "boltffi_macros"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33e78b79cf977f97ebc3f7f2b0ae3526fe366851848f5e11781e10324a9939cc"
+dependencies = [
+ "boltffi_ffi_rules",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -591,6 +631,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 name = "ffi-benchmark"
 version = "0.1.0"
 dependencies = [
+ "boltffi",
  "inventory",
  "mobench-sdk",
  "serde",
@@ -1227,7 +1268,7 @@ dependencies = [
 
 [[package]]
 name = "mobench"
-version = "0.1.37"
+version = "0.1.42"
 dependencies = [
  "anyhow",
  "clap",
@@ -1254,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-macros"
-version = "0.1.37"
+version = "0.1.42"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1264,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-sdk"
-version = "0.1.37"
+version = "0.1.42"
 dependencies = [
  "include_dir",
  "inventory",
@@ -1884,8 +1925,9 @@ dependencies = [
 
 [[package]]
 name = "sample-fns"
-version = "0.1.37"
+version = "0.1.42"
 dependencies = [
+ "boltffi",
  "camino",
  "mobench-sdk",
  "serde",

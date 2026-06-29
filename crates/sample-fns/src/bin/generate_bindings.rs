@@ -103,6 +103,6 @@ fn main() {
 
 #[cfg(not(feature = "bindgen"))]
 fn main() {
-    eprintln!("generate-bindings requires --features bindgen");
+    eprintln!("generate_bindings requires --features bindgen");
     std::process::exit(1);
 }

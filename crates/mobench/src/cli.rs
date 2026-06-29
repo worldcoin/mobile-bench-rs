@@ -111,6 +111,30 @@ pub(crate) enum Command {
             help = "Deprecated compatibility flag for generated XCUITest harness timeout"
         )]
         ios_completion_timeout_secs: Option<u64>,
+        #[arg(
+            long,
+            hide = true,
+            help = "Deprecated compatibility flag; use [ios].deployment_target in mobench.toml"
+        )]
+        ios_deployment_target: Option<String>,
+        #[arg(
+            long,
+            hide = true,
+            help = "Deprecated compatibility flag; use [ios].runner in mobench.toml"
+        )]
+        ios_runner: Option<String>,
+        #[arg(
+            long,
+            hide = true,
+            help = "Deprecated compatibility flag for Android BrowserStack benchmark timeout"
+        )]
+        android_benchmark_timeout_secs: Option<u64>,
+        #[arg(
+            long,
+            hide = true,
+            help = "Deprecated compatibility flag for Android BrowserStack heartbeat interval"
+        )]
+        android_heartbeat_interval_secs: Option<u64>,
         #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
         fetch: bool,
         #[arg(long, default_value = "target/browserstack")]
@@ -217,6 +241,18 @@ pub(crate) enum Command {
             help = "Deprecated compatibility flag for generated XCUITest harness timeout"
         )]
         ios_completion_timeout_secs: Option<u64>,
+        #[arg(
+            long,
+            hide = true,
+            help = "Deprecated compatibility flag; use [ios].deployment_target in mobench.toml"
+        )]
+        ios_deployment_target: Option<String>,
+        #[arg(
+            long,
+            hide = true,
+            help = "Deprecated compatibility flag; use [ios].runner in mobench.toml"
+        )]
+        ios_runner: Option<String>,
         #[arg(
             long,
             help = "Project root containing mobench.toml or the Cargo workspace"
@@ -612,6 +648,30 @@ pub(crate) struct CiRunArgs {
         help = "Deprecated compatibility flag for generated XCUITest harness timeout"
     )]
     pub(crate) ios_completion_timeout_secs: Option<u64>,
+    #[arg(
+        long,
+        hide = true,
+        help = "Deprecated compatibility flag; use [ios].deployment_target in mobench.toml"
+    )]
+    pub(crate) ios_deployment_target: Option<String>,
+    #[arg(
+        long,
+        hide = true,
+        help = "Deprecated compatibility flag; use [ios].runner in mobench.toml"
+    )]
+    pub(crate) ios_runner: Option<String>,
+    #[arg(
+        long,
+        hide = true,
+        help = "Deprecated compatibility flag for Android BrowserStack benchmark timeout"
+    )]
+    pub(crate) android_benchmark_timeout_secs: Option<u64>,
+    #[arg(
+        long,
+        hide = true,
+        help = "Deprecated compatibility flag for Android BrowserStack heartbeat interval"
+    )]
+    pub(crate) android_heartbeat_interval_secs: Option<u64>,
     #[arg(long, help = "Fetch BrowserStack artifacts after the run completes")]
     pub(crate) fetch: bool,
     #[arg(long, default_value = "target/browserstack")]

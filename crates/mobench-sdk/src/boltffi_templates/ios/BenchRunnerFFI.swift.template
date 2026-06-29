@@ -1,0 +1,217 @@
+import Foundation
+
+private let defaultFunction = "{{DEFAULT_FUNCTION}}"
+private let defaultIterations: UInt32 = 20
+private let defaultWarmup: UInt32 = 3
+
+struct BenchParams {
+    let function: String
+    let iterations: UInt32
+    let warmup: UInt32
+
+    private struct EncodedBenchSpec: Decodable {
+        let function: String
+        let iterations: UInt32
+        let warmup: UInt32
+    }
+
+    static func fromBundle() -> BenchParams? {
+        guard let url = Bundle.main.url(forResource: "bench_spec", withExtension: "json") else {
+            return nil
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            let decoded = try JSONDecoder().decode(EncodedBenchSpec.self, from: data)
+            return BenchParams(function: decoded.function, iterations: decoded.iterations, warmup: decoded.warmup)
+        } catch {
+            print("[BenchRunner] ERROR: Failed to parse bench_spec.json: \(error)")
+            return nil
+        }
+    }
+
+    static func fromProcessInfo() -> BenchParams {
+        let info = ProcessInfo.processInfo
+        var function = defaultFunction
+        var iterations = defaultIterations
+        var warmup = defaultWarmup
+
+        if let value = info.environment["BENCH_FUNCTION"], !value.isEmpty {
+            function = value
+        }
+        if let value = info.environment["BENCH_ITERATIONS"], let parsed = UInt32(value) {
+            iterations = parsed
+        }
+        if let value = info.environment["BENCH_WARMUP"], let parsed = UInt32(value) {
+            warmup = parsed
+        }
+
+        for arg in info.arguments {
+            if arg.hasPrefix("--bench-function="), let value = arg.split(separator: "=", maxSplits: 1).last {
+                function = String(value)
+            } else if arg.hasPrefix("--bench-iterations="),
+                      let value = arg.split(separator: "=", maxSplits: 1).last,
+                      let parsed = UInt32(value) {
+                iterations = parsed
+            } else if arg.hasPrefix("--bench-warmup="),
+                      let value = arg.split(separator: "=", maxSplits: 1).last,
+                      let parsed = UInt32(value) {
+                warmup = parsed
+            }
+        }
+
+        return BenchParams(function: function, iterations: iterations, warmup: warmup)
+    }
+
+    static func resolved() -> BenchParams {
+        fromBundle() ?? fromProcessInfo()
+    }
+}
+
+struct BenchmarkResult {
+    let displayText: String
+    let jsonReport: String
+}
+
+enum {{PROJECT_NAME_PASCAL}}FFI {
+    static func runCurrentBenchmark() async -> BenchmarkResult {
+        run(params: BenchParams.resolved())
+    }
+
+    static func run(params: BenchParams) -> BenchmarkResult {
+        do {
+            let rawReport = try runBenchmarkJson(specJson: encodeSpec(params))
+            let report = try enrichBenchReport(rawReport)
+            return BenchmarkResult(
+                displayText: formatBenchReport(report),
+                jsonReport: serializeJSON(report)
+            )
+        } catch {
+            print("[BenchRunner] ERROR: Benchmark failed: \(error)")
+            let message = error.localizedDescription
+            return BenchmarkResult(
+                displayText: "Benchmark error: \(message)",
+                jsonReport: "{\"error\": true, \"message\": \"\(escapeJSON(message))\"}"
+            )
+        }
+    }
+
+    private static func encodeSpec(_ params: BenchParams) throws -> String {
+        let spec: [String: Any] = [
+            "name": params.function,
+            "iterations": params.iterations,
+            "warmup": params.warmup
+        ]
+        let data = try JSONSerialization.data(withJSONObject: spec, options: [])
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private static func enrichBenchReport(_ rawReport: String) throws -> [String: Any] {
+        let data = Data(rawReport.utf8)
+        guard var json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+            throw BoltFfiBenchError.execution("BoltFFI benchmark returned non-object JSON")
+        }
+        let spec = json["spec"] as? [String: Any] ?? [:]
+        json["function"] = spec["name"] as? String ?? defaultFunction
+        let samples = json["samples"] as? [[String: Any]] ?? []
+        let durations = samples.compactMap { coerceToUInt64($0["duration_ns"] ?? 0) }
+        json["samples_ns"] = durations
+        if !durations.isEmpty {
+            let sum = durations.reduce(0, +)
+            json["stats"] = [
+                "min_ns": durations.min() ?? 0,
+                "max_ns": durations.max() ?? 0,
+                "avg_ns": Double(sum) / Double(durations.count),
+                "mean_ns": sum / UInt64(durations.count),
+                "median_ns": median(durations)
+            ] as [String: Any]
+        }
+        json["resources"] = [
+            "platform": "ios",
+            "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
+        ] as [String: Any]
+        return json
+    }
+
+    private static func formatBenchReport(_ report: [String: Any]) -> String {
+        let spec = report["spec"] as? [String: Any] ?? [:]
+        let samples = report["samples_ns"] as? [UInt64] ?? []
+        var output = "=== Benchmark Results ===\n\n"
+        output += "Function: \(spec["name"] as? String ?? defaultFunction)\n"
+        output += "Iterations: \(coerceToUInt64(spec["iterations"] ?? defaultIterations) ?? UInt64(defaultIterations))\n"
+        output += "Warmup: \(coerceToUInt64(spec["warmup"] ?? defaultWarmup) ?? UInt64(defaultWarmup))\n\n"
+        output += "Samples (\(samples.count)):\n"
+        for (index, sample) in samples.enumerated() {
+            output += "  \(index + 1). \(formatDuration(sample))\n"
+        }
+        if let stats = report["stats"] as? [String: Any] {
+            output += "\nStatistics:\n"
+            output += "  Min: \(formatDuration(coerceToUInt64(stats["min_ns"] ?? 0) ?? 0))\n"
+            output += "  Max: \(formatDuration(coerceToUInt64(stats["max_ns"] ?? 0) ?? 0))\n"
+            output += "  Avg: \(formatDuration(coerceToUInt64(stats["mean_ns"] ?? 0) ?? 0))\n"
+        }
+        return output
+    }
+
+    private static func serializeJSON(_ value: [String: Any]) -> String {
+        do {
+            let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+            return String(data: data, encoding: .utf8) ?? "{}"
+        } catch {
+            return "{}"
+        }
+    }
+
+    private static func formatDuration(_ ns: UInt64) -> String {
+        let ms = Double(ns) / 1_000_000.0
+        if ms >= 1000.0 {
+            return String(format: "%.3fs", ms / 1000.0)
+        }
+        return String(format: "%.3fms", ms)
+    }
+}
+
+private enum BoltFfiBenchError: LocalizedError {
+    case execution(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .execution(let message):
+            return message
+        }
+    }
+}
+
+private func coerceToUInt64(_ value: Any) -> UInt64? {
+    if let value = value as? UInt64 {
+        return value
+    }
+    if let value = value as? UInt32 {
+        return UInt64(value)
+    }
+    if let value = value as? Int {
+        return value >= 0 ? UInt64(value) : nil
+    }
+    if let value = value as? NSNumber {
+        return value.uint64Value
+    }
+    return nil
+}
+
+private func median(_ values: [UInt64]) -> UInt64 {
+    guard !values.isEmpty else {
+        return 0
+    }
+    let sorted = values.sorted()
+    let midpoint = sorted.count / 2
+    if sorted.count % 2 == 0 {
+        return (sorted[midpoint - 1] + sorted[midpoint]) / 2
+    }
+    return sorted[midpoint]
+}
+
+private func escapeJSON(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\n", with: "\\n")
+}

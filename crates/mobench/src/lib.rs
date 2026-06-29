@@ -174,6 +174,10 @@ struct BrowserStackConfig {
     project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     ios_completion_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    android_benchmark_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    android_heartbeat_interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -218,6 +222,10 @@ pub(crate) struct RunSpec {
     pub(crate) devices: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) ios_completion_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) android_benchmark_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) android_heartbeat_interval_secs: Option<u64>,
     #[serde(skip_serializing, skip_deserializing, default)]
     pub(crate) browserstack: Option<BrowserStackConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -260,7 +268,10 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) crate_name: String,
     pub(crate) library_name: String,
     pub(crate) android_abis: Option<Vec<String>>,
+    pub(crate) ffi_backend: mobench_sdk::FfiBackend,
     pub(crate) ios_completion_timeout_secs: Option<u64>,
+    pub(crate) android_benchmark_timeout_secs: Option<u64>,
+    pub(crate) android_heartbeat_interval_secs: Option<u64>,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) output_dir: PathBuf,
     pub(crate) default_function: Option<String>,
@@ -405,6 +416,10 @@ pub fn run() -> Result<()> {
             ios_app,
             ios_test_suite,
             ios_completion_timeout_secs,
+            ios_deployment_target: _,
+            ios_runner: _,
+            android_benchmark_timeout_secs,
+            android_heartbeat_interval_secs,
             fetch,
             fetch_output_dir,
             fetch_poll_interval_secs,
@@ -431,6 +446,8 @@ pub fn run() -> Result<()> {
                 ios_app,
                 ios_test_suite,
                 ios_completion_timeout_secs,
+                android_benchmark_timeout_secs,
+                android_heartbeat_interval_secs,
                 local_only,
                 release,
                 cli.dry_run,
@@ -602,12 +619,23 @@ pub fn run() -> Result<()> {
                             println!("[2/4] Building Android APK...");
                         } else {
                             println!("Building for Android...");
-                            println!("  Building Rust library for Android targets...");
+                            if layout.ffi_backend.uses_boltffi() {
+                                println!("  Generating and packaging BoltFFI Android artifacts...");
+                            } else {
+                                println!("  Building Rust library for Android targets...");
+                            }
                         }
                         let ndk = std::env::var("ANDROID_NDK_HOME").context(
                             "ANDROID_NDK_HOME must be set for Android builds. Example: export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/<version>",
                         )?;
-                        let build = run_android_build(&layout, &ndk, release, cli.dry_run)?;
+                        let build = run_android_build(
+                            &layout,
+                            &ndk,
+                            release,
+                            cli.dry_run,
+                            spec.android_benchmark_timeout_secs,
+                            spec.android_heartbeat_interval_secs,
+                        )?;
                         let apk = build.app_path;
                         if !progress {
                             println!("\u{2713} Built Android APK at {:?}", apk);
@@ -641,7 +669,11 @@ pub fn run() -> Result<()> {
                             println!("[2/4] Building iOS xcframework...");
                         } else {
                             println!("Building for iOS...");
-                            println!("  Building Rust library for iOS targets...");
+                            if layout.ffi_backend.uses_boltffi() {
+                                println!("  Generating and packaging BoltFFI iOS artifacts...");
+                            } else {
+                                println!("  Building Rust library for iOS targets...");
+                            }
                         }
                         let (xcframework, header) = run_ios_build(
                             &layout,
@@ -1034,6 +1066,8 @@ pub fn run() -> Result<()> {
             target,
             release,
             ios_completion_timeout_secs,
+            ios_deployment_target: _,
+            ios_runner: _,
             project_root,
             output_dir,
             crate_path,
@@ -1426,9 +1460,21 @@ pub(crate) fn resolve_project_layout(
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
     let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
+    let ffi_backend = config_path
+        .as_deref()
+        .map(config::load_ffi_backend_from_file)
+        .transpose()?
+        .unwrap_or_default();
     let ios_completion_timeout_secs = config
         .as_ref()
         .and_then(|cfg| cfg.browserstack.ios_completion_timeout_secs);
+    let android_browserstack = config_path
+        .as_deref()
+        .map(config::load_android_browserstack_settings_from_file)
+        .transpose()?
+        .unwrap_or_default();
+    let android_benchmark_timeout_secs = android_browserstack.benchmark_timeout_secs;
+    let android_heartbeat_interval_secs = android_browserstack.heartbeat_interval_secs;
     let output_dir = config
         .as_ref()
         .and_then(|cfg| cfg.project.output_dir.clone())
@@ -1450,7 +1496,10 @@ pub(crate) fn resolve_project_layout(
         crate_name,
         library_name,
         android_abis,
+        ffi_backend,
         ios_completion_timeout_secs,
+        android_benchmark_timeout_secs,
+        android_heartbeat_interval_secs,
         config_path,
         output_dir,
         default_function,
@@ -1493,6 +1542,20 @@ fn configured_ios_completion_timeout_secs(
     ios_completion_timeout_secs.or(layout.ios_completion_timeout_secs)
 }
 
+fn configured_android_benchmark_timeout_secs(
+    layout: &ResolvedProjectLayout,
+    android_benchmark_timeout_secs: Option<u64>,
+) -> Option<u64> {
+    android_benchmark_timeout_secs.or(layout.android_benchmark_timeout_secs)
+}
+
+fn configured_android_heartbeat_interval_secs(
+    layout: &ResolvedProjectLayout,
+    android_heartbeat_interval_secs: Option<u64>,
+) -> Option<u64> {
+    android_heartbeat_interval_secs.or(layout.android_heartbeat_interval_secs)
+}
+
 fn write_config_template(path: &Path, target: MobileTarget, overwrite: bool) -> Result<()> {
     ensure_can_write(path, overwrite)?;
 
@@ -1517,6 +1580,8 @@ fn write_config_template(path: &Path, target: MobileTarget, overwrite: bool) -> 
             app_automate_access_key: "${BROWSERSTACK_ACCESS_KEY}".into(),
             project: Some("mobile-bench-rs".into()),
             ios_completion_timeout_secs: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
         },
         ios_xcuitest,
     };
@@ -2387,6 +2452,13 @@ fn cmd_ci_run_single(
     output_dir: &Path,
     metadata: &CiContractMetadata,
 ) -> Result<i32> {
+    let _ = (
+        &args.ios_deployment_target,
+        &args.ios_runner,
+        &args.android_benchmark_timeout_secs,
+        &args.android_heartbeat_interval_secs,
+    );
+
     let default_baseline_path = previous_baseline_path(output_dir);
     let baseline_source = args.baseline.clone().or_else(|| {
         if default_baseline_path.exists() {
@@ -2396,34 +2468,40 @@ fn cmd_ci_run_single(
         }
     });
 
-    let result = run_request(&RunRequest {
-        target,
-        function: args.function.clone().unwrap_or_default(),
-        crate_path: args.crate_path.clone(),
-        iterations: args.iterations,
-        warmup: args.warmup,
-        device_selection: DeviceSelection {
-            devices: args.devices.clone(),
-            device_matrix: args.device_matrix.clone(),
-            device_tags: args.device_tags.clone(),
+    let result = with_android_benchmark_env(
+        args.android_benchmark_timeout_secs,
+        args.android_heartbeat_interval_secs,
+        || {
+            run_request(&RunRequest {
+                target,
+                function: args.function.clone().unwrap_or_default(),
+                crate_path: args.crate_path.clone(),
+                iterations: args.iterations,
+                warmup: args.warmup,
+                device_selection: DeviceSelection {
+                    devices: args.devices.clone(),
+                    device_matrix: args.device_matrix.clone(),
+                    device_tags: args.device_tags.clone(),
+                },
+                config: args.config.clone(),
+                baseline: baseline_source,
+                regression_threshold_pct: args.regression_threshold_pct,
+                junit: args.junit.clone(),
+                local_only: args.local_only,
+                release: args.release,
+                ios_app: args.ios_app.clone(),
+                ios_test_suite: args.ios_test_suite.clone(),
+                ios_completion_timeout_secs: args.ios_completion_timeout_secs,
+                fetch: args.fetch,
+                fetch_output_dir: args.fetch_output_dir.clone(),
+                fetch_poll_interval_secs: args.fetch_poll_interval_secs,
+                fetch_timeout_secs: args.fetch_timeout_secs,
+                progress: args.progress,
+                output_dir: output_dir.to_path_buf(),
+                plots: args.plots,
+            })
         },
-        config: args.config.clone(),
-        baseline: baseline_source,
-        regression_threshold_pct: args.regression_threshold_pct,
-        junit: args.junit.clone(),
-        local_only: args.local_only,
-        release: args.release,
-        ios_app: args.ios_app.clone(),
-        ios_test_suite: args.ios_test_suite.clone(),
-        ios_completion_timeout_secs: args.ios_completion_timeout_secs,
-        fetch: args.fetch,
-        fetch_output_dir: args.fetch_output_dir.clone(),
-        fetch_poll_interval_secs: args.fetch_poll_interval_secs,
-        fetch_timeout_secs: args.fetch_timeout_secs,
-        progress: args.progress,
-        output_dir: output_dir.to_path_buf(),
-        plots: args.plots,
-    })?;
+    )?;
 
     let summary_json = result.report.summary_json;
     let summary_md = result.report.summary_md;
@@ -2750,6 +2828,8 @@ fn resolve_run_spec(
     ios_app: Option<PathBuf>,
     ios_test_suite: Option<PathBuf>,
     ios_completion_timeout_secs: Option<u64>,
+    android_benchmark_timeout_secs: Option<u64>,
+    android_heartbeat_interval_secs: Option<u64>,
     local_only: bool,
     _release: bool,
     dry_run: bool,
@@ -2759,6 +2839,12 @@ fn resolve_run_spec(
         let configured_ios_completion_timeout_secs = ios_completion_timeout_secs
             .or(cfg.browserstack.ios_completion_timeout_secs)
             .or(layout.ios_completion_timeout_secs);
+        let configured_android_benchmark_timeout_secs = android_benchmark_timeout_secs
+            .or(cfg.browserstack.android_benchmark_timeout_secs)
+            .or(layout.android_benchmark_timeout_secs);
+        let configured_android_heartbeat_interval_secs = android_heartbeat_interval_secs
+            .or(cfg.browserstack.android_heartbeat_interval_secs)
+            .or(layout.android_heartbeat_interval_secs);
         if device_matrix.is_some() && !devices.is_empty() {
             bail!(
                 "--device-matrix cannot be combined with --devices; choose one source for devices"
@@ -2798,6 +2884,8 @@ fn resolve_run_spec(
             warmup: warmup.unwrap_or(cfg.warmup),
             devices: device_names,
             ios_completion_timeout_secs: configured_ios_completion_timeout_secs,
+            android_benchmark_timeout_secs: configured_android_benchmark_timeout_secs,
+            android_heartbeat_interval_secs: configured_android_heartbeat_interval_secs,
             browserstack: Some(cfg.browserstack),
             ios_xcuitest,
         });
@@ -2865,6 +2953,14 @@ fn resolve_run_spec(
         ios_completion_timeout_secs: configured_ios_completion_timeout_secs(
             layout,
             ios_completion_timeout_secs,
+        ),
+        android_benchmark_timeout_secs: configured_android_benchmark_timeout_secs(
+            layout,
+            android_benchmark_timeout_secs,
+        ),
+        android_heartbeat_interval_secs: configured_android_heartbeat_interval_secs(
+            layout,
+            android_heartbeat_interval_secs,
         ),
         browserstack: None,
         ios_xcuitest,
@@ -2959,6 +3055,51 @@ fn with_ios_benchmark_timeout_env<T>(
     result
 }
 
+fn with_android_benchmark_env<T>(
+    timeout_secs: Option<u64>,
+    heartbeat_interval_secs: Option<u64>,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if timeout_secs.is_none() && heartbeat_interval_secs.is_none() {
+        return f();
+    }
+
+    let previous_timeout = env::var_os("MOBENCH_ANDROID_BENCHMARK_TIMEOUT_SECS");
+    let previous_heartbeat = env::var_os("MOBENCH_ANDROID_HEARTBEAT_INTERVAL_SECS");
+
+    if let Some(timeout_secs) = timeout_secs {
+        println!("Using Android benchmark timeout: {timeout_secs}s");
+        unsafe {
+            env::set_var(
+                "MOBENCH_ANDROID_BENCHMARK_TIMEOUT_SECS",
+                timeout_secs.to_string(),
+            )
+        };
+    }
+    if let Some(heartbeat_interval_secs) = heartbeat_interval_secs {
+        println!("Using Android benchmark heartbeat interval: {heartbeat_interval_secs}s");
+        unsafe {
+            env::set_var(
+                "MOBENCH_ANDROID_HEARTBEAT_INTERVAL_SECS",
+                heartbeat_interval_secs.to_string(),
+            )
+        };
+    }
+
+    let result = f();
+
+    match previous_timeout {
+        Some(value) => unsafe { env::set_var("MOBENCH_ANDROID_BENCHMARK_TIMEOUT_SECS", value) },
+        None => unsafe { env::remove_var("MOBENCH_ANDROID_BENCHMARK_TIMEOUT_SECS") },
+    }
+    match previous_heartbeat {
+        Some(value) => unsafe { env::set_var("MOBENCH_ANDROID_HEARTBEAT_INTERVAL_SECS", value) },
+        None => unsafe { env::remove_var("MOBENCH_ANDROID_HEARTBEAT_INTERVAL_SECS") },
+    }
+
+    result
+}
+
 pub(crate) fn run_ios_build(
     layout: &ResolvedProjectLayout,
     release: bool,
@@ -2972,7 +3113,8 @@ pub(crate) fn run_ios_build(
             .verbose(true)
             .dry_run(dry_run)
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -3004,7 +3146,8 @@ fn package_ios_xcuitest_artifacts(
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -5034,8 +5177,14 @@ pub(crate) fn run_android_build(
     _ndk_home: &str,
     release: bool,
     dry_run: bool,
+    android_benchmark_timeout_secs: Option<u64>,
+    android_heartbeat_interval_secs: Option<u64>,
 ) -> Result<mobench_sdk::BuildResult> {
     ensure_android_home();
+    let android_benchmark_timeout_secs =
+        configured_android_benchmark_timeout_secs(layout, android_benchmark_timeout_secs);
+    let android_heartbeat_interval_secs =
+        configured_android_heartbeat_interval_secs(layout, android_heartbeat_interval_secs);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -5052,8 +5201,13 @@ pub(crate) fn run_android_build(
             .verbose(true)
             .dry_run(dry_run)
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
-    let result = builder.build(&cfg)?;
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
+    let result = with_android_benchmark_env(
+        android_benchmark_timeout_secs,
+        android_heartbeat_interval_secs,
+        || Ok(builder.build(&cfg)?),
+    )?;
     Ok(result)
 }
 
@@ -5218,6 +5372,8 @@ fn cmd_build(
     let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
     let ios_completion_timeout_secs =
         configured_ios_completion_timeout_secs(&layout, ios_completion_timeout_secs);
+    let android_benchmark_timeout_secs = configured_android_benchmark_timeout_secs(&layout, None);
+    let android_heartbeat_interval_secs = configured_android_heartbeat_interval_secs(&layout, None);
 
     // Progress mode: simplified output
     if progress {
@@ -5242,9 +5398,14 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/3] Building Android APK...");
-                let result = builder.build(&build_config)?;
+                let result = with_android_benchmark_env(
+                    android_benchmark_timeout_secs,
+                    android_heartbeat_interval_secs,
+                    || Ok(builder.build(&build_config)?),
+                )?;
                 println!("[3/3] Done!");
                 if !dry_run {
                     println!("\n\u{2713} APK: {:?}", result.app_path);
@@ -5259,7 +5420,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/3] Building iOS xcframework...");
                 let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                     Ok(builder.build(&build_config)?)
@@ -5278,9 +5440,14 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/5] Building Android APK...");
-                let android_result = android_builder.build(&build_config)?;
+                let android_result = with_android_benchmark_env(
+                    android_benchmark_timeout_secs,
+                    android_heartbeat_interval_secs,
+                    || Ok(android_builder.build(&build_config)?),
+                )?;
 
                 println!("[3/5] Building Rust library for iOS...");
                 let ios_builder = mobench_sdk::builders::IosBuilder::new(
@@ -5290,7 +5457,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[4/5] Building iOS xcframework...");
                 let ios_result =
                     with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
@@ -5340,7 +5508,11 @@ fn cmd_build(
     match target {
         SdkTarget::Android => {
             println!("\nBuilding for Android...");
-            println!("  Building Rust library for Android targets...");
+            if layout.ffi_backend.uses_boltffi() {
+                println!("  Generating and packaging BoltFFI Android artifacts...");
+            } else {
+                println!("  Building Rust library for Android targets...");
+            }
             let builder = mobench_sdk::builders::AndroidBuilder::new(
                 &layout.project_root,
                 layout.crate_name.clone(),
@@ -5348,10 +5520,13 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
-            let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                Ok(builder.build(&build_config)?)
-            })?;
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
+            let result = with_android_benchmark_env(
+                android_benchmark_timeout_secs,
+                android_heartbeat_interval_secs,
+                || Ok(builder.build(&build_config)?),
+            )?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
                 println!("\n[checkmark] Android build completed!");
@@ -5360,7 +5535,11 @@ fn cmd_build(
         }
         SdkTarget::Ios => {
             println!("\nBuilding for iOS...");
-            println!("  Building Rust library for iOS targets...");
+            if layout.ffi_backend.uses_boltffi() {
+                println!("  Generating and packaging BoltFFI iOS artifacts...");
+            } else {
+                println!("  Building Rust library for iOS targets...");
+            }
             let builder = mobench_sdk::builders::IosBuilder::new(
                 &layout.project_root,
                 layout.crate_name.clone(),
@@ -5368,7 +5547,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(builder.build(&build_config)?)
             })?;
@@ -5381,7 +5561,11 @@ fn cmd_build(
         SdkTarget::Both => {
             // Build Android
             println!("\nBuilding for Android...");
-            println!("  Building Rust library for Android targets...");
+            if layout.ffi_backend.uses_boltffi() {
+                println!("  Generating and packaging BoltFFI Android artifacts...");
+            } else {
+                println!("  Building Rust library for Android targets...");
+            }
             let android_builder = mobench_sdk::builders::AndroidBuilder::new(
                 &layout.project_root,
                 layout.crate_name.clone(),
@@ -5389,8 +5573,13 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
-            let android_result = android_builder.build(&build_config)?;
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
+            let android_result = with_android_benchmark_env(
+                android_benchmark_timeout_secs,
+                android_heartbeat_interval_secs,
+                || Ok(android_builder.build(&build_config)?),
+            )?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
                 println!("\n[checkmark] Android build completed!");
@@ -5399,7 +5588,11 @@ fn cmd_build(
 
             // Build iOS
             println!("\nBuilding for iOS...");
-            println!("  Building Rust library for iOS targets...");
+            if layout.ffi_backend.uses_boltffi() {
+                println!("  Generating and packaging BoltFFI iOS artifacts...");
+            } else {
+                println!("  Building Rust library for iOS targets...");
+            }
             let ios_builder = mobench_sdk::builders::IosBuilder::new(
                 &layout.project_root,
                 layout.crate_name.clone(),
@@ -5407,7 +5600,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(ios_builder.build(&build_config)?)
             })?;
@@ -7026,6 +7220,7 @@ resolver = "2"
             br#"[project]
 crate = "zk-mobile-bench"
 library_name = "zk_mobile_bench"
+ffi_backend = "native-c-abi"
 
 [android]
 abis = ["arm64-v8a", "x86_64"]
@@ -7091,6 +7286,8 @@ pub fn bench_query_proof_generation() {}
             None,
             None,
             None,
+            None,
+            None,
             false,
             false, // release
             false,
@@ -7141,6 +7338,8 @@ device_matrix = "{}"
 app_automate_username = "user"
 app_automate_access_key = "key"
 project = "proj"
+android_benchmark_timeout_secs = 7200
+android_heartbeat_interval_secs = 15
 "#,
             config_matrix_path.display()
         );
@@ -7163,6 +7362,8 @@ project = "proj"
             Some(config_path.as_path()),
             Some(cli_matrix_path.as_path()),
             Vec::new(),
+            None,
+            None,
             None,
             None,
             None,
@@ -7206,6 +7407,8 @@ device_matrix = "{}"
 app_automate_username = "user"
 app_automate_access_key = "key"
 project = "proj"
+android_benchmark_timeout_secs = 7200
+android_heartbeat_interval_secs = 15
 "#,
             matrix_path.display()
         );
@@ -7231,6 +7434,8 @@ project = "proj"
             None,
             None,
             None,
+            Some(3600),
+            None,
             false,
             false,
             false,
@@ -7241,6 +7446,8 @@ project = "proj"
         assert_eq!(spec.function, "cli::function");
         assert_eq!(spec.iterations, 3);
         assert_eq!(spec.warmup, 1);
+        assert_eq!(spec.android_benchmark_timeout_secs, Some(3600));
+        assert_eq!(spec.android_heartbeat_interval_secs, Some(15));
     }
 
     #[test]
@@ -7340,6 +7547,7 @@ project = "proj"
         assert_eq!(layout.crate_dir, crate_dir);
         assert_eq!(layout.crate_name, "zk-mobile-bench");
         assert_eq!(layout.library_name, "zk_mobile_bench");
+        assert_eq!(layout.ffi_backend, mobench_sdk::FfiBackend::NativeCAbi);
         assert_eq!(
             layout.android_abis,
             Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()])
@@ -7458,6 +7666,8 @@ project = "proj"
             None,
             None,
             None,
+            None,
+            None,
             false,
             false,
             true,
@@ -7516,6 +7726,8 @@ project = "proj"
             warmup: 1,
             devices: vec![],
             ios_completion_timeout_secs: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
             browserstack: None,
             ios_xcuitest: None,
         };
@@ -7545,6 +7757,8 @@ project = "proj"
             None,
             None,
             Vec::new(),
+            None,
+            None,
             None,
             None,
             None,
@@ -7740,6 +7954,62 @@ project = "proj"
     }
 
     #[test]
+    fn ci_run_accepts_deprecated_ios_runner_flags() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "ci",
+            "run",
+            "--target",
+            "ios",
+            "--function",
+            "sample_fns::fibonacci",
+            "--ios-deployment-target",
+            "10.0",
+            "--ios-runner",
+            "uikit-legacy",
+        ]);
+
+        match cli.command {
+            Command::Ci {
+                command: CiCommand::Run(args),
+            } => {
+                assert_eq!(args.target, CiTarget::Ios);
+                assert_eq!(args.ios_deployment_target.as_deref(), Some("10.0"));
+                assert_eq!(args.ios_runner.as_deref(), Some("uikit-legacy"));
+            }
+            _ => panic!("expected ci run command"),
+        }
+    }
+
+    #[test]
+    fn ci_run_accepts_deprecated_android_runner_flags() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "ci",
+            "run",
+            "--target",
+            "android",
+            "--function",
+            "sample_fns::fibonacci",
+            "--android-benchmark-timeout-secs",
+            "7200",
+            "--android-heartbeat-interval-secs",
+            "10",
+        ]);
+
+        match cli.command {
+            Command::Ci {
+                command: CiCommand::Run(args),
+            } => {
+                assert_eq!(args.target, CiTarget::Android);
+                assert_eq!(args.android_benchmark_timeout_secs, Some(7200));
+                assert_eq!(args.android_heartbeat_interval_secs, Some(10));
+            }
+            _ => panic!("expected ci run command"),
+        }
+    }
+
+    #[test]
     fn build_parses_ios_completion_timeout_secs() {
         let cli = Cli::parse_from([
             "mobench",
@@ -7756,6 +8026,32 @@ project = "proj"
                 ..
             } => {
                 assert_eq!(ios_completion_timeout_secs, Some(750));
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn build_accepts_deprecated_ios_runner_flags() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "build",
+            "--target",
+            "ios",
+            "--ios-deployment-target",
+            "10.0",
+            "--ios-runner",
+            "uikit-legacy",
+        ]);
+
+        match cli.command {
+            Command::Build {
+                ios_deployment_target,
+                ios_runner,
+                ..
+            } => {
+                assert_eq!(ios_deployment_target.as_deref(), Some("10.0"));
+                assert_eq!(ios_runner.as_deref(), Some("uikit-legacy"));
             }
             _ => panic!("expected build command"),
         }
@@ -7813,6 +8109,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
             None,
             None,
             Some(600),
+            None,
+            None,
             false,
             false,
             false,
@@ -8199,6 +8497,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                         app_automate_access_key: access_key,
                         project,
                         ios_completion_timeout_secs: None,
+                        android_benchmark_timeout_secs: None,
+                        android_heartbeat_interval_secs: None,
                     },
                     ios_xcuitest: None,
                 },
@@ -8661,6 +8961,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
             browserstack: None,
             ios_xcuitest: None,
             ios_completion_timeout_secs: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
         };
         let run_summary = RunSummary {
             spec: spec.clone(),
@@ -8706,6 +9008,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
             browserstack: None,
             ios_xcuitest: None,
             ios_completion_timeout_secs: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
         };
         let run_summary = RunSummary {
             spec: spec.clone(),
@@ -8819,6 +9123,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
             warmup: 1,
             devices: vec![],
             ios_completion_timeout_secs: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
             browserstack: None,
             ios_xcuitest: None,
         };
@@ -8835,6 +9141,8 @@ test_suite = "target/ios/BenchRunnerUITests.zip"
                 warmup: 1,
                 devices: vec![],
                 ios_completion_timeout_secs: None,
+                android_benchmark_timeout_secs: None,
+                android_heartbeat_interval_secs: None,
                 browserstack: None,
                 ios_xcuitest: None,
             }),
@@ -9545,6 +9853,8 @@ mod ci_merge_tests {
             browserstack: None,
             ios_xcuitest: None,
             ios_completion_timeout_secs: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
         };
         let local_report = json!({});
         let run_summary = RunSummary {
@@ -9599,6 +9909,8 @@ mod ci_merge_tests {
             browserstack: None,
             ios_xcuitest: None,
             ios_completion_timeout_secs: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
         };
         let run_summary = RunSummary {
             spec: spec.clone(),

@@ -366,6 +366,9 @@ pub mod codegen;
 // Registry runtime modules - available without build tooling
 #[cfg(feature = "registry")]
 #[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
+pub mod native_c_abi;
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub mod registry;
 #[cfg(feature = "registry")]
 #[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
@@ -384,6 +387,9 @@ pub use inventory;
 // Re-export key registry types for convenience
 #[cfg(feature = "registry")]
 #[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
+pub use native_c_abi::MobenchBuf;
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub use registry::{BenchFunction, discover_benchmarks, find_benchmark, list_benchmark_names};
 #[cfg(feature = "registry")]
 #[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
@@ -395,7 +401,7 @@ pub use types::{BenchError, BenchSample, BenchSpec, HarnessTimelineSpan, RunnerR
 // Re-export build/config types. These are plain data types and do not pull in
 // build automation dependencies by themselves.
 pub use types::{
-    BuildConfig, BuildProfile, BuildResult, InitConfig, NativeLibraryArtifact, Target,
+    BuildConfig, BuildProfile, BuildResult, FfiBackend, InitConfig, NativeLibraryArtifact, Target,
 };
 
 // Re-export timing types at the crate root for convenience

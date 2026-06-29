@@ -17,6 +17,26 @@ on:
         required: false
         type: string
         default: "low-spec"
+      ios_device:
+        description: "Custom iOS device name"
+        required: false
+        type: string
+        default: ""
+      ios_os_version:
+        description: "Custom iOS OS version"
+        required: false
+        type: string
+        default: ""
+      android_device:
+        description: "Custom Android device name"
+        required: false
+        type: string
+        default: ""
+      android_os_version:
+        description: "Custom Android OS version"
+        required: false
+        type: string
+        default: ""
       crate_path:
         description: "Benchmark crate fixture path"
         required: false
@@ -44,6 +64,11 @@ on:
         default: ""
       mobench_ref:
         description: "Git ref for mobile-bench-rs to install instead of the caller path or crates.io version"
+        required: false
+        type: string
+        default: ""
+      ffi_backend:
+        description: "mobench FFI backend to configure for the fixture (uniffi | native-c-abi | boltffi)"
         required: false
         type: string
         default: ""
@@ -85,10 +110,15 @@ jobs:
       functions: ${{ inputs.functions }}
       platform: ${{ inputs.platform }}
       device_profile: ${{ inputs.device_profile }}
+      ios_device: ${{ inputs.ios_device }}
+      ios_os_version: ${{ inputs.ios_os_version }}
+      android_device: ${{ inputs.android_device }}
+      android_os_version: ${{ inputs.android_os_version }}
       iterations: ${{ inputs.iterations }}
       warmup: ${{ inputs.warmup }}
       mobench_version: ${{ inputs.mobench_version }}
       mobench_ref: ${{ inputs.mobench_ref }}
+      ffi_backend: ${{ inputs.ffi_backend }}
       build_release: true
       pr_number: ${{ inputs.pr_number }}
       requested_by: ${{ inputs.requested_by }}

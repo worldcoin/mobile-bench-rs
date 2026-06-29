@@ -48,6 +48,7 @@ pub struct BenchSample {
     pub duration_ns: u64,
     pub cpu_time_ms: Option<u64>,
     pub peak_memory_kb: Option<u64>,
+    pub process_peak_memory_kb: Option<u64>,
 }
 
 /// A semantic phase emitted by the benchmark runner.
@@ -109,6 +110,7 @@ impl From<mobench_sdk::BenchSample> for BenchSample {
             duration_ns: sample.duration_ns,
             cpu_time_ms: sample.cpu_time_ms,
             peak_memory_kb: sample.peak_memory_kb,
+            process_peak_memory_kb: sample.process_peak_memory_kb,
         }
     }
 }
@@ -156,6 +158,14 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
     let sdk_spec: mobench_sdk::BenchSpec = spec.into();
     let report = mobench_sdk::run_benchmark(sdk_spec)?;
     Ok(report.into())
+}
+
+/// Run a benchmark through BoltFFI using the same JSON bridge as generated runners.
+#[boltffi::export]
+pub fn run_benchmark_json(spec_json: &str) -> Result<String, String> {
+    let spec: BenchSpec = serde_json::from_str(spec_json).map_err(|err| err.to_string())?;
+    let report = run_benchmark(spec).map_err(|err| err.to_string())?;
+    serde_json::to_string(&report).map_err(|err| err.to_string())
 }
 
 /// Compute fibonacci number iteratively.
@@ -312,6 +322,31 @@ mod tests {
         };
         let report = run_benchmark(spec).unwrap();
         assert_eq!(report.samples.len(), 2);
+    }
+
+    #[test]
+    fn test_run_benchmark_via_boltffi_json() {
+        let spec = r#"{"name":"ffi_benchmark::bench_checksum","iterations":2,"warmup":0}"#;
+        let report_json = run_benchmark_json(spec).unwrap();
+        let report: BenchReport = serde_json::from_str(&report_json).unwrap();
+        assert_eq!(report.spec.name, "ffi_benchmark::bench_checksum");
+        assert_eq!(report.samples.len(), 2);
+    }
+
+    #[test]
+    fn bench_sample_conversion_preserves_process_peak_memory() {
+        let sample = mobench_sdk::BenchSample {
+            duration_ns: 42,
+            cpu_time_ms: Some(7),
+            peak_memory_kb: Some(11),
+            process_peak_memory_kb: Some(17),
+        };
+
+        let ffi_sample: BenchSample = sample.into();
+
+        assert_eq!(ffi_sample.process_peak_memory_kb, Some(17));
+        let json = serde_json::to_value(&ffi_sample).unwrap();
+        assert_eq!(json["process_peak_memory_kb"], 17);
     }
 
     #[test]
