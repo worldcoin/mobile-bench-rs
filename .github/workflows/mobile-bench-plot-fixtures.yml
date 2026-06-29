@@ -39,7 +39,7 @@ jobs:
         run: echo "${GITHUB_WORKSPACE}/target/debug" >> "$GITHUB_PATH"
 
       - name: Render and verify plot fixtures
-        run: scripts/ci/verify-example-plot-fixture.sh ${{ matrix.fixture }}
+        run: mobench fixture verify-plots ${{ matrix.fixture }}
 
       - name: Upload plot artifacts
         if: always()

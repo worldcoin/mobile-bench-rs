@@ -1,723 +1,242 @@
 # Testing Guide
 
-This document provides comprehensive testing instructions for mobile-bench-rs.
+Current release: **0.1.42**.
 
-> **For SDK integrators**: if you're importing `mobench-sdk` into your project, use:
-> - `cargo mobench build --target <android|ios>` for builds
-> - Scripts shown below are legacy tooling for this repository
-> - See [sdk-integration.md](sdk-integration.md) for the integration guide
-> **Note**: For detailed build instructions, prerequisites, and step-by-step build processes, see [build.md](build.md). This document focuses on testing scenarios and troubleshooting.
+This guide covers host tests, CLI validation, generated mobile artifacts,
+BrowserStack smoke tests, and local native profiling checks.
 
-Build/run/list/verify/package commands resolve the benchmark crate from `--project-root`, `--crate-path`, `mobench.toml`, Cargo workspace metadata, or git root before falling back to `bench-mobile/`. `build --progress` uses that same config-first resolver.
+## Host Tests
 
-## Table of Contents
-- [Prerequisites](#prerequisites)
-- [Host Testing](#host-testing)
-- [Android Testing](#android-testing)
-- [iOS Testing](#ios-testing)
-- [Troubleshooting](#troubleshooting)
+Run the full Rust test suite:
 
-## Prerequisites
-
-### Prerequisite Validation (Recommended)
-
-Before installing prerequisites manually, use the `check` command to validate your setup:
-
-```bash
-# Check Android prerequisites
-cargo mobench check --target android
-
-# Check iOS prerequisites
-cargo mobench check --target ios
-```
-
-The check command will identify missing tools and provide installation instructions.
-
-### Rust
-```bash
-# Install Rust if not already installed
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-# https://www.rust-lang.org/tools/install
-
-# Install the default Android target
-rustup target add aarch64-linux-android
-
-# Optional: add extra Android targets only when android.abis enables them
-# rustup target add armv7-linux-androideabi x86_64-linux-android
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-# https://doc.rust-lang.org/rustup/targets.html
-
-# Install cargo-ndk for Android builds
-cargo install cargo-ndk
-# https://github.com/bbqsrc/cargo-ndk
-```
-
-### Android
-```bash
-# Install Android SDK and NDK (via Android Studio or command line)
-# Android Studio: https://developer.android.com/studio
-# Android NDK: https://developer.android.com/ndk/downloads
-# JDK 17+ (for Gradle; any distribution): https://openjdk.org/install/
-# Note: Android Gradle Plugin (AGP) officially supports Java 17.
-# Set environment variable (add to ~/.zshrc or ~/.bashrc)
-export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
-
-# Verify NDK is available
-ls $ANDROID_NDK_HOME
-```
-
-### iOS (macOS only)
-```bash
-# Install Xcode from App Store
-# https://developer.apple.com/xcode/
-# Install command-line tools
-xcode-select --install
-
-# Install xcodegen
-brew install xcodegen
-# https://github.com/yonaskolb/XcodeGen
-```
-
-## Host Testing
-
-### Unit Tests
-Run all Rust tests:
 ```bash
 cargo test --all
 ```
 
-Expected output: All tests pass (11 tests total as of UniFFI migration).
+Run a package-specific suite:
 
-### CLI Note
-The CLI does not currently expose a host-only demo command. Use `cargo test --all` for host
-validation and use `cargo mobench run` to execute benchmarks on devices.
+```bash
+cargo test -p mobench-sdk
+cargo test -p mobench-macros
+cargo test -p mobench
+```
 
-### CI Artifacts
-The `Mobile Bench (manual)` workflow uploads summary artifacts:
-- `host-run-summary` (JSON + Markdown + optional CSV from host-only run)
-- `browserstack-run-summary` (JSON + Markdown + optional CSV + fetched logs when secrets are set)
+## CLI Validation
+
+Check local prerequisites:
+
+```bash
+cargo mobench check --target android
+cargo mobench check --target ios
+```
+
+Validate BrowserStack credentials, config, and a device matrix:
+
+```bash
+cargo mobench doctor \
+  --target both \
+  --config bench-config.toml \
+  --device-matrix device-matrix.yaml \
+  --browserstack true
+```
+
+List registered benchmarks:
+
+```bash
+cargo mobench list --crate-path examples/basic-benchmark
+```
+
+Verify registry and generated artifacts:
+
+```bash
+cargo mobench verify \
+  --target android \
+  --crate-path examples/basic-benchmark \
+  --check-artifacts
+```
+
+Run a host smoke test:
+
+```bash
+cargo mobench verify \
+  --target android \
+  --crate-path examples/basic-benchmark \
+  --function basic_benchmark::bench_fibonacci \
+  --smoke-test
+```
+
+## Local-Only Benchmark Runs
+
+Use `--local-only` to exercise the host harness without mobile builds:
+
+```bash
+cargo mobench run \
+  --target android \
+  --function basic_benchmark::bench_fibonacci \
+  --crate-path examples/basic-benchmark \
+  --local-only \
+  --iterations 20 \
+  --warmup 5 \
+  --output target/mobench/results.json
+```
+
+Inspect the report:
+
+```bash
+cargo mobench summary target/mobench/results.json
+cargo mobench summary --format json target/mobench/results.json
+cargo mobench summary --format csv target/mobench/results.json
+```
 
 ## Android Testing
 
-### Method 1: Quick All-in-One Build
+Build Android artifacts:
 
 ```bash
-# First, validate prerequisites
-cargo mobench check --target android
-
-# Build everything and create APK
-cargo mobench build --target android
-
-# Or build with progress output for clearer feedback
 cargo mobench build --target android --progress
-
-# Verify the build artifacts
-cargo mobench verify --target android --check-artifacts
-
-# Install on connected device/emulator
-adb install -r target/mobench/android/app/build/outputs/apk/debug/app-debug.apk
-
-# Launch app
-adb shell am start -n dev.world.bench/.MainActivity
 ```
 
-### Method 2: Step-by-Step Build
+For default Android emulators using the UniFFI path:
 
 ```bash
-# Step 1: Build Rust libraries + bindings (ABI-aware)
-cargo mobench build --target android
-
-# Step 2: Build APK
-cd target/mobench/android
-./gradlew :app:assembleDebug
-cd ../../..
-
-# Step 3: Install and launch
-adb install -r target/mobench/android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n dev.world.bench/.MainActivity
+UNIFFI_ANDROID_ABI=x86_64 cargo mobench build --target android --progress
 ```
 
-### Method 3: Using Android Studio
-
-1. Build Rust libraries first:
-   ```bash
-   cargo mobench build --target android
-   ```
-
-2. Open `target/mobench/android/` directory in Android Studio
-
-3. Let Gradle sync complete
-
-4. Click Run (green triangle) or Run → Run 'app'
-
-5. Select target device/emulator
-
-### Testing with Custom Parameters
-
-Launch with different benchmark configurations:
+Verify outputs:
 
 ```bash
-# Test checksum function with 30 iterations
-adb shell am start -n dev.world.bench/.MainActivity \
-  --es bench_function sample_fns::checksum \
-  --ei bench_iterations 30 \
-  --ei bench_warmup 5
-
-# Test fibonacci with minimal runs
-adb shell am start -n dev.world.bench/.MainActivity \
-  --es bench_function fibonacci \
-  --ei bench_iterations 5 \
-  --ei bench_warmup 1
+cargo mobench verify \
+  --target android \
+  --check-artifacts \
+  --output-dir target/mobench
 ```
 
-Parameters:
-- `--es bench_function <string>`: Function name (fibonacci, checksum, sample_fns::fibonacci, etc.)
-- `--ei bench_iterations <int>`: Number of benchmark iterations
-- `--ei bench_warmup <int>`: Number of warmup iterations
+Use `--release` for BrowserStack-sized artifacts:
 
-### Verifying Output
-
-Check logcat for detailed output:
 ```bash
-adb logcat | grep -i bench
-```
-
-The app display should show:
-```
-=== Benchmark Results ===
-
-Function: sample_fns::fibonacci
-Iterations: 20
-Warmup: 3
-
-Samples (20):
-  1. 0.001 ms
-  2. 0.001 ms
-  ...
-
-Statistics:
-  Min: 0.001 ms
-  Max: 0.002 ms
-  Avg: 0.001 ms
+cargo mobench build --target android --release
 ```
 
 ## iOS Testing
 
-### Build and Run
+Build iOS artifacts:
 
 ```bash
-# Step 0: Validate prerequisites
-cargo mobench check --target ios
-
-# Step 1: Build Rust xcframework (includes automatic code signing)
-cargo mobench build --target ios
-
-# Or build with progress output for clearer feedback
 cargo mobench build --target ios --progress
-
-# Verify the build artifacts
-cargo mobench verify --target ios --check-artifacts
-
-# This build step:
-# - Compiles Rust for aarch64-apple-ios (device), aarch64-apple-ios-sim (Apple Silicon simulators), and x86_64-apple-ios (Intel simulators)
-# - Creates xcframework with proper structure:
-#   target/mobench/ios/<library_name>.xcframework/
-#     ├── Info.plist
-#     ├── ios-arm64/
-#     │   └── <library_name>.framework/
-#     │       ├── <library_name> (binary)
-#     │       ├── Headers/
-#     │       │   ├── <library_name>FFI.h
-#     │       │   └── module.modulemap
-#     │       └── Info.plist
-#     └── ios-simulator-arm64/
-#         └── <library_name>.framework/
-#             ├── <library_name> (binary)
-#             ├── Headers/
-#             │   ├── <library_name>FFI.h
-#             │   └── module.modulemap
-#             └── Info.plist
-# - Copies UniFFI-generated C headers into framework
-# - Creates module map for Swift to import C FFI
-# - Automatically code-signs the xcframework
-
-# Step 2: Generate Xcode project from project.yml
-cd target/mobench/ios/BenchRunner
-xcodegen generate
-
-# Step 3: Open in Xcode
-open BenchRunner.xcodeproj
 ```
 
-In Xcode:
-1. Select a scheme: BenchRunner
-2. Select a destination: iPhone 15 (or any simulator)
-3. Click Run (⌘R) or Product → Run
-
-**Important Notes:**
-- The xcframework contains static libraries (`.a` archives), not dynamic frameworks
-- A bridging header (`BenchRunner-Bridging-Header.h`) is used to expose C FFI types to Swift
-- The UniFFI-generated Swift bindings (`sample_fns.swift`) are compiled directly into the app
-- No `import sample_fns` is needed - the types are available globally via the bridging header
-
-### Testing with Custom Parameters
-
-#### Method 1: Edit Scheme in Xcode
-
-1. Product → Scheme → Edit Scheme...
-2. Click "Run" in left sidebar
-3. Go to "Arguments" tab
-4. Click "Environment Variables" section
-5. Click "+" to add variables:
-   - Name: `BENCH_FUNCTION`, Value: `sample_fns::checksum`
-   - Name: `BENCH_ITERATIONS`, Value: `30`
-   - Name: `BENCH_WARMUP`, Value: `5`
-6. Click Close
-7. Run the app
-
-#### Method 2: Command Line (Simulator Only)
-
-First, build and install to simulator:
-```bash
-# Build for simulator
-xcodebuild -project target/mobench/ios/BenchRunner/BenchRunner.xcodeproj \
-  -scheme BenchRunner \
-  -destination 'platform=iOS Simulator,name=iPhone 15' \
-  -derivedDataPath target/mobench/ios/build
-
-# Launch with arguments (replace the bundle id if your project uses a custom one)
-xcrun simctl launch booted dev.world.bench \
-  --bench-function=sample_fns::checksum \
-  --bench-iterations=30 \
-  --bench-warmup=5
-```
-
-#### Method 3: Edit bench_spec.json Bundle Resource
-
-Add `bench_spec.json` to the app bundle:
-1. Create `target/mobench/ios/BenchRunner/BenchRunner/Resources/bench_spec.json`:
-   ```json
-   {
-     "function": "sample_fns::checksum",
-     "iterations": 30,
-     "warmup": 5
-   }
-   ```
-2. Add to Xcode project (File → Add Files to "BenchRunner"...)
-3. Ensure it's in "Copy Bundle Resources" build phase
-4. Run the app
-
-### Verifying Output
-
-The app should display:
-```
-=== Benchmark Results ===
-
-Function: sample_fns::fibonacci
-Iterations: 20
-Warmup: 3
-
-Samples (20):
-  1. 0.001 ms
-  2. 0.001 ms
-  ...
-
-Statistics:
-  Min: 0.001 ms
-  Max: 0.002 ms
-  Avg: 0.001 ms
-```
-
-## Troubleshooting
-
-### General Validation
-
-Before troubleshooting specific issues, use these validation commands:
+Verify outputs:
 
 ```bash
-# Check prerequisites
-cargo mobench check --target android
-cargo mobench check --target ios
-
-# Verify benchmark setup (registry, spec, artifacts)
-cargo mobench verify --target android --check-artifacts
-cargo mobench verify --target ios --check-artifacts
-
-# List discovered benchmarks
-cargo mobench list
-
-# Validate BrowserStack device specs
-cargo mobench devices --validate "Google Pixel 7-13.0"
+cargo mobench verify \
+  --target ios \
+  --check-artifacts \
+  --output-dir target/mobench
 ```
 
-The `verify` command validates:
-- **Registry**: Benchmark functions are properly registered
-- **Spec**: `bench_spec.json` exists and is valid (if `--spec-path` provided)
-- **Artifacts**: Build outputs exist and are consistent (if `--check-artifacts`)
-- **Smoke test**: Runs a local test with minimal iterations when the benchmark crate is linked into the CLI binary; external crates report unsupported for `--smoke-test`
+Package BrowserStack iOS artifacts:
 
-### Android
-
-**Problem**: `ANDROID_NDK_HOME is not set`
 ```bash
-# First, run check to see the full prerequisite status
-cargo mobench check --target android
-
-# Solution: Export the NDK path
-export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/29.0.14206865
-# Or add to ~/.zshrc / ~/.bashrc
+cargo mobench package-ipa --method adhoc
+cargo mobench package-xcuitest
 ```
 
-**Problem**: `cargo-ndk: command not found`
+## BrowserStack Smoke Tests
+
+Set credentials:
+
 ```bash
-# Solution: Install cargo-ndk
-cargo install cargo-ndk
+export BROWSERSTACK_USERNAME="your_username"
+export BROWSERSTACK_ACCESS_KEY="your_access_key"
 ```
 
-**Problem**: `error: failed to run custom build command for 'sample-fns'`
-```bash
-# Solution: Clean and rebuild
-cargo clean
-cargo mobench build --target android
-```
-
-**Problem**: App crashes on launch with "UnsatisfiedLinkError"
-```bash
-# Solution: Ensure .so files are in the APK
-cargo mobench build --target android
-cd target/mobench/android && ./gradlew clean assembleDebug
-```
-
-**Problem**: App shows "Error: UnknownFunction"
-- Check function name matches one of: `fibonacci`, `fib`, `sample_fns::fibonacci`, `checksum`, `checksum_1k`, `sample_fns::checksum`
-- Function names are case-sensitive
-
-### iOS
-
-**Problem**: `xcodegen: command not found`
-```bash
-# Solution: Install xcodegen
-brew install xcodegen
-```
-
-**Problem**: "The Framework '<library_name>.xcframework' is unsigned"
-```bash
-# Solution: Code-sign the xcframework
-codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
-
-# The build step includes signing, but if you built manually:
-cargo mobench build --target ios
-cd target/mobench/ios/BenchRunner
-xcodegen generate
-# Clean build in Xcode (⌘+Shift+K) then build (⌘+B)
-```
-
-**Problem**: "No such module 'sample_fns'" or "Unable to find module dependency: 'sample_fns'" in Swift
-```bash
-# Solution: The Swift bindings are compiled directly into the app.
-# Remove any `import sample_fns` statements from your Swift code.
-# The types (BenchSpec, BenchReport, etc.) are available without import.
-```
-
-**Problem**: "Cannot find type 'RustBuffer' in scope" or FFI type errors
-```bash
-# Solution: regenerate the generated project instead of hand-authoring the header
-rm -rf target/mobench/ios
-cargo mobench build --target ios
-cd target/mobench/ios/BenchRunner
-xcodegen generate
-```
-
-**Problem**: Build fails with "library not found for -lsample_fns" or "framework 'ios-simulator-arm64' not found"
-```bash
-# Solution: Ensure xcframework was built correctly with proper structure
-rm -rf target/mobench/ios/<library_name>.xcframework
-cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
-
-# Verify structure:
-ls -la target/mobench/ios/<library_name>.xcframework/
-# Should show:
-#   ios-arm64/<library_name>.framework/
-#   ios-simulator-arm64/<library_name>.framework/
-#   Info.plist
-```
-
-**Problem**: "While building for iOS Simulator, no library for this platform was found"
-```bash
-# Solution: Rebuild the xcframework - the structure may be incorrect
-rm -rf target/mobench/ios/<library_name>.xcframework
-cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
-
-# Clean Xcode build folder
-cd target/mobench/ios/BenchRunner
-xcodebuild clean -project BenchRunner.xcodeproj -scheme BenchRunner
-# Then build in Xcode
-```
-
-**Problem**: "Framework had an invalid CFBundleIdentifier in its Info.plist"
-```bash
-# Solution: The framework bundle ID should not conflict with the app
-# Check the iOS builder uses `dev.world.sample-fns` for the framework
-# Rebuild:
-cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
-```
-
-**Problem**: Simulator crashes with "Symbol not found"
-```bash
-# Solution: Clean and rebuild for simulator architecture
-cargo clean
-cargo mobench build --target ios
-codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework
-
-# In Xcode, clean (⌘+Shift+K) then build (⌘+B)
-```
-
-**Problem**: "Could not launch" on physical device
-- Ensure proper code signing is configured in Xcode
-- Select your development team in Xcode → Project Settings → Signing & Capabilities
-- Trust developer certificate on device: Settings → General → VPN & Device Management
-- The xcframework must be signed: `codesign --force --deep --sign - target/mobench/ios/<library_name>.xcframework`
-
-### UniFFI Bindings (Proc Macros)
-
-**Problem**: Changes to FFI types in `crates/sample-fns/src/lib.rs` not reflected in mobile apps
-```bash
-# Solution: Rebuild library and regenerate bindings
-cargo mobench build --target android
-
-# Then rebuild mobile apps
-cargo mobench build --target android
-cargo mobench build --target ios
-```
-
-**Problem**: "error: cannot find type `BenchSpec` in the crate root"
-```bash
-# Solution: Ensure build.rs runs and generates scaffolding
-cargo clean
-cargo build -p sample-fns
-```
-
-### General
-
-**Problem**: Tests fail after code changes
-```bash
-# Solution: Run tests to see specific failures
-cargo test --all
-
-# Common causes:
-# - Missing serde dependency (check Cargo.toml)
-# - API signature changes (update FFI types with proc macros and regenerate bindings)
-# - Test assertions need updating
-```
-
-## Advanced Testing
-
-### BrowserStack integration testing
-
-See [browserstack-ci.md](browserstack-ci.md) for the BrowserStack benchmark flow.
-
-#### Device Validation
-
-Before running tests on BrowserStack, validate your device specifications:
+Android:
 
 ```bash
-# List all available BrowserStack devices
-cargo mobench devices
-
-# Filter by platform
-cargo mobench devices --platform android
-cargo mobench devices --platform ios
-
-# Validate specific device specs
-cargo mobench devices --validate "Google Pixel 7-13.0"
-cargo mobench devices --validate "iPhone 14-16"
-
-# Output as JSON for scripting
-cargo mobench devices --json
-```
-
-If a device spec is invalid, the command will suggest similar available devices.
-
-#### View Benchmark Results
-
-After a benchmark run, use the `summary` command to view statistics:
-
-```bash
-# Display result statistics (avg/min/max/median)
-cargo mobench summary results.json
-
-# Output as JSON
-cargo mobench summary results.json --format json
-
-# Output as CSV
-cargo mobench summary results.json --format csv
-```
-
-#### Release Builds for BrowserStack
-
-Always use the `--release` flag when running benchmarks on BrowserStack. Debug builds are significantly larger and may cause upload timeouts:
-
-| Build Type | APK Size |
-|------------|----------|
-| Debug      | ~544 MB  |
-| Release    | ~133 MB  |
-
-```bash
-# Android - use --release for smaller APK
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
   --devices "Google Pixel 7-13.0" \
+  --iterations 20 \
+  --warmup 5 \
   --release \
-  --output results.json
+  --fetch \
+  --output target/mobench/results.json
+```
 
-# iOS - use --release for smaller artifacts
+iOS:
+
+```bash
 cargo mobench run \
   --target ios \
   --function sample_fns::fibonacci \
   --devices "iPhone 14-16" \
-  --release \
-  --ios-app target/mobench/ios/BenchRunner.ipa \
-  --ios-test-suite target/mobench/ios/BenchRunnerUITests.zip \
-  --output results.json
-```
-
-#### Packaging iOS for BrowserStack
-
-BrowserStack iOS testing requires both an IPA and an XCUITest runner package:
-
-```bash
-# 1. Build the iOS artifacts
-cargo mobench build --target ios
-
-# 2. Package the app IPA
-cargo mobench package-ipa --method adhoc
-
-# 3. Package the XCUITest runner
-cargo mobench package-xcuitest
-```
-
-The `package-xcuitest` command creates `target/mobench/ios/BenchRunnerUITests.zip` which BrowserStack uses to drive the test automation.
-
-### Performance Regression Testing
-
-Compare benchmark results across builds:
-```bash
-# Run benchmark and save results (use --release for BrowserStack)
-cargo mobench run \
-  --target android \
-  --function sample_fns::fibonacci \
-  --devices "Google Pixel 7-13.0" \
-  --iterations 100 \
+  --iterations 20 \
+  --warmup 5 \
   --release \
   --fetch \
-  --output results-v1.json \
-  --summary-csv
-
-# After changes, run again
-cargo mobench run \
-  --target android \
-  --function sample_fns::fibonacci \
-  --devices "Google Pixel 7-13.0" \
-  --iterations 100 \
-  --release \
-  --fetch \
-  --output results-v2.json \
-  --summary-csv
-
-# Compare summaries
-cargo mobench compare \
-  --baseline results-v1.json \
-  --candidate results-v2.json \
-  --output comparison.md
+  --output target/mobench/results.json
 ```
 
-**Note**: The `--release` flag is recommended for BrowserStack runs to reduce APK size (debug: ~544MB, release: ~133MB) and prevent upload timeouts.
-
-### Profiling Command Smoke Checks
-
-The profiling subsystem is now local-first and attempts real native capture for
-`local + android-native` and `local + ios-instruments`. Use these commands as
-the first validation layer:
+## CI Contract Test
 
 ```bash
-# Profile parser + contract + backend planning tests
-cargo test -p mobench profile_
-
-# Android local native capture
-cargo run -p mobench --bin mobench -- profile run \
+cargo mobench ci run \
   --target android \
   --function sample_fns::fibonacci \
+  --local-only \
+  --iterations 20 \
+  --warmup 5 \
+  --plots auto \
+  --output-dir target/mobench/ci
+```
+
+Expected files:
+
+- `target/mobench/ci/summary.json`
+- `target/mobench/ci/summary.md`
+- `target/mobench/ci/results.csv`
+- `target/mobench/ci/plots/*.svg` when plots are rendered
+
+## Profiling Checks
+
+Android native profiling:
+
+```bash
+cargo mobench profile run \
+  --target android \
   --provider local \
-  --backend android-native
+  --backend android-native \
+  --function sample_fns::fibonacci
+```
 
-# Render markdown summary from the generated manifest
-cargo run -p mobench --bin mobench -- profile summarize \
+iOS simulator-host profiling:
+
+```bash
+cargo mobench profile run \
+  --target ios \
+  --provider local \
+  --backend ios-instruments \
+  --function sample_fns::fibonacci
+```
+
+Render the latest profile summary:
+
+```bash
+cargo mobench profile summarize \
   --profile target/mobench/profile/profile.json
 ```
 
-Each run should write a run-scoped session under
-`target/mobench/profile/<run-id>/` plus top-level latest-session copies at
-`target/mobench/profile/profile.json` and `target/mobench/profile/summary.md`.
-For supported local native backends, the run-scoped `artifacts/` tree should
-contain real raw and processed artifacts such as `stacks.folded`,
-`native-report.txt`, and `flamegraph.html`.
+BrowserStack native stack/flamegraph profiling is unsupported in this release.
 
-### Adding New Test Functions
+## Troubleshooting
 
-1. Add function to `crates/sample-fns/src/lib.rs`
-2. Add to dispatch in `run_benchmark()` match statement
-3. Add test case in `#[cfg(test)]` module
-4. Run tests: `cargo test -p sample-fns`
-5. Test on mobile platforms
-
-Example:
-```rust
-// In lib.rs
-pub fn my_new_function(n: u32) -> u64 {
-    // implementation
-}
-
-// In run_benchmark()
-"my_new_function" | "sample_fns::my_new_function" => {
-    run_closure(runner_spec, || {
-        let _ = my_new_function(100);
-        Ok(())
-    })
-    .map_err(|e: BenchRunnerError| -> BenchError { e.into() })?
-}
-
-// In tests
-#[test]
-fn test_my_new_function() {
-    let spec = BenchSpec {
-        name: "my_new_function".to_string(),
-        iterations: 3,
-        warmup: 1,
-    };
-    let report = run_benchmark(spec).unwrap();
-    assert_eq!(report.samples.len(), 3);
-}
-```
-
-## Continuous integration
-
-Current workflow families:
-- `.github/workflows/mobile-bench.yml`: fixture benchmark workflow for the checked-in example crate
-- `.github/workflows/mobile-bench-plot-fixtures.yml`: plot rendering verification
-- `.github/workflows/mobile-bench-selftest.yml`: sample benchmark self-test
-- `.github/workflows/mobile-bench-profile-selftest.yml`: local profiling self-test
-
-Prefer the workflow docs in [../codebase/TESTING.md](../codebase/TESTING.md) when you need an internal map of which workflow owns which validation surface.
-
-## Additional resources
-
-- [UniFFI Documentation](https://mozilla.github.io/uniffi-rs/)
-- [Android NDK Documentation](https://developer.android.com/ndk)
-- [Rust Cross-Compilation Guide](https://rust-lang.github.io/rustup/cross-compilation.html)
-- [../codebase/ARCHITECTURE.md](../codebase/ARCHITECTURE.md) - current architecture reference
-- [../../RELEASE_NOTES.md](../../RELEASE_NOTES.md) - published release history and support status
-- [../../CLAUDE.md](../../CLAUDE.md) - developer guide for this codebase
+- No benchmarks listed: confirm functions use `#[benchmark]`, are public, and
+  the crate depends on `inventory`.
+- Android emulator build fails: use `UNIFFI_ANDROID_ABI=x86_64` for the default
+  emulator ABI.
+- BrowserStack upload is slow or times out: use `--release`.
+- Missing BrowserStack artifacts: rerun with `--fetch` or use `cargo mobench
+  fetch`.
+- iOS framework is rejected as unsigned: sign the generated xcframework or rerun
+  the iOS build.

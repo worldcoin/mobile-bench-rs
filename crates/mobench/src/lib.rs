@@ -53,7 +53,7 @@
 //! | `doctor` | Validate local/CI prerequisites and configuration |
 //! | `config validate` | Validate run config + matrix contract |
 //! | `devices resolve` | Resolve deterministic device sets from matrix/profile |
-//! | `fixture ...` | Fixture lifecycle helpers (`init`, `build`, `verify`, `cache-key`) |
+//! | `fixture ...` | Fixture lifecycle helpers (`init`, `build`, `verify`, `verify-plots`, `cache-key`) |
 //! | `report ...` | Render markdown and publish sticky PR comments |
 //! | `list` | List discovered benchmark functions |
 //! | `fetch` | Retrieve results from BrowserStack |
@@ -142,6 +142,7 @@ use browserstack::{BrowserStackAuth, BrowserStackClient};
 #[cfg(test)]
 pub(crate) use cli::CiTarget;
 pub use cli::MobileTarget;
+pub(crate) use cli::PlotFixture;
 pub(crate) use cli::{
     CheckOutputFormat, CiCheckRunArgs, CiCommand, CiRunArgs, CiSummarizeArgs, Cli, Command,
     ConfigCommand, ContractErrorCategory, DevicePlatform, DevicesCommand, FixtureCommand,
@@ -1182,6 +1183,12 @@ pub fn run() -> Result<()> {
                 format,
             } => {
                 cmd_fixture_verify(&config, device_matrix.as_deref(), target, profile, format)?;
+            }
+            FixtureCommand::VerifyPlots {
+                fixture,
+                output_dir,
+            } => {
+                cmd_fixture_verify_plots(fixture, output_dir.as_deref())?;
             }
             FixtureCommand::CacheKey {
                 config,
@@ -6936,6 +6943,71 @@ fn cmd_fixture_build(
     Ok(())
 }
 
+fn cmd_fixture_verify_plots(fixture: PlotFixture, output_dir: Option<&Path>) -> Result<()> {
+    let (summary_path, default_output_dir, expected_plots): (&str, &str, &[&str]) = match fixture {
+        PlotFixture::Basic => (
+            "examples/fixtures/basic/summary.json",
+            "target/mobench/plot-fixtures/basic",
+            &["fibonacci.svg", "checksum.svg"],
+        ),
+        PlotFixture::Ffi => (
+            "examples/fixtures/ffi/summary.json",
+            "target/mobench/plot-fixtures/ffi",
+            &["fibonacci.svg", "checksum.svg"],
+        ),
+    };
+
+    let repo = repo_root()?;
+    let summary_path = repo.join(summary_path);
+    let output_dir = output_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo.join(default_output_dir));
+    let markdown_path = output_dir.join("summary.md");
+
+    if output_dir.exists() {
+        fs::remove_dir_all(&output_dir)
+            .with_context(|| format!("removing plot fixture output {}", output_dir.display()))?;
+    }
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("creating plot fixture output {}", output_dir.display()))?;
+
+    let markdown = cmd_report_summarize(
+        &summary_path,
+        Some(&markdown_path),
+        plots::PlotMode::Require,
+    )?;
+
+    if !markdown.contains("## Device Comparison Plots") {
+        bail!(
+            "expected Device Comparison Plots section in {}",
+            markdown_path.display()
+        );
+    }
+
+    for plot in expected_plots {
+        let plot_path = output_dir.join("plots").join(plot);
+        if !plot_path.is_file() || fs::metadata(&plot_path)?.len() == 0 {
+            bail!("expected rendered plot at {}", plot_path.display());
+        }
+
+        let expected_link = format!("](plots/{plot})");
+        if !markdown.contains(&expected_link) {
+            bail!(
+                "expected markdown link {} in {}",
+                expected_link,
+                markdown_path.display()
+            );
+        }
+    }
+
+    println!(
+        "Verified plot fixture {:?} in {}",
+        fixture,
+        output_dir.display()
+    );
+    Ok(())
+}
+
 fn cmd_fixture_verify(
     config_path: &Path,
     device_matrix_override: Option<&Path>,
@@ -7379,6 +7451,22 @@ android_heartbeat_interval_secs = 15
     #[test]
     fn run_accepts_config_without_target_or_function_flags() {
         assert!(Cli::try_parse_from(["mobench", "run", "--config", "bench-config.toml"]).is_ok());
+    }
+
+    #[test]
+    fn fixture_verify_plots_parses_fixture_name() {
+        assert!(Cli::try_parse_from(["mobench", "fixture", "verify-plots", "basic",]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "fixture",
+                "verify-plots",
+                "ffi",
+                "--output-dir",
+                "target/custom-fixture",
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

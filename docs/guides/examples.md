@@ -1,120 +1,219 @@
 # Examples
 
-Updated: 2026-04-26
+Current release: **0.1.42**.
 
-Use these examples to pick the smallest starting point for a mobench
-integration.
+Use these examples as copy-paste starting points for benchmark crates and CI
+invocations.
 
-## Minimal Benchmark Crate
+## Minimal Benchmark
 
-Path: `examples/basic-benchmark`
+```rust
+use mobench_sdk::benchmark;
 
-Use this when you only need Rust benchmark functions and SDK registry execution.
+#[benchmark]
+pub fn fibonacci_30() {
+    let result = fibonacci(30);
+    std::hint::black_box(result);
+}
+
+fn fibonacci(n: u32) -> u64 {
+    match n {
+        0 => 0,
+        1 => 1,
+        _ => fibonacci(n - 1) + fibonacci(n - 2),
+    }
+}
+```
+
+Run it with the repository example:
 
 ```bash
-cargo test -p basic-benchmark
 cargo mobench list --crate-path examples/basic-benchmark
-cargo mobench run --target android --function basic_benchmark::fibonacci --local-only
+cargo mobench run \
+  --target android \
+  --function basic_benchmark::bench_fibonacci \
+  --crate-path examples/basic-benchmark \
+  --local-only \
+  --iterations 20 \
+  --warmup 5 \
+  --output target/mobench/results.json
 ```
 
-## Setup And Teardown Benchmarks
+## Setup, Per-Iteration Setup, And Teardown
 
-Use `#[benchmark(setup = setup_fn)]` when expensive fixture creation should not
-be timed as benchmark work.
+Setup runs outside measured iterations:
 
 ```rust
 use mobench_sdk::benchmark;
 
-struct ProofInput {
-    bytes: Vec<u8>,
+fn create_input() -> Vec<u8> {
+    vec![42; 1024 * 1024]
 }
 
-fn setup_proof() -> ProofInput {
-    ProofInput { bytes: vec![42; 4096] }
-}
-
-#[benchmark(setup = setup_proof)]
-fn verify_proof(input: &ProofInput) {
-    std::hint::black_box(input.bytes.len());
+#[benchmark(setup = create_input)]
+pub fn checksum(input: &Vec<u8>) {
+    let sum: u64 = input.iter().map(|b| *b as u64).sum();
+    std::hint::black_box(sum);
 }
 ```
 
-Use per-iteration setup when each measured iteration must own fresh input:
+Per-iteration setup gives each sample a fresh value:
 
 ```rust
 use mobench_sdk::benchmark;
 
-fn setup_message() -> Vec<u8> {
-    vec![7; 1024]
+fn unsorted_vec() -> Vec<i32> {
+    (0..1000).rev().collect()
 }
 
-#[benchmark(setup_per_iter = setup_message)]
-fn hash_message(mut message: Vec<u8>) {
-    message.reverse();
-    std::hint::black_box(message);
+#[benchmark(setup = unsorted_vec, per_iteration)]
+pub fn sort_vec(mut data: Vec<i32>) {
+    data.sort();
+    std::hint::black_box(data);
 }
 ```
 
-## FFI And Custom Types
+Teardown cleans up setup resources after measured work:
 
-Path: `examples/ffi-benchmark`
+```rust
+use mobench_sdk::benchmark;
 
-Use this when your benchmark crate already exposes UniFFI bindings or needs
-custom FFI-facing request/error types.
+fn setup_temp_file() -> TempFile {
+    TempFile::new()
+}
+
+fn cleanup_temp_file(file: TempFile) {
+    file.remove();
+}
+
+#[benchmark(setup = setup_temp_file, teardown = cleanup_temp_file)]
+pub fn read_temp_file(file: &TempFile) {
+    std::hint::black_box(file.read_all());
+}
+```
+
+## Native C ABI Runner
+
+Use `native-c-abi` when you want generated Android and iOS runners to call the
+mobench JSON C ABI directly.
+
+`mobench.toml`:
+
+```toml
+[project]
+crate = "my-bench-crate"
+library_name = "my_bench_crate"
+ffi_backend = "native-c-abi"
+```
+
+Crate root:
+
+```rust
+mobench_sdk::export_native_c_abi!();
+```
+
+The generated runners call `mobench_run_benchmark_json` and free returned
+buffers with `mobench_free_buf`.
+
+## CI Output Example
 
 ```bash
-cargo test -p ffi-benchmark
-cargo mobench list --crate-path examples/ffi-benchmark
-cargo mobench run --target android --function ffi_benchmark::fibonacci --local-only
+cargo mobench ci run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --devices "Google Pixel 7-13.0" \
+  --release \
+  --fetch \
+  --plots auto \
+  --output-dir target/mobench/ci
 ```
 
-## CI-Only Benchmark Workflow
+The output directory contains:
 
-Use `ci run` when a workflow should produce stable machine-readable outputs.
+- `summary.json`
+- `summary.md`
+- `results.csv`
+- `plots/*.svg` when plot rendering is available
+
+`results.csv` includes timing columns such as `mean_ns`, `median_ns`, `p95_ns`,
+`min_ns`, and `max_ns`. Resource columns include `cpu_total_ms`,
+`cpu_median_ms`, `peak_memory_kb`, `peak_memory_growth_kb`, and
+`process_peak_memory_kb` when those values are available.
+
+## BrowserStack Android Example
+
+```bash
+export BROWSERSTACK_USERNAME="your_username"
+export BROWSERSTACK_ACCESS_KEY="your_access_key"
+
+cargo mobench run \
+  --target android \
+  --function sample_fns::checksum \
+  --devices "Google Pixel 7-13.0" \
+  --iterations 30 \
+  --warmup 5 \
+  --release \
+  --fetch \
+  --output target/mobench/results.json
+```
+
+## BrowserStack iOS Example
+
+`mobench run` can package iOS app and XCUITest artifacts automatically when
+`--ios-app` and `--ios-test-suite` are not provided:
+
+```bash
+cargo mobench run \
+  --target ios \
+  --function sample_fns::fibonacci \
+  --devices "iPhone 14-16" \
+  --iterations 20 \
+  --warmup 3 \
+  --release \
+  --output target/mobench/results.json
+```
+
+You can also package explicitly:
+
+```bash
+cargo mobench package-ipa --method adhoc
+cargo mobench package-xcuitest
+```
+
+## Programmatic Integration
+
+For runtime integration, depend on `mobench-sdk` and call the public timing
+APIs:
+
+```rust
+use mobench_sdk::{run_benchmark, BenchSpec};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let spec = BenchSpec::new("sample_fns::fibonacci", 100, 10)?;
+    let report = run_benchmark(spec)?;
+
+    println!("mean: {} ns", report.mean_ns());
+    println!("median: {} ns", report.median_ns());
+    Ok(())
+}
+```
+
+For CI summaries, prefer the CLI/file contract over private crate modules:
 
 ```bash
 cargo mobench ci run \
   --target android \
   --function sample_fns::fibonacci \
   --local-only \
-  --plots auto
+  --plots auto \
+  --output-dir target/mobench/ci
 ```
 
-Outputs are written under `target/mobench/ci/`:
+Read:
 
-- `summary.json`
-- `summary.md`
-- `results.csv`
-- `plots/*.svg` when plot rendering is enabled
+- `target/mobench/ci/summary.json`
+- `target/mobench/ci/summary.md`
+- `target/mobench/ci/results.csv`
 
-## Profiling Workflow
-
-Use local profiling when you need native stack artifacts and flamegraphs.
-
-```bash
-cargo mobench profile run \
-  --target android \
-  --provider local \
-  --backend android-native \
-  --crate-path crates/sample-fns \
-  --function sample_fns::fibonacci
-
-cargo mobench profile summarize \
-  --profile target/mobench/profile/profile.json
-```
-
-## Programmatic SDK Usage
-
-Use the SDK directly when embedding mobench into another Rust tool.
-
-```rust
-use mobench_sdk::{BenchSpec, run_benchmark};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let spec = BenchSpec::new("sample_fns::fibonacci", 100, 10)?;
-    let report = run_benchmark(spec)?;
-
-    println!("median: {} ns", report.median_ns());
-    Ok(())
-}
-```
+The full contract is described in
+[../specs/mobench-current-spec.md](../specs/mobench-current-spec.md).

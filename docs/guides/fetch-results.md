@@ -1,357 +1,87 @@
-# Fetching BrowserStack Results in CI
+# Fetch Results Guide
 
-This guide shows how to use the `--fetch` flag to wait for BrowserStack tests to complete and retrieve results in CI pipelines.
+Current release: **0.1.42**.
 
-## Quick Start
+Use `--fetch` or `cargo mobench fetch` to collect BrowserStack artifacts after a
+remote benchmark run. Fetching is for benchmark logs and session artifacts;
+native profile artifacts are local-only.
 
-The `--fetch` flag makes `cargo mobench run` wait for BrowserStack tests to complete and automatically fetch benchmark results:
+## Fetch During A Run
 
 ```bash
 cargo mobench run \
   --target android \
   --function sample_fns::fibonacci \
-  --iterations 30 \
-  --warmup 5 \
   --devices "Google Pixel 7-13.0" \
   --release \
   --fetch \
-  --output results.json
+  --fetch-output-dir target/browserstack \
+  --output target/mobench/results.json
 ```
 
-**Note**: Always use the `--release` flag for BrowserStack runs. Debug builds are significantly larger (~544MB vs ~133MB for release) and may cause upload timeouts.
-
-## How It Works
-
-When `--fetch` is enabled:
-
-1. **Builds and uploads** artifacts to BrowserStack
-2. **Schedules** test run on specified devices
-3. **Polls** for build completion (checks every 5 seconds)
-4. **Fetches** device logs from all sessions
-5. **Extracts** benchmark results as JSON
-6. **Merges** results into output file
-
-## Output Format
-
-With `--fetch`, the output JSON includes a `benchmark_results` field:
-
-```json
-{
-  "spec": {
-    "target": "android",
-    "function": "sample_fns::fibonacci",
-    "iterations": 30,
-    "warmup": 5,
-    "devices": ["Google Pixel 7-13.0"]
-  },
-  "remote_run": {
-    "platform": "android",
-    "app_url": "bs://...",
-    "build_id": "88f8c5a..."
-  },
-  "benchmark_results": {
-    "Google Pixel 7-13.0": [
-      {
-        "function": "sample_fns::fibonacci",
-        "iterations": 30,
-        "warmup": 5,
-        "samples": [
-          {"duration_ns": 1234000},
-          {"duration_ns": 1240000},
-          ...
-        ],
-        "mean_ns": 1237000,
-        "median_ns": 1236500,
-        "min_ns": 1230000,
-        "max_ns": 1245000
-      }
-    ]
-  }
-}
-```
-
-## Configuration Options
-
-### Timeout
-
-Control how long to wait for build completion (default: 300 seconds / 5 minutes):
+For CI:
 
 ```bash
-cargo mobench run \
+cargo mobench ci run \
   --target android \
-  --function my_func \
-  --devices "..." \
+  --function sample_fns::fibonacci \
+  --devices "Google Pixel 7-13.0" \
+  --release \
   --fetch \
-  --fetch-timeout-secs 600  # Wait up to 10 minutes
+  --fetch-output-dir target/browserstack
 ```
 
-### Poll Interval
-
-Control how often to check build status (default: 5 seconds):
-
-```bash
-cargo mobench run \
-  --target android \
-  --function my_func \
-  --devices "..." \
-  --fetch \
-  --fetch-poll-interval-secs 30  # Check every 30 seconds
-```
-
-### Output Directory
-
-Detailed artifacts (logs, screenshots, videos) are saved separately:
-
-```bash
-cargo mobench run \
-  --target android \
-  --function my_func \
-  --devices "..." \
-  --fetch \
-  --fetch-output-dir target/browserstack  # Default location
-```
-
-Directory structure:
-```
-target/browserstack/
-└── {build_id}/
-    ├── build.json              # Build metadata
-    ├── sessions.json           # Session list
-    └── session-{id}/
-        ├── session.json        # Session details
-        ├── bench-report.json   # Extracted benchmark data
-        ├── device-logs.txt     # Raw device logs
-        └── *.mp4, *.png        # Videos and screenshots
-```
-
-## GitHub Actions Example
-
-```yaml
-name: Mobile Benchmarks
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-jobs:
-  benchmark-android:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Android NDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: ndk;26.1.10909125
-
-      - name: Install mobench
-        run: cargo install mobench
-
-      - name: Run benchmarks on BrowserStack
-        env:
-          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
-          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
-          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
-        run: |
-          # Use --release to reduce APK size and prevent upload timeouts
-          cargo mobench run \
-            --target android \
-            --function my_crate::my_benchmark \
-            --iterations 30 \
-            --warmup 5 \
-            --devices "Google Pixel 7-13.0" \
-            --release \
-            --fetch \
-            --fetch-timeout-secs 900 \
-            --output results.json
-
-      - name: Extract metrics
-        run: |
-          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
-          jq -r '.benchmark_results | to_entries[] | "### \(.key)\n- Mean: \(.value[0].mean_ns)ns\n- Min: \(.value[0].min_ns)ns\n- Max: \(.value[0].max_ns)ns"' results.json >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload results
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-results
-          path: |
-            results.json
-            target/browserstack/
-```
-
-## Error Handling
-
-### Build Timeout
-
-If the build exceeds the timeout, you'll see:
-
-```
-Warning: Failed to fetch benchmark results: Timeout waiting for build 88f8c5a... to complete (waited 600 seconds)
-Build may still be accessible at: https://app-automate.browserstack.com/dashboard/v2/builds/88f8c5a...
-```
-
-The command will still succeed and write partial results. You can manually check the dashboard or use the separate `fetch` command:
+## Fetch Later
 
 ```bash
 cargo mobench fetch \
   --target android \
-  --build-id 88f8c5a3134562b8a92004582b757468ee10d08c \
-  --output-dir target/browserstack
+  --build-id <browserstack-build-id> \
+  --output-dir target/browserstack \
+  --wait \
+  --poll-interval-secs 10 \
+  --timeout-secs 1800
 ```
 
-### Build Failed
+Targets:
 
-If the test fails on BrowserStack:
+- `android`: Espresso/App Automate artifacts.
+- `ios`: XCUITest/App Automate artifacts.
 
-```
-Warning: Failed to fetch benchmark results: Build 88f8c5a... failed with status: failed
-```
+## Output Layout
 
-Check the dashboard for error details. Common causes:
-- App crashed during startup
-- Test timed out
-- Device disconnected
+Fetched artifacts are written under the selected output directory, defaulting to
+`target/browserstack`.
 
-### No Results Found
+Common files include:
 
-If logs don't contain benchmark JSON:
+- Build/session JSON.
+- Device logs.
+- Instrumentation logs when BrowserStack exposes them.
+- Video URLs or downloaded video artifacts when available.
+- Other BrowserStack session URLs mobench can safely download.
 
-```
-Warning: Failed to fetch benchmark results: No benchmark results found in device logs
-```
+Authenticated downloads are restricted to BrowserStack HTTPS hosts.
 
-This means:
-- Your app didn't log benchmark results
-- Logs are in unexpected format
-- Tests didn't actually run
-
-Verify your app logs JSON to stdout/logcat in the correct format.
-
-## Analyzing Results with `summary`
-
-The `summary` command provides quick statistics from benchmark results:
+## Summarize Existing Results
 
 ```bash
-# Text summary (default)
-cargo mobench summary results.json
-
-# Output:
-# Benchmark Summary
-# =================
-# Source: results.json
-# Function: sample_fns::fibonacci
-# Device: Google Pixel 7-13.0
-#
-# Statistics:
-#   Samples: 30
-#   Mean: 1,234,567 ns (1.23 ms)
-#   Median: 1,230,000 ns (1.23 ms)
-#   Min: 1,200,000 ns (1.20 ms)
-#   Max: 1,280,000 ns (1.28 ms)
-#   P95: 1,270,000 ns (1.27 ms)
-
-# JSON format for programmatic access
-cargo mobench summary results.json --format json
-
-# CSV format for spreadsheets
-cargo mobench summary results.json --format csv
+cargo mobench summary target/mobench/results.json
+cargo mobench summary --format json target/mobench/results.json
+cargo mobench summary --format csv target/mobench/results.json
 ```
 
-### Using Summary in CI
-
-```yaml
-- name: Run benchmarks
-  run: |
-    cargo mobench run --target android --function my_benchmark \
-      --devices "Google Pixel 7-13.0" --release --fetch \
-      --output results.json
-
-- name: Display summary
-  run: cargo mobench summary results.json
-
-- name: Export metrics
-  run: |
-    cargo mobench summary results.json --format json > metrics.json
-    # Use jq to extract specific values
-    MEAN_NS=$(jq '.[0].mean_ns' metrics.json)
-    echo "mean_ns=$MEAN_NS" >> $GITHUB_OUTPUT
-```
-
-## Best Practices
-
-1. **Always use --fetch in CI** for automated pipelines
-2. **Always use --release for BrowserStack** to reduce artifact sizes (~544MB debug vs ~133MB release) and prevent upload timeouts
-3. **Use summary command** to quickly analyze results
-4. **Set reasonable timeouts** based on your benchmark duration
-5. **Check exit codes** - command succeeds even if fetch warns
-6. **Archive results** as CI artifacts for historical tracking
-7. **Use GitHub Actions summaries** to display results inline
-
-## Comparison with Manual Workflow
-
-### Without --fetch
-```bash
-# 1. Run and schedule
-cargo mobench run --target android --function my_func --devices "..."
-
-# 2. Wait manually
-# (check dashboard periodically)
-
-# 3. Fetch later
-cargo mobench fetch --target android --build-id <id>
-
-# 4. Parse logs manually
-cat target/browserstack/.../device-logs.txt | grep '{"function"'
-```
-
-### With --fetch
-```bash
-# One command does everything (use --release for BrowserStack)
-cargo mobench run \
-  --target android \
-  --function my_func \
-  --devices "..." \
-  --release \
-  --fetch \
-  --output results.json
-
-# Results already in results.json!
-```
-
-## New CLI Commands for Results
-
-### `cargo mobench summary`
-
-Display statistics from any benchmark report file:
+Render Markdown from CI summary JSON:
 
 ```bash
-cargo mobench summary <report-file> [--format text|json|csv]
+cargo mobench report summarize \
+  --summary target/mobench/ci/summary.json \
+  --plots auto
 ```
 
-Supports multiple report formats:
-- `RunSummary` from `mobench run --output`
-- `BenchReport` from direct timing output
-- Fetched BrowserStack results
+## Troubleshooting
 
-### `cargo mobench verify`
-
-Validate setup before running benchmarks:
-
-```bash
-cargo mobench verify --target android --check-artifacts --function sample_fns::fibonacci
-```
-
-For external crates configured via `mobench.toml`, use `cargo mobench list` and `cargo mobench verify --check-artifacts`; `verify --smoke-test` is only supported for benchmark crates linked into the `mobench` CLI binary.
-
-## See Also
-
-- [browserstack-ci.md](browserstack-ci.md) - programmatic API for custom workflows
-- [browserstack-metrics.md](browserstack-metrics.md) - metrics and performance documentation
-- `cargo mobench run --help` - Full CLI options
-- `cargo mobench summary --help` - Summary command options
-- `cargo mobench verify --help` - Verification command options
+- Build still running: use `--wait`.
+- Timeout: increase `--timeout-secs`.
+- Missing logs: check the BrowserStack session status dashboard.
+- No benchmark JSON: inspect device logs for generated runner output markers.

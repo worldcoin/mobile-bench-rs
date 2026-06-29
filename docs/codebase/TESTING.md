@@ -1,57 +1,87 @@
 # Testing
 
-Updated: 2026-04-01
+Updated: 2026-06-29. Release line: `0.1.42`.
 
-## Host-side Rust tests
+## Host-Side Rust Tests
 
 Primary commands:
 
 ```bash
 cargo test --workspace
+cargo test -p mobench-sdk
+cargo test -p mobench-macros
+cargo test -p mobench
+```
+
+Focused suites:
+
+```bash
 cargo test -p mobench profile_ -- --nocapture
 cargo test -p mobench flamegraph_viewer -- --nocapture
 cargo test -p mobench devices_ -- --nocapture
-cargo test -p mobench-sdk -- --nocapture
+cargo test -p mobench summarize -- --nocapture
 ```
 
 Common coverage areas:
-- timing/registry behavior
-- build/config resolution
-- BrowserStack device resolution and fetch parsing
-- profile planning/execution semantics
-- flamegraph viewer HTML generation
-- template regeneration and binding refresh behavior
 
-Host-only tests must not require Android SDK, Xcode, BrowserStack credentials,
-connected devices, or local native profiler binaries. These are the default
-tests for pull requests and release-readiness checks.
+- Timing and registry behavior.
+- Setup, teardown, and per-iteration macro behavior.
+- Build/config/project resolution.
+- BrowserStack device resolution and fetch parsing.
+- CI summary, CSV, Markdown, plot, PR, and check-run rendering.
+- Native C ABI JSON boundary.
+- Profile planning/execution semantics.
+- Flamegraph viewer HTML generation.
+- Template regeneration and generated runner invariants.
 
-## Test taxonomy
+Host-only tests should not require Android SDK, Xcode, BrowserStack
+credentials, connected devices, or native profiler binaries.
 
-Use these labels when adding tests, workflows, or docs:
+## Test Taxonomy
 
-- **Host-only**: runs with the Rust toolchain only. Examples: schema
-  validation, summary/CSV/Markdown rendering, CLI parsing, BrowserStack JSON
-  normalization, template text invariants, setup/teardown timing behavior.
+- **Host-only**: requires only the Rust toolchain. Examples: schema validation,
+  CLI parsing, summary rendering, BrowserStack JSON normalization, template text
+  invariants, and timing behavior.
 - **Tool-gated**: requires local platform tools but no external service.
-  Examples: Android Gradle/NDK builds, iOS/Xcode packaging, local `adb`,
-  `simpleperf`, simulator-host `sample`, and plot rendering that requires
-  Python/matplotlib.
+  Examples: Android Gradle/NDK builds, iOS/Xcode packaging, `adb`,
+  `simpleperf`, simulator-host `sample`, and plot rendering dependencies.
 - **Service-gated**: requires credentials or remote infrastructure. Examples:
   BrowserStack benchmark execution, GitHub PR comment publishing, and workflow
   dispatch chains.
 
 Gate host-only tests in normal Rust CI. Keep tool-gated and service-gated tests
-in named workflows or explicit local commands so contributors can tell whether
-a failure is from code, local tooling, or a provider.
+in named workflows or explicit local commands so failures are attributable to
+code, local tooling, or provider state.
 
-## Fixture validation
+## CLI Smoke Checks
 
-The repository keeps a lightweight fixture CI loop around `examples/ffi-benchmark`.
+Validate command surfaces before releases:
+
+```bash
+cargo run -q -p mobench --bin mobench -- --help
+cargo run -q -p mobench --bin mobench -- build --help
+cargo run -q -p mobench --bin mobench -- run --help
+cargo run -q -p mobench --bin mobench -- ci run --help
+cargo run -q -p mobench --bin mobench -- profile run --help
+```
+
+Validate local prerequisites:
+
+```bash
+cargo mobench check --target android
+cargo mobench check --target ios
+cargo mobench doctor --target both --browserstack false
+```
+
+## Fixture Validation
+
+The repository keeps lightweight fixture CI around example crates.
 
 Key paths:
-- `scripts/ci/verify-example-plot-fixture.sh`
-- `.github/workflows/mobile-bench.yml`
+
+- `examples/basic-benchmark/`
+- `examples/ffi-benchmark/`
+- `crates/sample-fns/`
 - `.github/workflows/mobile-bench-plot-fixtures.yml`
 
 Typical local validation:
@@ -59,15 +89,37 @@ Typical local validation:
 ```bash
 cargo build -p mobench --bins --locked
 export PATH="$PWD/target/debug:$PATH"
-scripts/ci/verify-example-plot-fixture.sh basic
-scripts/ci/verify-example-plot-fixture.sh ffi
+mobench fixture verify-plots basic
+mobench fixture verify-plots ffi
 ```
 
-## Local profiling smoke tests
+## CI Contract Validation
 
-These are intentionally separate from BrowserStack benchmark validation.
+Run a host-only CI contract smoke test:
 
-Typical smoke commands:
+```bash
+cargo mobench ci run \
+  --target android \
+  --function sample_fns::fibonacci \
+  --local-only \
+  --iterations 20 \
+  --warmup 5 \
+  --plots auto \
+  --output-dir target/mobench/ci
+```
+
+Expected outputs:
+
+- `target/mobench/ci/summary.json`
+- `target/mobench/ci/summary.md`
+- `target/mobench/ci/results.csv`
+- `target/mobench/ci/plots/*.svg` when plots render
+
+## Local Profiling Smoke Tests
+
+These are separate from BrowserStack benchmark validation.
+
+Android:
 
 ```bash
 cargo run -p mobench --bin mobench -- profile run \
@@ -76,7 +128,11 @@ cargo run -p mobench --bin mobench -- profile run \
   --backend android-native \
   --crate-path crates/sample-fns \
   --function sample_fns::fibonacci
+```
 
+iOS:
+
+```bash
 cargo run -p mobench --bin mobench -- profile run \
   --target ios \
   --provider local \
@@ -85,27 +141,45 @@ cargo run -p mobench --bin mobench -- profile run \
   --function sample_fns::fibonacci
 ```
 
-Expected outputs:
-- run-scoped `profile.json`
-- `summary.md`
-- raw and processed native artifacts
-- `flamegraph.html`
-- `frame-locations.json` on Android when source metadata is available
-- `profile-diff.json` / `summary.md` under `target/mobench/profile/diff/` for differential comparisons
+Expected profile outputs:
 
-## Workflow-level testing
+- Run-scoped `profile.json`.
+- Latest `summary.md`.
+- Raw and processed native artifacts.
+- `flamegraph.html`.
+- `frame-locations.json` on Android when source metadata is available.
+- `profile-diff.json` and `summary.md` under `target/mobench/profile/diff/`
+  for differential comparisons.
+
+BrowserStack native profiling should remain an explicit unsupported path.
+
+## Workflow-Level Testing
 
 Benchmark workflows:
-- BrowserStack fixture benchmark workflow
-- plot fixture workflow
-- self-test / PR-dispatch workflow chain
 
-Profiling workflow:
-- local native profiling self-test workflow, used to verify the flamegraph path without implying BrowserStack-native profiling support
+- `mobile-bench.yml`
+- `reusable-bench.yml`
+- `mobile-bench-pr-auto.yml`
+- `mobile-bench-pr-command.yml`
+- `mobile-bench-selftest.yml`
 
-## Testing guidance
+Artifact/reporting workflows:
 
-- prefer exact, focused tests for CLI/help/error text changes
-- do not fake successful profile captures; unsupported paths should fail explicitly
-- when template behavior changes, verify both the generator and at least one real generated artifact path
-- before merging, rerun the focused profile and flamegraph viewer suites even if the change was “docs only” when comments or doc strings touched command/help output
+- `mobile-bench-plot-fixtures.yml`
+- `mobile-bench-profile-selftest.yml`
+- `mobile-bench-action-example.yml`
+
+Quality workflows:
+
+- `rust.yml`
+- `compile-gate.yml`
+
+## Testing Guidance
+
+- Prefer exact, focused tests for CLI/help/error text changes.
+- Do not fake successful profile captures; unsupported paths should fail
+  explicitly.
+- When template behavior changes, verify both generator output and at least one
+  generated artifact path.
+- When comments or docs feed command help or rustdoc output, rerun focused tests
+  even if the change looks documentation-only.

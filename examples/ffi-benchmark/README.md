@@ -21,7 +21,11 @@ From the repository root:
 ```bash
 cargo test -p ffi-benchmark
 cargo mobench list --crate-path examples/ffi-benchmark
-cargo mobench run --target android --function ffi_benchmark::fibonacci --local-only
+cargo mobench run \
+  --crate-path examples/ffi-benchmark \
+  --target android \
+  --function ffi_benchmark::bench_fibonacci \
+  --local-only
 ```
 
 Use this example as the starting point for crates that need custom data types

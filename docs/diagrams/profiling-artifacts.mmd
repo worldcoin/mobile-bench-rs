@@ -1,9 +1,32 @@
 flowchart LR
-    run["profile run"] --> manifest["profile.json\nnative_capture\nsemantic_profile\ncapture_metadata"]
-    run --> raw["raw capture\nsimpleperf or sample"]
-    raw --> processed["processed stacks\nstacks.folded\nnative-report.txt"]
-    processed --> viewer["flamegraph.html\nfull and focused SVGs"]
-    manifest --> summary["summary.md"]
-    manifest --> semantic["artifacts/semantic/phases.json"]
-    viewer --> diff["profile diff\nbaseline vs candidate"]
-    summary --> diff
+    run["cargo mobench profile run"]
+    provider{"Provider/backend"}
+    android["local + android-native\nsimpleperf capture"]
+    ios["local + ios-instruments\nsimulator-host sample capture"]
+    tracing["local + rust-tracing\nplanned trace contract"]
+    unsupported["BrowserStack native profiling\nunsupported"]
+    raw["Raw capture artifacts"]
+    processed["Processed stacks\nstacks.folded\nnative-report.txt\nframe-locations.json"]
+    manifest["profile.json\nnative_capture\nsemantic_profile\ncapture_metadata"]
+    semantic["Semantic phases\nartifacts/semantic/phases.json"]
+    viewer["flamegraph.html\nfull and focused SVGs"]
+    summary["summary.md"]
+    diff["profile diff\nbaseline vs candidate"]
+
+    run --> provider
+    provider --> android
+    provider --> ios
+    provider --> tracing
+    provider --> unsupported
+
+    android --> raw
+    ios --> raw
+    tracing --> manifest
+    raw --> processed
+    processed --> viewer
+    processed --> manifest
+    semantic --> manifest
+    manifest --> summary
+    viewer --> summary
+    manifest --> diff
+    viewer --> diff

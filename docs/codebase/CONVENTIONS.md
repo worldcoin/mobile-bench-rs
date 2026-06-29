@@ -1,63 +1,77 @@
 # Conventions
 
-Updated: 2026-04-01
+Updated: 2026-06-29. Release line: `0.1.42`.
 
 ## Naming
 
-- Rust files, modules, functions, and variables: `snake_case`
-- public types and enum variants: `PascalCase`
-- constants and environment variable names: `SCREAMING_SNAKE_CASE`
-- artifact labels in manifests: kebab-case or short descriptive strings
+- Rust files, modules, functions, and variables: `snake_case`.
+- Public types and enum variants: `PascalCase`.
+- Constants and environment variables: `SCREAMING_SNAKE_CASE`.
+- Serialized enum values: lowercase or kebab-case when already shipped.
+- Artifact labels in manifests: short descriptive kebab-case strings.
+- Generated runner backend values: `uniffi`, `native-c-abi`.
 
-## Output conventions
+## Output Conventions
 
-- default generated output root: `target/mobench/`
-- benchmark CI outputs: `summary.json`, `summary.md`, `results.csv`
-- profile outputs are run-scoped and also mirrored to latest-run convenience copies
-- processed profile artifacts keep stable names:
+- Default generated output root: `target/mobench/`.
+- BrowserStack fetch output root: `target/browserstack/`.
+- Benchmark CI outputs: `summary.json`, `summary.md`, `results.csv`, optional
+  `plots/*.svg`.
+- Resource columns: `cpu_total_ms`, `cpu_median_ms`, `peak_memory_kb`,
+  `peak_memory_growth_kb`, `process_peak_memory_kb`.
+- Profile outputs are run-scoped and mirrored to latest-run convenience paths.
+- Processed profile artifact names:
   - `stacks.folded`
   - `native-report.txt`
-  - `frame-locations.json` when Android symbolization resolves file/line metadata
+  - `frame-locations.json` when Android symbolization resolves file/line data
   - `flamegraph.full.svg`
   - `flamegraph.focused.svg`
   - `flamegraph.html`
-- differential profile outputs live under `target/mobench/profile/diff/` and use:
-  - `profile-diff.json`
-  - `summary.md`
-  - `diff.full.folded`
-  - `diff.focused.folded`
+- Differential profile outputs live under `target/mobench/profile/diff/` and
+  include `profile-diff.json`, `summary.md`, and differential folded stacks.
 
-## Config conventions
+## Config Conventions
 
-Resolution order stays consistent across build/run/profile commands:
+Project resolution order:
 
-1. explicit CLI flags
-2. explicit config path
-3. discovered `mobench.toml`
-4. workspace root
-5. git root
-6. legacy fallback paths
+1. Explicit CLI flags.
+2. Explicit config path.
+3. Discovered `mobench.toml`.
+4. Cargo workspace metadata.
+5. Git root.
+6. Legacy fallback paths.
 
-Device resolution semantics should reuse the same surface area instead of inventing command-specific flags:
+Device resolution should reuse the shared CLI surface:
+
 - `--device`
 - `--os-version`
 - `--profile`
 - `--device-matrix`
+- `--device-tags`
 
-## Documentation and comments
+Generated runner backend selection belongs in `[project].ffi_backend`.
 
-- public Rust items should use `//!` or `///` comments when they define user-facing behavior
-- comments should explain why a branch/tooling workaround exists, not restate obvious code
-- README and template docs should describe current shipped behavior, not superseded MVP constraints
+## Documentation Conventions
 
-## Template editing
+- Public Rust items should document user-facing behavior with `//!` or `///`.
+- Comments should explain why a branch or tooling workaround exists.
+- README and guide examples should describe current shipped behavior.
+- Avoid linking to removed migration/spec docs from current docs.
+- Keep Mermaid sources in `docs/diagrams/` mirrored with README Mermaid blocks.
 
-- edit `templates/` and the mirrored `crates/mobench-sdk/templates/` copy together
-- keep Android and iOS runner JSON/log markers aligned so CLI parsers stay cross-platform
-- when SDK report structures change, regenerate or refresh template/runtime bindings in the same change
+## Template Editing
 
-## Error handling style
+- Edit `templates/` first.
+- Mirror changes into `crates/mobench-sdk/templates/`.
+- Keep Android and iOS runner JSON/log markers aligned so CLI parsers remain
+  cross-platform.
+- Update docs when template inputs, output paths, or generated backend behavior
+  changes.
 
-- SDK surfaces typed errors via `thiserror`
-- CLI orchestration adds context with `anyhow`
-- unsupported provider/backend combinations must fail explicitly and describe the supported alternative
+## Error Handling Style
+
+- SDK errors should be typed where possible.
+- CLI errors should include actionable context.
+- Unsupported provider/backend combinations should fail explicitly.
+- Do not silently downgrade BrowserStack native profiling to timing-only
+  behavior.

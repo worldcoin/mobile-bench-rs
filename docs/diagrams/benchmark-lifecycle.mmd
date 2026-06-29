@@ -1,16 +1,19 @@
 sequenceDiagram
-    participant Dev as Developer
+    participant Dev as Developer or CI
     participant CLI as mobench CLI
     participant SDK as mobench-sdk
-    participant App as Generated mobile app
-    participant Device as Device or BrowserStack
-    participant Reports as Reports
+    participant Runner as Generated mobile runner
+    participant Device as Local device or BrowserStack
+    participant Reports as Reports and artifacts
 
-    Dev->>CLI: cargo mobench run
-    CLI->>SDK: resolve crate and benchmark spec
-    SDK->>SDK: build native libraries and generate bindings
-    SDK->>App: embed bench_spec.json and templates
-    CLI->>Device: install/upload and start run
-    Device->>App: execute benchmark function
-    App->>CLI: emit BenchReport JSON
-    CLI->>Reports: write summary.json, summary.md, results.csv
+    Dev->>CLI: cargo mobench run or ci run
+    CLI->>CLI: resolve flags, config, project root, crate, devices
+    CLI->>SDK: build native libraries and bench_spec.json
+    SDK->>Runner: generate Android/iOS runner using uniffi or native-c-abi
+    CLI->>Device: install locally or upload APK/IPA/XCUITest
+    Device->>Runner: launch with spec from extras, env, args, or bundle asset
+    Runner->>SDK: run_benchmark(BenchSpec)
+    SDK-->>Runner: BenchReport JSON
+    Runner-->>CLI: log or return benchmark report
+    CLI->>Reports: write results JSON, summary.json, summary.md, results.csv
+    CLI->>Reports: fetch BrowserStack artifacts and render plots when enabled

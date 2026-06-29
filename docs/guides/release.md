@@ -1,42 +1,65 @@
-# Release Checklist
+# Release Guide
 
-Use this checklist before publishing the `mobench` crate family.
+Current release line: **0.1.42**.
+
+Use this checklist when cutting a mobench workspace release.
 
 ## Preflight
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --all-features --no-deps
-cargo test --workspace --locked
-cargo bench -p mobench --features bench-support --bench host_contracts -- --test
-```
-
-## Publish Dry Run
-
-Publish order matters because the SDK depends on the proc macro crate and the
-CLI depends on the SDK. Before the first crate is published, only the leaf
-crate can complete a crates.io dry run because unpublished sibling versions are
-not yet available in the registry index.
+Confirm the workspace is on the intended release commit:
 
 ```bash
-cargo publish --dry-run -p mobench-macros
+git status --short
+git branch --show-current
 ```
 
-After `mobench-macros` is published and available from crates.io, dry-run the
-SDK before publishing it:
+Run formatting and tests:
 
 ```bash
-cargo publish --dry-run -p mobench-sdk
+cargo fmt --all --check
+cargo test --all
 ```
 
-After `mobench-sdk` is published and available from crates.io, dry-run the CLI:
+Run CLI smoke checks:
 
 ```bash
-cargo publish --dry-run -p mobench
+cargo run -q -p mobench --bin mobench -- --help
+cargo run -q -p mobench --bin mobench -- build --help
+cargo run -q -p mobench --bin mobench -- run --help
+cargo run -q -p mobench --bin mobench -- ci run --help
+cargo run -q -p mobench --bin mobench -- profile run --help
 ```
 
-## Publish
+Run documentation hygiene checks:
+
+```bash
+git diff --check
+```
+
+Also search the docs for unfinished markers, unknown code fences, removed docs,
+and old support filenames. Those searches should return no matches unless an
+intentional historical note is being added.
+
+## Versioning
+
+All published crates should use the same release version:
+
+- `mobench-macros`
+- `mobench-sdk`
+- `mobench`
+
+Update:
+
+- Workspace package versions.
+- Internal dependency versions between the crates.
+- Crate READMEs.
+- Root `README.md`.
+- `RELEASE_NOTES.md`.
+- Guide release lines.
+
+## Publish Order
+
+Publish dependencies before dependents:
 
 ```bash
 cargo publish -p mobench-macros
@@ -44,6 +67,35 @@ cargo publish -p mobench-sdk
 cargo publish -p mobench
 ```
 
-Wait for each crate to become available before publishing the dependent crate.
-After publishing, update `RELEASE_NOTES.md` with the published date/status, push
-that docs commit, then tag the release at the published commit.
+If crates.io indexing is still catching up, wait and retry the dependent crate.
+
+Verify publication:
+
+```bash
+cargo search mobench --limit 5
+```
+
+## Post-Publish Checks
+
+Install the published CLI in a clean environment:
+
+```bash
+cargo install mobench --version 0.1.42
+mobench --version
+mobench --help
+```
+
+Check that public docs reference the published version:
+
+```bash
+rg -n '0\.1\.42|mobench-sdk = "0\.1\.42"' README.md docs crates -g '*.md'
+```
+
+Tag the published commit:
+
+```bash
+git tag v0.1.42
+git push origin v0.1.42
+```
+
+Do not add `Co-Authored-By` lines to release commits.

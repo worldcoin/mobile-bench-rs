@@ -1,15 +1,23 @@
 # Codebase Reference
 
-These notes replace the older `.planning/codebase/` scratch docs and track the
-repo as it exists on `dev` after the fixture CI and local profiling work.
+Updated: 2026-06-29. Release line: `0.1.42`.
 
-For end-user and integrator workflows, start in
-[docs/guides/README.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/guides/README.md).
+These notes describe the current repository structure, implementation
+boundaries, integration points, and release-sensitive public surface. For user
+workflows, start with [../guides/README.md](../guides/README.md). For the full
+behavior contract, see [../specs/mobench-current-spec.md](../specs/mobench-current-spec.md).
 
-- [ARCHITECTURE.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/codebase/ARCHITECTURE.md): how the CLI, SDK, generated runners, profiling pipeline, and CI workflows fit together
-- [PUBLIC_API.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/codebase/PUBLIC_API.md): public API, semver, feature flag, MSRV, and release-readiness boundaries
-- [STRUCTURE.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/codebase/STRUCTURE.md): where the important crates, templates, docs, and workflows live
-- [STACK.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/codebase/STACK.md): the main languages, tools, runtime dependencies, and native profiler toolchain
-- [INTEGRATIONS.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/codebase/INTEGRATIONS.md): BrowserStack, GitHub Actions, Android, iOS, and local profiling integrations
-- [CONVENTIONS.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/codebase/CONVENTIONS.md): naming, output, configuration, and documentation conventions
-- [TESTING.md](/Users/dcbuilder/Code/world/mobile-bench-rs/docs/codebase/TESTING.md): host tests, fixture workflows, smoke tests, and profiling validation
+- [ARCHITECTURE.md](ARCHITECTURE.md): how the CLI, SDK, generated runners,
+  BrowserStack flow, reporting, and profiling fit together.
+- [PUBLIC_API.md](PUBLIC_API.md): public Rust APIs, CLI/API contracts,
+  feature flags, MSRV, semver boundaries, and release checks.
+- [STRUCTURE.md](STRUCTURE.md): important crates, templates, docs, workflows,
+  generated outputs, and where new work belongs.
+- [STACK.md](STACK.md): languages, Rust crates, native toolchains, services,
+  and artifact types.
+- [INTEGRATIONS.md](INTEGRATIONS.md): BrowserStack, GitHub Actions, Android,
+  iOS, generated runner backends, and local native profiling.
+- [CONVENTIONS.md](CONVENTIONS.md): naming, output, config, docs, template,
+  and error-handling conventions.
+- [TESTING.md](TESTING.md): host tests, tool-gated checks, service-gated checks,
+  fixture validation, CI contract checks, and profiling smoke tests.

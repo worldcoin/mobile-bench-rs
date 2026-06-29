@@ -1,132 +1,152 @@
 # Architecture
 
-Updated: 2026-04-26
+Updated: 2026-06-29. Release line: `0.1.42`.
 
-## System shape
+mobench has two product surfaces:
 
-`mobench` now has two distinct but related product surfaces:
+1. Benchmark execution: build mobile artifacts, run host-only, locally, or on
+   BrowserStack, then write JSON, Markdown, CSV, plot, PR-comment, and
+   check-run outputs.
+2. Local native profiling: run local native capture plans, normalize profile
+   manifests, and write flamegraph plus semantic-phase artifacts.
 
-1. benchmark execution
-   - build mobile artifacts
-   - run locally or on BrowserStack
-   - collect summaries, CSV, plots, and PR comments
-2. native profiling
-   - plan and execute local native captures
-   - keep a normalized manifest contract
-   - write flamegraph and semantic-phase artifacts
+## Published Crates
 
-The workspace still centers on three published crates:
+- `mobench`: CLI orchestration, BrowserStack client, CI/reporting entry points,
+  profile execution, flamegraph viewer generation, and programmatic CLI helpers.
+- `mobench-sdk`: timing harness, benchmark registry, runner, generated runner
+  backends, project generation, Android/iOS builders, UniFFI compatibility, and
+  native C ABI exports.
+- `mobench-macros`: `#[benchmark]` proc macro registration with setup,
+  teardown, per-iteration setup, and compile-time signature validation.
 
-- `mobench`: CLI orchestration, BrowserStack client, CI/reporting entry points, profile execution, and flamegraph viewer generation
-- `mobench-sdk`: timing harness, registry/runner, project generation, builders, and generated mobile runner templates
-- `mobench-macros`: `#[benchmark]` proc macro registration
+## Runtime Layers
 
-## Runtime layers
-
-### CLI orchestration
+### CLI Orchestration
 
 Location: `crates/mobench/src/`
 
 Responsibilities:
-- parse commands and resolve project layout
-- build/package Android and iOS artifacts
-- dispatch benchmark runs locally or to BrowserStack
-- fetch BrowserStack artifacts and enrich results
-- manage fixture CI flows and report rendering
-- run local native profiling and summarize profile sessions
+
+- Parse command-line arguments and resolve project layout.
+- Load and validate config, device matrix, and BrowserStack credentials.
+- Build/package Android and iOS artifacts.
+- Select generated runner backend from `[project].ffi_backend`.
+- Dispatch benchmark runs host-only, locally, or on BrowserStack.
+- Fetch BrowserStack artifacts and normalize run outputs.
+- Render JSON, Markdown, CSV, plots, PR comments, and check-run summaries.
+- Run local native profiling, summarize profiles, and generate profile diffs.
 
 Important modules:
-- `lib.rs`: crate facade, command dispatch, benchmark/CI orchestration, and shared report helpers
-- `cli.rs`: clap command surface and target/value enums
-- `doctor.rs`: prerequisite checks, config validation, and machine-readable validation issue rendering
-- `profile.rs`: target resolution, capture planning, capture execution, manifest/summary writing
-- `flamegraph_viewer.rs`: focused/full folded-stack derivation, SVG retinting, and interactive viewer document generation
-- `flamegraph_viewer_template.html`: browser-side flamegraph shell, timeline interactions, legend/fullscreen UX, and metadata layout
-- `browserstack.rs`: App Automate upload, schedule, polling, and fetch helpers
 
-### SDK/runtime layer
+- `cli.rs`: clap command surface and value enums.
+- `lib.rs`: command dispatch, benchmark/CI orchestration, report helpers, and
+  programmatic API types.
+- `config.rs`: config loading, validation, and `ffi_backend` resolution.
+- `doctor.rs`: prerequisite checks and validation issue rendering.
+- `browserstack.rs`: App Automate upload, scheduling, polling, and artifact
+  fetching.
+- `github.rs`: GitHub comment/check integration helpers.
+- `plots.rs`: CI plot input extraction and rendering.
+- `profile.rs`: profiling backend planning/execution, manifests, summaries,
+  and diffs.
+- `flamegraph_viewer.rs`: folded-stack derivation, SVG generation, and
+  interactive viewer assembly.
+
+### SDK Runtime And Builders
 
 Location: `crates/mobench-sdk/src/`
 
 Responsibilities:
-- benchmark timing and statistics
-- function registry and runtime dispatch
-- semantic phase capture via `profile_phase(...)`
-- Android/iOS code generation and builders
-- portable FFI-facing benchmark types
 
-Important modules:
-- `timing.rs`: `BenchSpec`, `BenchReport`, samples, phases, and the timing harness
-- `registry.rs` / `runner.rs`: benchmark lookup and execution
-- `builders/android.rs`, `builders/ios.rs`: native library build + project packaging
-- `codegen.rs`: template expansion and regeneration rules
+- Time warmup and measured iterations.
+- Register and discover benchmark functions through `inventory`.
+- Execute benchmarks through `run_benchmark`.
+- Generate Android and iOS runner projects.
+- Build native libraries and package mobile artifacts.
+- Provide UniFFI-compatible types.
+- Export the native JSON C ABI through `export_native_c_abi!()`.
+- Record semantic profiling phases through `profile_phase`.
 
-### Generated mobile runners
+Generated runner backends:
 
-Generated from `crates/mobench-sdk/templates/` into `target/mobench/`.
+- `uniffi`: default compatibility backend using generated Kotlin/Swift bindings.
+- `native-c-abi`: direct mobench JSON C ABI backend. Benchmark crates export
+  `mobench_run_benchmark_json`, `mobench_free_buf`, and
+  `mobench_last_error_message` through `mobench_sdk::export_native_c_abi!()`.
 
-Responsibilities:
-- load `bench_spec.json` or launch-time overrides
-- call the UniFFI-exposed Rust benchmark entrypoints
-- emit benchmark JSON for the CLI fetch/parsing paths
-- keep benchmark work alive long enough for local native profile capture when profiling launch options are supplied
+### Generated Mobile Runners
+
+Generated Android and iOS runners:
+
+- Read `bench_spec.json`.
+- Apply runtime overrides from Android intent extras or iOS environment
+  variables/launch arguments.
+- Execute the requested benchmark.
+- Emit benchmark JSON markers that the CLI can parse from local or
+  BrowserStack logs.
+- Keep profiling launch options available for local native capture.
 
 Platform-specific behavior:
-- Android runner emits `BENCH_JSON ...` in logcat and is marked `profileable` for local native capture
-- iOS runner emits `BENCH_REPORT_JSON_START/END` markers and supports repeat/warmup launch options used by local simulator-host profiling
 
-### CI/reporting layer
+- Android emits `BENCH_JSON ...` in logcat and can be marked `profileable` for
+  local native capture.
+- iOS emits `BENCH_REPORT_JSON_START/END` markers and supports simulator-host
+  profiling launch options.
+
+### CI And Reporting
 
 Responsibilities:
-- run fixture benchmarks on BrowserStack from GitHub Actions
-- publish normalized CI outputs (`summary.json`, `summary.md`, `results.csv`)
-- render shared device-comparison plots
-- publish sticky PR comments and check runs
 
-Current status:
-- benchmark CI is first-class
-- local native profiling is first-class on developer machines
-- a dedicated profiling self-test workflow is separate from BrowserStack benchmark workflows
+- Run benchmark fixtures from GitHub Actions.
+- Publish normalized CI outputs: `summary.json`, `summary.md`, `results.csv`,
+  and optional `plots/*.svg`.
+- Compare against baselines and write optional JUnit output.
+- Publish sticky PR comments and GitHub Check Run summaries.
 
-## Key flows
+BrowserStack benchmark timing/resource metrics are supported. BrowserStack
+native stack/flamegraph profiling is explicitly unsupported in this release.
 
-### Benchmark flow
+## Key Flows
 
-1. benchmark functions are registered at compile time through `inventory`
-2. `cargo mobench build` or `run` resolves the benchmark crate/layout
-3. the SDK builders compile Rust libraries and regenerate mobile bindings/templates
-4. mobile runners execute `run_benchmark(...)`
-5. the CLI collects and normalizes benchmark outputs locally or from BrowserStack
-6. reporters render JSON, Markdown, CSV, plots, PR comments, and check-run summaries
+### Benchmark Flow
 
-### Profiling flow
+1. Benchmark functions register at compile time through `inventory`.
+2. `cargo mobench build`, `run`, or `ci run` resolves the project and benchmark
+   crate from flags, config, Cargo metadata, git root, or legacy fallback.
+3. SDK builders compile native libraries and generate backend-specific runners.
+4. Mobile runners execute the benchmark through UniFFI or native C ABI.
+5. CLI collects and normalizes local or BrowserStack outputs.
+6. Reporters render JSON, Markdown, CSV, plots, PR comments, and check-run
+   summaries.
 
-1. `cargo mobench profile run` resolves a target and device context
-2. `profile.rs` builds a deterministic manifest and output contract
-3. supported local backends attempt native capture
-   - Android: `simpleperf`
-   - iOS: simulator-host `sample`
-4. post-processing writes:
-   - `stacks.folded`
-   - `native-report.txt`
-   - `frame-locations.json` on Android when file/line metadata is available
-   - `flamegraph.full.svg`
-   - `flamegraph.focused.svg`
-   - `flamegraph.html`
-   - `artifacts/semantic/phases.json` when phase data exists
-5. `profile summarize` renders the manifest into Markdown or JSON
-6. `profile diff` compares two profile sessions and writes a separate diff bundle under `target/mobench/profile/diff/`
+### Profiling Flow
 
-### Device resolution flow
+1. `cargo mobench profile run` resolves target, backend, provider, and device
+   context.
+2. `profile.rs` writes a deterministic profile manifest output contract.
+3. Supported local backends attempt native capture:
+   - Android: `simpleperf`.
+   - iOS: simulator-host `sample`.
+   - Rust tracing: planned manifest/trace contract.
+4. Post-processing writes folded stacks, native reports, flamegraph SVGs,
+   `flamegraph.html`, and semantic phase data when available.
+5. `profile summarize` renders Markdown or JSON.
+6. `profile diff` compares two profile manifests and writes a diff bundle.
 
-The repo uses one device-resolution model for both benchmark CI and profile planning:
+### Device Resolution Flow
 
-- `cargo mobench devices resolve` is the canonical entry point
-- `profile run` reuses the same profile/matrix/device concepts
-- BrowserStack benchmark workflows rely on this resolution path in CI
+- `cargo mobench devices resolve` is the canonical deterministic resolver.
+- `ci run` can resolve devices from matrix files and tags.
+- `profile run` reuses the same device, OS version, profile, and matrix concepts
+  for planning.
 
-## Boundaries and non-goals
+## Boundaries
 
-- BrowserStack benchmark execution is supported for timing/memory runs.
-- BrowserStack native profiling is explicitly unsupported until retrievable native artifacts exist.
-- The flamegraph viewer is a stable dual-view explorer; rolled-back experimental tower-collapse behavior is documented only as historical design work.
+- The SDK owns benchmark authoring, timing, registry, generated runners, and
+  mobile builders.
+- The CLI owns orchestration, provider access, output contracts, reporting, and
+  profiling commands.
+- Generated templates are implementation artifacts, but their input/output
+  paths are compatibility-sensitive because downstream projects may depend on
+  them.

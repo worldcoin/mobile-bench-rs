@@ -1,71 +1,30 @@
 //! # mobench-sdk
 //!
-//! [![Crates.io](https://img.shields.io/crates/v/mobench-sdk.svg)](https://crates.io/crates/mobench-sdk)
-//! [![Documentation](https://docs.rs/mobench-sdk/badge.svg)](https://docs.rs/mobench-sdk)
-//! [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/worldcoin/mobile-bench-rs/blob/main/LICENSE)
+//! Mobile benchmarking SDK for Rust. It provides runtime timing, benchmark
+//! registration, Android/iOS builders, generated runner templates, UniFFI
+//! compatibility, native JSON C ABI exports, and local profiling helpers.
 //!
-//! A mobile benchmarking SDK for Rust that provides the runtime, builders, and
-//! generated mobile runners used by the `mobench` CLI for local execution,
-//! BrowserStack benchmark runs, and local native profiling.
-//!
-//! ## Overview
-//!
-//! `mobench-sdk` provides a simple, declarative API for defining benchmarks that can
-//! run on mobile devices. It handles the timing/runtime layer, cross-compilation,
-//! FFI bindings, template generation, and mobile app packaging used by the CLI.
-//!
-//! ## Quick Setup Checklist
-//!
-//! Before using mobench-sdk, ensure your project is configured correctly:
-//!
-//! ### Required Cargo.toml entries
+//! ## Install
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1.37"
-//! inventory = "0.3"  # Required for benchmark registration
+//! mobench-sdk = "0.1.42"
+//! inventory = "0.3"
 //!
 //! [lib]
-//! # Required for mobile FFI - produces .so (Android) and .a (iOS)
 //! crate-type = ["cdylib", "staticlib", "lib"]
 //! ```
 //!
-//! ### When UniFFI is needed
-//!
-//! If you're creating custom FFI types for your benchmarks (custom errors, specs, etc.),
-//! you'll also need UniFFI:
-//!
-//! ```toml
-//! [dependencies]
-//! uniffi = { version = "0.28", features = ["cli"] }
-//! thiserror = "1.0"  # For custom error types
-//! serde = { version = "1.0", features = ["derive"] }  # For serialization
-//!
-//! [build-dependencies]
-//! uniffi = { version = "0.28", features = ["build"] }
-//! ```
-//!
-//! For most use cases, the SDK's built-in types are sufficient and UniFFI setup
-//! is handled automatically by `cargo mobench build`.
-//!
-//! ### Troubleshooting
-//!
-//! If benchmarks aren't being discovered:
-//! 1. Ensure functions are annotated with `#[benchmark]`
-//! 2. Ensure functions are `pub` (public visibility)
-//! 3. Ensure functions take no parameters and return `()`
-//! 4. Use the [`debug_benchmarks!`] macro to print registered benchmarks
+//! Generated runners use `ffi_backend = "uniffi"` by default. Set
+//! `ffi_backend = "native-c-abi"` in `mobench.toml` to use the direct
+//! mobench JSON C ABI path and export it from the benchmark crate with
+//! `mobench_sdk::export_native_c_abi!()`.
 //!
 //! For complete integration instructions, see
-//! [BENCH_SDK_INTEGRATION.md](https://github.com/worldcoin/mobile-bench-rs/blob/main/BENCH_SDK_INTEGRATION.md)
-//!
-//! ## Quick Start
-//!
-//! ### 1. Add Dependencies
-//!
+//! <https://github.com/worldcoin/mobile-bench-rs/blob/main/docs/guides/sdk-integration.md>.
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1.37"
+//! mobench-sdk = "0.1.42"
 //! inventory = "0.3"  # Required for benchmark registration
 //! ```
 //!
@@ -150,7 +109,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = { version = "0.1.37", default-features = false, features = ["runner-only"] }
+//! mobench-sdk = { version = "0.1.42", default-features = false, features = ["runner-only"] }
 //! ```
 //!
 //! ## Programmatic Usage

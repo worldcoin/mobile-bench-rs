@@ -1,82 +1,119 @@
 # Technology Stack
 
-Updated: 2026-04-01
+Updated: 2026-06-29. Release line: `0.1.42`.
 
-## Languages
+## Languages And Formats
 
-- Rust 2024: workspace root and primary implementation language
-- Rust 2021: some example and fixture crates retained for compatibility
-- Kotlin: generated Android bindings and runner code
-- Swift: generated iOS bindings and runner code
-- YAML/TOML/JSON: workflow, config, matrix, and report contracts
+- Rust 2024: workspace crates.
+- Rust 2021: some example/fixture crates retained for compatibility.
+- Kotlin: generated Android runner/binding code.
+- Swift: generated iOS runner/binding code.
+- YAML: GitHub workflows and device matrices.
+- TOML: Cargo manifests and mobench config.
+- JSON: benchmark specs, reports, CI summaries, schemas, and trace events.
+- Markdown/Mermaid: user docs, codebase docs, release notes, and diagrams.
 
-## Core Rust crates
+## Core Rust Crates
 
-- `clap`: CLI surface
-- `serde`, `serde_json`, `serde_yaml`, `toml`: config and report serialization
-- `anyhow`, `thiserror`: layered error handling
-- `inventory`: benchmark registration
-- `uniffi`: Kotlin/Swift binding generation
-- `include_dir`: embedded template assets
-- `reqwest` with `rustls`: BrowserStack REST calls
-- `time`: RFC3339 timestamps and report metadata
-- `inferno`: flamegraph SVG generation
+- `clap`: CLI surface.
+- `serde`, `serde_json`, `serde_yaml`, `toml`: config and report
+  serialization.
+- `anyhow`, `thiserror`: layered error handling.
+- `inventory`: benchmark registration.
+- `uniffi`: Kotlin/Swift binding generation for the compatibility backend.
+- `include_dir`: embedded template assets.
+- `reqwest` with `rustls`: BrowserStack REST calls.
+- `dotenvy`: `.env.local` credential loading.
+- `time`: RFC3339 timestamps and report metadata.
+- `inferno`: flamegraph SVG generation.
+- `tracing`, `tracing-subscriber`: CLI diagnostics.
+- `comfy-table`: terminal summary tables.
+- `jsonschema`, `proptest`, `criterion`: tests and benchmark support.
 
-## Native toolchain dependencies
+## Native Toolchain Dependencies
 
 ### Android
 
-- Rust Android targets
-- Android SDK + NDK
-- `cargo-ndk`
-- Gradle / Android build tools
-- `adb`
-- `simpleperf`
-- `llvm-addr2line` for symbolization
+- Android SDK and build tools.
+- Android NDK.
+- Rust targets:
+  - `aarch64-linux-android`
+  - `armv7-linux-androideabi`
+  - `x86_64-linux-android`
+- `cargo-ndk`.
+- Gradle.
+- `adb`.
+- `simpleperf` for local native profiling.
+- NDK `llvm-addr2line` for Android frame symbolization.
 
 ### iOS
 
-- Rust iOS targets
-- Xcode / xcodebuild
-- XcodeGen for generated project flows
-- `xcrun simctl`
-- macOS `sample` for current local native profiling
+- macOS.
+- Xcode and command-line tools.
+- XcodeGen for generated project flows.
+- Rust targets:
+  - `aarch64-apple-ios`
+  - `aarch64-apple-ios-sim`
+  - `x86_64-apple-ios`
+- `xcrun simctl`.
+- macOS `sample` for current local simulator-host profiling.
+- `codesign` for xcframework signing.
 
-## External services
+## External Services
 
-- BrowserStack App Automate
-  - benchmark execution on real devices
-  - device inventory resolution
-  - session artifact fetching and metric enrichment
-- GitHub Actions
-  - fixture benchmark workflows
-  - plot fixture verification
-  - PR auto-dispatch and sticky comments
+- BrowserStack App Automate:
+  - Android Espresso benchmark runs.
+  - iOS XCUITest benchmark runs.
+  - Device inventory and validation.
+  - Session artifact fetching and metric enrichment.
+- GitHub Actions:
+  - Rust quality checks.
+  - BrowserStack benchmark workflows.
+  - PR benchmark dispatch.
+  - Plot/profile self-tests.
+  - Sticky PR comments and Check Run summaries.
 
-## Runtime artifacts
+## Runtime Artifacts
 
 Benchmark outputs:
-- `summary.json`
-- `summary.md`
-- `results.csv`
-- plot SVGs when enabled
+
+- Result JSON from `run`.
+- `summary.json`.
+- `summary.md`.
+- `results.csv`.
+- Optional plot SVGs.
 
 Profile outputs:
-- `profile.json`
-- `summary.md`
-- raw capture artifacts (`sample.perf`, `sample.txt`, etc.)
-- processed stacks (`stacks.folded`, `native-report.txt`)
-- optional source links (`frame-locations.json` on Android)
-- viewer artifacts (`flamegraph.full.svg`, `flamegraph.focused.svg`, `flamegraph.html`)
-- semantic sidecar data (`artifacts/semantic/phases.json`)
-- differential bundles under `target/mobench/profile/diff/`
 
-## Supported execution modes
+- `profile.json`.
+- `summary.md`.
+- Raw capture artifacts.
+- `stacks.folded`.
+- `native-report.txt`.
+- `frame-locations.json` when Android file/line metadata is available.
+- `flamegraph.full.svg`.
+- `flamegraph.focused.svg`.
+- `flamegraph.html`.
+- `artifacts/semantic/phases.json` when semantic phase data exists.
+- Profile diff bundles under `target/mobench/profile/diff/`.
 
-- Local benchmark execution
-- BrowserStack benchmark execution
-- Local Android native profiling
-- Local iOS native profiling
+## Supported Execution Modes
 
-Explicitly not supported:
-- BrowserStack native profiling and retrievable flamegraph-capable artifacts
+- Host-only benchmark execution: `cargo mobench run --local-only`.
+- Android/iOS local build/package flows: `cargo mobench build`.
+- BrowserStack benchmark execution: `cargo mobench run` and
+  `cargo mobench ci run`.
+- BrowserStack artifact fetching: `cargo mobench fetch` and `--fetch`.
+- Local native profiling: `cargo mobench profile run --provider local`.
+
+Unsupported in this release:
+
+- BrowserStack native stack/flamegraph profiling.
+- Retrievable BrowserStack native profile artifacts.
+
+## Documentation And Schema Tooling
+
+- Markdown files in `docs/guides/` and `docs/codebase/`.
+- Mermaid sources in `docs/diagrams/`.
+- JSON schemas in `docs/schemas/`.
+- Release notes in `RELEASE_NOTES.md`.
