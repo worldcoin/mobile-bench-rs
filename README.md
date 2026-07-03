@@ -9,6 +9,9 @@ benchmarks on Android and iOS, locally or on BrowserStack, with a
 library-first SDK, a `cargo mobench` CLI, config-first project resolution,
 stable CI output contracts, and local native profiling artifacts.
 
+The checked-in examples are kept runnable as lightweight smoke tests for docs
+and release updates.
+
 Current workspace release and crates.io line: **v0.1.42**.
 
 ## What It Provides
