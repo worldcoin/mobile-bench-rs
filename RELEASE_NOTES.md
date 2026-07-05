@@ -15,9 +15,29 @@ Crates.io release pages:
 
 No user-facing unreleased changes yet.
 
-## v0.1.42
+## v0.1.43
 
 Status: current supported release.
+
+Publication date: 2026-07-05.
+
+### CI split-run merging
+
+- Added `cargo mobench ci merge-split-runs` to merge one-measured-sample CI
+  summaries back into standard `summary.json`, `summary.md`, and `results.csv`
+  artifacts.
+- Validates the requested benchmark function, requested device, one benchmark
+  per input summary, consistent target, and exact measured sample count before
+  writing merged outputs.
+- Recomputes `min_ns`, `max_ns`, `mean_ns`, `median_ns`, `p95_ns`, `samples_ns`,
+  and benchmark resource columns so downstream report/plot consumers can use the
+  merged result like normal `ci run` output.
+- Documented the workflow for long or fragile BrowserStack lanes that need to
+  run each measured sample as its own CI invocation.
+
+## v0.1.42
+
+Status: superseded by `v0.1.43`.
 
 Publication date: 2026-06-29.
 
@@ -133,7 +153,8 @@ the consolidation of the old `mobench-runner` functionality into
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Current supported release |
+| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Current supported release |
+| `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Superseded by `v0.1.43` |
 | `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Superseded by `v0.1.42` |
 | `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Superseded by `v0.1.41` |
 | `v0.1.36` | 2026-04-27 | `mobench 0.1.36`, `mobench-sdk 0.1.36`, `mobench-macros 0.1.36` | Superseded by `v0.1.37` |

@@ -3,7 +3,7 @@
 Command-line tool for building, running, reporting, and profiling Rust mobile
 benchmarks on Android and iOS.
 
-Current release: **0.1.42**.
+Current release: **0.1.43**.
 
 ## Install
 
@@ -70,6 +70,7 @@ debugging large development artifacts.
 | `build` | Build Android/iOS mobile artifacts. |
 | `run` | Run benchmarks locally, host-only, or on BrowserStack. |
 | `ci run` | Run the full CI benchmark flow and write stable contract outputs. |
+| `ci merge-split-runs` | Merge one-sample CI summaries into standard CI outputs. |
 | `devices` | List BrowserStack devices. |
 | `devices resolve` | Resolve deterministic device sets from matrix/profile. |
 | `fixture` | Manage reproducible CI fixtures. |
@@ -170,8 +171,22 @@ cargo mobench report summarize \
   --plots auto
 
 cargo mobench report github \
-  --pr 123 \
-  --summary target/mobench/ci/summary.json
+--pr 123 \
+--summary target/mobench/ci/summary.json
+```
+
+Long or fragile CI lanes can run one measured sample per BrowserStack
+invocation and merge `sample-*/summary.json` outputs back into the same
+contract:
+
+```bash
+cargo mobench ci merge-split-runs \
+--samples-dir target/mobench/ci/android/my_crate__my_benchmark/device/split \
+--output-dir target/mobench/ci/android/my_crate__my_benchmark/device \
+--function my_crate::my_benchmark \
+--device "Google Pixel 7-13.0" \
+--iterations 5 \
+--warmup 1
 ```
 
 ## BrowserStack

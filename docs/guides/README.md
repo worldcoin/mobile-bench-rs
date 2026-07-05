@@ -1,6 +1,6 @@
 # mobench Guides
 
-Current release line: **0.1.42**.
+Current release line: **0.1.43**.
 
 These guides cover the current mobench CLI, SDK, generated mobile runners,
 BrowserStack execution, CI outputs, artifact fetching, and local native

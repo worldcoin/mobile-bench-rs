@@ -144,10 +144,10 @@ pub(crate) use cli::CiTarget;
 pub use cli::MobileTarget;
 pub(crate) use cli::PlotFixture;
 pub(crate) use cli::{
-    CheckOutputFormat, CiCheckRunArgs, CiCommand, CiRunArgs, CiSummarizeArgs, Cli, Command,
-    ConfigCommand, ContractErrorCategory, DevicePlatform, DevicesCommand, FixtureCommand,
-    IosRunnerArg, IosSigningMethodArg, ProfileCommand, ReportCommand, SdkTarget, SummarizeFormat,
-    SummaryFormat,
+    CheckOutputFormat, CiCheckRunArgs, CiCommand, CiMergeSplitRunsArgs, CiRunArgs, CiSummarizeArgs,
+    Cli, Command, ConfigCommand, ContractErrorCategory, DevicePlatform, DevicesCommand,
+    FixtureCommand, IosRunnerArg, IosSigningMethodArg, ProfileCommand, ReportCommand, SdkTarget,
+    SummarizeFormat, SummaryFormat,
 };
 #[cfg(test)]
 pub(crate) use doctor::{
@@ -167,6 +167,7 @@ mod flamegraph_viewer;
 mod github;
 mod plots;
 mod profile;
+mod split_runs;
 pub(crate) mod summarize;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1069,6 +1070,9 @@ pub fn run() -> Result<()> {
             }
             CiCommand::Run(args) => {
                 cmd_ci_run(args)?;
+            }
+            CiCommand::MergeSplitRuns(args) => {
+                split_runs::cmd_ci_merge_split_runs(args, cli.dry_run)?;
             }
             CiCommand::Summarize(args) => {
                 cmd_ci_summarize(args)?;

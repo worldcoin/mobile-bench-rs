@@ -1,6 +1,6 @@
 # Release Guide
 
-Current release line: **0.1.42**.
+Current release line: **0.1.43**.
 
 Use this checklist when cutting a mobench workspace release.
 
@@ -27,6 +27,7 @@ cargo run -q -p mobench --bin mobench -- --help
 cargo run -q -p mobench --bin mobench -- build --help
 cargo run -q -p mobench --bin mobench -- run --help
 cargo run -q -p mobench --bin mobench -- ci run --help
+cargo run -q -p mobench --bin mobench -- ci merge-split-runs --help
 cargo run -q -p mobench --bin mobench -- profile run --help
 ```
 
@@ -80,7 +81,7 @@ cargo search mobench --limit 5
 Install the published CLI in a clean environment:
 
 ```bash
-cargo install mobench --version 0.1.42
+cargo install mobench --version 0.1.43
 mobench --version
 mobench --help
 ```
@@ -94,8 +95,8 @@ rg -n '0\.1\.42|mobench-sdk = "0\.1\.42"' README.md docs crates -g '*.md'
 Tag the published commit:
 
 ```bash
-git tag v0.1.42
-git push origin v0.1.42
+git tag v0.1.43
+git push origin v0.1.43
 ```
 
 Do not add `Co-Authored-By` lines to release commits.
