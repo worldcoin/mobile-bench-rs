@@ -1,6 +1,6 @@
 # Public API And Stability
 
-Updated: 2026-06-29. Release line: `0.1.43`.
+Updated: 2026-07-15. Release line: `0.1.43`.
 
 This document defines compatibility-sensitive API boundaries for the published
 mobench crates. Use it during semver reviews, docs.rs cleanup, feature-flag

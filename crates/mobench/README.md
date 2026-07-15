@@ -176,8 +176,8 @@ cargo mobench report github \
 ```
 
 Long or fragile CI lanes can run one measured sample per BrowserStack
-invocation and merge `sample-*/summary.json` outputs back into the same
-contract:
+invocation, then merge `sample-*/summary.json` outputs back into the standard
+CI contract:
 
 ```bash
 cargo mobench ci merge-split-runs \
@@ -188,6 +188,11 @@ cargo mobench ci merge-split-runs \
 --iterations 5 \
 --warmup 1
 ```
+
+The merge command validates one device and one benchmark per input summary,
+checks the requested function and device, requires exactly `--iterations`
+measured samples, and writes `summary.json`, `summary.md`, and `results.csv` in
+`--output-dir`.
 
 ## BrowserStack
 

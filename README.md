@@ -479,7 +479,8 @@ mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
 - `docs/codebase/PUBLIC_API.md`: public API and semver boundaries.
 - `docs/schemas/`: machine-readable CI, summary, and trace-event schemas.
 - `docs/diagrams/`: Mermaid source diagrams mirrored in this README.
-- `RELEASE_NOTES.md`: release history and support status.
+- `CHANGELOG.md`: concise release-by-release user-facing changes.
+- `RELEASE_NOTES.md`: integration-focused release notes and support status.
 
 ## License
 

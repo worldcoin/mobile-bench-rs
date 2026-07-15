@@ -166,8 +166,8 @@ Missing resource data is emitted as blank CSV fields.
 
 ## Split-Sample Merge
 
-Some long or fragile BrowserStack lanes may need to run each measured sample as
-its own CI invocation. Put those one-sample outputs under directories like
+Long or fragile BrowserStack lanes can run each measured sample as its own CI
+invocation. Put one-sample outputs under directories like
 `sample-1/summary.json`, `sample-2/summary.json`, then merge them back into the
 standard CI output contract:
 
@@ -181,11 +181,11 @@ cargo mobench ci merge-split-runs \
 --warmup 1
 ```
 
-The command validates that each input summary contains exactly one device and
+The command validates that every input summary contains exactly one device and
 one benchmark, that the benchmark matches `--function`, that every sample is for
 `--device`, and that the merged measured sample count equals `--iterations`.
 It writes `summary.json`, `summary.md`, and `results.csv` in `--output-dir`, so
-normal report, plot, PR comment, and comparison tooling can consume the merged
+normal report, plot, PR comment, and comparison tooling can consume merged
 output unchanged.
 
 ## Multiple Functions

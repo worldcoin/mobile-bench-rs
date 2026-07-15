@@ -4,7 +4,7 @@ Status: current source-of-truth product/API specification.
 
 Release line: `0.1.43`.
 
-Last updated: 2026-06-29.
+Last updated: 2026-07-15.
 
 This spec describes the behavior, CLI surface, configuration files, output
 contracts, generated runner backends, and Rust APIs currently provided by
@@ -382,6 +382,7 @@ Commands:
 - `config validate`: validate run configuration and referenced files.
 - `doctor`: validate local and CI prerequisites/configuration.
 - `ci run`: run full CI benchmark flow.
+- `ci merge-split-runs`: merge one-sample CI summaries into standard CI outputs.
 - `fetch`: fetch BrowserStack build artifacts.
 - `compare`: compare two run summaries for regressions.
 - `init-sdk`: initialize a benchmark project from SDK templates.
@@ -494,6 +495,29 @@ Regression exit semantics:
 - Normal success exits `0`.
 - Regression threshold failures are represented as regression failures and by
   the programmatic API as `regression_detected = true`.
+
+## `ci merge-split-runs` Behavior
+
+`mobench ci merge-split-runs` merges CI outputs from lanes that run one measured
+sample per invocation. Inputs live under `--samples-dir` as
+`sample-*/summary.json`.
+
+Each input summary must contain exactly one device and one benchmark result. The
+benchmark must match `--function`, every sample must be for `--device`, and the
+merged measured sample count must equal `--iterations`. Warmup count is retained
+in Markdown/report output but is not treated as a measured sample.
+
+Outputs in `--output-dir`:
+
+- `summary.json`
+- `summary.md`
+- `results.csv`
+
+The command combines benchmark samples, derives `samples_ns`, recomputes
+`min_ns`, `max_ns`, `mean_ns`, `median_ns`, `p95_ns`, and emits resource metric
+columns using the same summary schema as normal `ci run` output. Existing
+report, plot, PR comment, and comparison tooling can consume merged outputs
+unchanged.
 
 ## Reporting Outputs
 

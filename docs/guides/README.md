@@ -17,8 +17,8 @@ profiling.
 - [testing.md](testing.md): host tests, CLI checks, local smoke tests,
   Android/iOS validation, BrowserStack smoke tests, and profiling checks.
 - [browserstack-ci.md](browserstack-ci.md): BrowserStack credentials,
-  deterministic device resolution, `ci run`, PR reporting, baselines,
-  and artifact fetching.
+  deterministic device resolution, `ci run`, split-sample merging, PR reporting,
+  baselines, and artifact fetching.
 - [browserstack-metrics.md](browserstack-metrics.md): timing/resource metrics,
   CSV columns, BrowserStack log parsing, and local profiling boundaries.
 - [fetch-results.md](fetch-results.md): `--fetch`, `mobench fetch`, and
