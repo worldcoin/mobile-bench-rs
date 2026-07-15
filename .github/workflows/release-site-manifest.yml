@@ -1,0 +1,53 @@
+name: Publish website truth manifest
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.85'
+
+      - name: Verify invocation and manifest contracts
+        run: |
+          cargo test -p mobench --test invocation_cli
+          cargo test -p mobench site_manifest::tests
+          cargo run -p mobench --example generate-site-manifest -- /tmp/mobench-site-manifest-v1.json
+          cmp mobench-site-manifest-v1.json /tmp/mobench-site-manifest-v1.json
+
+      - name: Verify release identity
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          jq -e --arg tag "$TAG" --arg sha "$sha" '
+            .schema_version == 1 and
+            .release.tag == $tag and
+            .release.sha == $sha and
+            .release.repository == "https://github.com/worldcoin/mobile-bench-rs"
+          ' mobench-site-manifest-v1.json
+
+      - name: Attach manifest and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cp mobench-site-manifest-v1.json /tmp/mobench-site-manifest-v1.json
+          cd /tmp
+          sha256sum mobench-site-manifest-v1.json > mobench-site-manifest-v1.json.sha256
+          gh release upload "$TAG" \
+            mobench-site-manifest-v1.json \
+            mobench-site-manifest-v1.json.sha256 \
+            --repo worldcoin/mobile-bench-rs \
+            --clobber

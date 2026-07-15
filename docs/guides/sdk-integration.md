@@ -145,18 +145,18 @@ The native C ABI exports:
 - `mobench_last_error_message`
 - `MobenchBuf`
 
-## Run Locally
+## Host-Side Preflight
 
 List registered benchmarks:
 
 ```bash
-cargo mobench list --crate-path crates/my-bench-crate
+mobench list --crate-path crates/my-bench-crate
 ```
 
-Run the host harness without mobile builds:
+Resolve the request and write preflight/spec output without mobile execution:
 
 ```bash
-cargo mobench run \
+mobench run \
   --target android \
   --function my_bench_crate::checksum_bench \
   --crate-path crates/my-bench-crate \
@@ -166,12 +166,12 @@ cargo mobench run \
   --output target/mobench/results.json
 ```
 
-Inspect the report:
+Inspect the report shape only; do not treat it as mobile timing data:
 
 ```bash
-cargo mobench summary target/mobench/results.json
-cargo mobench summary --format json target/mobench/results.json
-cargo mobench summary --format csv target/mobench/results.json
+mobench summary target/mobench/results.json
+mobench summary --format json target/mobench/results.json
+mobench summary --format csv target/mobench/results.json
 ```
 
 ## Build Mobile Artifacts

@@ -27,6 +27,6 @@ cargo mobench run \
   --local-only
 ```
 
-Use the `cargo mobench run` command as a host/local smoke test. Building and
+Use the `mobench run --local-only` command as a host-side preflight/spec check. Building and
 running on actual Android or iOS devices still requires the platform toolchains
 documented in `docs/guides/build.md`.

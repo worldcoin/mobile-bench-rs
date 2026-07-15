@@ -79,7 +79,7 @@ pub fn my_benchmark() {
 }
 ```
 
-Run a host-only smoke benchmark:
+Write host-side preflight/spec output without mobile execution:
 
 ```bash
 cargo mobench run \

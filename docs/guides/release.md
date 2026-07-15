@@ -41,6 +41,19 @@ Also search the docs for unfinished markers, unknown code fences, removed docs,
 and old support filenames. Those searches should return no matches unless an
 intentional historical note is being added.
 
+Generate and verify the website truth contract:
+
+```bash
+cargo run -p mobench --example generate-site-manifest -- /tmp/mobench-site-manifest-v1.json
+cmp mobench-site-manifest-v1.json /tmp/mobench-site-manifest-v1.json
+cargo test -p mobench --test invocation_cli
+cargo test -p mobench site_manifest::tests
+```
+
+Before tagging, confirm `release.version`, `release.tag`, and `release.sha` in
+`mobench-site-manifest-v1.json` identify the release being cut. Every capability
+status must retain a source or test evidence identifier.
+
 ## Versioning
 
 All published crates should use the same release version:
@@ -101,5 +114,12 @@ Tag the published commit:
 git tag v0.1.43
 git push origin v0.1.43
 ```
+
+Publish the GitHub release from that tag. The `Publish website truth manifest`
+workflow regenerates the manifest, compares it with the checked-in copy, reruns
+the direct and Cargo-wrapper invocation tests, verifies the release tag and SHA,
+then attaches both `mobench-site-manifest-v1.json` and its `.sha256` checksum.
+The website release watcher will refuse an update when either asset or identity
+check is missing.
 
 Do not add `Co-Authored-By` lines to release commits.

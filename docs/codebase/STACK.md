@@ -99,7 +99,7 @@ Profile outputs:
 
 ## Supported Execution Modes
 
-- Host-only benchmark execution: `cargo mobench run --local-only`.
+- Host-side preflight/spec output without mobile execution: `mobench run --local-only`.
 - Android/iOS local build/package flows: `cargo mobench build`.
 - BrowserStack benchmark execution: `cargo mobench run` and
   `cargo mobench ci run`.

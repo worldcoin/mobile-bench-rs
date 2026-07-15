@@ -30,7 +30,7 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
-    /// Run benchmarks locally or on BrowserStack devices.
+    /// Build mobile artifacts, write host preflight output, or run on BrowserStack devices.
     ///
     /// This is a single-command flow that:
     /// 1. Builds Rust libraries for the target platform
@@ -91,7 +91,10 @@ pub(crate) enum Command {
         regression_threshold_pct: f64,
         #[arg(long, help = "Write JUnit XML report to the given path")]
         junit: Option<PathBuf>,
-        #[arg(long, help = "Skip mobile builds and only run the host harness")]
+        #[arg(
+            long,
+            help = "Skip mobile builds and write host-side preflight/spec output without mobile execution"
+        )]
         local_only: bool,
         #[arg(
             long,
@@ -642,7 +645,10 @@ pub(crate) struct CiRunArgs {
     pub(crate) regression_threshold_pct: f64,
     #[arg(long, help = "Write JUnit XML report to the given path")]
     pub(crate) junit: Option<PathBuf>,
-    #[arg(long, help = "Skip mobile builds and only run the host harness")]
+    #[arg(
+        long,
+        help = "Skip mobile builds and write host-side preflight/spec output without mobile execution"
+    )]
     pub(crate) local_only: bool,
     #[arg(
         long,

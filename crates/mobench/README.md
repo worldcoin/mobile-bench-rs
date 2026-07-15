@@ -68,7 +68,7 @@ debugging large development artifacts.
 | `config validate` | Validate config files and referenced matrix/settings. |
 | `check` | Check Android or iOS build prerequisites. |
 | `build` | Build Android/iOS mobile artifacts. |
-| `run` | Run benchmarks locally, host-only, or on BrowserStack. |
+| `run` | Build mobile artifacts, write host preflight/spec output, or run on BrowserStack. |
 | `ci run` | Run the full CI benchmark flow and write stable contract outputs. |
 | `ci merge-split-runs` | Merge one-sample CI summaries into standard CI outputs. |
 | `devices` | List BrowserStack devices. |

@@ -128,6 +128,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
+use std::ffi::OsString;
 use std::fmt::Write;
 use std::fs;
 use std::io::Write as IoWrite;
@@ -167,6 +168,7 @@ mod flamegraph_viewer;
 mod github;
 mod plots;
 mod profile;
+pub mod site_manifest;
 mod split_runs;
 pub(crate) mod summarize;
 
@@ -406,10 +408,23 @@ fn init_tracing(verbose: bool) {
 }
 
 pub fn run() -> Result<()> {
+    run_from(std::env::args_os())
+}
+
+/// Run the CLI with an explicit argument vector.
+///
+/// The first item must be the executable name, matching [`clap::Parser::parse_from`].
+/// This is public so the `cargo-mobench` shim can normalize Cargo's injected
+/// subcommand token without changing direct `mobench` invocation semantics.
+pub fn run_from<I, T>(args: I) -> Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
     // Load dotenv globally as a baseline for commands that don't resolve a layout
     // (e.g. fetch, doctor, ci run). Layout-aware commands reload from the resolved root.
     load_dotenv_global();
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(args);
     init_tracing(cli.verbose);
     debug!(
         dry_run = cli.dry_run,

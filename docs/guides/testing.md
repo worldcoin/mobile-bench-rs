@@ -65,12 +65,13 @@ cargo mobench verify \
   --smoke-test
 ```
 
-## Local-Only Benchmark Runs
+## Host-Side Preflight
 
-Use `--local-only` to exercise the host harness without mobile builds:
+Use `--local-only` to resolve the request and write preflight/spec output
+without mobile execution:
 
 ```bash
-cargo mobench run \
+mobench run \
   --target android \
   --function basic_benchmark::bench_fibonacci \
   --crate-path examples/basic-benchmark \
@@ -80,12 +81,12 @@ cargo mobench run \
   --output target/mobench/results.json
 ```
 
-Inspect the report:
+Inspect the report shape only; do not treat it as mobile timing data:
 
 ```bash
-cargo mobench summary target/mobench/results.json
-cargo mobench summary --format json target/mobench/results.json
-cargo mobench summary --format csv target/mobench/results.json
+mobench summary target/mobench/results.json
+mobench summary --format json target/mobench/results.json
+mobench summary --format csv target/mobench/results.json
 ```
 
 ## Android Testing

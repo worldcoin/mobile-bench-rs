@@ -22,8 +22,9 @@ mobench is a Rust mobile benchmarking toolkit with three published crates:
 
 mobench supports two product surfaces:
 
-- Benchmark execution: build mobile artifacts, run benchmarks locally,
-  host-only, or on BrowserStack, and write JSON/Markdown/CSV/plot outputs.
+- Benchmark execution: build mobile artifacts, write host-side preflight/spec
+  outputs, or run benchmarks on BrowserStack and write
+  JSON/Markdown/CSV/plot outputs.
 - Local native profiling: run native capture plans, produce normalized profile
   manifests, flamegraph artifacts, semantic phase summaries, and profile diffs.
 
@@ -376,7 +377,8 @@ Global flags:
 
 Commands:
 
-- `run`: run benchmarks locally, host-only, or on BrowserStack.
+- `run`: build mobile artifacts, write host-side preflight/spec output with
+  `--local-only`, or run benchmarks on BrowserStack when devices are selected.
 - `init`: scaffold a base config file.
 - `plan`: generate a sample device matrix file.
 - `config validate`: validate run configuration and referenced files.
@@ -445,7 +447,9 @@ Key options:
 - `--fetch-timeout-secs <N>`
 - `--progress`
 
-`--local-only` skips mobile builds and runs the host harness.
+`--local-only` skips mobile builds and writes host-side preflight/spec output.
+It does not execute the requested benchmark on an attached device, emulator,
+simulator, or other mobile target.
 
 `--release` is recommended for BrowserStack to reduce upload size.
 
