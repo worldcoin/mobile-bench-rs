@@ -1,6 +1,6 @@
 # Architecture
 
-Updated: 2026-06-29. Release line: `0.1.43`.
+Updated: 2026-07-15. Release line: `0.1.43`.
 
 mobench has two product surfaces:
 

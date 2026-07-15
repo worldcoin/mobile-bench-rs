@@ -55,6 +55,7 @@ Update:
 - Internal dependency versions between the crates.
 - Crate READMEs.
 - Root `README.md`.
+- `CHANGELOG.md`.
 - `RELEASE_NOTES.md`.
 - Guide release lines.
 
@@ -86,10 +87,12 @@ mobench --version
 mobench --help
 ```
 
-Check that public docs reference the published version:
+Check that public docs reference the published version and do not keep
+copy-pasted old-version install snippets:
 
 ```bash
-rg -n '0\.1\.42|mobench-sdk = "0\.1\.42"' README.md docs crates -g '*.md'
+rg -n '<previous-version>|mobench-sdk = "<previous-version>"' README.md docs crates -g '*.md'
+rg -n '<new-version>' README.md CHANGELOG.md RELEASE_NOTES.md docs crates -g '*.md'
 ```
 
 Tag the published commit:

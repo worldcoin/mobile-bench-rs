@@ -1,9 +1,9 @@
 # Release Notes
 
 `mobench`, `mobench-sdk`, and `mobench-macros` were published rapidly during
-bring-up. Only the current release line should be treated as supported. Earlier
-crates.io publishes are retained for auditability, but should not be used for
-new integrations unless explicitly noted.
+bring-up. Treat only the current release line as supported for new integrations
+unless an older release is explicitly called out. For a concise
+release-by-release change list, see `CHANGELOG.md`.
 
 Crates.io release pages:
 
@@ -21,19 +21,20 @@ Status: current supported release.
 
 Publication date: 2026-07-05.
 
-### CI split-run merging
+### CI Split-Run Merging
 
-- Added `cargo mobench ci merge-split-runs` to merge one-measured-sample CI
-  summaries back into standard `summary.json`, `summary.md`, and `results.csv`
-  artifacts.
+- Added `cargo mobench ci merge-split-runs` for CI workflows that run each
+  measured sample as a separate `cargo mobench ci run` invocation.
+- Merges `sample-*/summary.json` inputs back into standard `summary.json`,
+  `summary.md`, and `results.csv` outputs.
 - Validates the requested benchmark function, requested device, one benchmark
-  per input summary, consistent target, and exact measured sample count before
-  writing merged outputs.
-- Recomputes `min_ns`, `max_ns`, `mean_ns`, `median_ns`, `p95_ns`, `samples_ns`,
-  and benchmark resource columns so downstream report/plot consumers can use the
-  merged result like normal `ci run` output.
-- Documented the workflow for long or fragile BrowserStack lanes that need to
-  run each measured sample as its own CI invocation.
+  per input summary, one device per input summary, and exact measured sample
+  count before writing merged outputs.
+- Recomputes `samples_ns`, `min_ns`, `max_ns`, `mean_ns`, `median_ns`, `p95_ns`,
+  and resource columns so existing report, plot, PR comment, and comparison
+  tooling can consume merged results unchanged.
+- Documents the split-sample workflow for long or fragile BrowserStack lanes
+  that need to run each measured sample as its own provider invocation.
 
 ## v0.1.42
 
@@ -41,17 +42,17 @@ Status: superseded by `v0.1.43`.
 
 Publication date: 2026-06-29.
 
-### Native C ABI release hardening
+### Native C ABI Release Hardening
 
 - Fixed `cargo mobench ci run` and `mobench run` build helpers so
   config-selected `native-c-abi` backends propagate through Android builds, iOS
   builds, CI runs, and iOS BrowserStack packaging.
-- Prevented CI and run flows from rebuilding native C ABI projects with the
-  default UniFFI backend.
+- Prevented CI run flows from rebuilding native C ABI projects with the default
+  UniFFI backend.
 - Kept BrowserStack log/result extraction compatible across `uniffi` and
- `native-c-abi` generated runners.
-- Documented the merged `boltffi` generated runner backend alongside
- `uniffi` and `native-c-abi`.
+  `native-c-abi` generated runners.
+- Documented the merged `boltffi` runner backend alongside `uniffi` and
+  `native-c-abi`.
 - Refreshed the root README, crate READMEs, release docs, and Mermaid diagrams
   for the current backend matrix, profiling artifact layout, and CI output
   contract.
@@ -61,16 +62,16 @@ Publication date: 2026-06-29.
 Status: superseded by `v0.1.42`.
 
 - Added `[project].ffi_backend` with `uniffi` as the compatibility default and
-  `native-c-abi` for direct mobench JSON C ABI benchmark runners.
+  `native-c-abi` as the direct mobench JSON C ABI benchmark runner backend.
 - Added `mobench_sdk::export_native_c_abi!()` and `MobenchBuf` so
-  registry-based benchmark crates can export:
+  registry-based benchmark crates export:
   - `mobench_run_benchmark_json`
   - `mobench_free_buf`
   - `mobench_last_error_message`
-- Updated Android and iOS builders to branch on selected FFI backend, skip
+- Updated Android and iOS builders to branch on the selected FFI backend, skip
   UniFFI binding generation for `native-c-abi`, and generate native JSON C ABI
   runner templates.
-- Added native C ABI headers to generated iOS frameworks when the backend is
+- Added native C ABI headers to generated iOS frameworks when that backend is
   selected.
 
 ## v0.1.37
@@ -82,9 +83,9 @@ Status: superseded by `v0.1.41`.
 - Added the `mobench-sdk` `registry` feature for benchmark macro registration,
   inventory discovery, and runtime execution without builder/template
   dependencies.
-- Moved generated FFI wrapper crates and example benchmark crates to the
-  narrower `registry` feature instead of the full SDK build-tooling feature set.
-- Added property-test coverage for run config and device matrix parsing.
+- Moved generated FFI wrapper example benchmark crates to the narrower
+  `registry` feature instead of the full SDK build-tooling feature set.
+- Added property-test coverage for run config device matrix parsing.
 
 ## v0.1.36
 
@@ -97,14 +98,15 @@ Status: superseded by `v0.1.37`.
   manually-triggered publish dry-runs.
 - Added opt-in structured CLI tracing through `--verbose` or `MOBENCH_LOG`, plus
   explicit `doctor` MSRV checks.
-- Added host-only fixture contract coverage and stable Markdown/CSV rendering.
+- Added host-only fixture contract coverage for stable Markdown and CSV
+  rendering.
 - Hardened clean first-run spec embedding for generated Android and iOS
   projects.
 - Restricted authenticated BrowserStack artifact downloads to BrowserStack HTTPS
   hosts.
 - Restored config-file runs without duplicate `--target` / `--function` flags
-  and preserved CLI-over-config precedence.
-- Tightened generated mobile template compatibility for minimal UniFFI report
+  while preserving CLI-over-config precedence.
+- Tightened generated mobile template compatibility around minimal UniFFI report
   types.
 - Added compile-fail coverage for async benchmark functions and setup/teardown
   error behavior.
@@ -114,7 +116,7 @@ Status: superseded by `v0.1.37`.
 Status: superseded by `v0.1.36`.
 
 - Added iOS benchmark app process peak memory reporting using Mach `task_info`.
-- Marked iOS process peak resources with `memory_process = "benchmark_app"` to
+- Marked iOS process peak resources as `memory_process = "benchmark_app"` to
   match the Android summary contract while reflecting iOS app-process execution.
 - Added Android foreground service type metadata required by newer Android
   platform rules.
@@ -123,8 +125,8 @@ Status: superseded by `v0.1.36`.
 
 Status: superseded by `v0.1.35`.
 
-- Rendered one SVG plot per benchmark function in the `Device Comparison Plots`
-  summary section.
+- Rendered one SVG plot per benchmark function in the
+  `Device Comparison Plots` summary section.
 - Standardized benchmark-scoped resource columns in `results.csv`.
 - Added BrowserStack metric normalization documentation.
 
@@ -134,20 +136,19 @@ Status: superseded by `v0.1.34`.
 
 - Measured benchmark CPU time as process user-plus-kernel time across all
   threads.
-- Reworked rendered CI summaries into one table with wall mean, wall total, CPU
-  median, CPU total, CPU-to-wall ratio, and peak memory columns.
-- Exposed `mobench_ref` and `mobench_version` on the manual Mobile Bench
-  workflow for branch-pinned validation.
+- Reworked rendered CI summaries into one table covering wall mean, wall total,
+  CPU median, CPU total, CPU-to-wall ratio, and peak memory columns.
+- Exposed `mobench_ref` and `mobench_version` on manual Mobile Bench workflow
+  branch-pinned validation.
 
-## v0.1.32 and Earlier
+## v0.1.32 and earlier
 
-Status: historical test builds unless explicitly noted in their package
-metadata. Do not use for new integrations.
+Status: historical test builds unless explicitly noted in package metadata. Do
+not use for new integrations.
 
 Earlier releases covered the initial CI contract, BrowserStack orchestration,
 setup/teardown macro support, generated mobile templates, device matrices, and
-the consolidation of the old `mobench-runner` functionality into
-`mobench-sdk`.
+consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 ## Published Version History
 
@@ -161,4 +162,4 @@ the consolidation of the old `mobench-runner` functionality into
 | `v0.1.35` | 2026-04-24 | `mobench 0.1.35`, `mobench-sdk 0.1.35`, `mobench-macros 0.1.35` | Superseded by `v0.1.36` |
 | `v0.1.34` | 2026-04-23 | `mobench 0.1.34`, `mobench-sdk 0.1.34`, `mobench-macros 0.1.34` | Superseded by `v0.1.35` |
 | `v0.1.33` | 2026-04-17 | `mobench 0.1.33`, `mobench-sdk 0.1.33`, `mobench-macros 0.1.33` | Superseded by `v0.1.34` |
-| `v0.1.32` and earlier | 2026-01 to 2026-04 | See crates.io package history | Historical test builds |
+| `v0.1.32` and earlier | 2026-01 through 2026-04 | `mobench`, `mobench-sdk`, `mobench-macros` pre-support publishes | Historical |
