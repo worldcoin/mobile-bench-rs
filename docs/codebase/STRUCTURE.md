@@ -1,6 +1,6 @@
 # Structure
 
-Updated: 2026-06-29. Release line: `0.1.42`.
+Updated: 2026-06-29. Release line: `0.1.43`.
 
 ## Workspace Layout
 

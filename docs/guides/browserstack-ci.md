@@ -1,6 +1,6 @@
 # BrowserStack CI Guide
 
-Current release: **0.1.42**.
+Current release: **0.1.43**.
 
 This guide covers BrowserStack benchmark execution, deterministic device
 resolution, CI contract outputs, artifact fetching, PR reporting, and baseline
@@ -163,6 +163,30 @@ Resource columns include:
 - `process_peak_memory_kb`
 
 Missing resource data is emitted as blank CSV fields.
+
+## Split-Sample Merge
+
+Some long or fragile BrowserStack lanes may need to run each measured sample as
+its own CI invocation. Put those one-sample outputs under directories like
+`sample-1/summary.json`, `sample-2/summary.json`, then merge them back into the
+standard CI output contract:
+
+```bash
+cargo mobench ci merge-split-runs \
+--samples-dir target/mobench/ci/android/sample_fns__fibonacci/device/split \
+--output-dir target/mobench/ci/android/sample_fns__fibonacci/device \
+--function sample_fns::fibonacci \
+--device "Google Pixel 7-13.0" \
+--iterations 5 \
+--warmup 1
+```
+
+The command validates that each input summary contains exactly one device and
+one benchmark, that the benchmark matches `--function`, that every sample is for
+`--device`, and that the merged measured sample count equals `--iterations`.
+It writes `summary.json`, `summary.md`, and `results.csv` in `--output-dir`, so
+normal report, plot, PR comment, and comparison tooling can consume the merged
+output unchanged.
 
 ## Multiple Functions
 

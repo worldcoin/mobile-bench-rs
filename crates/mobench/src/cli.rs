@@ -448,6 +448,8 @@ pub(crate) enum CiCommand {
     },
     /// Run a full CI benchmark flow with stable output contract.
     Run(CiRunArgs),
+    /// Merge one-sample CI summaries into a normal CI output set.
+    MergeSplitRuns(CiMergeSplitRunsArgs),
     /// Summarize benchmark results with device metrics.
     Summarize(CiSummarizeArgs),
     /// Create a GitHub Check Run with benchmark results.
@@ -730,6 +732,33 @@ pub(crate) struct CiSummarizeArgs {
     /// Platform filter (show only one platform).
     #[arg(long, value_enum)]
     pub(crate) platform: Option<MobileTarget>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct CiMergeSplitRunsArgs {
+    /// Directory containing sample-*/summary.json one-sample CI outputs.
+    #[arg(long)]
+    pub(crate) samples_dir: PathBuf,
+
+    /// Directory to write merged summary.json, summary.md, and results.csv.
+    #[arg(long)]
+    pub(crate) output_dir: PathBuf,
+
+    /// Fully-qualified benchmark function all samples must contain.
+    #[arg(long)]
+    pub(crate) function: String,
+
+    /// Device label all samples must match.
+    #[arg(long)]
+    pub(crate) device: String,
+
+    /// Expected measured sample count.
+    #[arg(long)]
+    pub(crate) iterations: u32,
+
+    /// Warmup count reported in merged CI summaries.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) warmup: u32,
 }
 
 #[derive(Args, Debug, Clone)]
