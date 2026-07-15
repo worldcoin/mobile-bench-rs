@@ -1,0 +1,112 @@
+{
+  "decision": "ADR-000",
+  "audit_revision": "ce18066cfeff620040cd153cc52ad6df318e5bfc",
+  "implementation_revision": "faae658c2c6f8edf1eb684aa2272971a85d00331",
+  "findings": [
+    {
+      "id": "ANDROID-LOG-FRAME-INJECTION",
+      "regression": "Chunked and legacy logs reject wrong run, function, nonce, device, and malformed framing.",
+      "owner": "mobench-domain envelope plus provider and codegen adapters",
+      "first_passing_phase": 1,
+      "removal_gate": "No raw marker parser remains."
+    },
+    {
+      "id": "IOS-WEAK-REPORT-VALIDATION",
+      "regression": "Generated XCTest rejects wrong version, function, counts, and empty samples.",
+      "owner": "mobench-codegen",
+      "first_passing_phase": 1,
+      "removal_gate": "All runners consume the generated validator."
+    },
+    {
+      "id": "DOTENV-EXECUTABLE-SELECTION",
+      "regression": "Project dotenv cannot select a fake executable without an explicit trusted override.",
+      "owner": "mobench-process",
+      "first_passing_phase": 1,
+      "removal_gate": "All child processes use declared tools."
+    },
+    {
+      "id": "CONFIGURED-OUTPUT-ROOT-ESCAPE",
+      "regression": "Absolute, parent, and symlink escapes fail before deletion or write.",
+      "owner": "mobench-artifacts",
+      "first_passing_phase": 1,
+      "removal_gate": "Builders accept only ApprovedRoot projections."
+    },
+    {
+      "id": "CSV-FORMULA-INJECTION",
+      "regression": "RFC 4180 corpus covers formula prefixes, control whitespace, quotes, commas, CR, and LF.",
+      "owner": "mobench-report CSV adapter",
+      "first_passing_phase": 1,
+      "removal_gate": "Legacy CSV renderer is deleted."
+    },
+    {
+      "id": "MARKDOWN-INJECTION",
+      "regression": "Headings, cells, links, images, paths, and failures are context encoded.",
+      "owner": "mobench-report Markdown adapter",
+      "first_passing_phase": 1,
+      "removal_gate": "Legacy Markdown renderers are deleted."
+    },
+    {
+      "id": "PROF-001",
+      "regression": "Absolute and traversal run IDs cannot write outside the workspace.",
+      "owner": "mobench-artifacts",
+      "first_passing_phase": 1,
+      "removal_gate": "Profile paths are typed."
+    },
+    {
+      "id": "PROF-002",
+      "regression": "Untrusted SVG script cannot execute in the viewer.",
+      "owner": "mobench-report viewer adapter",
+      "first_passing_phase": 1,
+      "removal_gate": "Unsandboxed srcdoc is removed."
+    },
+    {
+      "id": "PROF-003",
+      "regression": "Identity-free or mismatched records are rejected and never relabeled.",
+      "owner": "mobench-domain envelope plus provider adapter",
+      "first_passing_phase": 1,
+      "removal_gate": "Fallback-to-last parser is deleted."
+    },
+    {
+      "id": "PROF-005",
+      "regression": "Concurrent and repeated runs use unique staging and never consume stale output.",
+      "owner": "mobench-artifacts",
+      "first_passing_phase": 1,
+      "removal_gate": "Deterministic shared write directory is deleted."
+    },
+    {
+      "id": "BROWSERSTACK-PARTIAL-SUCCESS",
+      "regression": "Passed, failed, and missing session matrices classify complete, partial, and failed exactly.",
+      "owner": "mobench-provider",
+      "first_passing_phase": 1,
+      "removal_gate": "Any-nonempty success path is deleted."
+    },
+    {
+      "id": "SUMMARIZE-MARKDOWN-INJECTION",
+      "regression": "Summarize headings, cells, and failures use the shared encoder.",
+      "owner": "mobench-report",
+      "first_passing_phase": 1,
+      "removal_gate": "The second Markdown path is deleted."
+    },
+    {
+      "id": "PLOTS-SYMLINK-WRITE",
+      "regression": "A symlinked plots directory fails before renderer execution or outside write.",
+      "owner": "mobench-artifacts plus mobench-process",
+      "first_passing_phase": 1,
+      "removal_gate": "Raw output joins are deleted."
+    },
+    {
+      "id": "ANDROID-CHUNK-PROTOCOL-MISMATCH",
+      "regression": "Generated Android START, CHUNK, END framing round trips through the shared decoder.",
+      "owner": "mobench-domain framing plus codegen and provider adapters",
+      "first_passing_phase": 1,
+      "removal_gate": "Producer and consumer share one fixture."
+    },
+    {
+      "id": "UNAUTHENTICATED-FAILURE-FRAMES",
+      "regression": "Failure evidence requires the same session identity as success reports.",
+      "owner": "mobench-domain envelope plus provider adapter",
+      "first_passing_phase": 1,
+      "removal_gate": "Raw failure-marker trust is deleted."
+    }
+  ]
+}

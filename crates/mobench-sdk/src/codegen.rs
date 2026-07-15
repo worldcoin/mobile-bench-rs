@@ -2435,9 +2435,13 @@ mod tests {
             "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
         );
         assert!(
-            ios_test.contains("\\\"error\\\""),
+            ios_test.contains("XCTAssertNil(payload[\"error\"]"),
             "iOS XCUITest template should fail when the benchmark report is an error payload"
         );
+        assert!(ios_test.contains("JSONSerialization.jsonObject"));
+        assert!(ios_test.contains("reportedFunction"));
+        assert!(ios_test.contains("payload[\"samples_ns\"]"));
+        assert!(ios_test.contains("payload[\"schema_version\"]"));
 
         let android_manifest =
             include_str!("../templates/android/app/src/main/AndroidManifest.xml");
@@ -2926,6 +2930,26 @@ pub fn public_bench() {
             "refreshed BenchRunnerUITests.swift should honor runtime timeout overrides, got:\n{}",
             refreshed
         );
+        assert!(
+            refreshed.contains(
+                "private let expectedBenchmarkFunction = \"sample_fns::example_benchmark\""
+            ),
+            "generated XCUITest must bind the report to the requested function, got:\n{}",
+            refreshed
+        );
+        for validator in [
+            "JSONSerialization.jsonObject",
+            "XCTAssertNil(payload[\"error\"]",
+            "reportedFunction",
+            "payload[\"samples_ns\"]",
+            "payload[\"samples\"]",
+            "payload[\"schema_version\"]",
+        ] {
+            assert!(
+                refreshed.contains(validator),
+                "generated XCUITest omitted `{validator}`, got:\n{refreshed}"
+            );
+        }
 
         fs::remove_dir_all(&temp_dir).ok();
     }

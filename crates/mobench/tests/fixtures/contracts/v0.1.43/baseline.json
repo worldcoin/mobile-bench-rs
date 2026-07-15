@@ -1,0 +1,28 @@
+{
+  "decision": "ADR-000",
+  "implementation_revision": "faae658c2c6f8edf1eb684aa2272971a85d00331",
+  "default_branch": "main",
+  "release_oracle": {
+    "tag": "v0.1.43",
+    "revision": "d1a3176f9144f35e777e83fd07045116144da257",
+    "published_at": "2026-07-15T15:50:51Z",
+    "url": "https://github.com/worldcoin/mobile-bench-rs/releases/tag/v0.1.43",
+    "draft": false,
+    "prerelease": false
+  },
+  "published_crates": {
+    "mobench": "0.1.43",
+    "mobench-sdk": "0.1.43",
+    "mobench-macros": "0.1.43"
+  },
+  "workspace": {
+    "version": "0.1.43",
+    "edition": "2024",
+    "rust_version": "1.85"
+  },
+  "conflict_policy": [
+    "Implement from the frozen origin/main revision.",
+    "Preserve released v0.1.43 public contracts unless an intentional 0.2 break is recorded.",
+    "Use the divergent audited revision as evidence only; carry no behavior that does not reproduce on the frozen baseline."
+  ]
+}

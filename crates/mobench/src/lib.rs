@@ -123,6 +123,9 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
+use mobench_report::{
+    csv_field, markdown_inline_field_text, markdown_link_destination, markdown_table_field_text,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -277,6 +280,7 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) crate_dir: PathBuf,
     pub(crate) crate_name: String,
     pub(crate) library_name: String,
+    pub(crate) ffi_backend: mobench_sdk::FfiBackend,
     pub(crate) android_abis: Option<Vec<String>>,
     pub(crate) ios_completion_timeout_secs: Option<u64>,
     pub(crate) ios_deployment_target: String,
@@ -1374,29 +1378,6 @@ fn load_layout_config(
     config::MobenchConfig::discover_from(&discovery_base)
 }
 
-fn load_toml_config_value(path: &Path) -> Result<toml::Value> {
-    let contents =
-        fs::read_to_string(path).with_context(|| format!("reading config {}", path.display()))?;
-    toml::from_str(&contents).with_context(|| format!("parsing config {}", path.display()))
-}
-
-fn toml_path<'a>(value: &'a toml::Value, path: &[&str]) -> Option<&'a toml::Value> {
-    path.iter()
-        .try_fold(value, |current, key| current.get(*key))
-}
-
-fn toml_string(value: &toml::Value, path: &[&str]) -> Option<String> {
-    toml_path(value, path)
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
-}
-
-fn toml_u64(value: &toml::Value, path: &[&str]) -> Option<u64> {
-    toml_path(value, path)
-        .and_then(|value| value.as_integer())
-        .and_then(|value| u64::try_from(value).ok())
-}
-
 fn resolve_project_root_for_layout(
     start_dir: &Path,
     explicit_project_root: Option<PathBuf>,
@@ -1517,10 +1498,6 @@ pub(crate) fn resolve_project_layout(
         Some((config, path)) => (Some(config), Some(path)),
         None => (None, None),
     };
-    let raw_config = config_path
-        .as_deref()
-        .map(load_toml_config_value)
-        .transpose()?;
 
     let project_root = resolve_project_root_for_layout(
         &start_dir,
@@ -1556,6 +1533,10 @@ pub(crate) fn resolve_project_layout(
         .as_ref()
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
+    let ffi_backend = config
+        .as_ref()
+        .and_then(|cfg| cfg.project.ffi_backend)
+        .unwrap_or_default();
     let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
     let ios_completion_timeout_secs = config
         .as_ref()
@@ -1564,26 +1545,29 @@ pub(crate) fn resolve_project_layout(
         .as_ref()
         .map(|cfg| cfg.ios.deployment_target.clone())
         .unwrap_or_else(|| mobench_sdk::codegen::DEFAULT_IOS_DEPLOYMENT_TARGET.to_string());
-    let ios_runner = raw_config
+    let ios_runner = config.as_ref().and_then(|cfg| cfg.ios.runner.clone());
+    let android_benchmark_timeout_secs = config
         .as_ref()
-        .and_then(|cfg| toml_string(cfg, &["ios", "runner"]));
-    let android_benchmark_timeout_secs = raw_config
+        .and_then(|cfg| cfg.browserstack.android_benchmark_timeout_secs);
+    let android_heartbeat_interval_secs = config
         .as_ref()
-        .and_then(|cfg| toml_u64(cfg, &["browserstack", "android_benchmark_timeout_secs"]));
-    let android_heartbeat_interval_secs = raw_config
+        .and_then(|cfg| cfg.browserstack.android_heartbeat_interval_secs);
+    let configured_output_dir = config
         .as_ref()
-        .and_then(|cfg| toml_u64(cfg, &["browserstack", "android_heartbeat_interval_secs"]));
-    let output_dir = config
-        .as_ref()
-        .and_then(|cfg| cfg.project.output_dir.clone())
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else {
-                project_root.join(path)
-            }
-        })
-        .unwrap_or_else(|| project_root.join("target/mobench"));
+        .and_then(|cfg| cfg.project.output_dir.as_deref())
+        .unwrap_or_else(|| Path::new("target/mobench"));
+    let approved_project_root =
+        mobench_artifacts::ApprovedRoot::existing(&project_root).map_err(|error| {
+            anyhow!("config_error: project root cannot own generated artifacts: {error}")
+        })?;
+    let output_dir = approved_project_root
+        .project_dir(configured_output_dir)
+        .map_err(|error| {
+            anyhow!(
+                "config_error: project.output_dir must be a relative, non-symlinked directory beneath {}: {error}",
+                project_root.display()
+            )
+        })?;
     let default_function = config
         .as_ref()
         .and_then(|cfg| cfg.benchmarks.default_function.clone());
@@ -1593,6 +1577,7 @@ pub(crate) fn resolve_project_layout(
         crate_dir,
         crate_name,
         library_name,
+        ffi_backend,
         android_abis,
         ios_completion_timeout_secs,
         ios_deployment_target,
@@ -1691,6 +1676,18 @@ fn configured_android_heartbeat_interval_secs(
     android_heartbeat_interval_secs: Option<u64>,
 ) -> Option<u64> {
     android_heartbeat_interval_secs.or(layout.android_heartbeat_interval_secs)
+}
+
+fn android_builder_for_layout(
+    layout: &ResolvedProjectLayout,
+) -> mobench_sdk::builders::AndroidBuilder {
+    mobench_sdk::builders::AndroidBuilder::new(&layout.project_root, layout.crate_name.clone())
+        .ffi_backend(layout.ffi_backend)
+}
+
+fn ios_builder_for_layout(layout: &ResolvedProjectLayout) -> mobench_sdk::builders::IosBuilder {
+    mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
+        .ffi_backend(layout.ffi_backend)
 }
 
 fn write_config_template(path: &Path, target: MobileTarget, overwrite: bool) -> Result<()> {
@@ -2935,6 +2932,11 @@ fn render_failure_markdown(value: &Value) -> String {
         .and_then(|value| value.get("reason"))
         .and_then(|value| value.as_str())
         .unwrap_or("unavailable");
+    let device = markdown_inline_field_text(device);
+    let function = markdown_inline_field_text(function);
+    let kind = markdown_inline_field_text(kind);
+    let message = markdown_inline_field_text(message);
+    let exit_reason = markdown_inline_field_text(exit_reason);
 
     format!(
         "# Android Benchmark Failure\n\n- Device: {device}\n- Function: {function}\n- Kind: {kind}\n- Message: {message}\n- Elapsed: {elapsed}\n- Exit reason: {exit_reason}\n"
@@ -3494,14 +3496,13 @@ pub(crate) fn run_ios_build(
         configured_ios_completion_timeout_secs(layout, ios_completion_timeout_secs);
     let ios_deployment_target = configured_ios_deployment_target(layout, ios_deployment_target)?;
     let ios_runner = configured_ios_runner(layout, &ios_deployment_target, ios_runner)?;
-    let builder =
-        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .dry_run(dry_run)
-            .deployment_target(ios_deployment_target)
-            .runner(Some(ios_runner))
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+    let builder = ios_builder_for_layout(layout)
+        .verbose(true)
+        .dry_run(dry_run)
+        .deployment_target(ios_deployment_target)
+        .runner(Some(ios_runner))
+        .crate_dir(&layout.crate_dir)
+        .output_dir(&layout.output_dir);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -3533,13 +3534,12 @@ fn package_ios_xcuitest_artifacts(
         configured_ios_completion_timeout_secs(layout, ios_completion_timeout_secs);
     let ios_deployment_target = configured_ios_deployment_target(layout, ios_deployment_target)?;
     let ios_runner = configured_ios_runner(layout, &ios_deployment_target, ios_runner)?;
-    let builder =
-        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .deployment_target(ios_deployment_target)
-            .runner(Some(ios_runner))
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+    let builder = ios_builder_for_layout(layout)
+        .verbose(true)
+        .deployment_target(ios_deployment_target)
+        .runner(Some(ios_runner))
+        .crate_dir(&layout.crate_dir)
+        .output_dir(&layout.output_dir);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -4853,8 +4853,16 @@ fn render_compare_markdown(report: &CompareReport) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "### Benchmark Comparison");
     let _ = writeln!(output);
-    let _ = writeln!(output, "- Baseline: {}", report.baseline.display());
-    let _ = writeln!(output, "- Candidate: {}", report.candidate.display());
+    let _ = writeln!(
+        output,
+        "- Baseline: {}",
+        markdown_inline_field_text(&report.baseline.display().to_string())
+    );
+    let _ = writeln!(
+        output,
+        "- Candidate: {}",
+        markdown_inline_field_text(&report.candidate.display().to_string())
+    );
     let _ = writeln!(output);
     let _ = writeln!(
         output,
@@ -4868,16 +4876,16 @@ fn render_compare_markdown(report: &CompareReport) -> String {
         let _ = writeln!(
             output,
             "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-            row.device,
-            row.function,
+            markdown_table_field_text(&row.device),
+            markdown_table_field_text(&row.function),
             format_ms(row.baseline_median_ns),
             format_ms(row.candidate_median_ns),
             format_delta(row.median_delta_pct),
-            row.median_label,
+            markdown_table_field_text(&row.median_label),
             format_ms(row.baseline_p95_ns),
             format_ms(row.candidate_p95_ns),
             format_delta(row.p95_delta_pct),
-            row.p95_label
+            markdown_table_field_text(&row.p95_label)
         );
     }
     output
@@ -4973,7 +4981,11 @@ fn render_summary_markdown_from_output(value: &Value) -> Result<String> {
                 serde_json::from_value(summary_value).with_context(|| {
                     format!("parsing summary report for target `{name}` in merged output")
                 })?;
-            sections.push(format!("## {name}\n\n{}", render_markdown_summary(&parsed)));
+            sections.push(format!(
+                "## {}\n\n{}",
+                markdown_inline_field_text(&name),
+                render_markdown_summary(&parsed)
+            ));
         }
         if !sections.is_empty() {
             return Ok(sections.join("\n\n"));
@@ -5035,7 +5047,8 @@ fn render_summary_markdown_from_output_with_plots_using_python(
                 .filter(|plot| plot.target == name)
                 .collect::<Vec<_>>();
             sections.push(format!(
-                "## {name}\n\n{}",
+                "## {}\n\n{}",
+                markdown_inline_field_text(&name),
                 append_plot_links_to_markdown(render_markdown_summary(&parsed), &rendered_refs)
             ));
         }
@@ -5068,13 +5081,11 @@ fn append_plot_links_to_markdown(
     markdown.push_str("### Device Comparison Plots\n\n");
 
     for plot in rendered_plots {
-        let _ = writeln!(markdown, "### {}", plot.function_label);
-        let _ = writeln!(
-            markdown,
-            "![{}]({})",
-            plot.function_label,
-            plot.relative_path.display()
-        );
+        let label = markdown_inline_field_text(&plot.function_label);
+        let relative_path = plot.relative_path.to_string_lossy().replace('\\', "/");
+        let destination = markdown_link_destination(&relative_path);
+        let _ = writeln!(markdown, "### {label}");
+        let _ = writeln!(markdown, "![{label}]({destination})",);
         let _ = writeln!(markdown);
     }
 
@@ -5445,14 +5456,31 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
     let devices = if summary.devices.is_empty() {
         "none".to_string()
     } else {
-        summary.devices.join(", ")
+        summary
+            .devices
+            .iter()
+            .map(|device| markdown_inline_field_text(device))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
 
     let _ = writeln!(output, "### Benchmark Summary");
     let _ = writeln!(output);
-    let _ = writeln!(output, "- Generated: {}", summary.generated_at);
-    let _ = writeln!(output, "- Target: {}", summary.target.display_name());
-    let _ = writeln!(output, "- Function: {}", summary.function);
+    let _ = writeln!(
+        output,
+        "- Generated: {}",
+        markdown_inline_field_text(&summary.generated_at)
+    );
+    let _ = writeln!(
+        output,
+        "- Target: {}",
+        markdown_inline_field_text(summary.target.display_name())
+    );
+    let _ = writeln!(
+        output,
+        "- Function: {}",
+        markdown_inline_field_text(&summary.function)
+    );
     let _ = writeln!(
         output,
         "- Iterations/Warmup: {} / {}",
@@ -5497,8 +5525,8 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
                 let _ = writeln!(
                     output,
                     "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                    device.device,
-                    bench.function,
+                    markdown_table_field_text(&device.device),
+                    markdown_table_field_text(&bench.function),
                     format_benchmark_status(bench),
                     bench.samples,
                     summary.warmup,
@@ -5524,18 +5552,20 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
                             .and_then(|usage| usage.process_peak_memory_kb)
                     ),
                     format_failure_elapsed_ms(bench.failure.as_ref()),
-                    bench
-                        .failure
-                        .as_ref()
-                        .and_then(|failure| failure.exit_reason.as_deref())
-                        .unwrap_or("-"),
+                    markdown_table_field_text(
+                        bench
+                            .failure
+                            .as_ref()
+                            .and_then(|failure| failure.exit_reason.as_deref())
+                            .unwrap_or("-"),
+                    ),
                 );
             } else {
                 let _ = writeln!(
                     output,
                     "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                    device.device,
-                    bench.function,
+                    markdown_table_field_text(&device.device),
+                    markdown_table_field_text(&bench.function),
                     bench.samples,
                     summary.warmup,
                     format_ms(bench.mean_ns),
@@ -5574,7 +5604,7 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
 
 fn format_benchmark_status(bench: &BenchmarkStats) -> String {
     if let Some(failure) = &bench.failure {
-        format!("failed ({})", failure.kind)
+        format!("failed ({})", markdown_table_field_text(&failure.kind))
     } else {
         "ok".to_string()
     }
@@ -5598,8 +5628,8 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
             let _ = writeln!(
                 output,
                 "{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                device.device,
-                bench.function,
+                csv_field(&device.device),
+                csv_field(&bench.function),
                 bench.samples,
                 bench.mean_ns.map_or(String::from(""), |v| v.to_string()),
                 bench.median_ns.map_or(String::from(""), |v| v.to_string()),
@@ -5764,12 +5794,11 @@ pub(crate) fn run_android_build(
         incremental: true,
         android_abis: layout.android_abis.clone(),
     };
-    let builder =
-        mobench_sdk::builders::AndroidBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .dry_run(dry_run)
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+    let builder = android_builder_for_layout(layout)
+        .verbose(true)
+        .dry_run(dry_run)
+        .crate_dir(&layout.crate_dir)
+        .output_dir(&layout.output_dir);
     let result = builder.build(&cfg)?;
     Ok(result)
 }
@@ -5967,14 +5996,11 @@ fn cmd_build(
         match target {
             SdkTarget::Android => {
                 println!("[1/3] Building Rust library...");
-                let builder = mobench_sdk::builders::AndroidBuilder::new(
-                    &layout.project_root,
-                    layout.crate_name.clone(),
-                )
-                .verbose(false)
-                .dry_run(dry_run)
-                .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                let builder = android_builder_for_layout(&layout)
+                    .verbose(false)
+                    .dry_run(dry_run)
+                    .output_dir(&effective_output_dir)
+                    .crate_dir(&layout.crate_dir);
                 println!("[2/3] Building Android APK...");
                 let result = builder.build(&build_config)?;
                 println!("[3/3] Done!");
@@ -5984,14 +6010,11 @@ fn cmd_build(
             }
             SdkTarget::Ios => {
                 println!("[1/3] Building Rust library...");
-                let builder = mobench_sdk::builders::IosBuilder::new(
-                    &layout.project_root,
-                    layout.crate_name.clone(),
-                )
-                .verbose(false)
-                .dry_run(dry_run)
-                .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                let builder = ios_builder_for_layout(&layout)
+                    .verbose(false)
+                    .dry_run(dry_run)
+                    .output_dir(&effective_output_dir)
+                    .crate_dir(&layout.crate_dir);
                 println!("[2/3] Building iOS xcframework...");
                 let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                     Ok(builder.build(&build_config)?)
@@ -6003,28 +6026,22 @@ fn cmd_build(
             }
             SdkTarget::Both => {
                 println!("[1/5] Building Rust library for Android...");
-                let android_builder = mobench_sdk::builders::AndroidBuilder::new(
-                    &layout.project_root,
-                    layout.crate_name.clone(),
-                )
-                .verbose(false)
-                .dry_run(dry_run)
-                .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                let android_builder = android_builder_for_layout(&layout)
+                    .verbose(false)
+                    .dry_run(dry_run)
+                    .output_dir(&effective_output_dir)
+                    .crate_dir(&layout.crate_dir);
                 println!("[2/5] Building Android APK...");
                 let android_result = android_builder.build(&build_config)?;
 
                 println!("[3/5] Building Rust library for iOS...");
-                let ios_builder = mobench_sdk::builders::IosBuilder::new(
-                    &layout.project_root,
-                    layout.crate_name.clone(),
-                )
-                .verbose(false)
-                .dry_run(dry_run)
-                .deployment_target(ios_deployment_target.clone())
-                .runner(Some(ios_runner))
-                .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                let ios_builder = ios_builder_for_layout(&layout)
+                    .verbose(false)
+                    .dry_run(dry_run)
+                    .deployment_target(ios_deployment_target.clone())
+                    .runner(Some(ios_runner))
+                    .output_dir(&effective_output_dir)
+                    .crate_dir(&layout.crate_dir);
                 println!("[4/5] Building iOS xcframework...");
                 let ios_result =
                     with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
@@ -6075,14 +6092,11 @@ fn cmd_build(
         SdkTarget::Android => {
             println!("\nBuilding for Android...");
             println!("  Building Rust library for Android targets...");
-            let builder = mobench_sdk::builders::AndroidBuilder::new(
-                &layout.project_root,
-                layout.crate_name.clone(),
-            )
-            .verbose(verbose)
-            .dry_run(dry_run)
-            .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            let builder = android_builder_for_layout(&layout)
+                .verbose(verbose)
+                .dry_run(dry_run)
+                .output_dir(&effective_output_dir)
+                .crate_dir(&layout.crate_dir);
             let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(builder.build(&build_config)?)
             })?;
@@ -6095,16 +6109,13 @@ fn cmd_build(
         SdkTarget::Ios => {
             println!("\nBuilding for iOS...");
             println!("  Building Rust library for iOS targets...");
-            let builder = mobench_sdk::builders::IosBuilder::new(
-                &layout.project_root,
-                layout.crate_name.clone(),
-            )
-            .verbose(verbose)
-            .dry_run(dry_run)
-            .deployment_target(ios_deployment_target.clone())
-            .runner(Some(ios_runner))
-            .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            let builder = ios_builder_for_layout(&layout)
+                .verbose(verbose)
+                .dry_run(dry_run)
+                .deployment_target(ios_deployment_target.clone())
+                .runner(Some(ios_runner))
+                .output_dir(&effective_output_dir)
+                .crate_dir(&layout.crate_dir);
             let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(builder.build(&build_config)?)
             })?;
@@ -6118,14 +6129,11 @@ fn cmd_build(
             // Build Android
             println!("\nBuilding for Android...");
             println!("  Building Rust library for Android targets...");
-            let android_builder = mobench_sdk::builders::AndroidBuilder::new(
-                &layout.project_root,
-                layout.crate_name.clone(),
-            )
-            .verbose(verbose)
-            .dry_run(dry_run)
-            .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            let android_builder = android_builder_for_layout(&layout)
+                .verbose(verbose)
+                .dry_run(dry_run)
+                .output_dir(&effective_output_dir)
+                .crate_dir(&layout.crate_dir);
             let android_result = android_builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
@@ -6136,14 +6144,11 @@ fn cmd_build(
             // Build iOS
             println!("\nBuilding for iOS...");
             println!("  Building Rust library for iOS targets...");
-            let ios_builder = mobench_sdk::builders::IosBuilder::new(
-                &layout.project_root,
-                layout.crate_name.clone(),
-            )
-            .verbose(verbose)
-            .dry_run(dry_run)
-            .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            let ios_builder = ios_builder_for_layout(&layout)
+                .verbose(verbose)
+                .dry_run(dry_run)
+                .output_dir(&effective_output_dir)
+                .crate_dir(&layout.crate_dir);
             let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(ios_builder.build(&build_config)?)
             })?;
@@ -6240,13 +6245,12 @@ fn cmd_package_ipa(
     let ios_deployment_target = configured_ios_deployment_target(&layout, None)?;
     let ios_runner = configured_ios_runner(&layout, &ios_deployment_target, None)?;
 
-    let builder =
-        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .deployment_target(ios_deployment_target)
-            .runner(Some(ios_runner))
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&effective_output_dir);
+    let builder = ios_builder_for_layout(&layout)
+        .verbose(true)
+        .deployment_target(ios_deployment_target)
+        .runner(Some(ios_runner))
+        .crate_dir(&layout.crate_dir)
+        .output_dir(&effective_output_dir);
 
     let signing_method: mobench_sdk::builders::SigningMethod = method.into();
     let ipa_path = builder
@@ -6288,13 +6292,12 @@ fn cmd_package_xcuitest(
     let ios_deployment_target = configured_ios_deployment_target(&layout, None)?;
     let ios_runner = configured_ios_runner(&layout, &ios_deployment_target, None)?;
 
-    let builder =
-        mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
-            .verbose(true)
-            .deployment_target(ios_deployment_target)
-            .runner(Some(ios_runner))
-            .crate_dir(&layout.crate_dir)
-            .output_dir(&effective_output_dir);
+    let builder = ios_builder_for_layout(&layout)
+        .verbose(true)
+        .deployment_target(ios_deployment_target)
+        .runner(Some(ios_runner))
+        .crate_dir(&layout.crate_dir)
+        .output_dir(&effective_output_dir);
 
     let zip_path = builder
         .package_xcuitest(scheme)
@@ -6971,16 +6974,17 @@ fn print_summary_json(data: &[SummaryData]) -> Result<()> {
 }
 
 /// Print summary in CSV format
-fn print_summary_csv(data: &[SummaryData]) {
-    println!(
-        "function,device,os_version,sample_count,mean_ns,median_ns,min_ns,max_ns,p95_ns,iterations,warmup"
+fn render_summary_data_csv(data: &[SummaryData]) -> String {
+    let mut output = String::from(
+        "function,device,os_version,sample_count,mean_ns,median_ns,min_ns,max_ns,p95_ns,iterations,warmup\n",
     );
     for entry in data {
-        println!(
+        let _ = writeln!(
+            output,
             "{},{},{},{},{},{},{},{},{},{},{}",
-            entry.function.as_deref().unwrap_or(""),
-            entry.device.as_deref().unwrap_or(""),
-            entry.os_version.as_deref().unwrap_or(""),
+            csv_field(entry.function.as_deref().unwrap_or("")),
+            csv_field(entry.device.as_deref().unwrap_or("")),
+            csv_field(entry.os_version.as_deref().unwrap_or("")),
             entry.sample_count,
             entry.mean_ns.map(|v| v.to_string()).unwrap_or_default(),
             entry.median_ns.map(|v| v.to_string()).unwrap_or_default(),
@@ -6991,6 +6995,11 @@ fn print_summary_csv(data: &[SummaryData]) {
             entry.warmup.map(|v| v.to_string()).unwrap_or_default(),
         );
     }
+    output
+}
+
+fn print_summary_csv(data: &[SummaryData]) {
+    print!("{}", render_summary_data_csv(data));
 }
 
 /// List available BrowserStack devices and optionally validate device specs.
@@ -7906,6 +7915,22 @@ pub fn bench_query_proof_generation() {}
         )
     }
 
+    fn write_custom_layout_output_dir(project_root: &Path, output_dir: &Path) {
+        write_file(
+            &project_root.join("mobench.toml"),
+            format!(
+                r#"[project]
+crate = "zk-mobile-bench"
+library_name = "zk_mobile_bench"
+output_dir = {:?}
+"#,
+                output_dir.display().to_string()
+            )
+            .as_bytes(),
+        )
+        .expect("write output-dir layout config");
+    }
+
     // Register a lightweight benchmark for tests so the inventory contains at least one entry.
     #[mobench_sdk::benchmark]
     fn noop_benchmark() {
@@ -8211,6 +8236,7 @@ project = "proj"
         assert_eq!(layout.crate_dir, crate_dir);
         assert_eq!(layout.crate_name, "zk-mobile-bench");
         assert_eq!(layout.library_name, "zk_mobile_bench");
+        assert_eq!(layout.ffi_backend, mobench_sdk::FfiBackend::Uniffi);
         assert_eq!(
             layout.android_abis,
             Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()])
@@ -8221,6 +8247,207 @@ project = "proj"
         assert_eq!(
             layout.default_function.as_deref(),
             Some("zk_mobile_bench::bench_query_proof_generation")
+        );
+    }
+
+    #[test]
+    fn resolver_projects_configured_output_dir_beneath_project_without_creating_it() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+        write_custom_layout_output_dir(&project_root, Path::new("artifacts/mobench"));
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve contained project layout");
+
+        assert_eq!(layout.output_dir, project_root.join("artifacts/mobench"));
+        assert!(!project_root.join("artifacts").exists());
+    }
+
+    #[test]
+    fn resolver_rejects_absolute_configured_output_dir_before_writing() {
+        let project_dir = TempDir::new().expect("project dir");
+        let outside = TempDir::new().expect("outside dir");
+        let (project_root, _) = write_custom_layout_project(&project_dir);
+        let escaped = outside.path().join("mobench-output");
+        write_custom_layout_output_dir(&project_root, &escaped);
+
+        let error = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect_err("absolute configured output must be rejected");
+
+        assert!(error.to_string().contains("project.output_dir"));
+        assert!(!escaped.exists());
+    }
+
+    #[test]
+    fn resolver_rejects_parent_traversal_configured_output_dir_before_writing() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+        let escape_name = format!(
+            "{}-escaped",
+            project_root
+                .file_name()
+                .expect("project file name")
+                .to_string_lossy()
+        );
+        let escaped = project_root
+            .parent()
+            .expect("project parent")
+            .join(&escape_name);
+        write_custom_layout_output_dir(&project_root, &Path::new("..").join(&escape_name));
+
+        let error = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect_err("parent traversal output must be rejected");
+
+        assert!(error.to_string().contains("project.output_dir"));
+        assert!(!escaped.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolver_rejects_symlinked_configured_output_dir_before_writing() {
+        use std::os::unix::fs::symlink;
+
+        let project_dir = TempDir::new().expect("project dir");
+        let outside = TempDir::new().expect("outside dir");
+        let (project_root, _) = write_custom_layout_project(&project_dir);
+        symlink(outside.path(), project_root.join("linked-output")).expect("create output symlink");
+        write_custom_layout_output_dir(&project_root, Path::new("linked-output/mobench"));
+
+        let error = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect_err("symlinked configured output must be rejected");
+
+        assert!(error.to_string().contains("symbolic link"));
+        assert!(!outside.path().join("mobench").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolver_rejects_symlinked_default_output_dir_before_writing() {
+        use std::os::unix::fs::symlink;
+
+        let project_dir = TempDir::new().expect("project dir");
+        let outside = TempDir::new().expect("outside dir");
+        let (project_root, _) = write_custom_layout_project(&project_dir);
+        symlink(outside.path(), project_root.join("target")).expect("create target symlink");
+
+        let error = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect_err("symlinked default output must be rejected");
+
+        assert!(error.to_string().contains("symbolic link"));
+        assert!(!outside.path().join("mobench").exists());
+    }
+
+    #[test]
+    fn resolver_uses_typed_builder_configuration() {
+        let cases = [
+            ("uniffi", mobench_sdk::FfiBackend::Uniffi),
+            ("native-c-abi", mobench_sdk::FfiBackend::NativeCAbi),
+            ("boltffi", mobench_sdk::FfiBackend::BoltFfi),
+        ];
+
+        for (configured_backend, expected_backend) in cases {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let (project_root, _) = write_custom_layout_project(&temp_dir);
+            write_file(
+                &project_root.join("mobench.toml"),
+                format!(
+                    r#"[project]
+crate = "zk-mobile-bench"
+library_name = "zk_mobile_bench"
+ffi_backend = "{configured_backend}"
+
+[ios]
+deployment_target = "14.0"
+runner = "uikit-legacy"
+
+[browserstack]
+android_benchmark_timeout_secs = 120
+android_heartbeat_interval_secs = 7
+"#
+                )
+                .as_bytes(),
+            )
+            .expect("write mobench config");
+
+            let layout = resolve_project_layout(ProjectLayoutOptions {
+                start_dir: Some(project_root.as_path()),
+                project_root: None,
+                crate_path: None,
+                config_path: None,
+            })
+            .expect("resolve project layout");
+
+            assert_eq!(layout.ffi_backend, expected_backend);
+            assert_eq!(layout.ios_runner.as_deref(), Some("uikit-legacy"));
+            assert_eq!(layout.android_benchmark_timeout_secs, Some(120));
+            assert_eq!(layout.android_heartbeat_interval_secs, Some(7));
+        }
+    }
+
+    #[test]
+    fn build_helpers_propagate_resolved_boltffi_backend() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, crate_dir) = write_custom_layout_project(&temp_dir);
+        write_file(
+            &project_root.join("mobench.toml"),
+            br#"[project]
+crate = "zk-mobile-bench"
+library_name = "zk_mobile_bench"
+ffi_backend = "boltffi"
+"#,
+        )
+        .expect("write mobench config");
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve project layout");
+
+        std::fs::remove_dir_all(crate_dir).expect("remove benchmark crate after resolution");
+
+        let android_err = run_android_build(&layout, "", false, true)
+            .expect_err("BoltFFI Android dry-run should inspect the configured crate");
+        assert!(
+            android_err
+                .to_string()
+                .contains("Specified crate path does not exist"),
+            "unexpected Android error: {android_err}"
+        );
+
+        let ios_err = run_ios_build(&layout, false, true, None, None, None)
+            .expect_err("BoltFFI iOS dry-run should inspect the configured crate");
+        assert!(
+            ios_err
+                .to_string()
+                .contains("Specified crate path does not exist"),
+            "unexpected iOS error: {ios_err}"
         );
     }
 
@@ -9630,6 +9857,204 @@ android_heartbeat_interval_secs = 7
             )
         );
         assert!(csv.contains(",482,241,249416,249416,1477787\n"));
+    }
+
+    #[test]
+    fn render_csv_summary_quotes_records_and_neutralizes_formulas() {
+        let csv = render_csv_summary(&SummaryReport {
+            generated_at: "2026-04-12T00:00:00Z".to_string(),
+            generated_at_unix: 1_744_416_000,
+            target: MobileTarget::Android,
+            function: "unused".to_string(),
+            iterations: 1,
+            warmup: 0,
+            devices: Vec::new(),
+            device_summaries: vec![DeviceSummary {
+                device: "\t=HYPERLINK(\"https://evil.invalid/a,b\")\r\nPixel".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "+SUM(1,2)".to_string(),
+                    samples: 1,
+                    mean_ns: Some(1),
+                    median_ns: Some(1),
+                    p95_ns: Some(1),
+                    min_ns: Some(1),
+                    max_ns: Some(1),
+                    resource_usage: None,
+                    failure: None,
+                }],
+            }],
+        });
+
+        assert_eq!(
+            csv,
+            concat!(
+                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb\n",
+                "\"'\t=HYPERLINK(\"\"https://evil.invalid/a,b\"\")\r\nPixel\",\"'+SUM(1,2)\",1,1,1,1,1,1,,,,,\n"
+            )
+        );
+    }
+
+    #[test]
+    fn legacy_summary_csv_quotes_records_and_neutralizes_formulas() {
+        let csv = render_summary_data_csv(&[SummaryData {
+            source_file: "ignored".to_string(),
+            function: Some("@cmd".to_string()),
+            device: Some("Pixel, \"8\"".to_string()),
+            os_version: Some("\n-1".to_string()),
+            sample_count: 0,
+            mean_ns: None,
+            median_ns: None,
+            min_ns: None,
+            max_ns: None,
+            p95_ns: None,
+            iterations: None,
+            warmup: None,
+        }]);
+
+        assert_eq!(
+            csv,
+            concat!(
+                "function,device,os_version,sample_count,mean_ns,median_ns,min_ns,max_ns,p95_ns,iterations,warmup\n",
+                "'@cmd,\"Pixel, \"\"8\"\"\",\"'\n-1\",0,,,,,,,\n"
+            )
+        );
+    }
+
+    #[test]
+    fn failure_markdown_neutralizes_untrusted_report_fields() {
+        let markdown = render_failure_markdown(&json!({
+            "device": "Pixel|8\n# hacked",
+            "function_name": "[run](x)",
+            "kind": "timeout\n- injected",
+            "message": "<script>alert(1)</script> ![x](y)",
+            "elapsed_ms": 1_u64,
+            "android_exit_info": { "reason": "@reason" }
+        }));
+
+        assert_eq!(
+            markdown,
+            concat!(
+                "# Android Benchmark Failure\n\n",
+                "- Device: Pixel&#124;8 &#35; hacked\n",
+                "- Function: &#91;run&#93;&#40;x&#41;\n",
+                "- Kind: timeout &#45; injected\n",
+                "- Message: &lt;script&gt;alert&#40;1&#41;&lt;&#47;script&gt; &#33;&#91;x&#93;&#40;y&#41;\n",
+                "- Elapsed: 1 ms\n",
+                "- Exit reason: @reason\n"
+            )
+        );
+    }
+
+    #[test]
+    fn summary_markdown_neutralizes_metadata_rows_and_failure_fields() {
+        let markdown = render_markdown_summary(&SummaryReport {
+            generated_at: "<time>".to_string(),
+            generated_at_unix: 1,
+            target: MobileTarget::Android,
+            function: "[root](x)".to_string(),
+            iterations: 1,
+            warmup: 0,
+            devices: vec!["Pixel|8".to_string(), "Line\n#two".to_string()],
+            device_summaries: vec![DeviceSummary {
+                device: "<img src=x>".to_string(),
+                benchmarks: vec![BenchmarkStats {
+                    function: "![run](x)|next".to_string(),
+                    samples: 0,
+                    mean_ns: None,
+                    median_ns: None,
+                    p95_ns: None,
+                    min_ns: None,
+                    max_ns: None,
+                    resource_usage: None,
+                    failure: Some(BenchmarkFailureStats {
+                        kind: "[timeout](x)".to_string(),
+                        message: "unused".to_string(),
+                        elapsed_ms: None,
+                        exit_reason: Some("<script>".to_string()),
+                    }),
+                }],
+            }],
+        });
+
+        assert!(markdown.contains("- Generated: &lt;time&gt;"));
+        assert!(markdown.contains("- Function: &#91;root&#93;&#40;x&#41;"));
+        assert!(markdown.contains("- Devices: Pixel&#124;8, Line &#35;two"));
+        assert!(markdown.contains(concat!(
+            "| &lt;img src=x&gt; | &#33;&#91;run&#93;&#40;x&#41;&#124;next | ",
+            "failed (&#91;timeout&#93;&#40;x&#41;) |"
+        )));
+        assert!(markdown.contains("| - | &lt;script&gt; |"));
+        assert!(!markdown.contains("<img"));
+        assert!(!markdown.contains("![run]"));
+    }
+
+    #[test]
+    fn comparison_markdown_neutralizes_paths_rows_and_labels() {
+        let markdown = render_compare_markdown(&CompareReport {
+            baseline: PathBuf::from("base\n# [link](x).json"),
+            candidate: PathBuf::from("<script>.json"),
+            rows: vec![CompareRow {
+                device: "Pixel|8\n# row".to_string(),
+                function: "![run](x)".to_string(),
+                baseline_median_ns: None,
+                candidate_median_ns: None,
+                median_delta_pct: None,
+                median_label: "[regressed](x)".to_string(),
+                baseline_p95_ns: None,
+                candidate_p95_ns: None,
+                p95_delta_pct: None,
+                p95_label: "<b>bad</b>".to_string(),
+            }],
+        });
+
+        assert!(markdown.contains("- Baseline: base &#35; &#91;link&#93;&#40;x&#41;&#46;json"));
+        assert!(markdown.contains("- Candidate: &lt;script&gt;&#46;json"));
+        assert!(markdown.contains(concat!(
+            "| Pixel&#124;8 &#35; row | &#33;&#91;run&#93;&#40;x&#41; | - | - | - | ",
+            "&#91;regressed&#93;&#40;x&#41; | - | - | - | &lt;b&gt;bad&lt;&#47;b&gt; |"
+        )));
+        assert!(!markdown.contains("<script>"));
+        assert!(!markdown.contains("![run]"));
+    }
+
+    #[test]
+    fn merged_and_plot_markdown_neutralizes_targets_labels_and_destinations() {
+        let merged = json!({
+            "targets": {
+                "android\n# [evil](x)": {
+                    "summary": {
+                        "generated_at": "2026-04-12T00:00:00Z",
+                        "generated_at_unix": 1_u64,
+                        "target": "android",
+                        "function": "bench",
+                        "iterations": 1_u64,
+                        "warmup": 0_u64,
+                        "devices": [],
+                        "device_summaries": []
+                    }
+                }
+            }
+        });
+        let merged_markdown =
+            render_summary_markdown_from_output(&merged).expect("render merged summary");
+        assert!(merged_markdown.starts_with("## android &#35; &#91;evil&#93;&#40;x&#41;\n\n"));
+
+        let plot = plots::RenderedPlot {
+            function_name: "unused".to_string(),
+            function_label: "![evil](x)\n# heading".to_string(),
+            target: "android".to_string(),
+            output_path: PathBuf::from("unused"),
+            relative_path: PathBuf::from("javascript:alert(1)\n).svg"),
+        };
+        let plot_markdown = append_plot_links_to_markdown(String::new(), &[&plot]);
+
+        assert!(plot_markdown.contains(concat!(
+            "### &#33;&#91;evil&#93;&#40;x&#41; &#35; heading\n",
+            "![&#33;&#91;evil&#93;&#40;x&#41; &#35; heading]",
+            "(javascript%3Aalert%281%29%0A%29.svg)\n"
+        )));
+        assert!(!plot_markdown.contains("javascript:"));
+        assert!(!plot_markdown.contains("![evil]"));
     }
 
     #[test]

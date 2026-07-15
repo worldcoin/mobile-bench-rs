@@ -8,6 +8,165 @@ type BrowserStackResults = (
     std::collections::HashMap<String, Vec<Value>>,
     std::collections::HashMap<String, PerformanceMetrics>,
 );
+
+#[derive(Debug)]
+struct CollectedBrowserStackSession {
+    session_id: String,
+    benchmark_results: Vec<Value>,
+    benchmark_failures: Vec<Value>,
+    performance_metrics: PerformanceMetrics,
+}
+
+fn browserstack_failure_diagnostic(failures: &[Value]) -> Option<String> {
+    let failure = failures.first()?;
+    let function = failure
+        .get("function_name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown function");
+    let kind = failure
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown failure");
+    let message = failure
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("no message");
+    Some(format!(
+        "benchmark failure for {function}: {kind}: {message}"
+    ))
+}
+
+fn classify_browserstack_result_completeness(
+    expected_sessions: &[DeviceSession],
+    collected_sessions: Vec<CollectedBrowserStackSession>,
+) -> Result<BrowserStackResults> {
+    if expected_sessions.is_empty() {
+        return Err(anyhow!(
+            "BrowserStack result set is incomplete; terminal build reported no device sessions"
+        ));
+    }
+
+    let mut expected_session_ids = std::collections::HashSet::new();
+    let mut expected_devices = std::collections::HashSet::new();
+    for session in expected_sessions {
+        if !expected_session_ids.insert(session.session_id.as_str()) {
+            return Err(anyhow!(
+                "BrowserStack result set is ambiguous; duplicate expected session: {}",
+                session.session_id
+            ));
+        }
+        if !expected_devices.insert(session.device.as_str()) {
+            return Err(anyhow!(
+                "BrowserStack result set is ambiguous; duplicate expected device: {}",
+                session.device
+            ));
+        }
+    }
+
+    let mut collected_by_session = std::collections::HashMap::new();
+    for session in collected_sessions {
+        let session_id = session.session_id.clone();
+        if collected_by_session
+            .insert(session_id.clone(), session)
+            .is_some()
+        {
+            return Err(anyhow!(
+                "BrowserStack result set is ambiguous; duplicate collected session: {session_id}"
+            ));
+        }
+    }
+    let missing = expected_sessions
+        .iter()
+        .filter(|session| !collected_by_session.contains_key(&session.session_id))
+        .map(|session| format!("{} ({})", session.device, session.session_id))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(anyhow!(
+            "BrowserStack result set is incomplete; missing collected sessions: {}",
+            missing.join(", ")
+        ));
+    }
+
+    let non_passed = expected_sessions
+        .iter()
+        .filter(|session| !session.status.eq_ignore_ascii_case("passed"))
+        .map(|session| {
+            let failure = collected_by_session
+                .get(&session.session_id)
+                .and_then(|collected| {
+                    browserstack_failure_diagnostic(&collected.benchmark_failures)
+                })
+                .map(|diagnostic| format!("; {diagnostic}"))
+                .unwrap_or_default();
+            format!(
+                "{} ({}, status={}{})",
+                session.device, session.session_id, session.status, failure
+            )
+        })
+        .collect::<Vec<_>>();
+    if !non_passed.is_empty() {
+        return Err(anyhow!(
+            "BrowserStack result set is incomplete; non-passed sessions: {}",
+            non_passed.join(", ")
+        ));
+    }
+
+    let resultless = expected_sessions
+        .iter()
+        .filter(|session| {
+            collected_by_session
+                .get(&session.session_id)
+                .is_some_and(|collected| collected.benchmark_results.is_empty())
+        })
+        .map(|session| {
+            let failure = collected_by_session
+                .get(&session.session_id)
+                .and_then(|collected| {
+                    browserstack_failure_diagnostic(&collected.benchmark_failures)
+                })
+                .map(|diagnostic| format!("; {diagnostic}"))
+                .unwrap_or_default();
+            format!("{} ({}{})", session.device, session.session_id, failure)
+        })
+        .collect::<Vec<_>>();
+    if !resultless.is_empty() {
+        return Err(anyhow!(
+            "BrowserStack result set is incomplete; result-less sessions: {}",
+            resultless.join(", ")
+        ));
+    }
+    let duplicate_results = expected_sessions
+        .iter()
+        .filter_map(|session| {
+            let count = collected_by_session
+                .get(&session.session_id)?
+                .benchmark_results
+                .len();
+            (count > 1).then(|| format!("{} ({}, got {count})", session.device, session.session_id))
+        })
+        .collect::<Vec<_>>();
+    if !duplicate_results.is_empty() {
+        return Err(anyhow!(
+            "BrowserStack result set is ambiguous; duplicate benchmark results: {}",
+            duplicate_results.join(", ")
+        ));
+    }
+
+    let mut benchmark_results = std::collections::HashMap::new();
+    let mut performance_metrics = std::collections::HashMap::new();
+    for expected in expected_sessions {
+        let collected = collected_by_session
+            .remove(&expected.session_id)
+            .expect("all expected sessions were checked above");
+        benchmark_results.insert(expected.device.clone(), collected.benchmark_results);
+        if collected.performance_metrics.sample_count > 0 {
+            performance_metrics.insert(expected.device.clone(), collected.performance_metrics);
+        }
+    }
+
+    Ok((benchmark_results, performance_metrics))
+}
+
 use std::path::Path;
 use std::time::Instant;
 
@@ -583,18 +742,11 @@ impl BrowserStackClient {
             Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
         }
 
-        // Also look for Android-style BENCH_JSON marker
-        let bench_json_marker = "BENCH_JSON ";
-        for line in logs.lines() {
-            if let Some(idx) = line.find(bench_json_marker) {
-                let json_part = &line[idx + bench_json_marker.len()..];
-                if let Ok(json) = serde_json::from_str::<Value>(json_part) {
-                    Self::extend_unique_results(
-                        &mut results,
-                        Self::normalize_benchmark_values(json),
-                    );
-                }
-            }
+        // Decode both the generated chunk protocol and the released legacy frame.
+        let android_values = mobench_domain::decode_android_bench_frames(logs)
+            .map_err(|error| anyhow!("Malformed Android benchmark framing: {error}"))?;
+        for json in android_values {
+            Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
         }
 
         // Look for JSON objects that contain benchmark-related fields (fallback)
@@ -910,9 +1062,7 @@ impl BrowserStackClient {
             build_status.devices.len()
         );
 
-        let mut benchmark_results = std::collections::HashMap::new();
-        let mut performance_metrics = std::collections::HashMap::new();
-        let mut benchmark_failures = std::collections::HashMap::new();
+        let mut collected_sessions = Vec::with_capacity(build_status.devices.len());
 
         for device in &build_status.devices {
             println!(
@@ -969,36 +1119,42 @@ impl BrowserStackClient {
                 }
             }
 
-            if device_benchmark_results.is_none() {
+            let should_fetch_failure_artifacts = device_failures.is_none()
+                && (device_benchmark_results.is_none()
+                    || !device.status.eq_ignore_ascii_case("passed"));
+            if device_benchmark_results.is_none() || should_fetch_failure_artifacts {
                 match self.get_session_json(build_id, &device.session_id, platform) {
                     Ok(session_json) => {
-                        match self.extract_results_from_session_artifacts(&session_json, |url| {
-                            self.download_text_url(url)
-                        }) {
-                            Ok((results, perf_metrics)) => {
-                                println!(
-                                    "    Found {} benchmark result(s) from session artifacts",
-                                    results.len()
-                                );
-                                if device_performance_metrics.sample_count == 0
-                                    && perf_metrics.sample_count > 0
-                                {
+                        if device_benchmark_results.is_none() {
+                            match self
+                                .extract_results_from_session_artifacts(&session_json, |url| {
+                                    self.download_text_url(url)
+                                }) {
+                                Ok((results, perf_metrics)) => {
                                     println!(
-                                        "    Found {} performance metric snapshot(s) from session artifacts",
-                                        perf_metrics.sample_count
+                                        "    Found {} benchmark result(s) from session artifacts",
+                                        results.len()
                                     );
-                                    device_performance_metrics = perf_metrics;
+                                    if device_performance_metrics.sample_count == 0
+                                        && perf_metrics.sample_count > 0
+                                    {
+                                        println!(
+                                            "    Found {} performance metric snapshot(s) from session artifacts",
+                                            perf_metrics.sample_count
+                                        );
+                                        device_performance_metrics = perf_metrics;
+                                    }
+                                    device_benchmark_results = Some(results);
                                 }
-                                device_benchmark_results = Some(results);
-                            }
-                            Err(e) => {
-                                println!(
-                                    "    Warning: Failed to fetch results from session artifacts: {e}"
-                                );
+                                Err(e) => {
+                                    println!(
+                                        "    Warning: Failed to fetch results from session artifacts: {e}"
+                                    );
+                                }
                             }
                         }
 
-                        if device_failures.is_none()
+                        if should_fetch_failure_artifacts
                             && let Ok(failures) = self
                                 .extract_failures_from_session_artifacts(&session_json, |url| {
                                     self.download_text_url(url)
@@ -1028,41 +1184,15 @@ impl BrowserStackClient {
                 .unwrap_or_default();
             }
 
-            if let Some(results) = device_benchmark_results {
-                benchmark_results.insert(device.device.clone(), results);
-            }
-            if let Some(failures) = device_failures {
-                benchmark_failures.insert(device.device.clone(), failures);
-            }
-            if device_performance_metrics.sample_count > 0 {
-                performance_metrics.insert(device.device.clone(), device_performance_metrics);
-            }
+            collected_sessions.push(CollectedBrowserStackSession {
+                session_id: device.session_id.clone(),
+                benchmark_results: device_benchmark_results.unwrap_or_default(),
+                benchmark_failures: device_failures.unwrap_or_default(),
+                performance_metrics: device_performance_metrics,
+            });
         }
 
-        if benchmark_results.is_empty() {
-            if let Some((device, failures)) = benchmark_failures.iter().next()
-                && let Some(failure) = failures.first()
-            {
-                let function = failure
-                    .get("function_name")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("unknown");
-                let kind = failure
-                    .get("kind")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("unknown");
-                let message = failure
-                    .get("message")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("no message");
-                return Err(anyhow!(
-                    "Android benchmark failure on {device} for {function}: {kind}: {message}"
-                ));
-            }
-            Err(anyhow!("No benchmark results found from any device"))
-        } else {
-            Ok((benchmark_results, performance_metrics))
-        }
+        classify_browserstack_result_completeness(&build_status.devices, collected_sessions)
     }
 
     /// Fetch session details from BrowserStack API.
@@ -2976,6 +3106,92 @@ BENCH_REPORT_JSON_END
     }
 
     #[test]
+    fn extract_benchmark_results_handles_generated_android_chunk_frames() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let logs = r#"
+2026-07-15 12:34:56 I/BenchRunner: BENCH_JSON_START
+2026-07-15 12:34:56 I/BenchRunner: BENCH_JSON_CHUNK {"spec":{"name":"sample_fns::checksum"},
+2026-07-15 12:34:56 I/BenchRunner: BENCH_JSON_CHUNK "samples_ns":[1000,2000],"function":"sample_fns::checksum"}
+2026-07-15 12:34:56 I/BenchRunner: BENCH_JSON_END
+        "#;
+
+        let results = client.extract_benchmark_results(logs).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["function"], "sample_fns::checksum");
+        assert_eq!(results[0]["samples_ns"], json!([1000, 2000]));
+    }
+
+    #[test]
+    fn extract_benchmark_results_rejects_android_chunk_before_start() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let logs = r#"
+I/BenchRunner: BENCH_JSON_CHUNK {"function":"forged","samples_ns":[1]}
+{"function":"fallback-must-not-win","samples":[{"duration_ns":1}]}
+        "#;
+
+        let error = client.extract_benchmark_results(logs).unwrap_err();
+
+        assert!(error.to_string().contains("before a start marker"));
+    }
+
+    #[test]
+    fn extract_benchmark_results_rejects_truncated_android_chunk_frame() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let logs = r#"
+I/BenchRunner: BENCH_JSON_START
+I/BenchRunner: BENCH_JSON_CHUNK {"function":"truncated","samples_ns":[1]}
+{"function":"fallback-must-not-win","samples":[{"duration_ns":1}]}
+        "#;
+
+        let error = client.extract_benchmark_results(logs).unwrap_err();
+
+        assert!(error.to_string().contains("is incomplete"));
+    }
+
+    #[test]
+    fn extract_benchmark_results_rejects_oversized_android_frame() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let oversized = "x".repeat(mobench_domain::MAX_ANDROID_BENCH_PAYLOAD_BYTES + 1);
+        let logs = format!(
+            "I/BenchRunner: BENCH_JSON {{\"function\":\"oversized\",\"payload\":\"{oversized}\"}}"
+        );
+
+        let error = client.extract_benchmark_results(&logs).unwrap_err();
+
+        assert!(error.to_string().contains("size limit"));
+    }
+
+    #[test]
     fn extract_benchmark_failures_handles_failure_only_logs() {
         let client = BrowserStackClient::new(
             BrowserStackAuth {
@@ -3521,5 +3737,222 @@ BENCH_REPORT_JSON_END
                 .map(std::vec::Vec::len),
             Some(2)
         );
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_one_of_ten_partial_collection() {
+        let expected = (0..10)
+            .map(|index| DeviceSession {
+                device: format!("device-{index}"),
+                session_id: format!("session-{index}"),
+                status: "passed".to_string(),
+                device_logs: None,
+            })
+            .collect::<Vec<_>>();
+        let collected = vec![CollectedBrowserStackSession {
+            session_id: "session-0".to_string(),
+            benchmark_results: vec![json!({
+                "function": "sample_fns::fibonacci",
+                "samples_ns": [10]
+            })],
+            benchmark_failures: Vec::new(),
+            performance_metrics: PerformanceMetrics::default(),
+        }];
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("one result must not make a ten-device run successful");
+
+        assert!(error.to_string().contains("missing collected sessions"));
+        assert!(error.to_string().contains("session-9"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_mixed_passed_and_failed_sessions() {
+        let expected = vec![
+            DeviceSession {
+                device: "passed-device".to_string(),
+                session_id: "passed-session".to_string(),
+                status: "passed".to_string(),
+                device_logs: None,
+            },
+            DeviceSession {
+                device: "failed-device".to_string(),
+                session_id: "failed-session".to_string(),
+                status: "failed".to_string(),
+                device_logs: None,
+            },
+        ];
+        let result = json!({"function": "sample_fns::fibonacci", "samples_ns": [10]});
+        let collected = vec![
+            CollectedBrowserStackSession {
+                session_id: "passed-session".to_string(),
+                benchmark_results: vec![result.clone()],
+                benchmark_failures: Vec::new(),
+                performance_metrics: PerformanceMetrics::default(),
+            },
+            CollectedBrowserStackSession {
+                session_id: "failed-session".to_string(),
+                benchmark_results: vec![result],
+                benchmark_failures: vec![json!({
+                    "kind": "timeout",
+                    "message": "benchmark exceeded deadline"
+                })],
+                performance_metrics: PerformanceMetrics::default(),
+            },
+        ];
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("a failed session must make the run incomplete");
+
+        assert!(error.to_string().contains("non-passed sessions"));
+        assert!(error.to_string().contains("failed-device"));
+        assert!(error.to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_passed_session_without_result() {
+        let expected = vec![DeviceSession {
+            device: "resultless-device".to_string(),
+            session_id: "resultless-session".to_string(),
+            status: "passed".to_string(),
+            device_logs: None,
+        }];
+        let collected = vec![CollectedBrowserStackSession {
+            session_id: "resultless-session".to_string(),
+            benchmark_results: Vec::new(),
+            benchmark_failures: vec![json!({
+                "function_name": "sample_fns::fibonacci",
+                "kind": "timeout",
+                "message": "benchmark exceeded deadline"
+            })],
+            performance_metrics: PerformanceMetrics::default(),
+        }];
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("a passed session without a validated result is incomplete");
+
+        assert!(error.to_string().contains("result-less sessions"));
+        assert!(error.to_string().contains("resultless-device"));
+        assert!(error.to_string().contains("sample_fns::fibonacci"));
+        assert!(error.to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_duplicate_collected_session() {
+        let expected = vec![DeviceSession {
+            device: "duplicate-device".to_string(),
+            session_id: "duplicate-session".to_string(),
+            status: "passed".to_string(),
+            device_logs: None,
+        }];
+        let result = json!({"function": "sample_fns::fibonacci", "samples_ns": [10]});
+        let collected = (0..2)
+            .map(|_| CollectedBrowserStackSession {
+                session_id: "duplicate-session".to_string(),
+                benchmark_results: vec![result.clone()],
+                benchmark_failures: Vec::new(),
+                performance_metrics: PerformanceMetrics::default(),
+            })
+            .collect();
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("duplicate collection records are ambiguous");
+
+        assert!(error.to_string().contains("duplicate collected session"));
+        assert!(error.to_string().contains("duplicate-session"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_multiple_results_for_one_session() {
+        let expected = vec![DeviceSession {
+            device: "duplicate-result-device".to_string(),
+            session_id: "duplicate-result-session".to_string(),
+            status: "passed".to_string(),
+            device_logs: None,
+        }];
+        let collected = vec![CollectedBrowserStackSession {
+            session_id: "duplicate-result-session".to_string(),
+            benchmark_results: vec![
+                json!({"function": "first", "samples_ns": [10]}),
+                json!({"function": "second", "samples_ns": [20]}),
+            ],
+            benchmark_failures: Vec::new(),
+            performance_metrics: PerformanceMetrics::default(),
+        }];
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("one session must produce exactly one validated result");
+
+        assert!(error.to_string().contains("duplicate benchmark results"));
+        assert!(error.to_string().contains("got 2"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_duplicate_expected_device() {
+        let expected = (0..2)
+            .map(|index| DeviceSession {
+                device: "same-device".to_string(),
+                session_id: format!("session-{index}"),
+                status: "passed".to_string(),
+                device_logs: None,
+            })
+            .collect::<Vec<_>>();
+        let collected = (0..2)
+            .map(|index| CollectedBrowserStackSession {
+                session_id: format!("session-{index}"),
+                benchmark_results: vec![json!({
+                    "function": "sample_fns::fibonacci",
+                    "samples_ns": [10]
+                })],
+                benchmark_failures: Vec::new(),
+                performance_metrics: PerformanceMetrics::default(),
+            })
+            .collect();
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("duplicate device labels would overwrite public results");
+
+        assert!(error.to_string().contains("duplicate expected device"));
+        assert!(error.to_string().contains("same-device"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_build_without_expected_sessions() {
+        let error = classify_browserstack_result_completeness(&[], Vec::new())
+            .expect_err("a terminal build without sessions is incomplete");
+
+        assert!(error.to_string().contains("reported no device sessions"));
+    }
+
+    #[test]
+    fn browserstack_completeness_accepts_ten_passed_sessions_with_one_result_each() {
+        let expected = (0..10)
+            .map(|index| DeviceSession {
+                device: format!("device-{index}"),
+                session_id: format!("session-{index}"),
+                status: "passed".to_string(),
+                device_logs: None,
+            })
+            .collect::<Vec<_>>();
+        let collected = (0..10)
+            .rev()
+            .map(|index| CollectedBrowserStackSession {
+                session_id: format!("session-{index}"),
+                benchmark_results: vec![json!({
+                    "function": "sample_fns::fibonacci",
+                    "samples_ns": [index + 1]
+                })],
+                benchmark_failures: Vec::new(),
+                performance_metrics: PerformanceMetrics::default(),
+            })
+            .collect();
+
+        let (results, performance) =
+            classify_browserstack_result_completeness(&expected, collected)
+                .expect("all expected sessions are complete");
+
+        assert_eq!(results.len(), 10);
+        assert_eq!(results["device-9"][0]["samples_ns"], json!([10]));
+        assert!(performance.is_empty());
     }
 }

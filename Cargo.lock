@@ -681,6 +681,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1278,6 +1288,10 @@ dependencies = [
  "inferno",
  "inventory",
  "jsonschema",
+ "mobench-artifacts",
+ "mobench-domain",
+ "mobench-process",
+ "mobench-report",
  "mobench-sdk",
  "proptest",
  "reqwest",
@@ -1294,6 +1308,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mobench-artifacts"
+version = "0.1.43"
+dependencies = [
+ "fs2",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "mobench-domain"
+version = "0.1.43"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "mobench-macros"
 version = "0.1.43"
 dependencies = [
@@ -1302,6 +1334,18 @@ dependencies = [
  "syn",
  "trybuild",
 ]
+
+[[package]]
+name = "mobench-process"
+version = "0.1.43"
+dependencies = [
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "mobench-report"
+version = "0.1.43"
 
 [[package]]
 name = "mobench-sdk"

@@ -305,6 +305,10 @@ default_iterations = 100
 default_warmup = 10
 ```
 
+`project.output_dir` must be a relative descendant of the project root.
+Absolute paths, parent traversal, and pre-existing symlink components are
+configuration errors detected before generation or cleanup begins.
+
 Configuration resolution precedence:
 
 1. Explicit `--project-root` and `--crate-path`.

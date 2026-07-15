@@ -1,0 +1,77 @@
+{
+  "decision": "ADR-000",
+  "receipt_kind": "phase-0-host-contract-baseline",
+  "implementation_revision": "faae658c2c6f8edf1eb684aa2272971a85d00331",
+  "release_oracle_revision": "d1a3176f9144f35e777e83fd07045116144da257",
+  "captured_at": "2026-07-15",
+  "host": {
+    "cpu": "Apple M4 Max",
+    "memory_gib": 128,
+    "os": "macOS",
+    "architecture": "aarch64",
+    "rustc": "1.97.0"
+  },
+  "harness": {
+    "framework": "criterion",
+    "framework_version": "0.5",
+    "command": "cargo bench -p mobench --features bench-support --bench host_contracts -- --sample-size 20 --warm-up-time 1 --measurement-time 1 --noplot",
+    "sample_size": 20,
+    "warm_up_seconds": 1,
+    "measurement_seconds": 1,
+    "plots": false
+  },
+  "measurements": [
+    {
+      "benchmark": "config/parse_run_config",
+      "estimate_interval_microseconds": {
+        "lower": 4.1817,
+        "upper": 4.2809
+      }
+    },
+    {
+      "benchmark": "config/parse_device_matrix",
+      "estimate_interval_microseconds": {
+        "lower": 5.6838,
+        "upper": 5.8819
+      }
+    },
+    {
+      "benchmark": "summary/render_markdown",
+      "estimate_interval_microseconds": {
+        "lower": 10.254,
+        "upper": 10.569
+      }
+    },
+    {
+      "benchmark": "summary/render_csv",
+      "estimate_interval_microseconds": {
+        "lower": 7.9352,
+        "upper": 8.3041
+      }
+    },
+    {
+      "benchmark": "profile/render_markdown",
+      "estimate_interval_microseconds": {
+        "lower": 1.7785,
+        "upper": 1.8269
+      }
+    },
+    {
+      "benchmark": "browserstack/extract_results",
+      "estimate_interval_microseconds": {
+        "lower": 39.94,
+        "upper": 44.859
+      }
+    }
+  ],
+  "interpretation": {
+    "scope": "Characterization receipt for host contract workloads only.",
+    "not_evidence_for": [
+      "the 30-run paired timing-engine gate",
+      "large-report wall-time or peak-RSS gates",
+      "provider cancellation and concurrency gates",
+      "mobile build or end-to-end gates"
+    ],
+    "rewrite_comparison_rule": "Compare like-for-like on the pinned release host; Phase-specific numeric gates remain authoritative."
+  }
+}

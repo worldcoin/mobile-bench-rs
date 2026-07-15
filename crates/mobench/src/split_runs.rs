@@ -5,9 +5,9 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, fs};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -34,6 +34,10 @@ pub(crate) fn cmd_ci_merge_split_runs(args: CiMergeSplitRunsArgs, dry_run: bool)
         return Ok(());
     }
 
+    let requested_by = ["MOBENCH_REQUESTED_BY", "GITHUB_ACTOR"]
+        .into_iter()
+        .find_map(|key| env::var(key).ok().filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| "unknown".to_string());
     let output = json!({
         "summary": merged.summary,
         "benchmark_results": {
@@ -41,6 +45,7 @@ pub(crate) fn cmd_ci_merge_split_runs(args: CiMergeSplitRunsArgs, dry_run: bool)
         },
         "ci": {
             "metadata": {
+                "requested_by": requested_by,
                 "request_command": "cargo mobench ci merge-split-runs",
                 "mobench_version": env!("CARGO_PKG_VERSION")
             },
@@ -607,6 +612,24 @@ mod tests {
         let summary: Value =
             serde_json::from_str(&fs::read_to_string(output_dir.join("summary.json")).unwrap())
                 .unwrap();
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let schema: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("docs/schemas/ci-contract-v1.schema.json")).unwrap(),
+        )
+        .unwrap();
+        let validator = jsonschema::JSONSchema::options().compile(&schema).unwrap();
+        if let Err(errors) = validator.validate(&summary) {
+            let messages = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+            panic!(
+                "merged split-run output violates CI schema: {}",
+                messages.join(" | ")
+            );
+        }
+        assert!(
+            summary["ci"]["metadata"]["requested_by"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
         let benchmark = &summary["summary"]["device_summaries"][0]["benchmarks"][0];
         assert_eq!(benchmark["samples"], 3);
         assert_eq!(benchmark["mean_ns"], 200_000_000);
@@ -628,10 +651,12 @@ mod tests {
                 .unwrap()
                 .contains("3 / 1")
         );
-        assert!(
-            fs::read_to_string(output_dir.join("results.csv"))
-                .unwrap()
-                .contains("device,function,samples")
+        let csv = fs::read_to_string(output_dir.join("results.csv")).unwrap();
+        assert_eq!(
+            csv.lines().next(),
+            Some(
+                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb"
+            )
         );
     }
 

@@ -21,6 +21,8 @@ use crate::{
     load_dotenv_for_layout, persist_mobile_spec, repo_root, resolve_devices_for_profile,
     resolve_project_layout, run_android_build, run_ios_build, validate_benchmark_function,
 };
+use mobench_artifacts::{ArtifactId, LatestArtifact, RunWorkspace};
+use mobench_report::{markdown_inline_code, markdown_inline_field_text};
 use mobench_sdk::types::NativeLibraryArtifact;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -423,9 +425,17 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     let mut markdown = String::new();
     let _ = writeln!(markdown, "# Profile Summary");
     let _ = writeln!(markdown);
-    let _ = writeln!(markdown, "- Run ID: `{}`", manifest.run_id);
+    let _ = writeln!(
+        markdown,
+        "- Run ID: {}",
+        markdown_inline_code(&manifest.run_id)
+    );
     let _ = writeln!(markdown, "- Target: `{}`", manifest.target.as_str());
-    let _ = writeln!(markdown, "- Function: `{}`", manifest.function);
+    let _ = writeln!(
+        markdown,
+        "- Function: {}",
+        markdown_inline_code(&manifest.function)
+    );
     let _ = writeln!(
         markdown,
         "- Provider: `{}`",
@@ -448,18 +458,18 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     for artifact in &manifest.native_capture.raw_artifacts {
         let _ = writeln!(
             markdown,
-            "  - `{}`: `{}`",
-            artifact.label,
-            artifact.path.display()
+            "  - {}: {}",
+            markdown_inline_code(&artifact.label),
+            markdown_inline_code(artifact.path.to_string_lossy().as_ref())
         );
     }
     let _ = writeln!(markdown, "- Processed artifacts:");
     for artifact in &manifest.native_capture.processed_artifacts {
         let _ = writeln!(
             markdown,
-            "  - `{}`: `{}`",
-            artifact.label,
-            artifact.path.display()
+            "  - {}: {}",
+            markdown_inline_code(&artifact.label),
+            markdown_inline_code(artifact.path.to_string_lossy().as_ref())
         );
     }
     let _ = writeln!(markdown, "- Symbolization:");
@@ -469,7 +479,7 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
         capture_status_label(manifest.native_capture.symbolization.status)
     );
     if let Some(tool) = &manifest.native_capture.symbolization.tool {
-        let _ = writeln!(markdown, "  - Tool: `{tool}`");
+        let _ = writeln!(markdown, "  - Tool: {}", markdown_inline_code(tool));
     }
     let _ = writeln!(
         markdown,
@@ -482,13 +492,13 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
         manifest.native_capture.symbolization.unresolved_frames
     );
     for note in &manifest.native_capture.symbolization.notes {
-        let _ = writeln!(markdown, "  - {}", note);
+        let _ = writeln!(markdown, "  - {}", markdown_inline_field_text(note));
     }
     if let Some(viewer_hint) = &manifest.native_capture.viewer_hint {
         let _ = writeln!(markdown);
         let _ = writeln!(markdown, "## Viewer");
         let _ = writeln!(markdown);
-        let _ = writeln!(markdown, "{}", viewer_hint);
+        let _ = writeln!(markdown, "{}", markdown_inline_field_text(viewer_hint));
     }
     let _ = writeln!(markdown);
     let _ = writeln!(markdown, "## Semantic phases");
@@ -500,7 +510,11 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     );
     match &manifest.semantic_profile.spans_path {
         Some(path) => {
-            let _ = writeln!(markdown, "- Spans path: `{}`", path.display());
+            let _ = writeln!(
+                markdown,
+                "- Spans path: {}",
+                markdown_inline_code(path.to_string_lossy().as_ref())
+            );
         }
         None => {
             let _ = writeln!(markdown, "- Spans path: `not recorded`");
@@ -511,7 +525,7 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     } else {
         let _ = writeln!(markdown, "- Phases:");
         for phase in &manifest.semantic_profile.phases {
-            let _ = writeln!(markdown, "  - `{}`", phase.name);
+            let _ = writeln!(markdown, "  - {}", markdown_inline_code(&phase.name));
             if let Some(duration_ns) = phase.duration_ns {
                 let _ = writeln!(markdown, "    - Duration: `{duration_ns}` ns");
             }
@@ -525,7 +539,7 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     let _ = writeln!(markdown);
     match &manifest.capture_metadata.device {
         Some(device) => {
-            let _ = writeln!(markdown, "- Device: `{device}`");
+            let _ = writeln!(markdown, "- Device: {}", markdown_inline_code(device));
         }
         None => {
             let _ = writeln!(markdown, "- Device: `not recorded`");
@@ -549,7 +563,11 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
     }
     match &manifest.capture_metadata.capture_method {
         Some(capture_method) => {
-            let _ = writeln!(markdown, "- Capture method: `{capture_method}`");
+            let _ = writeln!(
+                markdown,
+                "- Capture method: {}",
+                markdown_inline_code(capture_method)
+            );
         }
         None => {
             let _ = writeln!(markdown, "- Capture method: `not recorded`");
@@ -560,7 +578,7 @@ pub fn render_profile_markdown(manifest: &ProfileManifest) -> String {
         let _ = writeln!(markdown, "### Warnings");
         let _ = writeln!(markdown);
         for warning in &manifest.capture_metadata.warnings {
-            let _ = writeln!(markdown, "- {}", warning);
+            let _ = writeln!(markdown, "- {}", markdown_inline_field_text(warning));
         }
     }
 
@@ -589,9 +607,13 @@ where
     E: FnOnce(&ProfileRunArgs, &ResolvedProfileTarget, &mut ProfileManifest) -> Result<()>,
 {
     let target = resolve_profile_target(args)?;
-    let run_id = build_run_id(args.target, &args.function);
-    let run_output_dir = args.output_dir.join(&run_id);
-    let mut manifest = build_capture_plan(args, &target, &run_output_dir)?;
+    let run_id = ArtifactId::new(build_run_id(args.target, &args.function))
+        .context("profile run ID is not a safe artifact path component")?;
+    let workspace = RunWorkspace::allocate(&args.output_dir, &run_id)
+        .context("allocating isolated profile run workspace")?;
+    let staging_output_dir = workspace.staging_path().to_path_buf();
+    let published_output_dir = workspace.published_path().to_path_buf();
+    let mut manifest = build_capture_plan(args, &target, &staging_output_dir)?;
     let profile_span = tracing::info_span!(
         "profile_run",
         target = ?args.target,
@@ -601,7 +623,7 @@ where
         dry_run
     );
     let _profile_span = profile_span.enter();
-    info!(output_dir = %run_output_dir.display(), "resolved profile run");
+    info!(output_dir = %staging_output_dir.display(), "resolved profile run workspace");
     let execution_result = if dry_run {
         info!("planning profile capture only");
         manifest.capture_metadata.warnings.push(
@@ -622,17 +644,19 @@ where
 
     if should_persist_outputs {
         info!("writing profile session outputs");
-        write_profile_session_outputs(args, &run_output_dir, &manifest)?;
+        write_profile_session_outputs(args, workspace, &manifest)?;
+    } else {
+        let _ = std::fs::remove_dir_all(&staging_output_dir);
     }
     execution_result?;
 
     println!(
         "Profile session written to {}",
-        run_output_dir.join("profile.json").display()
+        published_output_dir.join("profile.json").display()
     );
     println!(
         "Profile summary written to {}",
-        run_output_dir.join("summary.md").display()
+        published_output_dir.join("summary.md").display()
     );
     println!(
         "Latest profile manifest refreshed at {}",
@@ -647,31 +671,68 @@ where
 
 fn write_profile_session_outputs(
     args: &ProfileRunArgs,
-    run_output_dir: &Path,
+    workspace: RunWorkspace,
     manifest: &ProfileManifest,
 ) -> Result<()> {
-    std::fs::create_dir_all(&args.output_dir)?;
-    std::fs::create_dir_all(run_output_dir)?;
+    let staging_output_dir = workspace.staging_path().to_path_buf();
+    let published_output_dir = workspace.published_path().to_path_buf();
     create_selected_artifact_roots(
         &manifest.native_capture.raw_artifacts,
         &manifest.native_capture.processed_artifacts,
     )?;
-    let rendered_summary = render_profile_markdown(manifest);
-
-    let run_profile_path = run_output_dir.join("profile.json");
-    let run_summary_path = run_output_dir.join("summary.md");
     write_semantic_phase_sidecar(manifest)?;
     write_harness_timeline_sidecar(manifest)?;
-    write_requested_trace_events_output(args, manifest)?;
-    refresh_flamegraph_viewer_from_manifest(run_output_dir, manifest)?;
-    write_profile_manifest(&run_profile_path, manifest)?;
-    std::fs::write(&run_summary_path, rendered_summary.as_bytes())?;
+    refresh_flamegraph_viewer_from_manifest(&staging_output_dir, manifest)?;
 
-    let latest_profile_path = args.output_dir.join("profile.json");
-    let latest_summary_path = args.output_dir.join("summary.md");
-    write_profile_manifest(&latest_profile_path, manifest)?;
-    std::fs::write(&latest_summary_path, rendered_summary.as_bytes())?;
+    let published_manifest =
+        rebase_profile_manifest_paths(manifest, &staging_output_dir, &published_output_dir);
+    let rendered_summary = render_profile_markdown(&published_manifest);
+    let run_profile_path = staging_output_dir.join("profile.json");
+    let run_summary_path = staging_output_dir.join("summary.md");
+    std::fs::write(&run_summary_path, rendered_summary.as_bytes())?;
+    write_profile_manifest(&run_profile_path, &published_manifest)?;
+
+    let required = [artifact_id("profile.json")?, artifact_id("summary.md")?];
+    let published = workspace.publish(&required)?;
+    write_requested_trace_events_output(args, &published_manifest)?;
+    published.refresh_latest(&[
+        LatestArtifact::same(required[0].clone()),
+        LatestArtifact::same(required[1].clone()),
+    ])?;
     Ok(())
+}
+
+fn artifact_id(value: &str) -> Result<ArtifactId> {
+    ArtifactId::new(value).with_context(|| format!("invalid built-in artifact ID `{value}`"))
+}
+
+fn rebase_profile_manifest_paths(
+    manifest: &ProfileManifest,
+    from_root: &Path,
+    to_root: &Path,
+) -> ProfileManifest {
+    let mut rebased = manifest.clone();
+    for artifact in rebased
+        .native_capture
+        .raw_artifacts
+        .iter_mut()
+        .chain(rebased.native_capture.processed_artifacts.iter_mut())
+    {
+        rebase_path(&mut artifact.path, from_root, to_root);
+    }
+    if let Some(path) = rebased.semantic_profile.spans_path.as_mut() {
+        rebase_path(path, from_root, to_root);
+    }
+    if let Some(path) = rebased.semantic_profile.timeline_path.as_mut() {
+        rebase_path(path, from_root, to_root);
+    }
+    rebased
+}
+
+fn rebase_path(path: &mut PathBuf, from_root: &Path, to_root: &Path) {
+    if let Ok(relative) = path.strip_prefix(from_root) {
+        *path = to_root.join(relative);
+    }
 }
 
 fn write_requested_trace_events_output(
@@ -1763,11 +1824,15 @@ pub fn cmd_profile_diff(args: &ProfileDiffArgs) -> Result<()> {
         .candidate
         .parent()
         .context("candidate manifest path must have a parent directory")?;
-    let diff_run_id = format!(
+    let diff_run_id = ArtifactId::new(format!(
         "{}--vs--{}",
         baseline_manifest.run_id, candidate_manifest.run_id
-    );
-    let diff_run_dir = args.output_dir.join(&diff_run_id);
+    ))
+    .context("profile diff run ID is not a safe artifact path component")?;
+    let workspace = RunWorkspace::allocate(&args.output_dir, &diff_run_id)
+        .context("allocating isolated profile diff workspace")?;
+    let diff_run_dir = workspace.staging_path().to_path_buf();
+    let published_diff_run_dir = workspace.published_path().to_path_buf();
     let processed_root = diff_run_dir.join("artifacts/processed");
     std::fs::create_dir_all(&processed_root)?;
     info!(
@@ -1802,7 +1867,7 @@ pub fn cmd_profile_diff(args: &ProfileDiffArgs) -> Result<()> {
     let viewer_path = processed_root.join("flamegraph.html");
     let summary_path = diff_run_dir.join("summary.md");
     let diff_manifest = DifferentialViewerManifest {
-        run_id: diff_run_id,
+        run_id: diff_run_id.to_string(),
         baseline: path_string(&args.baseline),
         candidate: path_string(&args.candidate),
         target: Some(candidate_manifest.target),
@@ -1822,21 +1887,62 @@ pub fn cmd_profile_diff(args: &ProfileDiffArgs) -> Result<()> {
     write_differential_manifest(&diff_manifest_path, &diff_manifest)?;
     refresh_differential_flamegraph_viewer_from_manifest_path(&diff_manifest_path)?;
 
-    let summary = render_profile_diff_markdown(&diff_manifest);
+    let published_manifest =
+        rebase_differential_manifest_paths(&diff_manifest, &diff_run_dir, &published_diff_run_dir);
+    let summary = render_profile_diff_markdown(&published_manifest);
     std::fs::write(&summary_path, summary.as_bytes())
         .with_context(|| format!("writing {}", summary_path.display()))?;
+    write_differential_manifest(&diff_manifest_path, &published_manifest)?;
 
-    std::fs::create_dir_all(&args.output_dir)?;
-    write_differential_manifest(&args.output_dir.join("profile-diff.json"), &diff_manifest)?;
-    std::fs::write(args.output_dir.join("summary.md"), summary.as_bytes())?;
+    let required = [
+        artifact_id("profile-diff.json")?,
+        artifact_id("summary.md")?,
+    ];
+    let published = workspace.publish(&required)?;
+    published.refresh_latest(&[
+        LatestArtifact::same(required[0].clone()),
+        LatestArtifact::same(required[1].clone()),
+    ])?;
 
     println!(
         "Differential profile written to {}",
-        diff_manifest_path.display()
+        published_diff_run_dir.join("profile-diff.json").display()
     );
-    println!("Differential summary written to {}", summary_path.display());
-    println!("Differential viewer written to {}", viewer_path.display());
+    println!(
+        "Differential summary written to {}",
+        published_diff_run_dir.join("summary.md").display()
+    );
+    println!(
+        "Differential viewer written to {}",
+        published_diff_run_dir
+            .join("artifacts/processed/flamegraph.html")
+            .display()
+    );
     Ok(())
+}
+
+fn rebase_differential_manifest_paths(
+    manifest: &DifferentialViewerManifest,
+    from_root: &Path,
+    to_root: &Path,
+) -> DifferentialViewerManifest {
+    let mut rebased = manifest.clone();
+    rebase_path_string(&mut rebased.viewer_path, from_root, to_root);
+    if let Some(summary_path) = rebased.summary_path.as_mut() {
+        rebase_path_string(summary_path, from_root, to_root);
+    }
+    for mode in &mut rebased.modes {
+        rebase_path_string(&mut mode.diff_folded, from_root, to_root);
+        rebase_path_string(&mut mode.flamegraph_svg, from_root, to_root);
+    }
+    rebased
+}
+
+fn rebase_path_string(path: &mut String, from_root: &Path, to_root: &Path) {
+    let path_value = Path::new(path);
+    if let Ok(relative) = path_value.strip_prefix(from_root) {
+        *path = path_string(&to_root.join(relative));
+    }
 }
 
 fn validate_profile_diff_inputs(
@@ -1974,17 +2080,33 @@ fn render_profile_diff_markdown(manifest: &DifferentialViewerManifest) -> String
     let mut markdown = String::new();
     let _ = writeln!(markdown, "# Differential Flamegraph Summary");
     let _ = writeln!(markdown);
-    let _ = writeln!(markdown, "- Run ID: `{}`", manifest.run_id);
+    let _ = writeln!(
+        markdown,
+        "- Run ID: {}",
+        markdown_inline_code(&manifest.run_id)
+    );
     if let Some(target) = manifest.target {
         let _ = writeln!(markdown, "- Target: `{}`", target.as_str());
     }
     if let Some(function) = &manifest.function {
-        let _ = writeln!(markdown, "- Function: `{function}`");
+        let _ = writeln!(markdown, "- Function: {}", markdown_inline_code(function));
     }
-    let _ = writeln!(markdown, "- Baseline: `{}`", manifest.baseline);
-    let _ = writeln!(markdown, "- Candidate: `{}`", manifest.candidate);
+    let _ = writeln!(
+        markdown,
+        "- Baseline: {}",
+        markdown_inline_code(&manifest.baseline)
+    );
+    let _ = writeln!(
+        markdown,
+        "- Candidate: {}",
+        markdown_inline_code(&manifest.candidate)
+    );
     let _ = writeln!(markdown, "- Normalize: `{}`", manifest.normalize);
-    let _ = writeln!(markdown, "- Viewer: `{}`", manifest.viewer_path);
+    let _ = writeln!(
+        markdown,
+        "- Viewer: {}",
+        markdown_inline_code(&manifest.viewer_path)
+    );
     let _ = writeln!(markdown);
     let _ = writeln!(
         markdown,
@@ -1995,22 +2117,38 @@ fn render_profile_diff_markdown(manifest: &DifferentialViewerManifest) -> String
         let _ = writeln!(markdown, "## Notes");
         let _ = writeln!(markdown);
         for warning in &manifest.warnings {
-            let _ = writeln!(markdown, "- {}", warning);
+            let _ = writeln!(markdown, "- {}", markdown_inline_field_text(warning));
         }
     }
     let _ = writeln!(markdown);
     let _ = writeln!(markdown, "## Modes");
     let _ = writeln!(markdown);
     for mode in &manifest.modes {
-        let _ = writeln!(markdown, "### {}", mode.mode);
+        let _ = writeln!(markdown, "### {}", markdown_inline_field_text(&mode.mode));
         if let Some(path) = &mode.baseline_folded {
-            let _ = writeln!(markdown, "- Baseline folded: `{}`", path);
+            let _ = writeln!(
+                markdown,
+                "- Baseline folded: {}",
+                markdown_inline_code(path)
+            );
         }
         if let Some(path) = &mode.candidate_folded {
-            let _ = writeln!(markdown, "- Candidate folded: `{}`", path);
+            let _ = writeln!(
+                markdown,
+                "- Candidate folded: {}",
+                markdown_inline_code(path)
+            );
         }
-        let _ = writeln!(markdown, "- Diff folded: `{}`", mode.diff_folded);
-        let _ = writeln!(markdown, "- SVG: `{}`", mode.flamegraph_svg);
+        let _ = writeln!(
+            markdown,
+            "- Diff folded: {}",
+            markdown_inline_code(&mode.diff_folded)
+        );
+        let _ = writeln!(
+            markdown,
+            "- SVG: {}",
+            markdown_inline_code(&mode.flamegraph_svg)
+        );
         if let (Some(before), Some(after)) = (mode.baseline_samples, mode.candidate_samples) {
             let _ = writeln!(
                 markdown,
@@ -2835,12 +2973,18 @@ fn execute_local_android_capture(
         );
     }
     match android_read_logcat(&toolchain) {
-        Ok(logs) => {
-            let reports = extract_benchmark_reports_from_logs(&logs);
-            if let Some(report) = select_benchmark_value_for_function(&reports, &args.function) {
-                merge_semantic_profile_from_bench_report(manifest, report)?;
+        Ok(logs) => match extract_benchmark_reports_from_logs(&logs) {
+            Ok(reports) => {
+                if let Some(report) =
+                    select_benchmark_value_for_function(&reports, &args.function)
+                {
+                    merge_semantic_profile_from_bench_report(manifest, report)?;
+                }
             }
-        }
+            Err(error) => manifest.capture_metadata.warnings.push(format!(
+                "semantic phase capture was unavailable because Android benchmark framing was malformed: {error}"
+            )),
+        },
         Err(error) => {
             manifest.capture_metadata.warnings.push(format!(
                 "semantic phase capture was unavailable because Android logcat could not be read: {error}"
@@ -3750,23 +3894,18 @@ fn parse_ios_sample_call_graph_line(line: &str) -> Option<ParsedIosSampleLine> {
     })
 }
 
-fn extract_benchmark_reports_from_logs(logs: &str) -> Vec<Value> {
+fn extract_benchmark_reports_from_logs(logs: &str) -> Result<Vec<Value>> {
     let mut results = Vec::new();
     if let Some(json) = extract_ios_benchmark_json(logs) {
         results.push(json);
     }
 
-    let marker = "BENCH_JSON ";
-    for line in logs.lines() {
-        if let Some(index) = line.find(marker) {
-            let json_part = &line[index + marker.len()..];
-            if let Ok(parsed) = serde_json::from_str::<Value>(json_part) {
-                results.push(parsed);
-            }
-        }
-    }
+    results.extend(
+        mobench_domain::decode_android_bench_frames(logs)
+            .context("malformed Android benchmark framing")?,
+    );
 
-    results
+    Ok(results)
 }
 
 fn extract_ios_benchmark_json(logs: &str) -> Option<Value> {
@@ -3861,18 +4000,14 @@ fn select_benchmark_value_for_function<'a>(
     function: &str,
 ) -> Option<&'a Value> {
     let simple_name = function.split("::").last().unwrap_or(function);
-    values
-        .iter()
-        .rev()
-        .find(|value| {
-            benchmark_value_function(value).is_some_and(|name| {
-                name == function
-                    || name == simple_name
-                    || name.ends_with(&format!("::{simple_name}"))
-                    || function.ends_with(&format!("::{name}"))
-            })
+    values.iter().rev().find(|value| {
+        benchmark_value_function(value).is_some_and(|name| {
+            name == function
+                || name == simple_name
+                || name.ends_with(&format!("::{simple_name}"))
+                || function.ends_with(&format!("::{name}"))
         })
-        .or_else(|| values.last())
+    })
 }
 
 fn benchmark_value_sample_duration_total_ns(benchmark_value: &Value) -> u64 {
@@ -4556,6 +4691,25 @@ mod tests {
         }
     }
 
+    fn find_published_run(output_dir: &Path, logical_id: &str, manifest_name: &str) -> PathBuf {
+        let prefix = format!("{logical_id}--");
+        let mut matches: Vec<_> = std::fs::read_dir(output_dir)
+            .expect("list profile output root")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .map(|entry| entry.path())
+            .filter(|path| path.join(manifest_name).is_file())
+            .collect();
+        matches.sort();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected one published run for {logical_id}"
+        );
+        matches.pop().expect("published run")
+    }
+
     #[test]
     fn local_native_profiles_default_to_warm_capture_mode() {
         let android_target = resolve_profile_target(&sample_run_args(
@@ -4618,13 +4772,118 @@ mod tests {
     fn benchmark_logs_extract_android_bench_json_reports() {
         let reports = extract_benchmark_reports_from_logs(
             "03-26 19:00:00.000 BenchRunner I BENCH_JSON {\"function\":\"sample_fns::fibonacci\",\"phases\":[{\"name\":\"prove\",\"duration_ns\":90},{\"name\":\"serialize\",\"duration_ns\":10}]}",
-        );
+        )
+        .expect("decode released Android frame");
 
         assert_eq!(reports.len(), 1);
         assert_eq!(
             benchmark_value_function(&reports[0]),
             Some("sample_fns::fibonacci")
         );
+    }
+
+    #[test]
+    fn benchmark_logs_extract_generated_android_chunk_reports() {
+        let reports = extract_benchmark_reports_from_logs(
+            r#"
+03-26 19:00:00.000 I/BenchRunner: BENCH_JSON_START
+03-26 19:00:00.001 I/BenchRunner: BENCH_JSON_CHUNK {"function":"sample_fns::fibonacci",
+03-26 19:00:00.002 I/BenchRunner: BENCH_JSON_CHUNK "samples_ns":[90,10]}
+03-26 19:00:00.003 I/BenchRunner: BENCH_JSON_END
+"#,
+        )
+        .expect("decode generated Android frame");
+
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            benchmark_value_function(&reports[0]),
+            Some("sample_fns::fibonacci")
+        );
+        assert_eq!(reports[0]["samples_ns"], serde_json::json!([90, 10]));
+    }
+
+    #[test]
+    fn benchmark_logs_reject_truncated_android_chunk_reports() {
+        let error = extract_benchmark_reports_from_logs(
+            r#"
+03-26 19:00:00.000 I/BenchRunner: BENCH_JSON_START
+03-26 19:00:00.001 I/BenchRunner: BENCH_JSON_CHUNK {"function":"sample_fns::fibonacci"
+"#,
+        )
+        .expect_err("reject truncated Android frame");
+
+        assert!(
+            error
+                .to_string()
+                .contains("malformed Android benchmark framing")
+        );
+        assert!(format!("{error:#}").contains("incomplete"));
+    }
+
+    #[test]
+    fn benchmark_logs_reject_android_chunks_before_start() {
+        let error = extract_benchmark_reports_from_logs(
+            r#"03-26 19:00:00.000 I/BenchRunner: BENCH_JSON_CHUNK {"function":"sample_fns::fibonacci"}"#,
+        )
+        .expect_err("reject malformed Android frame");
+
+        assert!(format!("{error:#}").contains("before a start marker"));
+    }
+
+    #[test]
+    fn benchmark_report_selection_matches_function_identity() {
+        let reports = vec![
+            serde_json::json!({"function": "sample_fns::fibonacci", "samples_ns": [90]}),
+            serde_json::json!({"function": "sample_fns::sha256", "samples_ns": [10]}),
+        ];
+
+        let selected = select_benchmark_value_for_function(&reports, "sample_fns::fibonacci")
+            .expect("select matching function");
+
+        assert_eq!(selected["samples_ns"], serde_json::json!([90]));
+    }
+
+    #[test]
+    fn benchmark_report_selection_matches_legacy_spec_name() {
+        let reports = vec![serde_json::json!({
+            "spec": {"name": "sample_fns::fibonacci"},
+            "samples_ns": [90]
+        })];
+
+        let selected = select_benchmark_value_for_function(&reports, "sample_fns::fibonacci")
+            .expect("select matching legacy spec name");
+
+        assert_eq!(selected["samples_ns"], serde_json::json!([90]));
+    }
+
+    #[test]
+    fn benchmark_report_selection_preserves_simple_legacy_function_name() {
+        let reports = vec![serde_json::json!({
+            "function": "fibonacci",
+            "samples_ns": [90]
+        })];
+
+        let selected = select_benchmark_value_for_function(&reports, "sample_fns::fibonacci")
+            .expect("select matching simple legacy function name");
+
+        assert_eq!(selected["samples_ns"], serde_json::json!([90]));
+    }
+
+    #[test]
+    fn benchmark_report_selection_rejects_mismatched_identity() {
+        let reports = vec![serde_json::json!({
+            "function": "sample_fns::sha256",
+            "samples_ns": [10]
+        })];
+
+        assert!(select_benchmark_value_for_function(&reports, "sample_fns::fibonacci").is_none());
+    }
+
+    #[test]
+    fn benchmark_report_selection_rejects_identity_free_report() {
+        let reports = vec![serde_json::json!({"samples_ns": [10]})];
+
+        assert!(select_benchmark_value_for_function(&reports, "sample_fns::fibonacci").is_none());
     }
 
     #[test]
@@ -4714,9 +4973,14 @@ mod tests {
     fn write_profile_session_outputs_persists_semantic_phase_sidecar() {
         let dir = tempfile::tempdir().expect("temp dir");
         let mut manifest = sample_manifest();
+        let logical_id = ArtifactId::new(&manifest.run_id).expect("valid manifest run ID");
+        let workspace =
+            RunWorkspace::allocate(dir.path(), &logical_id).expect("allocate workspace");
+        let published_output_dir = workspace.published_path().to_path_buf();
         manifest.semantic_profile.spans_path = Some(
-            dir.path()
-                .join("android-sample/artifacts/semantic/phases.json"),
+            workspace
+                .staging_path()
+                .join("artifacts/semantic/phases.json"),
         );
         let args = ProfileRunArgs {
             target: MobileTarget::Android,
@@ -4734,13 +4998,12 @@ mod tests {
             config: None,
             warmup_mode: Some(CaptureWarmupMode::Warm),
         };
-        let run_output_dir = dir.path().join("android-sample");
-
-        write_profile_session_outputs(&args, &run_output_dir, &manifest)
-            .expect("write profile outputs");
+        write_profile_session_outputs(&args, workspace, &manifest).expect("write profile outputs");
+        let published_manifest = load_profile_manifest(&published_output_dir.join("profile.json"))
+            .expect("load published manifest");
 
         let sidecar = std::fs::read_to_string(
-            manifest
+            published_manifest
                 .semantic_profile
                 .spans_path
                 .as_ref()
@@ -4751,10 +5014,11 @@ mod tests {
         assert!(sidecar.contains("\"serialize\""));
     }
 
-    fn write_timeline_demo_session(
-        output_dir: &Path,
-        run_output_dir: &Path,
-    ) -> Result<ProfileManifest> {
+    fn write_timeline_demo_session(output_dir: &Path) -> Result<(ProfileManifest, PathBuf)> {
+        let logical_id = ArtifactId::new("ios-demo")?;
+        let workspace = RunWorkspace::allocate(output_dir, &logical_id)?;
+        let run_output_dir = workspace.staging_path().to_path_buf();
+        let published_output_dir = workspace.published_path().to_path_buf();
         let raw_root = run_output_dir.join("artifacts/raw");
         let processed_root = run_output_dir.join("artifacts/processed");
         let semantic_root = run_output_dir.join("artifacts/semantic");
@@ -4916,17 +5180,16 @@ mod tests {
             config: None,
             warmup_mode: Some(CaptureWarmupMode::Warm),
         };
-        write_profile_session_outputs(&args, run_output_dir, &manifest)?;
-        Ok(manifest)
+        write_profile_session_outputs(&args, workspace, &manifest)?;
+        let published_manifest = load_profile_manifest(&published_output_dir.join("profile.json"))?;
+        Ok((published_manifest, published_output_dir))
     }
 
     #[test]
     fn write_profile_session_outputs_rewrites_flamegraph_with_timeline_payload() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let run_output_dir = dir.path().join("ios-demo");
-
-        let manifest =
-            write_timeline_demo_session(dir.path(), &run_output_dir).expect("write demo session");
+        let (manifest, run_output_dir) =
+            write_timeline_demo_session(dir.path()).expect("write demo session");
 
         let viewer_html =
             std::fs::read_to_string(run_output_dir.join("artifacts/processed/flamegraph.html"))
@@ -4953,9 +5216,8 @@ mod tests {
         let output_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target/mobench/flamegraph-timeline-demo");
         let _ = std::fs::remove_dir_all(&output_dir);
-        let run_output_dir = output_dir.join("ios-demo");
 
-        write_timeline_demo_session(&output_dir, &run_output_dir).expect("generate demo artifact");
+        write_timeline_demo_session(&output_dir).expect("generate demo artifact");
     }
 
     #[test]
@@ -5104,7 +5366,11 @@ mod tests {
         })
         .expect("run profile diff");
 
-        let diff_dir = output_dir.join("baseline-run--vs--candidate-run");
+        let diff_dir = find_published_run(
+            &output_dir,
+            "baseline-run--vs--candidate-run",
+            "profile-diff.json",
+        );
         assert!(diff_dir.join("profile-diff.json").exists());
         assert!(diff_dir.join("summary.md").exists());
         assert!(
@@ -5115,6 +5381,41 @@ mod tests {
         let summary = std::fs::read_to_string(diff_dir.join("summary.md")).expect("read summary");
         assert!(summary.contains("Differential Flamegraph Summary"));
         assert!(summary.contains("Normalize: `true`"));
+        let manifest: DifferentialViewerManifest = serde_json::from_slice(
+            &std::fs::read(diff_dir.join("profile-diff.json")).expect("read diff manifest"),
+        )
+        .expect("parse diff manifest");
+        let canonical_diff_dir = std::fs::canonicalize(&diff_dir).expect("canonical diff dir");
+        assert!(Path::new(&manifest.viewer_path).starts_with(&canonical_diff_dir));
+        assert!(!manifest.viewer_path.contains(".mobench-staging"));
+        assert!(output_dir.join("profile-diff.json").is_file());
+        assert!(output_dir.join("summary.md").is_file());
+    }
+
+    #[test]
+    fn profile_diff_rejects_unsafe_manifest_run_ids_before_writing_output() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let baseline_path = dir.path().join("baseline.json");
+        let candidate_path = dir.path().join("candidate.json");
+        let mut baseline_manifest = sample_manifest();
+        baseline_manifest.run_id = "../escape".into();
+        let mut candidate_manifest = baseline_manifest.clone();
+        candidate_manifest.run_id = "candidate".into();
+        write_profile_manifest(&baseline_path, &baseline_manifest).expect("write baseline");
+        write_profile_manifest(&candidate_path, &candidate_manifest).expect("write candidate");
+        let output_dir = dir.path().join("diff");
+        let escaped_dir = dir.path().join("escape--vs--candidate");
+
+        let error = cmd_profile_diff(&ProfileDiffArgs {
+            baseline: baseline_path,
+            candidate: candidate_path,
+            output_dir,
+            normalize: false,
+        })
+        .expect_err("reject unsafe manifest run ID");
+
+        assert!(error.to_string().contains("safe artifact path component"));
+        assert!(!escaped_dir.exists());
     }
 
     #[test]
@@ -5205,6 +5506,72 @@ mod tests {
         assert!(markdown.contains("artifacts/raw/sample.perf"));
         assert!(markdown.contains("## Semantic phases"));
         assert!(markdown.contains("missing symbols"));
+    }
+
+    #[test]
+    fn profile_markdown_contains_untrusted_manifest_fields() {
+        let mut manifest = sample_manifest();
+        manifest.run_id = "run`\n# forged heading".into();
+        manifest.function = "bench](https://evil.invalid)".into();
+        manifest.native_capture.raw_artifacts[0].label = "**raw**".into();
+        manifest.native_capture.raw_artifacts[0].path = PathBuf::from("artifact`\n- forged item");
+        manifest.native_capture.symbolization.tool = Some("<script>tool</script>".into());
+        manifest.native_capture.symbolization.notes =
+            vec!["[note](https://evil.invalid/note)".into()];
+        manifest.native_capture.viewer_hint = Some("![image](https://evil.invalid/image)".into());
+        manifest.semantic_profile.phases[0].name = "phase`\n## forged phase".into();
+        manifest.capture_metadata.device = Some("_device_".into());
+        manifest.capture_metadata.capture_method = Some("method`\n> quote".into());
+        manifest.capture_metadata.warnings = vec!["warning\n- forged warning".into()];
+
+        let markdown = render_profile_markdown(&manifest);
+
+        assert!(markdown.contains("`` run` # forged heading ``"));
+        assert!(markdown.contains("- Function: `bench](https://evil.invalid)`"));
+        assert!(markdown.contains("- Tool: `<script>tool</script>`"));
+        assert!(markdown.contains("- Device: `_device_`"));
+        assert!(!markdown.contains("[note](https://evil.invalid/note)"));
+        assert!(!markdown.contains("![image]"));
+        assert!(!markdown.lines().any(|line| matches!(
+            line,
+            "# forged heading" | "## forged phase" | "- forged item" | "- forged warning"
+        )));
+    }
+
+    #[test]
+    fn profile_diff_markdown_contains_untrusted_manifest_fields() {
+        let manifest = DifferentialViewerManifest {
+            run_id: "diff`\n# forged heading".into(),
+            baseline: "[baseline](https://evil.invalid/base)".into(),
+            candidate: "candidate`\n- forged candidate".into(),
+            target: Some(MobileTarget::Android),
+            function: Some("bench](https://evil.invalid/function)".into()),
+            backend: Some(ProfileBackend::AndroidNative),
+            normalize: false,
+            viewer_path: "viewer`\n> quote".into(),
+            summary_path: None,
+            warnings: vec!["<script>warning</script>".into()],
+            modes: vec![DifferentialViewerModeRecord {
+                mode: "## injected mode".into(),
+                baseline_folded: Some("baseline`\n- forged".into()),
+                candidate_folded: Some("candidate.folded".into()),
+                diff_folded: "diff`\n- forged".into(),
+                flamegraph_svg: "![svg](https://evil.invalid/svg)".into(),
+                baseline_samples: Some(1),
+                candidate_samples: Some(2),
+            }],
+        };
+
+        let markdown = render_profile_diff_markdown(&manifest);
+
+        assert!(markdown.contains("&#35;&#35; injected mode"));
+        assert!(markdown.contains("&lt;script&gt;warning&lt;&#47;script&gt;"));
+        assert!(markdown.contains("- Baseline: `[baseline](https://evil.invalid/base)`"));
+        assert!(markdown.contains("- SVG: `![svg](https://evil.invalid/svg)`"));
+        assert!(!markdown.lines().any(|line| matches!(
+            line,
+            "# forged heading" | "- forged candidate" | "- forged" | "> quote"
+        )));
     }
 
     #[test]
@@ -5724,7 +6091,8 @@ mod tests {
                 .contains("simulated android capture failure")
         );
 
-        let run_dir = dir.path().join(build_run_id(args.target, &args.function));
+        let logical_id = build_run_id(args.target, &args.function);
+        let run_dir = find_published_run(dir.path(), &logical_id, "profile.json");
         let manifest = load_profile_manifest(&run_dir.join("profile.json"))
             .expect("load failed profile manifest");
 
@@ -6064,8 +6432,10 @@ mod tests {
         run_profile_session_with_executor(&ios_args, false, |_args, _target, _manifest| Ok(()))
             .expect("write second profile session");
 
-        let android_run_dir = dir.path().join("android-sample_fns--fibonacci");
-        let ios_run_dir = dir.path().join("ios-sample_fns--checksum");
+        let android_run_dir =
+            find_published_run(dir.path(), "android-sample_fns--fibonacci", "profile.json");
+        let ios_run_dir =
+            find_published_run(dir.path(), "ios-sample_fns--checksum", "profile.json");
 
         assert!(android_run_dir.join("profile.json").exists());
         assert!(android_run_dir.join("summary.md").exists());
@@ -6078,6 +6448,67 @@ mod tests {
             load_profile_manifest(&dir.path().join("profile.json")).expect("load latest manifest");
         assert_eq!(latest_manifest.target, MobileTarget::Ios);
         assert_eq!(latest_manifest.function, "sample_fns::checksum");
+        let canonical_ios_run_dir =
+            std::fs::canonicalize(&ios_run_dir).expect("canonical iOS run dir");
+        for artifact in latest_manifest
+            .native_capture
+            .raw_artifacts
+            .iter()
+            .chain(latest_manifest.native_capture.processed_artifacts.iter())
+        {
+            assert!(artifact.path.starts_with(&canonical_ios_run_dir));
+            assert!(!artifact.path.to_string_lossy().contains(".mobench-staging"));
+        }
+    }
+
+    #[test]
+    fn repeated_profile_runs_publish_isolated_directories_without_stale_artifacts() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        args.output_dir = dir.path().to_path_buf();
+
+        run_profile_session_with_executor(&args, false, |_args, _target, manifest| {
+            let run_root = manifest
+                .semantic_profile
+                .spans_path
+                .as_deref()
+                .and_then(|path| path.ancestors().nth(3))
+                .context("semantic sidecar path must be rooted in the run directory")?;
+            std::fs::create_dir_all(run_root)?;
+            std::fs::write(run_root.join("stale.data"), "first run only")?;
+            Ok(())
+        })
+        .expect("write first profile session");
+        run_profile_session_with_executor(&args, false, |_args, _target, _manifest| Ok(()))
+            .expect("write second profile session");
+
+        let logical_id = build_run_id(args.target, &args.function);
+        let mut run_dirs: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("list output root")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name == logical_id || name.starts_with(&format!("{logical_id}--"))
+            })
+            .map(|entry| entry.path())
+            .collect();
+        run_dirs.sort();
+
+        assert_eq!(run_dirs.len(), 2);
+        assert_eq!(
+            run_dirs
+                .iter()
+                .filter(|run_dir| run_dir.join("stale.data").exists())
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -6206,12 +6637,9 @@ mod tests {
 
         cmd_profile_run(&args, true).expect("dry-run should stop after planning");
 
-        let manifest = load_profile_manifest(
-            &dir.path()
-                .join("ios-sample_fns--fibonacci")
-                .join("profile.json"),
-        )
-        .expect("load planned manifest");
+        let run_dir = find_published_run(dir.path(), "ios-sample_fns--fibonacci", "profile.json");
+        let manifest =
+            load_profile_manifest(&run_dir.join("profile.json")).expect("load planned manifest");
         assert_eq!(manifest.native_capture.status, CaptureStatus::Planned);
         assert!(
             manifest

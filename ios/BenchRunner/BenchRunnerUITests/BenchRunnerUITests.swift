@@ -1,9 +1,11 @@
+import Foundation
 import XCTest
 
 final class BenchRunnerUITests: XCTestCase {
 
     /// Maximum time to wait for benchmark completion (5 minutes for long benchmarks)
     private let defaultBenchmarkTimeout: TimeInterval = 300.0
+    private let expectedBenchmarkFunction = "sample_fns::fibonacci"
 
     private var benchmarkTimeout: TimeInterval {
         if let configuredTimeout =
@@ -15,6 +17,38 @@ final class BenchRunnerUITests: XCTestCase {
         }
 
         return defaultBenchmarkTimeout
+    }
+
+    private func validateBenchmarkReport(_ jsonString: String) {
+        XCTAssertFalse(jsonString.isEmpty, "Benchmark report JSON should not be empty")
+
+        guard let data = jsonString.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            XCTFail("Benchmark report should be a valid JSON object: \(jsonString)")
+            return
+        }
+
+        XCTAssertNil(payload["error"], "Benchmark report should not be an error payload: \(jsonString)")
+
+        let spec = payload["spec"] as? [String: Any]
+        let reportedFunction = payload["function"] as? String ?? spec?["name"] as? String
+        XCTAssertEqual(
+            reportedFunction,
+            expectedBenchmarkFunction,
+            "Benchmark report function must match the requested function"
+        )
+
+        let samples = payload["samples_ns"] as? [Any] ?? payload["samples"] as? [Any]
+        XCTAssertNotNil(samples, "Benchmark report should include measured samples")
+        XCTAssertFalse(samples?.isEmpty ?? true, "Benchmark report samples should not be empty")
+
+        if let schemaVersion = payload["schema_version"] {
+            XCTAssertTrue(
+                schemaVersion is String || schemaVersion is NSNumber,
+                "Benchmark report schema_version should be a string or number"
+            )
+        }
     }
 
     func testLaunchAndCaptureBenchmarkReport() {
@@ -49,9 +83,7 @@ final class BenchRunnerUITests: XCTestCase {
         print(jsonString)
         print("BENCH_REPORT_JSON_END")
 
-        // Verify we got valid JSON (not an error message)
-        XCTAssertFalse(jsonString.isEmpty, "Benchmark report JSON should not be empty")
-        XCTAssertTrue(jsonString.hasPrefix("{"), "Benchmark report should be valid JSON (starts with '{')")
+        validateBenchmarkReport(jsonString)
     }
 
     // Keep the old test name for backward compatibility

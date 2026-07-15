@@ -1,7 +1,11 @@
 [workspace]
 members = [
     "crates/mobench",
+    "crates/mobench-artifacts",
+    "crates/mobench-domain",
     "crates/mobench-macros",
+    "crates/mobench-process",
+    "crates/mobench-report",
     "crates/mobench-sdk",
     "crates/sample-fns",
     "examples/basic-benchmark",
@@ -26,6 +30,7 @@ toml = "0.8"
 uniffi = "0.28"
 boltffi = "0.25.2"
 time = { version = "0.3", features = ["formatting"] }
+fs2 = "0.4"
 
 # Phase 1: Registry and proc macros
 inventory = "0.3"
@@ -37,3 +42,7 @@ proc-macro2 = "1"
 include_dir = "0.7"
 mobench-macros = { version = "0.1.43", path = "crates/mobench-macros" }
 mobench-sdk = { version = "0.1.43", path = "crates/mobench-sdk", default-features = false }
+mobench-artifacts = { path = "crates/mobench-artifacts" }
+mobench-domain = { path = "crates/mobench-domain" }
+mobench-process = { path = "crates/mobench-process" }
+mobench-report = { path = "crates/mobench-report" }

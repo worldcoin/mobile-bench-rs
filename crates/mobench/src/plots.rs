@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
+use mobench_artifacts::ApprovedRoot;
+use mobench_process::DeclaredExecutable;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -337,12 +338,165 @@ printf '<svg>ok</svg>' > "$output"
 
     assert_eq!(rendered.len(), 1);
     assert_eq!(
+        rendered[0].output_path,
+        out.path().join("plots/nullifier-proof-generation.svg")
+    );
+    assert_eq!(
         rendered[0].relative_path,
         PathBuf::from("plots/nullifier-proof-generation.svg")
     );
     assert_eq!(
         fs::read_to_string(&rendered[0].output_path).expect("read svg"),
         "<svg>ok</svg>"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn render_plot_artifacts_ignores_ambient_python_selection() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    const CHILD_MARKER: &str = "MOBENCH_TEST_PLOT_PROVENANCE_CHILD";
+    const OUTPUT_DIR: &str = "MOBENCH_TEST_PLOT_OUTPUT_DIR";
+    const FIXED_MARKER: &str = "MOBENCH_TEST_FIXED_PYTHON_MARKER";
+    const AMBIENT_MARKER: &str = "MOBENCH_TEST_AMBIENT_PYTHON_MARKER";
+
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let output_dir = PathBuf::from(
+            std::env::var_os(OUTPUT_DIR).expect("child plot output directory should be set"),
+        );
+        let rendered =
+            render_plot_artifacts(&[sample_plot_input()], &output_dir, PlotMode::Require, None)
+                .expect("fixed-name Python discovery should render the plot");
+
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(
+            fs::read_to_string(&rendered[0].output_path).expect("read rendered plot"),
+            "<svg>fixed-name</svg>"
+        );
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let bin_dir = root.path().join("bin");
+    let output_dir = root.path().join("output");
+    fs::create_dir_all(&bin_dir).expect("create bin directory");
+    fs::create_dir_all(&output_dir).expect("create output directory");
+
+    let fixed_python = bin_dir.join("python3");
+    fs::write(
+        &fixed_python,
+        r#"#!/bin/sh
+printf invoked > "$MOBENCH_TEST_FIXED_PYTHON_MARKER"
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+printf '<svg>fixed-name</svg>' > "$output"
+"#,
+    )
+    .expect("write fixed-name Python");
+
+    let ambient_python = root.path().join("dotenv-python");
+    fs::write(
+        &ambient_python,
+        r#"#!/bin/sh
+printf invoked > "$MOBENCH_TEST_AMBIENT_PYTHON_MARKER"
+exit 99
+"#,
+    )
+    .expect("write ambient Python trap");
+
+    for executable in [&fixed_python, &ambient_python] {
+        let mut permissions = fs::metadata(executable)
+            .expect("fake Python metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(executable, permissions).expect("set fake Python permissions");
+    }
+
+    let fixed_marker = root.path().join("fixed-invoked");
+    let ambient_marker = root.path().join("ambient-invoked");
+    let output = Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("render_plot_artifacts_ignores_ambient_python_selection")
+        .arg("--nocapture")
+        .env(CHILD_MARKER, "1")
+        .env(OUTPUT_DIR, &output_dir)
+        .env(FIXED_MARKER, &fixed_marker)
+        .env(AMBIENT_MARKER, &ambient_marker)
+        .env("MOBENCH_PLOT_PYTHON", &ambient_python)
+        .env("PATH", &bin_dir)
+        .output()
+        .expect("run isolated plotting test process");
+
+    assert!(
+        output.status.success(),
+        "isolated plotting test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        fixed_marker.exists(),
+        "fixed python3 candidate was not used"
+    );
+    assert!(
+        !ambient_marker.exists(),
+        "ambient MOBENCH_PLOT_PYTHON executable was invoked"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn render_plot_artifacts_rejects_symlinked_plots_before_invoking_renderer() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let out = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    symlink(outside.path(), out.path().join("plots")).expect("create plots symlink");
+
+    let fake_python = out.path().join("fake-python");
+    fs::write(
+        &fake_python,
+        r#"#!/bin/sh
+printf 'invoked' > "$(dirname "$0")/renderer-invoked"
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+printf '<svg>escaped</svg>' > "$output"
+"#,
+    )
+    .expect("write fake python");
+    let mut permissions = fs::metadata(&fake_python)
+        .expect("fake python metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_python, permissions).expect("set fake python perms");
+
+    let error = render_plot_artifacts(
+        &[sample_plot_input()],
+        out.path(),
+        PlotMode::Require,
+        Some(&fake_python),
+    )
+    .expect_err("symlinked plots directory must fail");
+
+    assert!(error.to_string().contains("symbolic link"));
+    assert!(!out.path().join("renderer-invoked").exists());
+    assert!(
+        !outside
+            .path()
+            .join("nullifier-proof-generation.svg")
+            .exists()
     );
 }
 
@@ -470,15 +624,21 @@ pub fn render_plot_artifacts(
                 return Ok(Vec::new());
             }
 
-            let assets = materialize_renderer_assets(output_dir)?;
-            let plots_dir = output_dir.join("plots");
-            fs::create_dir_all(&plots_dir)
-                .with_context(|| format!("creating directory {}", plots_dir.display()))?;
+            let approved_root = ApprovedRoot::existing(output_dir)?;
+            approved_root.prepare_dir("plots")?;
+            let assets = materialize_renderer_assets(approved_root.path())?;
             let file_names = allocate_plot_file_names(inputs);
 
             let mut rendered = Vec::new();
             for (input, file_name) in inputs.iter().zip(file_names.iter()) {
-                match render_single_plot(input, &plots_dir, &assets, python_override, file_name) {
+                match render_single_plot(
+                    input,
+                    &approved_root,
+                    output_dir,
+                    &assets,
+                    python_override,
+                    file_name,
+                ) {
                     Ok(plot) => rendered.push(plot),
                     Err(err) if mode == PlotMode::Auto => {
                         eprintln!("Skipping plot {}: {err}", input.function_name);
@@ -494,13 +654,14 @@ pub fn render_plot_artifacts(
 
 fn render_single_plot(
     input: &PlotFunctionInput,
-    plots_dir: &Path,
+    approved_root: &ApprovedRoot,
+    reported_output_dir: &Path,
     assets: &RendererAssets,
     python_override: Option<&Path>,
     file_name: &str,
 ) -> Result<RenderedPlot> {
-    let output_path = plots_dir.join(file_name);
     let relative_path = PathBuf::from("plots").join(file_name);
+    let prepared_output_path = approved_root.prepare_file(&relative_path)?;
     let input_path = assets
         .script_path
         .parent()
@@ -514,14 +675,19 @@ fn render_single_plot(
         .with_context(|| format!("writing plot input {}", input_path.display()))?;
 
     let mut last_not_found = None;
-    for candidate in python_candidates(python_override) {
-        match try_render_with_python(&candidate, &assets.script_path, &input_path, &output_path) {
+    for candidate in python_candidates(python_override)? {
+        match try_render_with_python(
+            &candidate,
+            &assets.script_path,
+            &input_path,
+            &prepared_output_path,
+        ) {
             Ok(()) => {
                 return Ok(RenderedPlot {
                     function_name: input.function_name.clone(),
                     function_label: input.function_label.clone(),
                     target: input.target.clone(),
-                    output_path,
+                    output_path: reported_output_dir.join(&relative_path),
                     relative_path,
                 });
             }
@@ -541,12 +707,13 @@ enum RenderAttemptError {
 }
 
 fn try_render_with_python(
-    python: &Path,
+    python: &DeclaredExecutable,
     script_path: &Path,
     input_path: &Path,
     output_path: &Path,
 ) -> std::result::Result<(), RenderAttemptError> {
-    let output = Command::new(python)
+    let output = python
+        .command()
         .arg(script_path)
         .arg("--input")
         .arg(input_path)
@@ -577,26 +744,20 @@ fn try_render_with_python(
 
     Err(RenderAttemptError::Failed(anyhow::anyhow!(
         "{} failed for {}",
-        python.display(),
+        python.program().display(),
         details
     )))
 }
 
-fn python_candidates(python_override: Option<&Path>) -> Vec<PathBuf> {
+fn python_candidates(python_override: Option<&Path>) -> Result<Vec<DeclaredExecutable>> {
     if let Some(path) = python_override {
-        return vec![path.to_path_buf()];
+        return Ok(vec![DeclaredExecutable::explicit_override(path)?]);
     }
 
-    let mut candidates = Vec::new();
-    if let Ok(value) = std::env::var("MOBENCH_PLOT_PYTHON") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            candidates.push(PathBuf::from(trimmed));
-        }
-    }
-    candidates.push(PathBuf::from("python3"));
-    candidates.push(PathBuf::from("python"));
-    candidates
+    Ok(vec![
+        DeclaredExecutable::path_search("python3")?,
+        DeclaredExecutable::path_search("python")?,
+    ])
 }
 
 fn allocate_plot_file_names(inputs: &[PlotFunctionInput]) -> Vec<String> {
