@@ -53,6 +53,23 @@ fn extract_function_plot_inputs_reads_fixture_samples() {
 }
 
 #[test]
+fn extract_run_metadata_drops_counts_larger_than_u32() {
+    let out_of_range = u64::from(u32::MAX) + 1;
+    let value = serde_json::json!({
+        "summary": {
+            "target": "android",
+            "iterations": out_of_range,
+            "warmup": out_of_range
+        }
+    });
+
+    assert_eq!(
+        extract_run_metadata(&value, Path::new("summary.json")),
+        ("android".to_string(), 0, 0)
+    );
+}
+
+#[test]
 fn extract_function_plot_inputs_walks_nested_files_without_duplicates() {
     let root = tempfile::tempdir().expect("tempdir");
     let root_summary = root.path().join("summary.json");
@@ -1104,12 +1121,12 @@ fn extract_run_metadata(value: &Value, path: &Path) -> (String, u32, u32) {
 
     let iterations = summary
         .get("iterations")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
     let warmup = summary
         .get("warmup")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
 
     (target, iterations, warmup)
 }

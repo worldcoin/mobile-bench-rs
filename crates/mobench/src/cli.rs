@@ -1,8 +1,32 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use mobench_runtime::MAX_BENCHMARK_COUNT;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::{plots, profile};
+
+fn parse_iterations(value: &str) -> Result<u32, String> {
+    let count = value
+        .parse::<u32>()
+        .map_err(|_| "iterations must be an unsigned 32-bit integer".to_string())?;
+    if count == 0 {
+        return Err("iterations must be greater than zero".to_string());
+    }
+    if count > MAX_BENCHMARK_COUNT {
+        return Err(format!("iterations must not exceed {MAX_BENCHMARK_COUNT}"));
+    }
+    Ok(count)
+}
+
+fn parse_warmup(value: &str) -> Result<u32, String> {
+    let count = value
+        .parse::<u32>()
+        .map_err(|_| "warmup must be an unsigned 32-bit integer".to_string())?;
+    if count > MAX_BENCHMARK_COUNT {
+        return Err(format!("warmup must not exceed {MAX_BENCHMARK_COUNT}"));
+    }
+    Ok(count)
+}
 
 /// CLI orchestrator for building, packaging, and executing Rust benchmarks on mobile.
 #[derive(Parser, Debug)]
@@ -56,9 +80,9 @@ pub(crate) enum Command {
             help = "Path to the benchmark crate directory containing Cargo.toml"
         )]
         crate_path: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, value_parser = parse_iterations)]
         iterations: Option<u32>,
-        #[arg(long)]
+        #[arg(long, value_parser = parse_warmup)]
         warmup: Option<u32>,
         #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
         devices: Vec<String>,
@@ -616,9 +640,9 @@ pub(crate) struct CiRunArgs {
         help = "Multiple benchmark functions (comma-separated or JSON array). Runs each in sequence."
     )]
     pub(crate) functions: Vec<String>,
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 100, value_parser = parse_iterations)]
     pub(crate) iterations: u32,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 10, value_parser = parse_warmup)]
     pub(crate) warmup: u32,
     #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
     pub(crate) devices: Vec<String>,
@@ -753,11 +777,11 @@ pub(crate) struct CiMergeSplitRunsArgs {
     pub(crate) device: String,
 
     /// Expected measured sample count.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_iterations)]
     pub(crate) iterations: u32,
 
     /// Warmup count reported in merged CI summaries.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, value_parser = parse_warmup)]
     pub(crate) warmup: u32,
 }
 

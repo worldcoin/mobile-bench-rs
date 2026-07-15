@@ -23,6 +23,7 @@ use crate::{
 };
 use mobench_artifacts::{ArtifactId, LatestArtifact, RunWorkspace};
 use mobench_report::{markdown_inline_code, markdown_inline_field_text};
+use mobench_runtime::{rounded_percent_u64, saturating_sum_u64};
 use mobench_sdk::types::NativeLibraryArtifact;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -2052,11 +2053,12 @@ fn resolve_required_processed_artifact(
 fn total_samples_in_folded_path(path: &Path) -> Result<u64> {
     let folded =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(folded
-        .lines()
-        .filter_map(split_folded_stack_line)
-        .map(|(_, count)| count)
-        .sum())
+    Ok(saturating_sum_u64(
+        folded
+            .lines()
+            .filter_map(split_folded_stack_line)
+            .map(|(_, count)| count),
+    ))
 }
 
 fn split_folded_stack_line(line: &str) -> Option<(&str, u64)> {
@@ -4011,24 +4013,26 @@ fn select_benchmark_value_for_function<'a>(
 }
 
 fn benchmark_value_sample_duration_total_ns(benchmark_value: &Value) -> u64 {
-    let sample_objects_total_ns: u64 = benchmark_value
-        .get("samples")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|sample| sample.get("duration_ns").and_then(Value::as_u64))
-        .sum();
+    let sample_objects_total_ns = saturating_sum_u64(
+        benchmark_value
+            .get("samples")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|sample| sample.get("duration_ns").and_then(Value::as_u64)),
+    );
     if sample_objects_total_ns > 0 {
         return sample_objects_total_ns;
     }
 
-    benchmark_value
-        .get("samples_ns")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_u64)
-        .sum()
+    saturating_sum_u64(
+        benchmark_value
+            .get("samples_ns")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_u64),
+    )
 }
 
 fn populate_semantic_profile_from_benchmark_value(
@@ -4039,11 +4043,11 @@ fn populate_semantic_profile_from_benchmark_value(
         manifest.capture_metadata.benchmark_iterations = spec
             .get("iterations")
             .and_then(Value::as_u64)
-            .map(|value| value as u32);
+            .and_then(|value| u32::try_from(value).ok());
         manifest.capture_metadata.benchmark_warmup = spec
             .get("warmup")
             .and_then(Value::as_u64)
-            .map(|value| value as u32);
+            .and_then(|value| u32::try_from(value).ok());
     }
 
     if let Some(timeline) = benchmark_value.get("timeline").and_then(Value::as_array) {
@@ -4057,7 +4061,7 @@ fn populate_semantic_profile_from_benchmark_value(
                     iteration: span
                         .get("iteration")
                         .and_then(Value::as_u64)
-                        .map(|value| value as u32),
+                        .and_then(|value| u32::try_from(value).ok()),
                 })
             })
             .collect();
@@ -4067,10 +4071,11 @@ fn populate_semantic_profile_from_benchmark_value(
         return;
     };
 
-    let phase_duration_total_ns: u64 = phases
-        .iter()
-        .filter_map(|phase| phase.get("duration_ns").and_then(Value::as_u64))
-        .sum();
+    let phase_duration_total_ns = saturating_sum_u64(
+        phases
+            .iter()
+            .filter_map(|phase| phase.get("duration_ns").and_then(Value::as_u64)),
+    );
     let sample_duration_total_ns = benchmark_value_sample_duration_total_ns(benchmark_value);
     let total_duration_ns = if sample_duration_total_ns > 0 {
         sample_duration_total_ns
@@ -4086,11 +4091,8 @@ fn populate_semantic_profile_from_benchmark_value(
             continue;
         };
         let duration_ns = phase.get("duration_ns").and_then(Value::as_u64);
-        let percent_total = duration_ns.and_then(|duration_ns| {
-            (total_duration_ns > 0).then_some(
-                (duration_ns.saturating_mul(100) + (total_duration_ns / 2)) / total_duration_ns,
-            )
-        });
+        let percent_total =
+            duration_ns.and_then(|duration_ns| rounded_percent_u64(duration_ns, total_duration_ns));
         if duration_ns.is_none() {
             partial = true;
         }
@@ -4967,6 +4969,42 @@ mod tests {
         );
         assert_eq!(manifest.semantic_profile.phases[0].percent_total, Some(80));
         assert_eq!(manifest.semantic_profile.phases[1].percent_total, Some(10));
+    }
+
+    #[test]
+    fn semantic_profile_saturates_extreme_totals_and_computes_exact_percentages() {
+        let mut manifest = sample_manifest();
+
+        populate_semantic_profile_from_benchmark_value(
+            &mut manifest,
+            &serde_json::json!({
+                "function": "sample_fns::fibonacci",
+                "samples_ns": [u64::MAX, 1],
+                "phases": [
+                    {"name": "all-work", "duration_ns": u64::MAX}
+                ]
+            }),
+        );
+
+        assert_eq!(manifest.semantic_profile.phases.len(), 1);
+        assert_eq!(
+            manifest.semantic_profile.phases[0].duration_ns,
+            Some(u64::MAX)
+        );
+        assert_eq!(manifest.semantic_profile.phases[0].percent_total, Some(100));
+    }
+
+    #[test]
+    fn folded_stack_sample_totals_saturate_instead_of_overflowing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("extreme.folded");
+        std::fs::write(&path, format!("root {}\nother 1\n", u64::MAX))
+            .expect("write folded stacks");
+
+        assert_eq!(
+            total_samples_in_folded_path(&path).expect("sum folded samples"),
+            u64::MAX
+        );
     }
 
     #[test]

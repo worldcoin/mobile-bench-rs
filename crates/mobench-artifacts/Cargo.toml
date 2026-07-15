@@ -4,7 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-publish = false
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Transactional artifact publication primitives for mobench"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench-artifacts"
+keywords = ["benchmark", "artifacts", "atomic", "performance"]
+categories = ["development-tools::profiling", "filesystem"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 fs2.workspace = true

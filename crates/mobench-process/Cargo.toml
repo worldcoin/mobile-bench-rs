@@ -4,7 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-publish = false
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Declared executable and subprocess provenance primitives for mobench"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench-process"
+keywords = ["benchmark", "process", "provenance", "performance"]
+categories = ["development-tools::profiling", "os"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 thiserror.workspace = true

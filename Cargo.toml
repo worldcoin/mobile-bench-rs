@@ -6,6 +6,7 @@ members = [
     "crates/mobench-macros",
     "crates/mobench-process",
     "crates/mobench-report",
+    "crates/mobench-runtime",
     "crates/mobench-sdk",
     "crates/sample-fns",
     "examples/basic-benchmark",
@@ -42,7 +43,8 @@ proc-macro2 = "1"
 include_dir = "0.7"
 mobench-macros = { version = "0.1.43", path = "crates/mobench-macros" }
 mobench-sdk = { version = "0.1.43", path = "crates/mobench-sdk", default-features = false }
-mobench-artifacts = { path = "crates/mobench-artifacts" }
-mobench-domain = { path = "crates/mobench-domain" }
-mobench-process = { path = "crates/mobench-process" }
-mobench-report = { path = "crates/mobench-report" }
+mobench-artifacts = { version = "0.1.43", path = "crates/mobench-artifacts" }
+mobench-domain = { version = "0.1.43", path = "crates/mobench-domain" }
+mobench-process = { version = "0.1.43", path = "crates/mobench-process" }
+mobench-report = { version = "0.1.43", path = "crates/mobench-report" }
+mobench-runtime = { version = "0.1.43", path = "crates/mobench-runtime" }

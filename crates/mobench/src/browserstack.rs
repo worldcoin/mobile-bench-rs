@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow};
+use mobench_runtime::Distribution;
 use reqwest::Url;
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
@@ -1292,7 +1293,7 @@ impl BrowserStackClient {
 
     fn normalize_benchmark_value(mut value: Value) -> Option<Value> {
         let samples = Self::extract_sample_durations(&value);
-        let stats = Self::compute_sample_stats(&samples);
+        let stats = Distribution::from_slice(&samples).cli_v1_summary();
         let object = value.as_object_mut()?;
 
         if !object.contains_key("function")
@@ -1439,43 +1440,6 @@ impl BrowserStackClient {
 
         durations
     }
-
-    fn compute_sample_stats(samples: &[u64]) -> Option<NormalizedSampleStats> {
-        if samples.is_empty() {
-            return None;
-        }
-
-        let mut sorted = samples.to_vec();
-        sorted.sort_unstable();
-        let len = sorted.len();
-        let mean_ns =
-            (sorted.iter().map(|value| *value as u128).sum::<u128>() / len as u128) as u64;
-        let median_ns = if len % 2 == 1 {
-            sorted[len / 2]
-        } else {
-            let lower = sorted[(len / 2) - 1];
-            let upper = sorted[len / 2];
-            (lower + upper) / 2
-        };
-        let p95_ns = sorted[Self::percentile_index(len, 0.95)];
-
-        Some(NormalizedSampleStats {
-            mean_ns,
-            median_ns,
-            p95_ns,
-            min_ns: sorted[0],
-            max_ns: sorted[len - 1],
-        })
-    }
-
-    fn percentile_index(len: usize, percentile: f64) -> usize {
-        if len == 0 {
-            return 0;
-        }
-        let rank = (percentile * len as f64).ceil() as usize;
-        let index = rank.saturating_sub(1);
-        index.min(len - 1)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1560,15 +1524,6 @@ pub struct AggregateCpuMetrics {
     pub peak_percent: f64,
     pub average_percent: f64,
     pub min_percent: f64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct NormalizedSampleStats {
-    mean_ns: u64,
-    median_ns: u64,
-    p95_ns: u64,
-    min_ns: u64,
-    max_ns: u64,
 }
 
 impl PerformanceMetrics {
@@ -3655,6 +3610,28 @@ BENCH_REPORT_JSON_END
             Some(1500)
         );
         assert_eq!(metrics.sample_count, 0);
+    }
+
+    #[test]
+    fn benchmark_normalization_handles_extreme_samples_without_overflow() {
+        let normalized = BrowserStackClient::normalize_benchmark_value(json!({
+            "function": "bench_extreme",
+            "samples_ns": [u64::MAX - 1, u64::MAX]
+        }))
+        .expect("normalize extreme benchmark samples");
+
+        assert_eq!(
+            normalized.get("mean_ns").and_then(Value::as_u64),
+            Some(u64::MAX - 1)
+        );
+        assert_eq!(
+            normalized.get("median_ns").and_then(Value::as_u64),
+            Some(u64::MAX - 1)
+        );
+        assert_eq!(
+            normalized.get("p95_ns").and_then(Value::as_u64),
+            Some(u64::MAX)
+        );
     }
 
     #[test]

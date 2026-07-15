@@ -5,14 +5,13 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser::SerializeMap};
 use thiserror::Error;
 
+pub use mobench_runtime::MAX_BENCHMARK_COUNT as MAX_REPORT_COUNT;
+
 /// Canonical schema identifier for strict Mobench run reports.
 pub const REPORT_SCHEMA_V2: &str = "mobench.run/v2";
 
 /// Maximum UTF-8 byte length of a report identity component.
 pub const MAX_REPORT_IDENTIFIER_BYTES: usize = 255;
-
-/// Maximum accepted requested or observed iteration/warmup count.
-pub const MAX_REPORT_COUNT: u32 = 1_000_000;
 
 /// Maximum accepted number of samples in one report.
 pub const MAX_REPORT_SAMPLES: usize = MAX_REPORT_COUNT as usize;

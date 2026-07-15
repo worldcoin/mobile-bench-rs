@@ -1,9 +1,10 @@
 use crate::{
     BenchmarkResourceUsage, BenchmarkStats, CiMergeSplitRunsArgs, DeviceSummary, MobileTarget,
-    SummaryReport, compute_sample_stats, ensure_parent_dir, json_value_to_u64, median_u64,
-    render_csv_summary, render_markdown_summary, summary_report_from_value, write_file,
+    SummaryReport, compute_sample_stats, ensure_parent_dir, json_value_to_u64, render_csv_summary,
+    render_markdown_summary, summary_report_from_value, write_file,
 };
 use anyhow::{Context, Result, anyhow, bail};
+use mobench_runtime::{ResourceAccumulator, ResourceAggregate, ResourceSample};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -425,10 +426,7 @@ fn merge_resource_usage(
     samples: &[SplitSample],
     sample_values: &[Value],
 ) -> Option<BenchmarkResourceUsage> {
-    let sample_cpu_ms = collect_from_samples(sample_values, "cpu_time_ms");
-    let sample_peak_memory_kb = collect_from_samples(sample_values, "peak_memory_kb");
-    let sample_process_peak_memory_kb =
-        collect_from_samples(sample_values, "process_peak_memory_kb");
+    let sample_resources = aggregate_sample_resources(sample_values);
 
     let resource_values = samples
         .iter()
@@ -441,24 +439,19 @@ fn merge_resource_usage(
         .collect::<Vec<_>>();
 
     let usage = BenchmarkResourceUsage {
-        cpu_total_ms: if sample_cpu_ms.is_empty() {
-            sum_resource_values(&resource_values, &["cpu_total_ms", "elapsed_cpu_ms"])
-        } else {
-            Some(sample_cpu_ms.iter().sum())
-        },
-        cpu_median_ms: median_u64(&sample_cpu_ms)
+        cpu_total_ms: sample_resources
+            .cpu_total_ms
+            .or_else(|| sum_resource_values(&resource_values, &["cpu_total_ms", "elapsed_cpu_ms"])),
+        cpu_median_ms: sample_resources
+            .cpu_median_ms
             .or_else(|| median_resource_values(&resource_values, &["cpu_median_ms"])),
-        peak_memory_kb: max_sample_or_resource(
-            &sample_peak_memory_kb,
-            &resource_values,
-            &["peak_memory_kb"],
-        ),
+        peak_memory_kb: sample_resources
+            .peak_memory_growth_kb
+            .or_else(|| max_resource_value(&resource_values, &["peak_memory_kb"])),
         peak_memory_growth_kb: max_resource_value(&resource_values, &["peak_memory_growth_kb"]),
-        process_peak_memory_kb: max_sample_or_resource(
-            &sample_process_peak_memory_kb,
-            &resource_values,
-            &["process_peak_memory_kb"],
-        ),
+        process_peak_memory_kb: sample_resources
+            .process_peak_memory_kb
+            .or_else(|| max_resource_value(&resource_values, &["process_peak_memory_kb"])),
         total_pss_kb: max_resource_value(&resource_values, &["total_pss_kb"]),
         private_dirty_kb: max_resource_value(&resource_values, &["private_dirty_kb"]),
         native_heap_kb: max_resource_value(&resource_values, &["native_heap_kb"]),
@@ -468,12 +461,18 @@ fn merge_resource_usage(
     (!usage.is_empty()).then_some(usage)
 }
 
-fn collect_from_samples(samples: &[Value], key: &str) -> Vec<u64> {
-    samples
-        .iter()
-        .filter_map(|sample| sample.get(key))
-        .filter_map(json_value_to_u64)
-        .collect()
+fn aggregate_sample_resources(samples: &[Value]) -> ResourceAggregate {
+    let mut resources = ResourceAccumulator::new();
+    for sample in samples {
+        resources.record(ResourceSample {
+            cpu_time_ms: sample.get("cpu_time_ms").and_then(json_value_to_u64),
+            peak_memory_growth_kb: sample.get("peak_memory_kb").and_then(json_value_to_u64),
+            process_peak_memory_kb: sample
+                .get("process_peak_memory_kb")
+                .and_then(json_value_to_u64),
+        });
+    }
+    resources.finish()
 }
 
 fn resource_numbers(resources: &[&Value], keys: &[&str]) -> Vec<u64> {
@@ -486,23 +485,26 @@ fn resource_numbers(resources: &[&Value], keys: &[&str]) -> Vec<u64> {
 
 fn sum_resource_values(resources: &[&Value], keys: &[&str]) -> Option<u64> {
     let values = resource_numbers(resources, keys);
-    (!values.is_empty()).then(|| values.iter().sum())
+    aggregate_cpu_values(&values).cpu_total_ms
 }
 
 fn median_resource_values(resources: &[&Value], keys: &[&str]) -> Option<u64> {
-    median_u64(&resource_numbers(resources, keys))
+    aggregate_cpu_values(&resource_numbers(resources, keys)).cpu_median_ms
 }
 
 fn max_resource_value(resources: &[&Value], keys: &[&str]) -> Option<u64> {
     resource_numbers(resources, keys).into_iter().max()
 }
 
-fn max_sample_or_resource(samples: &[u64], resources: &[&Value], keys: &[&str]) -> Option<u64> {
-    samples
-        .iter()
-        .copied()
-        .max()
-        .or_else(|| max_resource_value(resources, keys))
+fn aggregate_cpu_values(values: &[u64]) -> ResourceAggregate {
+    let mut resources = ResourceAccumulator::new();
+    for value in values {
+        resources.record(ResourceSample {
+            cpu_time_ms: Some(*value),
+            ..ResourceSample::default()
+        });
+    }
+    resources.finish()
 }
 
 fn set_object_value(value: &mut Value, key: &str, item: Value) {
@@ -578,6 +580,13 @@ mod tests {
             serde_json::to_string_pretty(&summary).unwrap(),
         )
         .unwrap();
+    }
+
+    fn overwrite_sample_cpu(dir: &Path, name: &str, device: &str, cpu_time_ms: u64) {
+        let path = dir.join(name).join("summary.json");
+        let mut summary: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        summary["benchmark_results"][device][0]["samples"][0]["cpu_time_ms"] = json!(cpu_time_ms);
+        fs::write(path, serde_json::to_vec_pretty(&summary).unwrap()).unwrap();
     }
 
     #[test]
@@ -658,6 +667,29 @@ mod tests {
                 "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb"
             )
         );
+    }
+
+    #[test]
+    fn merge_split_run_summaries_saturates_extreme_cpu_totals() {
+        let temp = tempfile::tempdir().unwrap();
+        let samples_dir = temp.path().join("split");
+        fs::create_dir_all(&samples_dir).unwrap();
+        let function = "bench_mobile::extreme_cpu";
+        let device = "Samsung Galaxy M32-11.0";
+        write_sample(&samples_dir, "sample-1", function, device, 1);
+        write_sample(&samples_dir, "sample-2", function, device, 2);
+        overwrite_sample_cpu(&samples_dir, "sample-1", device, u64::MAX);
+        overwrite_sample_cpu(&samples_dir, "sample-2", device, 2);
+
+        let merged = merge_split_run_summaries(&samples_dir, function, device, 2, 0)
+            .expect("merge extreme CPU samples");
+        let resources = merged.summary.device_summaries[0].benchmarks[0]
+            .resource_usage
+            .as_ref()
+            .expect("merged resources");
+
+        assert_eq!(resources.cpu_total_ms, Some(u64::MAX));
+        assert_eq!(resources.cpu_median_ms, Some((u64::MAX / 2) + 1));
     }
 
     #[test]

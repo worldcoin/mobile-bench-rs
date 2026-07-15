@@ -107,7 +107,9 @@ impl From<mobench_sdk::timing::BenchReport> for BenchReport {
 impl From<TimingError> for BenchError {
     fn from(err: TimingError) -> Self {
         match err {
-            TimingError::NoIterations { .. } => BenchError::InvalidIterations,
+            TimingError::NoIterations { .. }
+            | TimingError::TooManyIterations { .. }
+            | TimingError::TooManyWarmupIterations { .. } => BenchError::InvalidIterations,
             TimingError::Execution(msg) => BenchError::ExecutionFailed { reason: msg },
         }
     }

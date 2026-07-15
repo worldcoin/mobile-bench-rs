@@ -62,6 +62,10 @@
 //! mobench-sdk = { version = "0.1.37", default-features = false, features = ["runner-only"] }
 //! ```
 
+use mobench_runtime::{
+    Distribution, MAX_BENCHMARK_COUNT, saturating_sum_u64, saturating_u128_to_u64,
+    saturating_usize_to_u32, sdk_v1_mean_u64, sdk_v1_std_dev_u64,
+};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::sync::{Arc, mpsc};
@@ -108,6 +112,7 @@ use thiserror::Error;
 /// # Ok::<(), serde_json::Error>(())
 /// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(try_from = "UncheckedBenchSpec")]
 pub struct BenchSpec {
     /// Name of the benchmark, typically the fully-qualified function name.
     ///
@@ -124,6 +129,21 @@ pub struct BenchSpec {
     /// Warmup iterations are not recorded. They allow CPU caches to warm
     /// and any JIT compilation to complete. Can be zero.
     pub warmup: u32,
+}
+
+#[derive(Deserialize)]
+struct UncheckedBenchSpec {
+    name: String,
+    iterations: u32,
+    warmup: u32,
+}
+
+impl TryFrom<UncheckedBenchSpec> for BenchSpec {
+    type Error = TimingError;
+
+    fn try_from(spec: UncheckedBenchSpec) -> Result<Self, Self::Error> {
+        Self::new(spec.name, spec.iterations, spec.warmup)
+    }
 }
 
 impl BenchSpec {
@@ -153,9 +173,7 @@ impl BenchSpec {
     /// # Ok::<(), mobench_sdk::timing::TimingError>(())
     /// ```
     pub fn new(name: impl Into<String>, iterations: u32, warmup: u32) -> Result<Self, TimingError> {
-        if iterations == 0 {
-            return Err(TimingError::NoIterations { count: iterations });
-        }
+        validate_benchmark_counts(iterations, warmup)?;
 
         Ok(Self {
             name: name.into(),
@@ -163,6 +181,30 @@ impl BenchSpec {
             warmup,
         })
     }
+
+    /// Validate the iteration counts on a specification built with public fields.
+    pub fn validate(&self) -> Result<(), TimingError> {
+        validate_benchmark_counts(self.iterations, self.warmup)
+    }
+}
+
+fn validate_benchmark_counts(iterations: u32, warmup: u32) -> Result<(), TimingError> {
+    if iterations == 0 {
+        return Err(TimingError::NoIterations { count: iterations });
+    }
+    if iterations > MAX_BENCHMARK_COUNT {
+        return Err(TimingError::TooManyIterations {
+            count: iterations,
+            maximum: MAX_BENCHMARK_COUNT,
+        });
+    }
+    if warmup > MAX_BENCHMARK_COUNT {
+        return Err(TimingError::TooManyWarmupIterations {
+            count: warmup,
+            maximum: MAX_BENCHMARK_COUNT,
+        });
+    }
+    Ok(())
 }
 
 /// A single timing sample from a benchmark iteration.
@@ -219,7 +261,7 @@ pub struct BenchSample {
 impl BenchSample {
     fn from_measurement(duration: Duration, resources: IterationResourceUsage) -> Self {
         Self {
-            duration_ns: duration.as_nanos() as u64,
+            duration_ns: saturating_u128_to_u64(duration.as_nanos()),
             cpu_time_ms: resources.cpu_time_ms,
             peak_memory_kb: resources.peak_memory_kb,
             process_peak_memory_kb: resources.process_peak_memory_kb,
@@ -292,59 +334,27 @@ impl BenchReport {
     /// Returns the mean (average) duration in nanoseconds.
     #[must_use]
     pub fn mean_ns(&self) -> f64 {
-        if self.samples.is_empty() {
-            return 0.0;
-        }
-        let sum: u64 = self.samples.iter().map(|s| s.duration_ns).sum();
-        sum as f64 / self.samples.len() as f64
+        sdk_v1_mean_u64(self.samples.iter().map(|sample| sample.duration_ns))
     }
 
     /// Returns the median duration in nanoseconds.
     #[must_use]
     pub fn median_ns(&self) -> f64 {
-        if self.samples.is_empty() {
-            return 0.0;
-        }
-        let mut sorted: Vec<u64> = self.samples.iter().map(|s| s.duration_ns).collect();
-        sorted.sort_unstable();
-        let len = sorted.len();
-        if len % 2 == 0 {
-            (sorted[len / 2 - 1] + sorted[len / 2]) as f64 / 2.0
-        } else {
-            sorted[len / 2] as f64
-        }
+        let durations = self.duration_values();
+        Distribution::from_vec(durations).sdk_v1_median()
     }
 
     /// Returns the standard deviation in nanoseconds (sample std dev, n-1).
     #[must_use]
     pub fn std_dev_ns(&self) -> f64 {
-        if self.samples.len() < 2 {
-            return 0.0;
-        }
-        let mean = self.mean_ns();
-        let variance: f64 = self
-            .samples
-            .iter()
-            .map(|s| {
-                let diff = s.duration_ns as f64 - mean;
-                diff * diff
-            })
-            .sum::<f64>()
-            / (self.samples.len() - 1) as f64;
-        variance.sqrt()
+        sdk_v1_std_dev_u64(self.samples.iter().map(|sample| sample.duration_ns))
     }
 
     /// Returns the given percentile (0-100) in nanoseconds.
     #[must_use]
     pub fn percentile_ns(&self, p: f64) -> f64 {
-        if self.samples.is_empty() {
-            return 0.0;
-        }
-        let mut sorted: Vec<u64> = self.samples.iter().map(|s| s.duration_ns).collect();
-        sorted.sort_unstable();
-        let p = p.clamp(0.0, 100.0) / 100.0;
-        let index = (p * (sorted.len() - 1) as f64).round() as usize;
-        sorted[index.min(sorted.len() - 1)] as f64
+        let durations = self.duration_values();
+        Distribution::from_vec(durations).sdk_v1_percentile(p)
     }
 
     /// Returns the minimum duration in nanoseconds.
@@ -352,7 +362,7 @@ impl BenchReport {
     pub fn min_ns(&self) -> u64 {
         self.samples
             .iter()
-            .map(|s| s.duration_ns)
+            .map(|sample| sample.duration_ns)
             .min()
             .unwrap_or(0)
     }
@@ -362,7 +372,7 @@ impl BenchReport {
     pub fn max_ns(&self) -> u64 {
         self.samples
             .iter()
-            .map(|s| s.duration_ns)
+            .map(|sample| sample.duration_ns)
             .max()
             .unwrap_or(0)
     }
@@ -370,42 +380,26 @@ impl BenchReport {
     /// Returns the total measured CPU time in milliseconds across all iterations.
     #[must_use]
     pub fn cpu_total_ms(&self) -> Option<u64> {
-        let values = self
+        let mut values = self
             .samples
             .iter()
             .filter_map(|sample| sample.cpu_time_ms)
-            .collect::<Vec<_>>();
-        if values.is_empty() {
-            return None;
-        }
-
-        let total = values
-            .iter()
-            .fold(0_u128, |sum, value| sum.saturating_add(u128::from(*value)));
-        Some(total.min(u128::from(u64::MAX)) as u64)
+            .peekable();
+        values.peek()?;
+        Some(saturating_sum_u64(values))
     }
 
     /// Returns the median measured CPU time in milliseconds across all iterations.
     #[must_use]
     pub fn cpu_median_ms(&self) -> Option<u64> {
-        let mut values = self
+        let values = self
             .samples
             .iter()
             .filter_map(|sample| sample.cpu_time_ms)
             .collect::<Vec<_>>();
-        if values.is_empty() {
-            return None;
-        }
-
-        values.sort_unstable();
-        let len = values.len();
-        Some(if len % 2 == 0 {
-            let lower = u128::from(values[(len / 2) - 1]);
-            let upper = u128::from(values[len / 2]);
-            ((lower + upper) / 2) as u64
-        } else {
-            values[len / 2]
-        })
+        Distribution::from_vec(values)
+            .cli_v1_summary()
+            .map(|summary| summary.median_ns)
     }
 
     /// Returns the maximum baseline-adjusted peak memory growth in kilobytes.
@@ -445,18 +439,27 @@ impl BenchReport {
     /// Returns a statistical summary of the benchmark results.
     #[must_use]
     pub fn summary(&self) -> BenchSummary {
+        let durations = self.duration_values();
+        let statistics = Distribution::from_vec(durations).sdk_v1_summary();
         BenchSummary {
             name: self.spec.name.clone(),
-            iterations: self.samples.len() as u32,
+            iterations: saturating_usize_to_u32(self.samples.len()),
             warmup: self.spec.warmup,
-            mean_ns: self.mean_ns(),
-            median_ns: self.median_ns(),
-            std_dev_ns: self.std_dev_ns(),
-            min_ns: self.min_ns(),
-            max_ns: self.max_ns(),
-            p95_ns: self.percentile_ns(95.0),
-            p99_ns: self.percentile_ns(99.0),
+            mean_ns: statistics.mean_ns,
+            median_ns: statistics.median_ns,
+            std_dev_ns: statistics.std_dev_ns,
+            min_ns: statistics.min_ns,
+            max_ns: statistics.max_ns,
+            p95_ns: statistics.p95_ns,
+            p99_ns: statistics.p99_ns,
         }
+    }
+
+    fn duration_values(&self) -> Vec<u64> {
+        self.samples
+            .iter()
+            .map(|sample| sample.duration_ns)
+            .collect()
     }
 }
 
@@ -1040,6 +1043,24 @@ pub enum TimingError {
         count: u32,
     },
 
+    /// The measured iteration count exceeds the bounded runtime contract.
+    #[error("iterations must not exceed {maximum} (got {count})")]
+    TooManyIterations {
+        /// The rejected iteration count.
+        count: u32,
+        /// The maximum supported count.
+        maximum: u32,
+    },
+
+    /// The warmup iteration count exceeds the bounded runtime contract.
+    #[error("warmup must not exceed {maximum} (got {count})")]
+    TooManyWarmupIterations {
+        /// The rejected warmup count.
+        count: u32,
+        /// The maximum supported count.
+        maximum: u32,
+    },
+
     /// The benchmark function failed during execution.
     ///
     /// Contains a description of the failure.
@@ -1125,11 +1146,7 @@ where
     F: FnMut() -> Result<(), TimingError>,
     M: ResourceMonitor,
 {
-    if spec.iterations == 0 {
-        return Err(TimingError::NoIterations {
-            count: spec.iterations,
-        });
-    }
+    spec.validate()?;
 
     reset_semantic_phase_collection();
     let harness_origin = Instant::now();
@@ -1231,11 +1248,7 @@ where
     F: FnMut(&T) -> Result<(), TimingError>,
     M: ResourceMonitor,
 {
-    if spec.iterations == 0 {
-        return Err(TimingError::NoIterations {
-            count: spec.iterations,
-        });
-    }
+    spec.validate()?;
 
     reset_semantic_phase_collection();
     let harness_origin = Instant::now();
@@ -1350,11 +1363,7 @@ where
     F: FnMut(T) -> Result<(), TimingError>,
     M: ResourceMonitor,
 {
-    if spec.iterations == 0 {
-        return Err(TimingError::NoIterations {
-            count: spec.iterations,
-        });
-    }
+    spec.validate()?;
 
     reset_semantic_phase_collection();
     let harness_origin = Instant::now();
@@ -1488,11 +1497,7 @@ where
     D: FnOnce(T),
     M: ResourceMonitor,
 {
-    if spec.iterations == 0 {
-        return Err(TimingError::NoIterations {
-            count: spec.iterations,
-        });
-    }
+    spec.validate()?;
 
     reset_semantic_phase_collection();
     let harness_origin = Instant::now();
@@ -1691,6 +1696,39 @@ mod tests {
     }
 
     #[test]
+    fn rejects_counts_above_the_runtime_limit_at_every_sdk_boundary() {
+        let out_of_range = MAX_BENCHMARK_COUNT + 1;
+        assert!(BenchSpec::new("maximum", MAX_BENCHMARK_COUNT, MAX_BENCHMARK_COUNT).is_ok());
+        assert!(matches!(
+            BenchSpec::new("iterations", out_of_range, 0),
+            Err(TimingError::TooManyIterations { .. })
+        ));
+        assert!(matches!(
+            BenchSpec::new("warmup", 1, out_of_range),
+            Err(TimingError::TooManyWarmupIterations { .. })
+        ));
+
+        let serialized =
+            format!(r#"{{"name":"serialized","iterations":{out_of_range},"warmup":0}}"#);
+        assert!(serde_json::from_str::<BenchSpec>(&serialized).is_err());
+
+        let mut executed = false;
+        let direct = BenchSpec {
+            name: "direct".to_string(),
+            iterations: out_of_range,
+            warmup: 0,
+        };
+        assert!(matches!(
+            run_closure(direct, || {
+                executed = true;
+                Ok(())
+            }),
+            Err(TimingError::TooManyIterations { .. })
+        ));
+        assert!(!executed);
+    }
+
+    #[test]
     fn serializes_to_json() {
         let report = BenchReport {
             spec: BenchSpec::new("test", 10, 2).unwrap(),
@@ -1726,6 +1764,76 @@ mod tests {
         assert_eq!(restored.phases.len(), 1);
         assert_eq!(restored.phases[0].name, "prove");
         assert!(restored.phases[0].duration_ns > 0);
+    }
+
+    #[test]
+    fn bench_report_statistics_do_not_overflow_on_extreme_durations() {
+        let report = BenchReport {
+            spec: BenchSpec::new("extreme", 2, 0).expect("valid spec"),
+            samples: [u64::MAX - 1, u64::MAX]
+                .into_iter()
+                .map(|duration_ns| BenchSample {
+                    duration_ns,
+                    cpu_time_ms: None,
+                    peak_memory_kb: None,
+                    process_peak_memory_kb: None,
+                })
+                .collect(),
+            phases: Vec::new(),
+            timeline: Vec::new(),
+        };
+
+        assert!(report.mean_ns().is_finite());
+        assert!(report.median_ns().is_finite());
+        let summary = report.summary();
+        assert_eq!(summary.max_ns, u64::MAX);
+        assert_eq!(summary.p95_ns, u64::MAX as f64);
+    }
+
+    #[test]
+    fn bench_sample_saturates_durations_larger_than_the_wire_range() {
+        let sample =
+            BenchSample::from_measurement(Duration::MAX, IterationResourceUsage::default());
+
+        assert_eq!(sample.duration_ns, u64::MAX);
+    }
+
+    #[test]
+    fn bench_report_statistics_preserve_the_released_sdk_policy() {
+        let report_for = |durations: &[u64]| BenchReport {
+            spec: BenchSpec::new("policy", durations.len().max(1) as u32, 0).expect("valid spec"),
+            samples: durations
+                .iter()
+                .map(|duration_ns| BenchSample {
+                    duration_ns: *duration_ns,
+                    cpu_time_ms: None,
+                    peak_memory_kb: None,
+                    process_peak_memory_kb: None,
+                })
+                .collect(),
+            phases: Vec::new(),
+            timeline: Vec::new(),
+        };
+
+        let empty = report_for(&[]);
+        assert_eq!(empty.mean_ns(), 0.0);
+        assert_eq!(empty.median_ns(), 0.0);
+        assert_eq!(empty.std_dev_ns(), 0.0);
+        assert_eq!(empty.percentile_ns(95.0), 0.0);
+        assert_eq!(empty.min_ns(), 0);
+        assert_eq!(empty.max_ns(), 0);
+
+        let even = report_for(&[1, 2]);
+        assert_eq!(even.mean_ns(), 1.5);
+        assert_eq!(even.median_ns(), 1.5);
+
+        let samples = (1..=12).collect::<Vec<_>>();
+        let report = report_for(&samples);
+        let summary = report.summary();
+        assert_eq!(summary.mean_ns, 6.5);
+        assert_eq!(summary.median_ns, 6.5);
+        assert_eq!(summary.p95_ns, 11.0);
+        assert_eq!(summary.p99_ns, 12.0);
     }
 
     #[test]

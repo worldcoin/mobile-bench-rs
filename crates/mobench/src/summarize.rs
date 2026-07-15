@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use comfy_table::{Attribute, Cell, ContentArrangement, Table, presets::UTF8_FULL};
-use mobench_report::{markdown_inline_text, markdown_table_cell_text};
+use mobench_report::{markdown_inline_field_text, markdown_table_field_text};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -126,10 +126,13 @@ fn parse_summary_object(summary: &serde_json::Value) -> Result<SummarizeReport> 
 
     let iterations = summary
         .get("iterations")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
 
-    let warmup = summary.get("warmup").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let warmup = summary
+        .get("warmup")
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
 
     let device_summaries = summary
         .get("device_summaries")
@@ -503,13 +506,13 @@ fn parse_raw_bench_report(path: &Path, value: &serde_json::Value) -> Result<Summ
     let iterations = first
         .get("spec")
         .and_then(|spec| spec.get("iterations"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
     let warmup = first
         .get("spec")
         .and_then(|spec| spec.get("warmup"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
     let benchmarks = entries
         .iter()
         .map(parse_benchmark_entry)
@@ -1016,16 +1019,16 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
             output.push('\n');
         }
 
-        let platform_name = markdown_inline_text(&platform.platform.to_uppercase());
-        let device_name = markdown_inline_text(&platform.device.name);
-        let device_os = markdown_inline_text(&platform.device.os);
-        let device_os_version = markdown_inline_text(&platform.device.os_version);
+        let platform_name = markdown_inline_field_text(&platform.platform.to_uppercase());
+        let device_name = markdown_inline_field_text(&platform.device.name);
+        let device_os = markdown_inline_field_text(&platform.device.os);
+        let device_os_version = markdown_inline_field_text(&platform.device.os_version);
         let mut header = format!(
             "### {} — {} ({} {})",
             platform_name, device_name, device_os, device_os_version,
         );
         if let Some(chipset) = &platform.device.chipset {
-            header.push_str(&format!(" · {}", markdown_inline_text(chipset)));
+            header.push_str(&format!(" · {}", markdown_inline_field_text(chipset)));
         }
         if let Some(ram) = platform.device.ram_gb {
             header.push_str(&format!(" · {ram} GB RAM"));
@@ -1062,7 +1065,7 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
         }
 
         for bench in &platform.benchmarks {
-            let benchmark_label = markdown_table_cell_text(&bench.label);
+            let benchmark_label = markdown_table_field_text(&bench.label);
             let mut row = if bench.failure.is_some() {
                 format!("| {benchmark_label} | **—** | — | — | — | — |")
             } else {
@@ -1079,9 +1082,9 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
 
             if has_failures {
                 if let Some(failure) = &bench.failure {
-                    let failure_kind = markdown_table_cell_text(&failure.kind);
-                    let failure_message = markdown_table_cell_text(&failure.message);
-                    let exit_reason = markdown_table_cell_text(
+                    let failure_kind = markdown_table_field_text(&failure.kind);
+                    let failure_message = markdown_table_field_text(&failure.message);
+                    let exit_reason = markdown_table_field_text(
                         failure.exit_reason.as_deref().unwrap_or("unavailable"),
                     );
                     row.push_str(&format!(
@@ -1385,9 +1388,9 @@ mod tests {
         assert_eq!(failure.exit_reason.as_deref(), Some("low_memory"));
 
         let markdown = render_markdown(&report);
-        assert!(markdown.contains("provekit&#58;&#58;passport"));
+        assert!(markdown.contains("provekit::passport"));
         assert!(markdown.contains("timeout"));
-        assert!(markdown.contains("low&#95;memory"));
+        assert!(markdown.contains("low_memory"));
     }
 
     #[test]

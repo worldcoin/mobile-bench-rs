@@ -1292,6 +1292,7 @@ dependencies = [
  "mobench-domain",
  "mobench-process",
  "mobench-report",
+ "mobench-runtime",
  "mobench-sdk",
  "proptest",
  "reqwest",
@@ -1320,6 +1321,7 @@ dependencies = [
 name = "mobench-domain"
 version = "0.1.43"
 dependencies = [
+ "mobench-runtime",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1348,13 +1350,23 @@ name = "mobench-report"
 version = "0.1.43"
 
 [[package]]
+name = "mobench-runtime"
+version = "0.1.43"
+dependencies = [
+ "criterion",
+ "proptest",
+]
+
+[[package]]
 name = "mobench-sdk"
 version = "0.1.43"
 dependencies = [
+ "criterion",
  "include_dir",
  "inventory",
  "libc",
  "mobench-macros",
+ "mobench-runtime",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

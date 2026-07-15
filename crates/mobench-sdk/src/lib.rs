@@ -364,6 +364,7 @@ pub use types::{
 };
 
 // Re-export timing types at the crate root for convenience
+pub use mobench_runtime::MAX_BENCHMARK_COUNT;
 pub use timing::{BenchSummary, SemanticPhase, TimingError, profile_phase, run_closure};
 
 /// Re-export of [`std::hint::black_box`] for preventing compiler optimizations.

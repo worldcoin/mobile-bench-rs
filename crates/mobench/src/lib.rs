@@ -126,6 +126,10 @@ use clap::Parser;
 use mobench_report::{
     csv_field, markdown_inline_field_text, markdown_link_destination, markdown_table_field_text,
 };
+use mobench_runtime::{
+    CliV1Summary, Distribution, MAX_BENCHMARK_COUNT, ResourceAccumulator, ResourceAggregate,
+    ResourceSample,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -3187,11 +3191,14 @@ fn resolve_run_spec(
                 "both --ios-app and --ios-test-suite must be provided together; omit both to use config-managed iOS artifacts"
             ),
         };
+        let resolved_iterations = iterations.unwrap_or(cfg.iterations);
+        let resolved_warmup = warmup.unwrap_or(cfg.warmup);
+        validate_run_counts(resolved_iterations, resolved_warmup)?;
         return Ok(RunSpec {
             target: resolved_target,
             function: function.unwrap_or(cfg.function),
-            iterations: iterations.unwrap_or(cfg.iterations),
-            warmup: warmup.unwrap_or(cfg.warmup),
+            iterations: resolved_iterations,
+            warmup: resolved_warmup,
             devices: device_names,
             ios_completion_timeout_secs: configured_ios_completion_timeout_secs,
             ios_deployment_target: configured_ios_deployment_target
@@ -3218,6 +3225,7 @@ fn resolve_run_spec(
     let function = function.unwrap_or_default();
     let iterations = iterations.unwrap_or(100);
     let warmup = warmup.unwrap_or(10);
+    validate_run_counts(iterations, warmup)?;
 
     if function.trim().is_empty() {
         bail!(
@@ -3314,6 +3322,19 @@ fn resolve_run_spec(
         browserstack: None,
         ios_xcuitest,
     })
+}
+
+fn validate_run_counts(iterations: u32, warmup: u32) -> Result<()> {
+    if iterations == 0 {
+        bail!("iterations must be greater than zero");
+    }
+    if iterations > MAX_BENCHMARK_COUNT {
+        bail!("iterations must not exceed {MAX_BENCHMARK_COUNT} (got {iterations})");
+    }
+    if warmup > MAX_BENCHMARK_COUNT {
+        bail!("warmup must not exceed {MAX_BENCHMARK_COUNT} (got {warmup})");
+    }
+    Ok(())
 }
 
 fn load_config(path: &Path) -> Result<BenchConfig> {
@@ -3737,39 +3758,23 @@ pub fn extract_benchmark_summary(
                 .unwrap_or("unknown")
                 .to_string();
 
-            let mean_ns = benchmark
+            let producer_mean_ns = benchmark
                 .get("mean_ns")
                 .and_then(|m| m.as_u64())
                 .unwrap_or(0);
 
-            let samples: Vec<u64> = benchmark
-                .get("samples")
-                .and_then(|s| s.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|s| s.get("duration_ns").and_then(|d| d.as_u64()))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let samples = extract_samples(benchmark);
 
             let sample_count = samples.len();
-            let min_ns = samples.iter().copied().min();
-            let max_ns = samples.iter().copied().max();
-
-            let std_dev_ns = if sample_count > 1 {
-                let mean = mean_ns as f64;
-                let variance: f64 = samples
-                    .iter()
-                    .map(|&s| {
-                        let diff = s as f64 - mean;
-                        diff * diff
-                    })
-                    .sum::<f64>()
-                    / (sample_count - 1) as f64;
-                Some(variance.sqrt() as u64)
+            let statistics = Distribution::from_slice(&samples).sdk_v1_summary();
+            let mean_ns = if samples.is_empty() {
+                producer_mean_ns
             } else {
-                None
+                statistics.mean_ns as u64
             };
+            let min_ns = (!samples.is_empty()).then_some(statistics.min_ns);
+            let max_ns = (!samples.is_empty()).then_some(statistics.max_ns);
+            let std_dev_ns = (sample_count > 1).then_some(statistics.std_dev_ns as u64);
 
             extracted.push(ExtractedBenchmarkResult {
                 device: device.clone(),
@@ -5230,53 +5235,10 @@ impl BenchmarkResourceUsage {
     }
 }
 
-#[derive(Clone, Debug)]
-struct SampleStats {
-    mean_ns: u64,
-    median_ns: u64,
-    p95_ns: u64,
-    min_ns: u64,
-    max_ns: u64,
-}
+type SampleStats = CliV1Summary;
 
 fn compute_sample_stats(samples: &[u64]) -> Option<SampleStats> {
-    if samples.is_empty() {
-        return None;
-    }
-
-    let mut sorted = samples.to_vec();
-    sorted.sort_unstable();
-    let len = sorted.len();
-
-    let mean_ns = (sorted.iter().map(|v| *v as u128).sum::<u128>() / len as u128) as u64;
-    let median_ns = if len % 2 == 1 {
-        sorted[len / 2]
-    } else {
-        let lower = sorted[(len / 2) - 1];
-        let upper = sorted[len / 2];
-        (lower + upper) / 2
-    };
-    let p95_index = percentile_index(len, 0.95);
-    let p95_ns = sorted[p95_index];
-    let min_ns = sorted[0];
-    let max_ns = sorted[len - 1];
-
-    Some(SampleStats {
-        mean_ns,
-        median_ns,
-        p95_ns,
-        min_ns,
-        max_ns,
-    })
-}
-
-fn percentile_index(len: usize, percentile: f64) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    let rank = (percentile * len as f64).ceil() as usize;
-    let index = rank.saturating_sub(1);
-    index.min(len - 1)
+    Distribution::from_slice(samples).cli_v1_summary()
 }
 
 fn extract_samples(value: &Value) -> Vec<u64> {
@@ -5297,20 +5259,6 @@ fn extract_samples(value: &Value) -> Vec<u64> {
     durations
 }
 
-fn extract_sample_metric_u64(value: &Value, key: &str) -> Vec<u64> {
-    value
-        .get("samples")
-        .and_then(|samples| samples.as_array())
-        .map(|samples| {
-            samples
-                .iter()
-                .filter_map(|sample| sample.get(key))
-                .filter_map(json_value_to_u64)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn json_value_to_u64(value: &Value) -> Option<u64> {
     value
         .as_u64()
@@ -5323,21 +5271,27 @@ fn json_value_to_u64(value: &Value) -> Option<u64> {
         })
 }
 
-fn median_u64(values: &[u64]) -> Option<u64> {
-    if values.is_empty() {
-        return None;
-    }
+fn json_value_to_u32(value: &Value) -> Option<u32> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+        .and_then(|value| u32::try_from(value).ok())
+}
 
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    let len = sorted.len();
-    Some(if len % 2 == 0 {
-        let lower = u128::from(sorted[(len / 2) - 1]);
-        let upper = u128::from(sorted[len / 2]);
-        ((lower + upper) / 2) as u64
-    } else {
-        sorted[len / 2]
-    })
+fn extract_sample_resources(value: &Value) -> ResourceAggregate {
+    let mut resources = ResourceAccumulator::new();
+    if let Some(samples) = value.get("samples").and_then(Value::as_array) {
+        for sample in samples {
+            resources.record(ResourceSample {
+                cpu_time_ms: sample.get("cpu_time_ms").and_then(json_value_to_u64),
+                peak_memory_growth_kb: sample.get("peak_memory_kb").and_then(json_value_to_u64),
+                process_peak_memory_kb: sample
+                    .get("process_peak_memory_kb")
+                    .and_then(json_value_to_u64),
+            });
+        }
+    }
+    resources.finish()
 }
 
 fn extract_benchmark_resource_usage(
@@ -5348,9 +5302,7 @@ fn extract_benchmark_resource_usage(
         .get("resource_usage")
         .or_else(|| entry.get("resources"))
         .or(Some(entry));
-    let sample_cpu_ms = extract_sample_metric_u64(entry, "cpu_time_ms");
-    let sample_peak_memory_kb = extract_sample_metric_u64(entry, "peak_memory_kb");
-    let sample_process_peak_memory_kb = extract_sample_metric_u64(entry, "process_peak_memory_kb");
+    let sample_resources = extract_sample_resources(entry);
 
     let cpu_total_ms = resources
         .and_then(|res| res.get("cpu_total_ms"))
@@ -5360,18 +5312,11 @@ fn extract_benchmark_resource_usage(
                 .and_then(|res| res.get("elapsed_cpu_ms"))
                 .and_then(json_value_to_u64)
         })
-        .or_else(|| {
-            (!sample_cpu_ms.is_empty()).then(|| {
-                sample_cpu_ms
-                    .iter()
-                    .fold(0_u128, |sum, value| sum.saturating_add(u128::from(*value)))
-                    .min(u128::from(u64::MAX)) as u64
-            })
-        });
+        .or(sample_resources.cpu_total_ms);
     let cpu_median_ms = resources
         .and_then(|res| res.get("cpu_median_ms"))
         .and_then(json_value_to_u64)
-        .or_else(|| median_u64(&sample_cpu_ms));
+        .or(sample_resources.cpu_median_ms);
     let total_pss_kb = resources
         .and_then(|res| res.get("total_pss_kb"))
         .and_then(json_value_to_u64);
@@ -5392,12 +5337,12 @@ fn extract_benchmark_resource_usage(
         .and_then(json_value_to_u64);
     let peak_memory_growth_kb = explicit_peak_memory_growth_kb
         .or(legacy_peak_memory_kb)
-        .or_else(|| sample_peak_memory_kb.iter().copied().max());
+        .or(sample_resources.peak_memory_growth_kb);
     let peak_memory_kb = peak_memory_growth_kb;
     let process_peak_memory_kb = resources
         .and_then(|res| res.get("process_peak_memory_kb"))
         .and_then(json_value_to_u64)
-        .or_else(|| sample_process_peak_memory_kb.iter().copied().max());
+        .or(sample_resources.process_peak_memory_kb);
 
     let resource_usage = BenchmarkResourceUsage {
         cpu_total_ms,
@@ -6534,11 +6479,7 @@ fn cmd_verify(
                 Ok(report) => {
                     println!("OK");
                     let samples = report.samples.len();
-                    let mean_ns = if samples > 0 {
-                        report.samples.iter().map(|s| s.duration_ns).sum::<u64>() / samples as u64
-                    } else {
-                        0
-                    };
+                    let mean_ns = verify_report_mean_ns(&report);
                     println!("        Function: {}", func);
                     println!("        Samples: {}", samples);
                     println!(
@@ -6563,11 +6504,7 @@ fn cmd_verify(
                 Ok(report) => {
                     println!("OK");
                     let samples = report.samples.len();
-                    let mean_ns = if samples > 0 {
-                        report.samples.iter().map(|s| s.duration_ns).sum::<u64>() / samples as u64
-                    } else {
-                        0
-                    };
+                    let mean_ns = verify_report_mean_ns(&report);
                     println!("        Function: {} (auto-selected)", func);
                     println!("        Samples: {}", samples);
                     println!(
@@ -6613,6 +6550,17 @@ fn cmd_verify(
     Ok(())
 }
 
+fn verify_report_mean_ns(report: &mobench_sdk::timing::BenchReport) -> u64 {
+    let durations = report
+        .samples
+        .iter()
+        .map(|sample| sample.duration_ns)
+        .collect::<Vec<_>>();
+    Distribution::from_slice(&durations)
+        .cli_v1_summary()
+        .map_or(0, |summary| summary.mean_ns)
+}
+
 /// Validate a bench_spec.json file
 ///
 /// Handles both "name" and "function" field names for compatibility
@@ -6648,14 +6596,20 @@ fn validate_spec_file(path: &Path) -> Result<mobench_sdk::BenchSpec> {
 
     let iterations = value
         .get("iterations")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
+        .map(|value| {
+            json_value_to_u32(value)
+                .ok_or_else(|| anyhow!("spec.iterations must be an unsigned 32-bit integer"))
+        })
+        .transpose()?
         .unwrap_or(100);
 
     let warmup = value
         .get("warmup")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
+        .map(|value| {
+            json_value_to_u32(value)
+                .ok_or_else(|| anyhow!("spec.warmup must be an unsigned 32-bit integer"))
+        })
+        .transpose()?
         .unwrap_or(10);
 
     // Validate
@@ -6666,11 +6620,7 @@ fn validate_spec_file(path: &Path) -> Result<mobench_sdk::BenchSpec> {
         bail!("spec.iterations must be > 0");
     }
 
-    Ok(mobench_sdk::BenchSpec {
-        name,
-        iterations,
-        warmup,
-    })
+    mobench_sdk::BenchSpec::new(name, iterations, warmup).map_err(anyhow::Error::from)
 }
 
 /// Run a minimal smoke test for verification
@@ -6735,14 +6685,8 @@ fn extract_summary_data(value: &Value) -> Result<Vec<SummaryData>> {
             .get("function")
             .and_then(|f| f.as_str())
             .map(String::from);
-        let iterations = summary
-            .get("iterations")
-            .and_then(|i| i.as_u64())
-            .map(|i| i as u32);
-        let warmup = summary
-            .get("warmup")
-            .and_then(|w| w.as_u64())
-            .map(|w| w as u32);
+        let iterations = summary.get("iterations").and_then(json_value_to_u32);
+        let warmup = summary.get("warmup").and_then(json_value_to_u32);
 
         if let Some(device_summaries) = summary.get("device_summaries").and_then(|d| d.as_array()) {
             for device_summary in device_summaries {
@@ -6796,14 +6740,8 @@ fn extract_summary_data(value: &Value) -> Result<Vec<SummaryData>> {
             min_ns: stats.as_ref().map(|s| s.min_ns),
             max_ns: stats.as_ref().map(|s| s.max_ns),
             p95_ns: stats.as_ref().map(|s| s.p95_ns),
-            iterations: spec
-                .get("iterations")
-                .and_then(|i| i.as_u64())
-                .map(|i| i as u32),
-            warmup: spec
-                .get("warmup")
-                .and_then(|w| w.as_u64())
-                .map(|w| w as u32),
+            iterations: spec.get("iterations").and_then(json_value_to_u32),
+            warmup: spec.get("warmup").and_then(json_value_to_u32),
         });
     }
 
@@ -6872,14 +6810,8 @@ fn extract_summary_data(value: &Value) -> Result<Vec<SummaryData>> {
             min_ns: stats.as_ref().map(|s| s.min_ns),
             max_ns: stats.as_ref().map(|s| s.max_ns),
             p95_ns: stats.as_ref().map(|s| s.p95_ns),
-            iterations: value
-                .get("iterations")
-                .and_then(|i| i.as_u64())
-                .map(|i| i as u32),
-            warmup: value
-                .get("warmup")
-                .and_then(|w| w.as_u64())
-                .map(|w| w as u32),
+            iterations: value.get("iterations").and_then(json_value_to_u32),
+            warmup: value.get("warmup").and_then(json_value_to_u32),
         });
     }
 
@@ -7977,6 +7909,82 @@ output_dir = {:?}
     }
 
     #[test]
+    fn validate_spec_file_rejects_counts_larger_than_u32() {
+        let out_of_range = u64::from(u32::MAX) + 1;
+
+        for (field, value) in [
+            (
+                "iterations",
+                json!({
+                    "function": "sample_fns::fibonacci",
+                    "iterations": out_of_range,
+                    "warmup": 1
+                }),
+            ),
+            (
+                "warmup",
+                json!({
+                    "function": "sample_fns::fibonacci",
+                    "iterations": 1,
+                    "warmup": out_of_range
+                }),
+            ),
+        ] {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let spec_path = temp_dir.path().join("bench_spec.json");
+            write_file(
+                &spec_path,
+                serde_json::to_vec(&value)
+                    .expect("serialize oversized spec")
+                    .as_slice(),
+            )
+            .expect("write oversized spec");
+
+            let error = validate_spec_file(&spec_path).expect_err("oversized count must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("spec.{field} must be an unsigned 32-bit integer")),
+                "unexpected error for {field}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_spec_file_requires_integral_bounded_counts() {
+        for (field, invalid) in [
+            ("iterations", json!(1.2)),
+            ("iterations", json!(-1)),
+            ("iterations", json!(MAX_BENCHMARK_COUNT + 1)),
+            ("warmup", json!(1.2)),
+            ("warmup", json!(-1)),
+            ("warmup", json!(MAX_BENCHMARK_COUNT + 1)),
+        ] {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let spec_path = temp_dir.path().join("bench_spec.json");
+            let mut value = json!({
+                "function": "sample_fns::fibonacci",
+                "iterations": 1,
+                "warmup": 0
+            });
+            value[field] = invalid;
+            write_file(
+                &spec_path,
+                serde_json::to_vec(&value)
+                    .expect("serialize invalid spec")
+                    .as_slice(),
+            )
+            .expect("write invalid spec");
+
+            assert!(
+                validate_spec_file(&spec_path).is_err(),
+                "{field} should reject {}",
+                value[field]
+            );
+        }
+    }
+
+    #[test]
     fn resolve_run_spec_prefers_cli_device_matrix_with_config() {
         let temp_dir = TempDir::new().expect("temp dir");
         let config_matrix_path = temp_dir.path().join("config-matrix.yml");
@@ -8054,6 +8062,69 @@ project = "proj"
     #[test]
     fn run_accepts_config_without_target_or_function_flags() {
         assert!(Cli::try_parse_from(["mobench", "run", "--config", "bench-config.toml"]).is_ok());
+    }
+
+    #[test]
+    fn cli_rejects_invalid_execution_counts_before_dispatch() {
+        let limit = MAX_BENCHMARK_COUNT.to_string();
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "run",
+                "--target",
+                "android",
+                "--function",
+                "bench",
+                "--iterations",
+                limit.as_str(),
+                "--warmup",
+                limit.as_str(),
+            ])
+            .is_ok()
+        );
+
+        for value in ["0", "1000001", "4294967295", "1.2", "-1"] {
+            assert!(
+                Cli::try_parse_from([
+                    "mobench",
+                    "run",
+                    "--target",
+                    "android",
+                    "--function",
+                    "bench",
+                    "--iterations",
+                    value,
+                ])
+                .is_err(),
+                "iterations={value} should fail"
+            );
+        }
+
+        for value in ["1000001", "4294967295", "1.2", "-1"] {
+            assert!(
+                Cli::try_parse_from([
+                    "mobench",
+                    "ci",
+                    "run",
+                    "--target",
+                    "android",
+                    "--function",
+                    "bench",
+                    "--warmup",
+                    value,
+                ])
+                .is_err(),
+                "warmup={value} should fail"
+            );
+        }
+    }
+
+    #[test]
+    fn config_count_validation_uses_the_same_runtime_limit() {
+        assert!(validate_run_counts(MAX_BENCHMARK_COUNT, MAX_BENCHMARK_COUNT).is_ok());
+        assert!(validate_run_counts(0, 0).is_err());
+        assert!(validate_run_counts(MAX_BENCHMARK_COUNT + 1, 0).is_err());
+        assert!(validate_run_counts(1, MAX_BENCHMARK_COUNT + 1).is_err());
     }
 
     #[test]
@@ -10781,7 +10852,7 @@ mod result_extraction_tests {
             "Device".to_string(),
             vec![json!({
                 "function": "test_fn",
-                "mean_ns": 100,
+                "mean_ns": 999,
                 "samples": [
                     {"duration_ns": 80},
                     {"duration_ns": 100},
@@ -10796,9 +10867,10 @@ mod result_extraction_tests {
         assert_eq!(extracted.len(), 1);
         let result = &extracted[0];
         assert_eq!(result.sample_count, 3);
+        assert_eq!(result.mean_ns, 100);
         assert_eq!(result.min_ns, Some(80));
         assert_eq!(result.max_ns, Some(120));
-        assert!(result.std_dev_ns.is_some());
+        assert_eq!(result.std_dev_ns, Some(20));
     }
 }
 

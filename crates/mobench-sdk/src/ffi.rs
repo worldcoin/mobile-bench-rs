@@ -187,7 +187,11 @@ impl From<crate::types::BenchError> for BenchErrorFfi {
     fn from(err: crate::types::BenchError) -> Self {
         match err {
             crate::types::BenchError::Runner(runner_err) => match runner_err {
-                crate::timing::TimingError::NoIterations { .. } => BenchErrorFfi::InvalidIterations,
+                crate::timing::TimingError::NoIterations { .. }
+                | crate::timing::TimingError::TooManyIterations { .. }
+                | crate::timing::TimingError::TooManyWarmupIterations { .. } => {
+                    BenchErrorFfi::InvalidIterations
+                }
                 crate::timing::TimingError::Execution(msg) => {
                     BenchErrorFfi::ExecutionFailed { reason: msg }
                 }

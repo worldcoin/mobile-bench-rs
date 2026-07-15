@@ -36,6 +36,8 @@ builders = ["codegen", "dep:toml"]
 codegen = ["dep:include_dir", "dep:toml"]
 # Minimal timing-only mode for mobile binaries (small footprint)
 runner-only = []
+# Opt-in criterion receipts for runtime statistics performance.
+bench-support = []
 
 [dependencies]
 # Proc macros (only with full feature)
@@ -47,6 +49,7 @@ inventory = { workspace = true, optional = true }
 # Serialization (always needed for BenchSpec/BenchReport)
 serde.workspace = true
 serde_json.workspace = true
+mobench-runtime.workspace = true
 libc = "0.2"
 
 # Error handling
@@ -59,4 +62,13 @@ include_dir = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Test dependencies will be added as needed
+criterion = "0.5"
+
+[[bench]]
+name = "statistics"
+harness = false
+required-features = ["bench-support"]
+
+[[test]]
+name = "public_api_contract"
+required-features = ["full"]
