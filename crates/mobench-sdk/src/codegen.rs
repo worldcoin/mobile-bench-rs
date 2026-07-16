@@ -2116,6 +2116,9 @@ mod tests {
             "MainActivity.kt should be in package directory: {:?}",
             main_activity_path
         );
+        let main_activity = fs::read_to_string(&main_activity_path).unwrap();
+        assert!(main_activity.contains("BENCH_RESULT_OK"));
+        assert!(!main_activity.contains("private const val RESULT_OK"));
 
         let test_activity_path = android_dir
             .join("app/src/androidTest/java/dev/world/mybenchproject/MainActivityTest.kt");
@@ -2199,6 +2202,8 @@ mod tests {
         assert!(main_activity.contains("mobench_run_benchmark_json"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(main_activity.contains("bench_spec.json"));
+        assert!(main_activity.contains("BENCH_RESULT_OK"));
+        assert!(!main_activity.contains("private const val RESULT_OK"));
         assert!(
             !main_activity.contains("uniffi."),
             "native Android runner must not import UniFFI bindings:\n{}",
