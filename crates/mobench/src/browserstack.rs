@@ -301,6 +301,7 @@ pub struct DeviceValidationError {
 }
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
+pub(crate) const DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS: u64 = 900;
 const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
 
@@ -1277,7 +1278,7 @@ impl BrowserStackClient {
                 build_id,
                 platform,
                 None,
-                timeout_secs.unwrap_or(300),
+                timeout_secs.unwrap_or(DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS),
                 poll_interval_secs.unwrap_or(5),
                 &mobench_process::global_cancellation_token(),
             )?

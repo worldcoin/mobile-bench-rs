@@ -451,6 +451,10 @@ Key options:
 
 `--local-only` skips mobile builds and runs the host harness.
 
+BrowserStack collection waits at most 900 seconds by default. The bound covers
+observed provider queue latency while remaining overrideable through
+`--fetch-timeout-secs`.
+
 `--release` is recommended for BrowserStack to reduce upload size.
 
 For iOS BrowserStack runs, IPA and XCUITest packages are created automatically

@@ -149,7 +149,7 @@ use tracing_subscriber::EnvFilter;
 use browserstack::{
     BrowserStackArtifacts, BrowserStackAuth, BrowserStackClient, BrowserStackPlatform,
     BrowserStackProviderAdapter, BrowserStackRunHandle, BrowserStackRunRequest,
-    completed_browserstack_results,
+    DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, completed_browserstack_results,
 };
 #[cfg(test)]
 pub(crate) use cli::CiTarget;
@@ -3932,8 +3932,11 @@ fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path, test_apk: &Path) ->
         creds.project.clone(),
     )?;
 
-    let engine =
-        mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(client, 300, 5));
+    let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+        client,
+        DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS,
+        5,
+    ));
     let request = BrowserStackRunRequest {
         devices: spec.devices.clone(),
         artifacts: BrowserStackArtifacts::Espresso {
@@ -3980,8 +3983,11 @@ fn trigger_browserstack_xcuitest(
         creds.project.clone(),
     )?;
 
-    let engine =
-        mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(client, 300, 5));
+    let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+        client,
+        DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS,
+        5,
+    ));
     let request = BrowserStackRunRequest {
         devices: spec.devices.clone(),
         artifacts: BrowserStackArtifacts::XcuiTest {
@@ -8198,6 +8204,37 @@ project = "proj"
     #[test]
     fn run_accepts_config_without_target_or_function_flags() {
         assert!(Cli::try_parse_from(["mobench", "run", "--config", "bench-config.toml"]).is_ok());
+    }
+
+    #[test]
+    fn browserstack_collection_defaults_cover_observed_queue_latency() {
+        let run = Cli::try_parse_from(["mobench", "run", "--config", "bench-config.toml"])
+            .expect("parse run command");
+        let Command::Run {
+            fetch_timeout_secs, ..
+        } = run.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(fetch_timeout_secs, 900);
+
+        let ci = Cli::try_parse_from([
+            "mobench",
+            "ci",
+            "run",
+            "--target",
+            "android",
+            "--function",
+            "bench",
+        ])
+        .expect("parse ci run command");
+        let Command::Ci {
+            command: CiCommand::Run(args),
+        } = ci.command
+        else {
+            panic!("expected ci run command");
+        };
+        assert_eq!(args.fetch_timeout_secs, 900);
     }
 
     #[test]

@@ -3,7 +3,7 @@ use mobench_runtime::MAX_BENCHMARK_COUNT;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::{plots, profile};
+use crate::{browserstack::DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, plots, profile};
 
 fn parse_iterations(value: &str) -> Result<u32, String> {
     let count = value
@@ -162,7 +162,7 @@ pub(crate) enum Command {
         fetch_output_dir: PathBuf,
         #[arg(long, default_value_t = 5)]
         fetch_poll_interval_secs: u64,
-        #[arg(long, default_value_t = 300)]
+        #[arg(long, default_value_t = DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS)]
         fetch_timeout_secs: u64,
         #[arg(long, help = "Show simplified step-by-step progress output")]
         progress: bool,
@@ -713,7 +713,7 @@ pub(crate) struct CiRunArgs {
     pub(crate) fetch_output_dir: PathBuf,
     #[arg(long, default_value_t = 5)]
     pub(crate) fetch_poll_interval_secs: u64,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS)]
     pub(crate) fetch_timeout_secs: u64,
     #[arg(long, help = "Show simplified step-by-step progress output")]
     pub(crate) progress: bool,
