@@ -1,40 +1,14 @@
 //! GitHub Checks API client for creating Check Runs.
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+pub use mobench_report::CheckRunAnnotation;
+use mobench_report::{CheckRunRequest, GITHUB_CHECK_ANNOTATION_LIMIT};
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 
 pub struct GitHubClient {
     http: reqwest::blocking::Client,
     token: String,
-}
-
-#[derive(Debug, Serialize)]
-struct CreateCheckRunRequest {
-    name: String,
-    head_sha: String,
-    status: String,
-    conclusion: String,
-    output: CheckRunOutput,
-}
-
-#[derive(Debug, Serialize)]
-struct CheckRunOutput {
-    title: String,
-    summary: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    annotations: Vec<CheckRunAnnotation>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CheckRunAnnotation {
-    pub path: String,
-    pub start_line: u32,
-    pub end_line: u32,
-    pub annotation_level: String,
-    pub message: String,
-    pub title: String,
 }
 
 pub struct CheckRunResult {
@@ -61,29 +35,18 @@ impl GitHubClient {
         conclusion: &str,
         title: &str,
         summary: &str,
-        mut annotations: Vec<CheckRunAnnotation>,
+        annotations: Vec<CheckRunAnnotation>,
     ) -> Result<CheckRunResult> {
         let url = format!("{GITHUB_API_BASE}/repos/{repo}/check-runs");
-        if annotations.len() > 50 {
+        if annotations.len() > GITHUB_CHECK_ANNOTATION_LIMIT {
             eprintln!(
-                "Warning: {} annotations exceed GitHub's 50-annotation limit, truncating",
-                annotations.len()
+                "Warning: {} annotations exceed GitHub's {}-annotation limit, truncating",
+                annotations.len(),
+                GITHUB_CHECK_ANNOTATION_LIMIT,
             );
-            annotations.truncate(50);
         }
-        let annotations_count = annotations.len();
-
-        let body = CreateCheckRunRequest {
-            name: name.to_string(),
-            head_sha: sha.to_string(),
-            status: "completed".to_string(),
-            conclusion: conclusion.to_string(),
-            output: CheckRunOutput {
-                title: title.to_string(),
-                summary: summary.to_string(),
-                annotations,
-            },
-        };
+        let body = CheckRunRequest::completed(name, sha, conclusion, title, summary, annotations);
+        let annotations_count = body.annotations_count();
 
         let response = self
             .http
@@ -102,7 +65,7 @@ impl GitHubClient {
         }
 
         Ok(CheckRunResult {
-            conclusion: conclusion.to_string(),
+            conclusion: body.conclusion,
             annotations_count,
         })
     }

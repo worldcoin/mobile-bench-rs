@@ -583,7 +583,7 @@ pub(crate) fn cmd_report_github(
     let value: Value = serde_json::from_str(&contents)
         .with_context(|| format!("parsing summary file {}", summary_path.display()))?;
     let markdown = render_summary_markdown_from_output(&value)?;
-    let comment_body = format!("{marker}\n\n{markdown}");
+    let comment_body = mobench_report::render_sticky_comment(marker, &markdown);
 
     if let Some(path) = output {
         ensure_parent_dir(path)?;

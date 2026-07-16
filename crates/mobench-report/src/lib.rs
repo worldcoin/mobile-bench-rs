@@ -4,8 +4,14 @@
 //! produce typed report data; JSON, Markdown, CSV, JUnit, comparison, and CI
 //! adapters render that data without reimplementing report semantics.
 
+mod github;
 mod model;
 mod render;
+
+pub use github::{
+    CheckRunAnnotation, CheckRunOutput, CheckRunRequest, GITHUB_CHECK_ANNOTATION_LIMIT,
+    render_sticky_comment,
+};
 
 pub use model::{
     BenchmarkFailureStats, BenchmarkResourceUsage, BenchmarkStats, CanonicalSummaryV2,
