@@ -1,7 +1,8 @@
 use crate::{
     BenchmarkResourceUsage, BenchmarkStats, CiMergeSplitRunsArgs, DeviceSummary, MobileTarget,
     SummaryReport, compute_sample_stats, ensure_parent_dir, json_value_to_u64, median_u64,
-    render_csv_summary, render_markdown_summary, summary_report_from_value, write_file,
+    render_csv_summary, render_markdown_summary, summarize::device_names_match,
+    summary_report_from_value, write_file,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
@@ -262,7 +263,7 @@ fn load_split_sample(
         .with_context(|| format!("reading summary section {}", path.display()))?;
 
     let device_summary = exactly_one(&summary.device_summaries, "device summary", path)?;
-    if device_summary.device != expected_device {
+    if !device_names_match(&device_summary.device, expected_device) {
         bail!(
             "{} device `{}` does not match requested `{}`",
             path.display(),
@@ -338,7 +339,7 @@ fn raw_benchmark_for_device(
         );
     }
     let (device, benchmarks) = results.iter().next().expect("non-empty benchmark_results");
-    if device != expected_device {
+    if !device_names_match(device, expected_device) {
         bail!(
             "{} benchmark_results device `{}` does not match requested `{}`",
             path.display(),
@@ -668,5 +669,22 @@ mod tests {
                 .unwrap_err()
                 .to_string();
         assert!(err.contains("does not match requested"));
+    }
+
+    #[test]
+    fn merge_split_run_summaries_accepts_reported_device_without_os_suffix() {
+        let temp = tempfile::tempdir().unwrap();
+        let samples_dir = temp.path().join("split");
+        fs::create_dir_all(&samples_dir).unwrap();
+        let function = "bench_mobile::bench_passport_complete_age_check_prove";
+        write_sample(
+            &samples_dir,
+            "sample-1",
+            function,
+            "Samsung Galaxy M32",
+            100,
+        );
+
+        merge_split_run_summaries(&samples_dir, function, "Samsung Galaxy M32-11.0", 1, 0).unwrap();
     }
 }
