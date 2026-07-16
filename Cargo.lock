@@ -1324,6 +1324,7 @@ dependencies = [
  "mobench-artifacts",
  "mobench-domain",
  "mobench-process",
+ "mobench-provider",
  "mobench-report",
  "mobench-runtime",
  "mobench-sdk",
@@ -1382,6 +1383,13 @@ version = "0.1.43"
 dependencies = [
  "libc",
  "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "mobench-provider"
+version = "0.1.43"
+dependencies = [
  "thiserror 1.0.69",
 ]
 

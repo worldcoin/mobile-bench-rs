@@ -353,7 +353,7 @@ pub(crate) fn run_tool_command(cmd: ToolCommand, description: &str) -> Result<()
 ///
 /// This compatibility entry point intentionally retains the released
 /// `Command::output` behavior. Rust does not expose whether a `Command` used
-/// `env_clear()`, so reconstructing it as a [`ToolCommand`] could accidentally
+/// `env_clear()`, so reconstructing it as a `ToolCommand` could accidentally
 /// reintroduce ambient credentials. New internal builder call sites use the
 /// bounded supervisor directly.
 pub fn run_command(mut cmd: Command, description: &str) -> Result<(), BenchError> {

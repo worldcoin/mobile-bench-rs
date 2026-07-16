@@ -5,6 +5,7 @@ members = [
     "crates/mobench-domain",
     "crates/mobench-macros",
     "crates/mobench-process",
+    "crates/mobench-provider",
     "crates/mobench-report",
     "crates/mobench-runtime",
     "crates/mobench-sdk",
@@ -46,5 +47,6 @@ mobench-sdk = { version = "0.1.43", path = "crates/mobench-sdk", default-feature
 mobench-artifacts = { version = "0.1.43", path = "crates/mobench-artifacts" }
 mobench-domain = { version = "0.1.43", path = "crates/mobench-domain" }
 mobench-process = { version = "0.1.43", path = "crates/mobench-process" }
+mobench-provider = { version = "0.1.43", path = "crates/mobench-provider" }
 mobench-report = { version = "0.1.43", path = "crates/mobench-report" }
 mobench-runtime = { version = "0.1.43", path = "crates/mobench-runtime" }

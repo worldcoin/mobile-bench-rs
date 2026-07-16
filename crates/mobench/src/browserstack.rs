@@ -1,4 +1,8 @@
 use anyhow::{Context, Result, anyhow};
+use mobench_provider::{
+    CollectedSession as ProviderCollectedSession, ExpectedSession as ProviderExpectedSession,
+    reconcile_sessions,
+};
 use mobench_runtime::Distribution;
 use reqwest::Url;
 use reqwest::blocking::multipart::Form;
@@ -41,118 +45,34 @@ fn classify_browserstack_result_completeness(
     expected_sessions: &[DeviceSession],
     collected_sessions: Vec<CollectedBrowserStackSession>,
 ) -> Result<BrowserStackResults> {
-    if expected_sessions.is_empty() {
-        return Err(anyhow!(
-            "BrowserStack result set is incomplete; terminal build reported no device sessions"
-        ));
-    }
-
-    let mut expected_session_ids = std::collections::HashSet::new();
-    let mut expected_devices = std::collections::HashSet::new();
-    for session in expected_sessions {
-        if !expected_session_ids.insert(session.session_id.as_str()) {
-            return Err(anyhow!(
-                "BrowserStack result set is ambiguous; duplicate expected session: {}",
-                session.session_id
-            ));
-        }
-        if !expected_devices.insert(session.device.as_str()) {
-            return Err(anyhow!(
-                "BrowserStack result set is ambiguous; duplicate expected device: {}",
-                session.device
-            ));
-        }
-    }
-
-    let mut collected_by_session = std::collections::HashMap::new();
-    for session in collected_sessions {
-        let session_id = session.session_id.clone();
-        if collected_by_session
-            .insert(session_id.clone(), session)
-            .is_some()
-        {
-            return Err(anyhow!(
-                "BrowserStack result set is ambiguous; duplicate collected session: {session_id}"
-            ));
-        }
-    }
-    let missing = expected_sessions
+    let expected = expected_sessions
         .iter()
-        .filter(|session| !collected_by_session.contains_key(&session.session_id))
-        .map(|session| format!("{} ({})", session.device, session.session_id))
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
-        return Err(anyhow!(
-            "BrowserStack result set is incomplete; missing collected sessions: {}",
-            missing.join(", ")
-        ));
-    }
-
-    let non_passed = expected_sessions
-        .iter()
-        .filter(|session| !session.status.eq_ignore_ascii_case("passed"))
-        .map(|session| {
-            let failure = collected_by_session
-                .get(&session.session_id)
-                .and_then(|collected| {
-                    browserstack_failure_diagnostic(&collected.benchmark_failures)
-                })
-                .map(|diagnostic| format!("; {diagnostic}"))
-                .unwrap_or_default();
-            format!(
-                "{} ({}, status={}{})",
-                session.device, session.session_id, session.status, failure
-            )
+        .map(|session| ProviderExpectedSession {
+            session_id: session.session_id.clone(),
+            device_id: session.device.clone(),
+            status: session.status.clone(),
         })
         .collect::<Vec<_>>();
-    if !non_passed.is_empty() {
+    let collected = collected_sessions
+        .iter()
+        .map(|session| ProviderCollectedSession {
+            session_id: session.session_id.clone(),
+            report_count: session.benchmark_results.len(),
+            failure: browserstack_failure_diagnostic(&session.benchmark_failures),
+        })
+        .collect::<Vec<_>>();
+    let assessment = reconcile_sessions(&expected, &collected)
+        .map_err(|error| anyhow!("BrowserStack result set is ambiguous; {error}"))?;
+    if !assessment.is_complete() {
         return Err(anyhow!(
-            "BrowserStack result set is incomplete; non-passed sessions: {}",
-            non_passed.join(", ")
+            "BrowserStack result set is incomplete; {assessment}"
         ));
     }
 
-    let resultless = expected_sessions
-        .iter()
-        .filter(|session| {
-            collected_by_session
-                .get(&session.session_id)
-                .is_some_and(|collected| collected.benchmark_results.is_empty())
-        })
-        .map(|session| {
-            let failure = collected_by_session
-                .get(&session.session_id)
-                .and_then(|collected| {
-                    browserstack_failure_diagnostic(&collected.benchmark_failures)
-                })
-                .map(|diagnostic| format!("; {diagnostic}"))
-                .unwrap_or_default();
-            format!("{} ({}{})", session.device, session.session_id, failure)
-        })
-        .collect::<Vec<_>>();
-    if !resultless.is_empty() {
-        return Err(anyhow!(
-            "BrowserStack result set is incomplete; result-less sessions: {}",
-            resultless.join(", ")
-        ));
-    }
-    let duplicate_results = expected_sessions
-        .iter()
-        .filter_map(|session| {
-            let count = collected_by_session
-                .get(&session.session_id)?
-                .benchmark_results
-                .len();
-            (count > 1).then(|| format!("{} ({}, got {count})", session.device, session.session_id))
-        })
-        .collect::<Vec<_>>();
-    if !duplicate_results.is_empty() {
-        return Err(anyhow!(
-            "BrowserStack result set is ambiguous; duplicate benchmark results: {}",
-            duplicate_results.join(", ")
-        ));
-    }
-
+    let mut collected_by_session = collected_sessions
+        .into_iter()
+        .map(|session| (session.session_id.clone(), session))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut benchmark_results = std::collections::HashMap::new();
     let mut performance_metrics = std::collections::HashMap::new();
     for expected in expected_sessions {

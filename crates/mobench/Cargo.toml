@@ -44,6 +44,7 @@ anyhow.workspace = true
 mobench-artifacts.workspace = true
 mobench-domain.workspace = true
 mobench-process.workspace = true
+mobench-provider.workspace = true
 mobench-report.workspace = true
 mobench-runtime.workspace = true
 mobench-sdk = { workspace = true, features = ["full"] }
