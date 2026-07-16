@@ -276,7 +276,23 @@ impl MobenchConfig {
     /// * `Ok(())` - Successfully saved configuration
     /// * `Err` - If the file cannot be written
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        let contents = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
+        let serialized =
+            toml::to_string_pretty(self).context("Failed to serialize configuration")?;
+        let mut modeled: toml::Value = toml::from_str(&serialized)
+            .context("Failed to materialize serialized configuration")?;
+
+        // Some rewrite-era settings are parsed by a private extension layer so
+        // the constructible public config structs remain semver-compatible.
+        // Preserve those settings, and any future unmodeled keys, when saving
+        // over an existing valid TOML document.
+        if let Ok(existing_contents) = std::fs::read_to_string(path) {
+            if let Ok(existing) = toml::from_str::<toml::Value>(&existing_contents) {
+                preserve_unmodeled_values(&mut modeled, &existing);
+            }
+        }
+
+        let contents =
+            toml::to_string_pretty(&modeled).context("Failed to serialize configuration")?;
 
         std::fs::write(path, contents)
             .with_context(|| format!("Failed to write config file: {:?}", path))?;
@@ -417,6 +433,20 @@ default_warmup = 10
             library_name = library_name,
             package = package,
         )
+    }
+}
+
+fn preserve_unmodeled_values(modeled: &mut toml::Value, existing: &toml::Value) {
+    let (toml::Value::Table(modeled), toml::Value::Table(existing)) = (modeled, existing) else {
+        return;
+    };
+
+    for (key, existing_value) in existing {
+        if let Some(modeled_value) = modeled.get_mut(key) {
+            preserve_unmodeled_values(modeled_value, existing_value);
+        } else {
+            modeled.insert(key.clone(), existing_value.clone());
+        }
     }
 }
 
@@ -606,6 +636,63 @@ android_heartbeat_interval_secs = 5
         assert_eq!(config.benchmarks.default_iterations, 50);
         assert_eq!(config.benchmarks.default_warmup, 5);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, Some(1200));
+    }
+
+    #[test]
+    fn save_preserves_private_extensions_and_future_keys() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("mobench.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[project]
+crate = "test-bench"
+ffi_backend = "boltffi"
+future_project_key = "keep-me"
+
+[android]
+package = "com.test.bench"
+
+[ios]
+bundle_id = "com.test.bench"
+runner = "uikit-legacy"
+
+[benchmarks]
+default_iterations = 50
+
+[browserstack]
+android_benchmark_timeout_secs = 600
+android_heartbeat_interval_secs = 5
+"#,
+        )
+        .unwrap();
+
+        let mut config = MobenchConfig::load_from_file(&config_path).unwrap();
+        config.benchmarks.default_iterations = 75;
+        config.save_to_file(&config_path).unwrap();
+
+        let saved: toml::Value = toml::from_str(
+            &std::fs::read_to_string(&config_path).expect("saved config must be readable"),
+        )
+        .unwrap();
+        assert_eq!(saved["project"]["ffi_backend"].as_str(), Some("boltffi"));
+        assert_eq!(
+            saved["project"]["future_project_key"].as_str(),
+            Some("keep-me")
+        );
+        assert_eq!(saved["ios"]["runner"].as_str(), Some("uikit-legacy"));
+        assert_eq!(
+            saved["browserstack"]["android_benchmark_timeout_secs"].as_integer(),
+            Some(600)
+        );
+        assert_eq!(
+            saved["browserstack"]["android_heartbeat_interval_secs"].as_integer(),
+            Some(5)
+        );
+        assert_eq!(
+            saved["benchmarks"]["default_iterations"].as_integer(),
+            Some(75)
+        );
     }
 
     #[test]

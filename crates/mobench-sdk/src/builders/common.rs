@@ -17,7 +17,6 @@
 //! - Where it happened (paths, commands)
 //! - How to fix it (specific commands or configuration changes)
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -352,49 +351,33 @@ pub(crate) fn run_tool_command(cmd: ToolCommand, description: &str) -> Result<()
 
 /// Runs an externally configured command with consistent error handling.
 ///
-/// This compatibility entry point preserves the released builder API while
-/// routing execution through Mobench's bounded process supervisor. Program,
-/// arguments, current directory, and explicit environment edits are copied
-/// from `cmd`; stdout and stderr are captured completely up to the builder
-/// limits, as they were by the historical `Command::output` implementation.
-pub fn run_command(cmd: Command, description: &str) -> Result<(), BenchError> {
-    let executable = DeclaredExecutable::explicit_override(cmd.get_program()).map_err(|error| {
+/// This compatibility entry point intentionally retains the released
+/// `Command::output` behavior. Rust does not expose whether a `Command` used
+/// `env_clear()`, so reconstructing it as a [`ToolCommand`] could accidentally
+/// reintroduce ambient credentials. New internal builder call sites use the
+/// bounded supervisor directly.
+pub fn run_command(mut cmd: Command, description: &str) -> Result<(), BenchError> {
+    let output = cmd.output().map_err(|e| {
         BenchError::Build(format!(
-            "Failed to declare {description} executable: {error}"
+            "Failed to start {}.\n\n\
+             Error: {}\n\n\
+             Ensure the tool is installed and available on PATH.",
+            description, e
         ))
     })?;
-    let working_directory = cmd
-        .get_current_dir()
-        .map_or(WorkingDirectoryPolicy::Inherit, |path| {
-            WorkingDirectoryPolicy::Path(path.to_path_buf())
-        });
-    let mut set = BTreeMap::new();
-    let mut remove = BTreeSet::new();
-    for (name, value) in cmd.get_envs() {
-        match value {
-            Some(value) => {
-                set.insert(name.to_os_string(), value.to_os_string());
-            }
-            None => {
-                remove.insert(name.to_os_string());
-            }
-        }
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BenchError::Build(format!(
+            "{} failed.\n\n\
+             Exit status: {}\n\n\
+             Stdout:\n{}\n\n\
+             Stderr:\n{}",
+            description, output.status, stdout, stderr
+        )));
     }
-    let environment = if set.is_empty() && remove.is_empty() {
-        EnvironmentPolicy::Inherit
-    } else {
-        EnvironmentPolicy::InheritWith { set, remove }
-    };
-    run_tool_command(
-        ToolCommand {
-            executable,
-            arguments: cmd.get_args().map(OsStr::to_os_string).collect(),
-            working_directory,
-            environment,
-            timeout: DEFAULT_TOOL_TIMEOUT,
-        },
-        description,
-    )
+    Ok(())
 }
 
 /// Reads the package name from a Cargo.toml file.
@@ -844,6 +827,20 @@ mod tests {
         let err = result.unwrap_err();
         let msg = format!("{}", err);
         assert!(msg.contains("Failed to start"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn public_run_command_preserves_env_clear() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.env_clear()
+            .env("MOBENCH_EXPLICIT_ENV", "present")
+            .args([
+                "-c",
+                "test \"$MOBENCH_EXPLICIT_ENV\" = present && test -z \"${HOME+x}\"",
+            ]);
+
+        run_command(cmd, "env-clear compatibility check").unwrap();
     }
 
     #[test]
