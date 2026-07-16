@@ -21,6 +21,10 @@ pub(crate) struct LocalRunRequest {
     pub(crate) iterations: u32,
     pub(crate) warmup: u32,
     pub(crate) release: bool,
+    pub(crate) run_id: String,
+    pub(crate) nonce: String,
+    pub(crate) logical_session_id: String,
+    pub(crate) producer: String,
 }
 
 /// Local Provider Adapter for one resolved benchmark crate.
@@ -174,6 +178,10 @@ impl ProviderAdapter for LocalProviderAdapter<'_> {
             .arg(&handle.request.function)
             .arg(handle.request.iterations.to_string())
             .arg(handle.request.warmup.to_string())
+            .arg(&handle.request.run_id)
+            .arg(&handle.request.nonce)
+            .arg(&handle.request.logical_session_id)
+            .arg(&handle.request.producer)
             .current_dir(
                 handle
                     .manifest_path
@@ -420,15 +428,32 @@ fn main() {
         .expect("missing warmup")
         .parse::<u32>()
         .expect("invalid warmup");
+    let run_id = arguments.next().expect("missing run id");
+    let nonce = arguments.next().expect("missing nonce");
+    let logical_session_id = arguments.next().expect("missing logical session id");
+    let producer = arguments.next().expect("missing producer");
     assert!(arguments.next().is_none(), "unexpected harness argument");
 
     let report = mobench_sdk::run_benchmark(mobench_sdk::BenchSpec {
-        name: function,
+        name: function.clone(),
         iterations,
         warmup,
     })
     .expect("benchmark execution failed");
-    let json = serde_json::to_string(&report).expect("benchmark report serialization failed");
+    let mut envelope = serde_json::to_value(&report).expect("benchmark report serialization failed");
+    let samples_ns = report.samples.iter().map(|sample| sample.duration_ns).collect::<Vec<_>>();
+    let object = envelope.as_object_mut().expect("benchmark report must serialize as an object");
+    object.insert("schema_version".into(), serde_json::json!("mobench.run/v2"));
+    object.insert("run_id".into(), serde_json::json!(run_id));
+    object.insert("nonce".into(), serde_json::json!(nonce));
+    object.insert("logical_session_id".into(), serde_json::json!(logical_session_id));
+    object.insert("function_id".into(), serde_json::json!(function));
+    object.insert("producer".into(), serde_json::json!(producer));
+    object.insert("requested".into(), serde_json::json!({"iterations": iterations, "warmup": warmup}));
+    object.insert("observed".into(), serde_json::json!({"iterations": iterations, "warmup": warmup}));
+    object.insert("samples_ns".into(), serde_json::json!(samples_ns));
+    object.insert("outcome".into(), serde_json::json!({"status": "success"}));
+    let json = serde_json::to_string(&envelope).expect("benchmark report serialization failed");
     println!("MOBENCH_LOCAL_REPORT:{json}");
 }
 "#
@@ -438,6 +463,37 @@ fn validate_report_identity(
     report: &Value,
     request: &LocalRunRequest,
 ) -> Result<(), LocalProviderError> {
+    let identifier = |value: &str| {
+        mobench_domain::ReportIdentifier::parse(value).map_err(|error| {
+            LocalProviderError::IdentityMismatch {
+                message: error.to_string(),
+            }
+        })
+    };
+    let expected = mobench_domain::ExpectedReportIdentity::new(
+        mobench_domain::ReportIdentity::new(
+            identifier(&request.run_id)?,
+            identifier(&request.nonce)?,
+            identifier(&request.logical_session_id)?,
+            identifier(&request.function)?,
+            identifier(&request.producer)?,
+        ),
+        mobench_domain::ReportCounts::new(request.iterations, request.warmup).map_err(|error| {
+            LocalProviderError::IdentityMismatch {
+                message: error.to_string(),
+            }
+        })?,
+    );
+    let encoded =
+        serde_json::to_vec(report).map_err(|error| LocalProviderError::InvalidReport {
+            message: error.to_string(),
+        })?;
+    expected
+        .validate_json(&encoded)
+        .map_err(|error| LocalProviderError::IdentityMismatch {
+            message: error.to_string(),
+        })?;
+
     let spec = report
         .get("spec")
         .ok_or_else(|| LocalProviderError::IdentityMismatch {
@@ -518,6 +574,10 @@ mod tests {
             iterations: 3,
             warmup: 1,
             release: false,
+            run_id: "run-local-test".to_owned(),
+            nonce: "nonce-local-test".to_owned(),
+            logical_session_id: "logical-session-local-test".to_owned(),
+            producer: "local-runner".to_owned(),
         };
         let engine = ProviderEngine::new(LocalProviderAdapter::new(&layout));
         let run = engine
@@ -537,6 +597,10 @@ mod tests {
             iterations: 2,
             warmup: 1,
             release: false,
+            run_id: "run-local-test".to_owned(),
+            nonce: "nonce-local-test".to_owned(),
+            logical_session_id: "logical-session-local-test".to_owned(),
+            producer: "local-runner".to_owned(),
         };
         let report = serde_json::json!({
             "spec": { "name": "crate::wrong", "iterations": 2, "warmup": 1 },

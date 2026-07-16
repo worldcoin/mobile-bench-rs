@@ -6,11 +6,12 @@ use thiserror::Error;
 mod report;
 
 pub use report::{
-    ExpectedReportIdentity, LegacyV1AdapterError, MAX_REPORT_COUNT,
-    MAX_REPORT_FAILURE_MESSAGE_BYTES, MAX_REPORT_IDENTIFIER_BYTES, MAX_REPORT_SAMPLES,
-    REPORT_SCHEMA_V2, ReducedProvenanceReport, ReportConstructionError, ReportCount, ReportCounts,
-    ReportEnvelopeV2, ReportFailure, ReportIdentifier, ReportIdentifierError, ReportIdentity,
-    ReportOutcome, ReportValidationError, adapt_legacy_v1_json,
+    BoundRunReportV2, ExpectedProviderBinding, ExpectedReportIdentity, LegacyV1AdapterError,
+    MAX_REPORT_COUNT, MAX_REPORT_FAILURE_MESSAGE_BYTES, MAX_REPORT_IDENTIFIER_BYTES,
+    MAX_REPORT_SAMPLES, ProviderReportBinding, REPORT_SCHEMA_V2, ReducedProvenanceReport,
+    ReportBindingError, ReportConstructionError, ReportCount, ReportCounts, ReportEnvelopeV2,
+    ReportFailure, ReportIdentifier, ReportIdentifierError, ReportIdentity, ReportOutcome,
+    ReportValidationError, adapt_legacy_v1_json,
 };
 
 /// Maximum accepted JSON payload for one Android benchmark report.

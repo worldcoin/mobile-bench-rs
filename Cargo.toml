@@ -33,6 +33,7 @@ uniffi = "0.28"
 boltffi = "0.25.2"
 time = { version = "0.3", features = ["formatting"] }
 fs2 = "0.4"
+getrandom = "0.3"
 
 # Phase 1: Registry and proc macros
 inventory = "0.3"

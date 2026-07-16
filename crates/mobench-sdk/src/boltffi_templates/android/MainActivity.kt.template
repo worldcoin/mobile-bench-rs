@@ -27,12 +27,18 @@ class MainActivity : AppCompatActivity() {
         private const val ITERATIONS_EXTRA = "bench_iterations"
         private const val WARMUP_EXTRA = "bench_warmup"
         private const val SPEC_ASSET = "bench_spec.json"
+        private const val REPORT_SCHEMA_V2 = "mobench.run/v2"
     }
 
     private data class BenchParams(
         val function: String,
         val iterations: UInt,
         val warmup: UInt,
+        val runId: String? = null,
+        val nonce: String? = null,
+        val logicalSessionId: String? = null,
+        val functionId: String? = null,
+        val producer: String? = null,
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,7 +48,7 @@ class MainActivity : AppCompatActivity() {
         params = resolveBenchParams()
         val display = try {
             val rawReport = runBenchmarkWithBoltFfi(params)
-            val report = enrichBenchReport(rawReport)
+            val report = enrichBenchReport(rawReport, params)
             logBenchJson(report.toString())
             formatBenchReport(report)
         } catch (e: Exception) {
@@ -86,12 +92,13 @@ class MainActivity : AppCompatActivity() {
             .put("function_name", params.function)
             .put("kind", kind)
             .put("message", message)
-            .toString()
-        failureJson = payload
+        applyV2Envelope(payload, params, JSONArray(), "failure", kind, message)
+        val encoded = payload.toString()
+        failureJson = encoded
         benchmarkFailed = true
         benchmarkComplete = true
-        android.util.Log.e("BenchRunner", "BENCH_FAILURE_JSON $payload")
-        return payload
+        android.util.Log.e("BenchRunner", "BENCH_FAILURE_JSON $encoded")
+        return encoded
     }
 
     private fun runBenchmarkWithBoltFfi(params: BenchParams): JSONObject {
@@ -102,7 +109,7 @@ class MainActivity : AppCompatActivity() {
         return JSONObject(runBenchmarkJson(specJson = spec.toString()))
     }
 
-    private fun enrichBenchReport(rawReport: JSONObject): JSONObject {
+    private fun enrichBenchReport(rawReport: JSONObject, params: BenchParams): JSONObject {
         val json = JSONObject(rawReport.toString())
         val spec = json.optJSONObject("spec") ?: JSONObject()
         json.put("function", spec.optString("name", DEFAULT_FUNCTION))
@@ -116,6 +123,7 @@ class MainActivity : AppCompatActivity() {
             durations.add(duration)
         }
         json.put("samples_ns", samplesNs)
+        applyV2Envelope(json, params, samplesNs, "success", null, null)
 
         if (durations.isNotEmpty()) {
             val min = durations.minOrNull() ?: 0L
@@ -136,6 +144,39 @@ class MainActivity : AppCompatActivity() {
                 .put("native_heap_kb", Debug.getNativeHeapAllocatedSize() / 1024)
         )
         return json
+    }
+
+    private fun applyV2Envelope(
+        json: JSONObject,
+        params: BenchParams,
+        samplesNs: JSONArray,
+        status: String,
+        errorCode: String?,
+        message: String?,
+    ) {
+        val runId = params.runId ?: return
+        val nonce = params.nonce ?: return
+        val logicalSessionId = params.logicalSessionId ?: return
+        val functionId = params.functionId ?: return
+        val producer = params.producer ?: return
+        json.put("schema_version", REPORT_SCHEMA_V2)
+            .put("run_id", runId)
+            .put("nonce", nonce)
+            .put("logical_session_id", logicalSessionId)
+            .put("function_id", functionId)
+            .put("producer", producer)
+            .put("requested", JSONObject()
+                .put("iterations", params.iterations.toInt())
+                .put("warmup", params.warmup.toInt()))
+            .put("observed", JSONObject()
+                .put("iterations", samplesNs.length())
+                .put("warmup", if (status == "success") params.warmup.toInt() else 0))
+            .put("samples_ns", samplesNs)
+            .put("outcome", JSONObject().put("status", status).also {
+                if (errorCode != null && message != null) {
+                    it.put("error", JSONObject().put("code", errorCode).put("message", message))
+                }
+            })
     }
 
     private fun logBenchJson(json: String) {
@@ -193,6 +234,11 @@ class MainActivity : AppCompatActivity() {
             intentFunction ?: defaults.function,
             intentIterations ?: defaults.iterations,
             intentWarmup ?: defaults.warmup,
+            defaults.runId,
+            defaults.nonce,
+            defaults.logicalSessionId,
+            defaults.functionId,
+            defaults.producer,
         )
     }
 
@@ -204,6 +250,11 @@ class MainActivity : AppCompatActivity() {
                 json.optString("function", DEFAULT_FUNCTION),
                 json.optInt("iterations", DEFAULT_ITERATIONS.toInt()).toUInt(),
                 json.optInt("warmup", DEFAULT_WARMUP.toInt()).toUInt(),
+                json.optString("run_id").takeUnless { it.isBlank() },
+                json.optString("nonce").takeUnless { it.isBlank() },
+                json.optString("logical_session_id").takeUnless { it.isBlank() },
+                json.optString("function_id").takeUnless { it.isBlank() },
+                json.optString("producer").takeUnless { it.isBlank() },
             )
         } catch (_: java.io.FileNotFoundException) {
             null

@@ -3,16 +3,32 @@ import Foundation
 private let defaultFunction = "{{DEFAULT_FUNCTION}}"
 private let defaultIterations: UInt32 = 20
 private let defaultWarmup: UInt32 = 3
+private let reportSchemaV2 = "mobench.run/v2"
+
+struct ReportIdentity {
+    let runId: String
+    let nonce: String
+    let logicalSessionId: String
+    let functionId: String
+    let producer: String
+}
 
 struct BenchParams {
     let function: String
     let iterations: UInt32
     let warmup: UInt32
+    let identity: ReportIdentity?
 
-    private struct EncodedBenchSpec: Decodable {
+    fileprivate struct EncodedBenchSpec: Decodable {
         let function: String
         let iterations: UInt32
         let warmup: UInt32
+        let schema_version: String?
+        let run_id: String?
+        let nonce: String?
+        let logical_session_id: String?
+        let function_id: String?
+        let producer: String?
     }
 
     static func fromBundle() -> BenchParams? {
@@ -22,7 +38,12 @@ struct BenchParams {
         do {
             let data = try Data(contentsOf: url)
             let decoded = try JSONDecoder().decode(EncodedBenchSpec.self, from: data)
-            return BenchParams(function: decoded.function, iterations: decoded.iterations, warmup: decoded.warmup)
+            return BenchParams(
+                function: decoded.function,
+                iterations: decoded.iterations,
+                warmup: decoded.warmup,
+                identity: decoded.schema_version == reportSchemaV2 ? decoded.reportIdentity() : nil
+            )
         } catch {
             print("[BenchRunner] ERROR: Failed to parse bench_spec.json: \(error)")
             return nil
@@ -59,11 +80,26 @@ struct BenchParams {
             }
         }
 
-        return BenchParams(function: function, iterations: iterations, warmup: warmup)
+        return BenchParams(function: function, iterations: iterations, warmup: warmup, identity: nil)
     }
 
     static func resolved() -> BenchParams {
         fromBundle() ?? fromProcessInfo()
+    }
+}
+
+private extension BenchParams.EncodedBenchSpec {
+    func reportIdentity() -> ReportIdentity? {
+        guard let run_id, let nonce, let logical_session_id, let function_id, let producer else {
+            return nil
+        }
+        return ReportIdentity(
+            runId: run_id,
+            nonce: nonce,
+            logicalSessionId: logical_session_id,
+            functionId: function_id,
+            producer: producer
+        )
     }
 }
 
@@ -80,7 +116,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
     static func run(params: BenchParams) -> BenchmarkResult {
         do {
             let rawReport = try runBenchmarkJson(specJson: encodeSpec(params))
-            let report = try enrichBenchReport(rawReport)
+            let report = try enrichBenchReport(rawReport, params: params)
             return BenchmarkResult(
                 displayText: formatBenchReport(report),
                 jsonReport: serializeJSON(report)
@@ -90,7 +126,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             let message = error.localizedDescription
             return BenchmarkResult(
                 displayText: "Benchmark error: \(message)",
-                jsonReport: "{\"error\": true, \"message\": \"\(escapeJSON(message))\"}"
+                jsonReport: serializeFailureJSON(message, params: params)
             )
         }
     }
@@ -105,7 +141,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         return String(data: data, encoding: .utf8) ?? "{}"
     }
 
-    private static func enrichBenchReport(_ rawReport: String) throws -> [String: Any] {
+    private static func enrichBenchReport(_ rawReport: String, params: BenchParams) throws -> [String: Any] {
         let data = Data(rawReport.utf8)
         guard var json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
             throw BoltFfiBenchError.execution("BoltFFI benchmark returned non-object JSON")
@@ -115,6 +151,7 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         let samples = json["samples"] as? [[String: Any]] ?? []
         let durations = samples.compactMap { coerceToUInt64($0["duration_ns"] ?? 0) }
         json["samples_ns"] = durations
+        applyV2Envelope(to: &json, params: params, samplesNs: durations, outcome: ["status": "success"])
         if !durations.isEmpty {
             let sum = durations.reduce(0, +)
             json["stats"] = [
@@ -130,6 +167,42 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
             "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
         ] as [String: Any]
         return json
+    }
+
+    private static func serializeFailureJSON(_ message: String, params: BenchParams) -> String {
+        var json: [String: Any] = ["error": true, "message": message, "samples_ns": []]
+        applyV2Envelope(
+            to: &json,
+            params: params,
+            samplesNs: [],
+            outcome: [
+                "status": "failure",
+                "error": ["code": "benchmark_error", "message": message]
+            ]
+        )
+        return serializeJSON(json)
+    }
+
+    private static func applyV2Envelope(
+        to json: inout [String: Any],
+        params: BenchParams,
+        samplesNs: [UInt64],
+        outcome: [String: Any]
+    ) {
+        guard let identity = params.identity else { return }
+        json["schema_version"] = reportSchemaV2
+        json["run_id"] = identity.runId
+        json["nonce"] = identity.nonce
+        json["logical_session_id"] = identity.logicalSessionId
+        json["function_id"] = identity.functionId
+        json["producer"] = identity.producer
+        json["requested"] = ["iterations": params.iterations, "warmup": params.warmup]
+        json["observed"] = [
+            "iterations": samplesNs.count,
+            "warmup": outcome["status"] as? String == "success" ? params.warmup : 0
+        ]
+        json["samples_ns"] = samplesNs
+        json["outcome"] = outcome
     }
 
     private static func formatBenchReport(_ report: [String: Any]) -> String {

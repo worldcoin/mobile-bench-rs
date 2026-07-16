@@ -18,6 +18,21 @@ type BrowserStackResults = (
     std::collections::HashMap<String, PerformanceMetrics>,
 );
 
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserStackCollectedReport {
+    pub(crate) requested_device_id: String,
+    pub(crate) observed_device_id: String,
+    pub(crate) transport_session_id: String,
+    pub(crate) benchmark: Value,
+}
+
+#[derive(Debug)]
+pub(crate) struct BrowserStackCollection {
+    pub(crate) benchmark_results: std::collections::HashMap<String, Vec<Value>>,
+    pub(crate) performance_metrics: std::collections::HashMap<String, PerformanceMetrics>,
+    pub(crate) reports: Vec<BrowserStackCollectedReport>,
+}
+
 /// BrowserStack transport selected for one Provider Run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BrowserStackPlatform {
@@ -192,9 +207,26 @@ fn validate_requested_device_sessions(
     ))
 }
 
+fn provider_device_identifier(details: &SessionDetails) -> String {
+    BrowserStackDevice {
+        device: details.device.clone(),
+        os: details.os.clone(),
+        os_version: details.os_version.clone(),
+        available: None,
+    }
+    .identifier()
+}
+
 pub(crate) fn completed_browserstack_results(
     run: ProviderRun<BrowserStackReport>,
 ) -> Result<BrowserStackResults> {
+    let collection = completed_browserstack_collection(run)?;
+    Ok((collection.benchmark_results, collection.performance_metrics))
+}
+
+pub(crate) fn completed_browserstack_collection(
+    run: ProviderRun<BrowserStackReport>,
+) -> Result<BrowserStackCollection> {
     if !run.assessment().is_complete() {
         return Err(anyhow!(
             "BrowserStack result set is incomplete; {}",
@@ -204,6 +236,7 @@ pub(crate) fn completed_browserstack_results(
 
     let mut benchmark_results = std::collections::HashMap::new();
     let mut performance_metrics = std::collections::HashMap::new();
+    let mut reports = Vec::new();
     for (assessment, collected) in run
         .assessment()
         .sessions()
@@ -214,6 +247,12 @@ pub(crate) fn completed_browserstack_results(
             .reports
             .first()
             .expect("complete Provider Session has exactly one report");
+        reports.push(BrowserStackCollectedReport {
+            requested_device_id: assessment.device_id.clone(),
+            observed_device_id: assessment.device_id.clone(),
+            transport_session_id: assessment.session_id.clone(),
+            benchmark: report.benchmark.clone(),
+        });
         benchmark_results.insert(assessment.device_id.clone(), vec![report.benchmark.clone()]);
         if report.performance_metrics.sample_count > 0 {
             performance_metrics.insert(
@@ -223,7 +262,11 @@ pub(crate) fn completed_browserstack_results(
         }
     }
 
-    Ok((benchmark_results, performance_metrics))
+    Ok(BrowserStackCollection {
+        benchmark_results,
+        performance_metrics,
+        reports,
+    })
 }
 use std::time::Instant;
 
@@ -1310,19 +1353,31 @@ impl BrowserStackClient {
             true,
             cancellation,
         )?;
+        let mut verified_sessions = build_status.devices.clone();
         if let Some(requested_devices) = requested_devices {
-            validate_requested_device_sessions(requested_devices, &build_status.devices)?;
+            for session in &mut verified_sessions {
+                let details = self
+                    .get_session_details(build_id, &session.session_id)
+                    .with_context(|| {
+                        format!(
+                            "fetching observed BrowserStack device identity for session {}",
+                            session.session_id
+                        )
+                    })?;
+                session.device = provider_device_identifier(&details);
+            }
+            validate_requested_device_sessions(requested_devices, &verified_sessions)?;
         }
 
         println!("Build completed with status: {}", build_status.status);
         println!(
             "Fetching results from {} device(s)...",
-            build_status.devices.len()
+            verified_sessions.len()
         );
 
-        let mut collected_sessions = Vec::with_capacity(build_status.devices.len());
+        let mut collected_sessions = Vec::with_capacity(verified_sessions.len());
 
-        for device in &build_status.devices {
+        for device in &verified_sessions {
             if cancellation.is_cancelled() {
                 return Err(anyhow!("BrowserStack collection was cancelled"));
             }
@@ -1454,7 +1509,7 @@ impl BrowserStackClient {
         }
 
         Ok(browserstack_adapter_run(
-            &build_status.devices,
+            &verified_sessions,
             collected_sessions,
         ))
     }
@@ -2677,6 +2732,17 @@ mod tests {
                     }]
                 }),
             ),
+            ScriptedHttpResponse::json(
+                "/app-automate/builds/build-1/sessions/session-1",
+                json!({
+                    "automation_session": {
+                        "device": "Google Pixel 7",
+                        "os": "android",
+                        "os_version": "13.0",
+                        "duration": 201
+                    }
+                }),
+            ),
             ScriptedHttpResponse::text(
                 "/app-automate/espresso/v2/builds/build-1/sessions/session-1/devicelogs",
                 r#"{"function":"crate::bench","samples":[1,2,3]}"#,
@@ -2783,6 +2849,18 @@ mod tests {
                 .to_string()
                 .contains("Samsung Galaxy S23-13.0 (1 unexpected)")
         );
+    }
+
+    #[test]
+    fn provider_session_details_bind_the_observed_device_and_os_version() {
+        let details = SessionDetails {
+            device: "Google Pixel 7".to_owned(),
+            os: "android".to_owned(),
+            os_version: "13.0".to_owned(),
+            duration: Some(201),
+        };
+
+        assert_eq!(provider_device_identifier(&details), "Google Pixel 7-13.0");
     }
 
     #[test]

@@ -149,7 +149,7 @@ use tracing_subscriber::EnvFilter;
 use browserstack::{
     BrowserStackArtifacts, BrowserStackAuth, BrowserStackClient, BrowserStackPlatform,
     BrowserStackProviderAdapter, BrowserStackRunHandle, BrowserStackRunRequest,
-    DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, completed_browserstack_results,
+    DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, completed_browserstack_collection,
 };
 #[cfg(test)]
 pub(crate) use cli::CiTarget;
@@ -285,6 +285,87 @@ pub(crate) struct RunSpec {
     pub(crate) browserstack: Option<BrowserStackConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) ios_xcuitest: Option<IosXcuitestArtifacts>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RunEnvelopeIdentity {
+    run_id: String,
+    nonce: String,
+    logical_session_id: String,
+    producer: String,
+}
+
+impl RunEnvelopeIdentity {
+    pub(crate) fn generate(target: MobileTarget) -> Result<Self> {
+        Ok(Self {
+            run_id: format!("run-{}", random_hex::<16>()?),
+            nonce: format!("nonce-{}", random_hex::<32>()?),
+            logical_session_id: format!("logical-session-{}", random_hex::<16>()?),
+            producer: match target {
+                MobileTarget::Android => "android-runner",
+                MobileTarget::Ios => "ios-runner",
+            }
+            .to_owned(),
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bind_report_value(
+    report: &Value,
+    identity: &RunEnvelopeIdentity,
+    spec: &RunSpec,
+    provider_id: &str,
+    provider_run_id: &str,
+    transport_session_id: &str,
+    requested_device_id: &str,
+    observed_device_id: &str,
+) -> Result<mobench_domain::BoundRunReportV2> {
+    let identifier = |value: &str, field: &str| {
+        mobench_domain::ReportIdentifier::parse(value.to_owned())
+            .with_context(|| format!("invalid {field} in v2 report binding"))
+    };
+    let expected = mobench_domain::ExpectedReportIdentity::new(
+        mobench_domain::ReportIdentity::new(
+            identifier(&identity.run_id, "run_id")?,
+            identifier(&identity.nonce, "nonce")?,
+            identifier(&identity.logical_session_id, "logical_session_id")?,
+            identifier(&spec.function, "function_id")?,
+            identifier(&identity.producer, "producer")?,
+        ),
+        mobench_domain::ReportCounts::new(spec.iterations, spec.warmup)
+            .context("invalid requested v2 report counts")?,
+    );
+    let encoded = serde_json::to_vec(report).context("serializing collected v2 report")?;
+    let envelope = expected
+        .validate_json(&encoded)
+        .context("collected producer report failed strict v2 validation")?;
+    let binding = mobench_domain::ProviderReportBinding::new(
+        identifier(provider_id, "provider_id")?,
+        identifier(provider_run_id, "provider_run_id")?,
+        identifier(transport_session_id, "transport_session_id")?,
+        identifier(requested_device_id, "requested_device_id")?,
+        identifier(observed_device_id, "observed_device_id")?,
+    );
+    let expected_binding = mobench_domain::ExpectedProviderBinding::new(
+        identifier(provider_id, "provider_id")?,
+        identifier(provider_run_id, "provider_run_id")?,
+        identifier(transport_session_id, "transport_session_id")?,
+        identifier(requested_device_id, "requested_device_id")?,
+    );
+    expected
+        .bind(envelope, binding, &expected_binding)
+        .context("collected report failed provider binding validation")
+}
+
+fn random_hex<const N: usize>() -> Result<String> {
+    let mut bytes = [0_u8; N];
+    getrandom::fill(&mut bytes).map_err(|error| anyhow!("generating run identity: {error}"))?;
+    let mut encoded = String::with_capacity(N * 2);
+    for byte in bytes {
+        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(encoded)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -562,6 +643,7 @@ pub fn run() -> Result<()> {
                 release,
                 cli.dry_run,
             )?;
+            let run_identity = RunEnvelopeIdentity::generate(spec.target)?;
             let summary_paths = resolve_summary_paths(output.as_deref())?;
             let output_dir = layout.output_dir.clone();
             let run_span = tracing::info_span!(
@@ -714,9 +796,10 @@ pub fn run() -> Result<()> {
                     output_dir.display()
                 );
             } else {
-                persist_mobile_spec(&layout, &spec, release)?;
+                persist_mobile_spec(&layout, &spec, &run_identity, release)?;
             }
 
+            let mut bound_reports = Vec::new();
             let local_report = if local_only && !cli.dry_run {
                 if progress {
                     println!("[2/4] Running benchmark through local provider...");
@@ -730,6 +813,10 @@ pub fn run() -> Result<()> {
                     iterations: spec.iterations,
                     warmup: spec.warmup,
                     release,
+                    run_id: run_identity.run_id.clone(),
+                    nonce: run_identity.nonce.clone(),
+                    logical_session_id: run_identity.logical_session_id.clone(),
+                    producer: run_identity.producer.clone(),
                 };
                 let run = engine
                     .execute(&request, &mobench_process::global_cancellation_token())
@@ -740,11 +827,26 @@ pub fn run() -> Result<()> {
                         run.assessment()
                     );
                 }
-                run.sessions()
+                let session = run
+                    .sessions()
                     .first()
-                    .and_then(|session| session.reports.first())
+                    .context("local provider completed without one session")?;
+                let report = session
+                    .reports
+                    .first()
                     .cloned()
-                    .context("local provider completed without one benchmark report")?
+                    .context("local provider completed without one benchmark report")?;
+                bound_reports.push(bind_report_value(
+                    &report,
+                    &run_identity,
+                    &spec,
+                    "local",
+                    &run_identity.run_id,
+                    &session.session_id,
+                    "host",
+                    "host",
+                )?);
+                report
             } else {
                 if !progress && !local_only {
                     println!("Skipping host benchmark - benchmarks will run on mobile devices");
@@ -845,6 +947,7 @@ pub fn run() -> Result<()> {
                                 let packaged = package_ios_xcuitest_artifacts(
                                     &layout,
                                     &spec,
+                                    &run_identity,
                                     release,
                                     spec.ios_completion_timeout_secs,
                                     spec.ios_deployment_target.as_deref(),
@@ -950,9 +1053,23 @@ pub fn run() -> Result<()> {
                         &mobench_process::global_cancellation_token(),
                     )
                     .map_err(|error| anyhow!("BrowserStack provider failed to collect: {error}"))
-                    .and_then(completed_browserstack_results);
+                    .and_then(completed_browserstack_collection);
                 match provider_result {
-                    Ok((bench_results, perf_metrics)) => {
+                    Ok(collection) => {
+                        for collected in &collection.reports {
+                            bound_reports.push(bind_report_value(
+                                &collected.benchmark,
+                                &run_identity,
+                                &run_summary.spec,
+                                "browserstack",
+                                build_id,
+                                &collected.transport_session_id,
+                                &collected.requested_device_id,
+                                &collected.observed_device_id,
+                            )?);
+                        }
+                        let bench_results = collection.benchmark_results;
+                        let perf_metrics = collection.performance_metrics;
                         println!(
                             "\n✓ Successfully fetched results from {} device(s)",
                             bench_results.len()
@@ -1080,6 +1197,12 @@ pub fn run() -> Result<()> {
                 &summary_paths,
                 summary_csv,
                 plots::PlotMode::Off,
+            )?;
+            write_summary_v2(
+                &summary_paths,
+                &run_identity,
+                &run_summary.spec,
+                &bound_reports,
             )?;
 
             let mut compare_report = None;
@@ -3667,6 +3790,7 @@ pub(crate) fn run_ios_build(
 fn package_ios_xcuitest_artifacts(
     layout: &ResolvedProjectLayout,
     spec: &RunSpec,
+    identity: &RunEnvelopeIdentity,
     release: bool,
     ios_completion_timeout_secs: Option<u64>,
     ios_deployment_target: Option<&str>,
@@ -3700,7 +3824,7 @@ fn package_ios_xcuitest_artifacts(
     // `build()` refreshes generated XCUITest sources from the crate's detected
     // default. Re-embed after generation so the compiled test suite is bound to
     // the function requested for this run, not a stale scaffolding default.
-    embed_spec_into_apps(&layout.output_dir, spec)
+    embed_spec_into_apps(&layout.output_dir, spec, identity)
         .context("Failed to bind generated iOS artifacts to the current bench spec")?;
     let app = builder
         .package_ipa("BenchRunner", mobench_sdk::builders::SigningMethod::AdHoc)
@@ -4152,11 +4276,18 @@ pub(crate) fn validate_benchmark_function(
 pub(crate) fn persist_mobile_spec(
     layout: &ResolvedProjectLayout,
     spec: &RunSpec,
+    identity: &RunEnvelopeIdentity,
     release: bool,
 ) -> Result<()> {
     let root = &layout.project_root;
     let payload = json!({
+        "schema_version": mobench_domain::REPORT_SCHEMA_V2,
+        "run_id": identity.run_id,
+        "nonce": identity.nonce,
+        "logical_session_id": identity.logical_session_id,
         "function": spec.function,
+        "function_id": spec.function,
+        "producer": identity.producer,
         "iterations": spec.iterations,
         "warmup": spec.warmup,
         "android_benchmark_timeout_secs": spec.android_benchmark_timeout_secs,
@@ -4184,7 +4315,7 @@ pub(crate) fn persist_mobile_spec(
     let apps_exist =
         mobench_output_dir.join("android").exists() || mobench_output_dir.join("ios").exists();
 
-    if let Err(e) = embed_spec_into_apps(&mobench_output_dir, spec) {
+    if let Err(e) = embed_spec_into_apps(&mobench_output_dir, spec, identity) {
         // Only warn if the apps don't exist yet - they'll be created during build
         if apps_exist {
             println!(
@@ -4218,10 +4349,20 @@ pub(crate) fn persist_mobile_spec(
 }
 
 /// Embeds the benchmark spec into Android assets and iOS bundle resources.
-fn embed_spec_into_apps(output_dir: &Path, spec: &RunSpec) -> Result<()> {
+fn embed_spec_into_apps(
+    output_dir: &Path,
+    spec: &RunSpec,
+    identity: &RunEnvelopeIdentity,
+) -> Result<()> {
     #[derive(Serialize)]
     struct EmbeddedRunSpec {
+        schema_version: &'static str,
+        run_id: String,
+        nonce: String,
+        logical_session_id: String,
         function: String,
+        function_id: String,
+        producer: String,
         iterations: u32,
         warmup: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -4231,7 +4372,13 @@ fn embed_spec_into_apps(output_dir: &Path, spec: &RunSpec) -> Result<()> {
     }
 
     let embedded_spec = EmbeddedRunSpec {
+        schema_version: mobench_domain::REPORT_SCHEMA_V2,
+        run_id: identity.run_id.clone(),
+        nonce: identity.nonce.clone(),
+        logical_session_id: identity.logical_session_id.clone(),
         function: spec.function.clone(),
+        function_id: spec.function.clone(),
+        producer: identity.producer.clone(),
         iterations: spec.iterations,
         warmup: spec.warmup,
         android_benchmark_timeout_secs: spec.android_benchmark_timeout_secs,
@@ -4450,6 +4597,44 @@ fn write_summary(
         write_file(&paths.csv, csv.as_bytes())?;
         println!("Wrote CSV summary to {:?}", paths.csv);
     }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct CanonicalSummaryV2<'a> {
+    schema_version: &'static str,
+    run_id: &'a str,
+    target: MobileTarget,
+    function_id: &'a str,
+    requested: mobench_domain::ReportCounts,
+    reports: &'a [mobench_domain::BoundRunReportV2],
+}
+
+fn summary_v2_path(paths: &SummaryPaths) -> PathBuf {
+    paths.json.with_file_name("summary.v2.json")
+}
+
+fn write_summary_v2(
+    paths: &SummaryPaths,
+    identity: &RunEnvelopeIdentity,
+    spec: &RunSpec,
+    reports: &[mobench_domain::BoundRunReportV2],
+) -> Result<()> {
+    let summary = CanonicalSummaryV2 {
+        schema_version: "mobench.summary/v2",
+        run_id: &identity.run_id,
+        target: spec.target,
+        function_id: &spec.function,
+        requested: mobench_domain::ReportCounts::new(spec.iterations, spec.warmup)
+            .context("invalid canonical summary counts")?,
+        reports,
+    };
+    let path = summary_v2_path(paths);
+    let encoded =
+        serde_json::to_vec_pretty(&summary).context("serializing canonical summary v2")?;
+    ensure_parent_dir(&path)?;
+    write_file(&path, &encoded)?;
+    println!("Wrote canonical v2 summary to {:?}", path);
     Ok(())
 }
 
@@ -8940,6 +9125,49 @@ runner = "swiftui"
         let report = run_local_smoke(&spec).expect("local harness");
         assert!(report["samples"].is_array());
         assert_eq!(report["spec"]["name"], "noop_benchmark");
+    }
+
+    #[test]
+    fn embedded_mobile_spec_carries_v2_logical_identity() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let spec = RunSpec {
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".into(),
+            iterations: 3,
+            warmup: 1,
+            devices: vec!["Google Pixel 7-13.0".into()],
+            ios_completion_timeout_secs: None,
+            ios_deployment_target: None,
+            ios_runner: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let identity = RunEnvelopeIdentity {
+            run_id: "run-test-001".into(),
+            nonce: "nonce-test-001".into(),
+            logical_session_id: "logical-session-test-001".into(),
+            producer: "android-runner".into(),
+        };
+
+        embed_spec_into_apps(temp_dir.path(), &spec, &identity).expect("embed mobile spec");
+        let value: Value = serde_json::from_slice(
+            &fs::read(
+                temp_dir
+                    .path()
+                    .join("target/mobile-spec/android/bench_spec.json"),
+            )
+            .expect("read embedded Android spec"),
+        )
+        .expect("parse embedded spec");
+
+        assert_eq!(value["schema_version"], mobench_domain::REPORT_SCHEMA_V2);
+        assert_eq!(value["run_id"], "run-test-001");
+        assert_eq!(value["nonce"], "nonce-test-001");
+        assert_eq!(value["logical_session_id"], "logical-session-test-001");
+        assert_eq!(value["function_id"], "sample_fns::fibonacci");
+        assert_eq!(value["producer"], "android-runner");
     }
 
     #[test]

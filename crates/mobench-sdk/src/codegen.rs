@@ -2507,8 +2507,42 @@ mod tests {
         assert!(ios.contains("currentProcessResidentMemoryKb"));
         assert!(ios.contains("task_info("));
         assert!(ios.contains("\"memory_process\": \"benchmark_app\""));
-        assert!(ios.contains("generateJSONReport(report, runProcessPeakMemoryKb:"));
+        assert!(ios.contains("params: params,"));
         assert!(ios.contains("processPeakSamplesKb.max() ?? runProcessPeakMemoryKb"));
+    }
+
+    #[test]
+    fn all_generated_runner_backends_emit_strict_v2_identity_and_counts() {
+        let templates = [
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template"),
+            include_str!("../templates/ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift.template"),
+            include_str!("native_templates/android/MainActivity.kt.template"),
+            include_str!("native_templates/ios/BenchRunnerFFI.swift.template"),
+            include_str!("boltffi_templates/android/MainActivity.kt.template"),
+            include_str!("boltffi_templates/ios/BenchRunnerFFI.swift.template"),
+        ];
+
+        for template in templates {
+            for field in [
+                "mobench.run/v2",
+                "run_id",
+                "nonce",
+                "logical_session_id",
+                "function_id",
+                "producer",
+                "requested",
+                "observed",
+                "samples_ns",
+                "outcome",
+                "success",
+                "code",
+            ] {
+                assert!(
+                    template.contains(field),
+                    "generated runner omitted strict v2 field `{field}`"
+                );
+            }
+        }
     }
 
     #[test]

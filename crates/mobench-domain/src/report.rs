@@ -186,9 +186,8 @@ impl ReportCounts {
 pub struct ReportIdentity {
     run_id: ReportIdentifier,
     nonce: ReportIdentifier,
+    logical_session_id: ReportIdentifier,
     function_id: ReportIdentifier,
-    device_id: ReportIdentifier,
-    session_id: ReportIdentifier,
     producer: ReportIdentifier,
 }
 
@@ -197,17 +196,15 @@ impl ReportIdentity {
     pub fn new(
         run_id: ReportIdentifier,
         nonce: ReportIdentifier,
+        logical_session_id: ReportIdentifier,
         function_id: ReportIdentifier,
-        device_id: ReportIdentifier,
-        session_id: ReportIdentifier,
         producer: ReportIdentifier,
     ) -> Self {
         Self {
             run_id,
             nonce,
+            logical_session_id,
             function_id,
-            device_id,
-            session_id,
             producer,
         }
     }
@@ -222,19 +219,17 @@ impl ReportIdentity {
         &self.nonce
     }
 
+    /// Orchestrator-issued logical session, assigned before provider scheduling.
+    ///
+    /// This is deliberately distinct from any provider transport session ID,
+    /// which is attached by a provider binding during collection.
+    pub fn logical_session_id(&self) -> &ReportIdentifier {
+        &self.logical_session_id
+    }
+
     /// Requested benchmark function identifier.
     pub fn function_id(&self) -> &ReportIdentifier {
         &self.function_id
-    }
-
-    /// Device identifier bound to this report.
-    pub fn device_id(&self) -> &ReportIdentifier {
-        &self.device_id
-    }
-
-    /// Provider or local session identifier.
-    pub fn session_id(&self) -> &ReportIdentifier {
-        &self.session_id
     }
 
     /// Component that produced the envelope.
@@ -349,6 +344,137 @@ pub struct ReportEnvelopeV2 {
     observed: ReportCounts,
     samples_ns: BoundedSamples,
     outcome: ReportOutcome,
+}
+
+/// Authenticated provider evidence attached after a producer envelope is read
+/// from one concrete provider transport session.
+///
+/// These fields are deliberately absent from [`ReportEnvelopeV2`]: remote
+/// providers assign them after the mobile artifact has already been built.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderReportBinding {
+    provider_id: ReportIdentifier,
+    provider_run_id: ReportIdentifier,
+    transport_session_id: ReportIdentifier,
+    requested_device_id: ReportIdentifier,
+    observed_device_id: ReportIdentifier,
+}
+
+impl ProviderReportBinding {
+    /// Construct evidence returned by a provider Adapter.
+    pub fn new(
+        provider_id: ReportIdentifier,
+        provider_run_id: ReportIdentifier,
+        transport_session_id: ReportIdentifier,
+        requested_device_id: ReportIdentifier,
+        observed_device_id: ReportIdentifier,
+    ) -> Self {
+        Self {
+            provider_id,
+            provider_run_id,
+            transport_session_id,
+            requested_device_id,
+            observed_device_id,
+        }
+    }
+
+    /// Provider Adapter that supplied the evidence.
+    pub fn provider_id(&self) -> &ReportIdentifier {
+        &self.provider_id
+    }
+
+    /// Provider build or run identifier.
+    pub fn provider_run_id(&self) -> &ReportIdentifier {
+        &self.provider_run_id
+    }
+
+    /// Provider-assigned session identifier.
+    pub fn transport_session_id(&self) -> &ReportIdentifier {
+        &self.transport_session_id
+    }
+
+    /// Device requested for this transport session.
+    pub fn requested_device_id(&self) -> &ReportIdentifier {
+        &self.requested_device_id
+    }
+
+    /// Device reported by the provider for this transport session.
+    pub fn observed_device_id(&self) -> &ReportIdentifier {
+        &self.observed_device_id
+    }
+}
+
+/// Provider transport evidence expected for one collected report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpectedProviderBinding {
+    provider_id: ReportIdentifier,
+    provider_run_id: ReportIdentifier,
+    transport_session_id: ReportIdentifier,
+    requested_device_id: ReportIdentifier,
+}
+
+impl ExpectedProviderBinding {
+    /// Bind collection to one provider run, session, and requested device.
+    pub fn new(
+        provider_id: ReportIdentifier,
+        provider_run_id: ReportIdentifier,
+        transport_session_id: ReportIdentifier,
+        requested_device_id: ReportIdentifier,
+    ) -> Self {
+        Self {
+            provider_id,
+            provider_run_id,
+            transport_session_id,
+            requested_device_id,
+        }
+    }
+
+    /// Validate provider evidence without modifying producer identity.
+    pub fn validate(&self, binding: &ProviderReportBinding) -> Result<(), ReportBindingError> {
+        validate_binding_field("provider_id", &self.provider_id, &binding.provider_id)?;
+        validate_binding_field(
+            "provider_run_id",
+            &self.provider_run_id,
+            &binding.provider_run_id,
+        )?;
+        validate_binding_field(
+            "transport_session_id",
+            &self.transport_session_id,
+            &binding.transport_session_id,
+        )?;
+        validate_binding_field(
+            "requested_device_id",
+            &self.requested_device_id,
+            &binding.requested_device_id,
+        )?;
+        if binding.observed_device_id != binding.requested_device_id {
+            return Err(ReportBindingError::ObservedDeviceMismatch {
+                requested: binding.requested_device_id.clone(),
+                observed: binding.observed_device_id.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Canonical report after producer identity and provider transport evidence
+/// have both been validated.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundRunReportV2 {
+    envelope: ReportEnvelopeV2,
+    binding: ProviderReportBinding,
+}
+
+impl BoundRunReportV2 {
+    /// Validated producer envelope.
+    pub fn envelope(&self) -> &ReportEnvelopeV2 {
+        &self.envelope
+    }
+
+    /// Validated provider transport evidence.
+    pub fn binding(&self) -> &ProviderReportBinding {
+        &self.binding
+    }
 }
 
 impl ReportEnvelopeV2 {
@@ -481,19 +607,14 @@ impl ExpectedReportIdentity {
         validate_identity_field("run_id", self.identity.run_id(), report.identity.run_id())?;
         validate_identity_field("nonce", self.identity.nonce(), report.identity.nonce())?;
         validate_identity_field(
+            "logical_session_id",
+            self.identity.logical_session_id(),
+            report.identity.logical_session_id(),
+        )?;
+        validate_identity_field(
             "function_id",
             self.identity.function_id(),
             report.identity.function_id(),
-        )?;
-        validate_identity_field(
-            "device_id",
-            self.identity.device_id(),
-            report.identity.device_id(),
-        )?;
-        validate_identity_field(
-            "session_id",
-            self.identity.session_id(),
-            report.identity.session_id(),
         )?;
         validate_identity_field(
             "producer",
@@ -522,6 +643,37 @@ impl ExpectedReportIdentity {
         self.validate(&report)?;
         Ok(report)
     }
+
+    /// Validate a producer envelope and bind it to authenticated provider
+    /// transport evidence without rewriting either identity layer.
+    pub fn bind(
+        &self,
+        report: ReportEnvelopeV2,
+        binding: ProviderReportBinding,
+        expected_binding: &ExpectedProviderBinding,
+    ) -> Result<BoundRunReportV2, ReportBindingError> {
+        self.validate(&report)?;
+        expected_binding.validate(&binding)?;
+        Ok(BoundRunReportV2 {
+            envelope: report,
+            binding,
+        })
+    }
+}
+
+fn validate_binding_field(
+    field: &'static str,
+    expected: &ReportIdentifier,
+    observed: &ReportIdentifier,
+) -> Result<(), ReportBindingError> {
+    if observed != expected {
+        return Err(ReportBindingError::ProviderFieldMismatch {
+            field,
+            expected: expected.clone(),
+            observed: observed.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_identity_field(
@@ -657,6 +809,27 @@ pub enum ReportValidationError {
     EmptyFailureMessage,
     #[error("failure report message is {length} bytes; maximum is {limit}")]
     FailureMessageTooLong { length: usize, limit: usize },
+}
+
+/// Failure while attaching provider transport evidence to a producer report.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ReportBindingError {
+    /// Producer envelope validation failed.
+    #[error(transparent)]
+    Report(#[from] ReportValidationError),
+    /// Provider evidence did not match the expected collection context.
+    #[error("provider binding field {field} mismatched: expected {expected}, observed {observed}")]
+    ProviderFieldMismatch {
+        field: &'static str,
+        expected: ReportIdentifier,
+        observed: ReportIdentifier,
+    },
+    /// Provider reported a different device from the requested matrix entry.
+    #[error("provider observed device {observed}, expected requested device {requested}")]
+    ObservedDeviceMismatch {
+        requested: ReportIdentifier,
+        observed: ReportIdentifier,
+    },
 }
 
 /// Failure constructing typed report values locally.

@@ -29,7 +29,13 @@ private const val DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS = {{ANDROID_HEARTBEAT_
 private const val FUNCTION_EXTRA = "bench_function"
 private const val ITERATIONS_EXTRA = "bench_iterations"
 private const val WARMUP_EXTRA = "bench_warmup"
+private const val RUN_ID_EXTRA = "mobench_run_id"
+private const val NONCE_EXTRA = "mobench_nonce"
+private const val LOGICAL_SESSION_ID_EXTRA = "mobench_logical_session_id"
+private const val FUNCTION_ID_EXTRA = "mobench_function_id"
+private const val PRODUCER_EXTRA = "mobench_producer"
 private const val SPEC_ASSET = "bench_spec.json"
+private const val REPORT_SCHEMA_V2 = "mobench.run/v2"
 private const val RUN_BENCHMARK_ACTION = "{{PACKAGE_NAME}}.RUN_BENCHMARK"
 private const val RESULT_RECEIVER_EXTRA = "bench_result_receiver"
 private const val RESULT_DISPLAY_EXTRA = "bench_display"
@@ -78,6 +84,11 @@ class MainActivity : AppCompatActivity() {
                 putExtra(FUNCTION_EXTRA, params.function)
                 putExtra(ITERATIONS_EXTRA, params.iterations.toInt())
                 putExtra(WARMUP_EXTRA, params.warmup.toInt())
+                params.runId?.let { putExtra(RUN_ID_EXTRA, it) }
+                params.nonce?.let { putExtra(NONCE_EXTRA, it) }
+                params.logicalSessionId?.let { putExtra(LOGICAL_SESSION_ID_EXTRA, it) }
+                params.functionId?.let { putExtra(FUNCTION_ID_EXTRA, it) }
+                params.producer?.let { putExtra(PRODUCER_EXTRA, it) }
                 putExtra(RESULT_RECEIVER_EXTRA, resultReceiver)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -119,12 +130,13 @@ class MainActivity : AppCompatActivity() {
             .put("function_name", params.function)
             .put("kind", kind)
             .put("message", message)
-            .toString()
-        failureJson = payload
+        applyV2Envelope(payload, params, JSONArray(), "failure", kind, message)
+        val encoded = payload.toString()
+        failureJson = encoded
         benchmarkFailed = true
         benchmarkComplete = true
-        android.util.Log.e("BenchRunner", "BENCH_FAILURE_JSON $payload")
-        return payload
+        android.util.Log.e("BenchRunner", "BENCH_FAILURE_JSON $encoded")
+        return encoded
     }
 
     private fun resolveBenchParams(): BenchParams {
@@ -145,7 +157,16 @@ class MainActivity : AppCompatActivity() {
         val iterations = intentIterations ?: defaults.iterations
         val warmup = intentWarmup ?: defaults.warmup
         android.util.Log.i("BenchRunner", "Resolved params: function=$fn, iterations=$iterations, warmup=$warmup")
-        return BenchParams(fn, iterations, warmup)
+        return BenchParams(
+            fn,
+            iterations,
+            warmup,
+            defaults.runId,
+            defaults.nonce,
+            defaults.logicalSessionId,
+            defaults.functionId,
+            defaults.producer,
+        )
     }
 
     private fun loadBenchParamsFromAssets(): BenchParams? {
@@ -160,7 +181,16 @@ class MainActivity : AppCompatActivity() {
                 val iterations = json.optInt("iterations", DEFAULT_ITERATIONS.toInt()).toUInt()
                 val warmup = json.optInt("warmup", DEFAULT_WARMUP.toInt()).toUInt()
                 android.util.Log.i("BenchRunner", "Loaded config from bench_spec.json: function=$function, iterations=$iterations, warmup=$warmup")
-                BenchParams(function, iterations, warmup)
+                BenchParams(
+                    function,
+                    iterations,
+                    warmup,
+                    json.optString("run_id").takeUnless { it.isBlank() },
+                    json.optString("nonce").takeUnless { it.isBlank() },
+                    json.optString("logical_session_id").takeUnless { it.isBlank() },
+                    json.optString("function_id").takeUnless { it.isBlank() },
+                    json.optString("producer").takeUnless { it.isBlank() },
+                )
             }
         } catch (e: java.io.FileNotFoundException) {
             android.util.Log.d("BenchRunner", "No bench_spec.json in assets, will use intent extras or defaults")
@@ -186,6 +216,11 @@ class BenchmarkWorkerService : Service() {
             function = intent.getStringExtra(FUNCTION_EXTRA)?.takeUnless { it.isBlank() } ?: DEFAULT_FUNCTION,
             iterations = intent.getIntExtra(ITERATIONS_EXTRA, DEFAULT_ITERATIONS.toInt()).toUInt(),
             warmup = intent.getIntExtra(WARMUP_EXTRA, DEFAULT_WARMUP.toInt()).toUInt(),
+            runId = intent.getStringExtra(RUN_ID_EXTRA),
+            nonce = intent.getStringExtra(NONCE_EXTRA),
+            logicalSessionId = intent.getStringExtra(LOGICAL_SESSION_ID_EXTRA),
+            functionId = intent.getStringExtra(FUNCTION_ID_EXTRA),
+            producer = intent.getStringExtra(PRODUCER_EXTRA),
         )
 
         startBenchmarkForeground()
@@ -264,7 +299,7 @@ class BenchmarkWorkerService : Service() {
             } finally {
                 runProcessPeakMemoryKb = processMemorySampler.stop()
             }
-            val json = buildNativeBenchReportJson(rawReport, runProcessPeakMemoryKb)
+            val json = buildNativeBenchReportJson(rawReport, params, runProcessPeakMemoryKb)
             android.util.Log.i("BenchRunner", "BENCH_JSON ${json}")
             formatNativeBenchReport(json)
         } catch (e: Exception) {
@@ -283,6 +318,11 @@ private data class BenchParams(
     val function: String,
     val iterations: UInt,
     val warmup: UInt,
+    val runId: String? = null,
+    val nonce: String? = null,
+    val logicalSessionId: String? = null,
+    val functionId: String? = null,
+    val producer: String? = null,
 )
 
 private data class WorkerBenchmarkResult(
@@ -468,7 +508,11 @@ private fun formatDuration(ns: Long): String {
     }
 }
 
-private fun buildNativeBenchReportJson(report: JSONObject, runProcessPeakMemoryKb: Long?): JSONObject {
+private fun buildNativeBenchReportJson(
+    report: JSONObject,
+    params: BenchParams,
+    runProcessPeakMemoryKb: Long?,
+): JSONObject {
     val json = JSONObject(report.toString())
     val spec = json.optJSONObject("spec") ?: JSONObject()
     val function = spec.optString("name", DEFAULT_FUNCTION)
@@ -492,6 +536,7 @@ private fun buildNativeBenchReportJson(report: JSONObject, runProcessPeakMemoryK
         optionalLong(sample, "process_peak_memory_kb")?.let { processPeakSamplesKb.add(it) }
     }
     json.put("samples_ns", samplesNs)
+    applyV2Envelope(json, params, samplesNs, "success", null, null)
 
     if (durations.isNotEmpty()) {
         val stats = JSONObject()
@@ -523,6 +568,39 @@ private fun buildNativeBenchReportJson(report: JSONObject, runProcessPeakMemoryK
     json.put("resources", resources)
 
     return json
+}
+
+private fun applyV2Envelope(
+    json: JSONObject,
+    params: BenchParams,
+    samplesNs: JSONArray,
+    status: String,
+    errorCode: String?,
+    message: String?,
+) {
+    val runId = params.runId ?: return
+    val nonce = params.nonce ?: return
+    val logicalSessionId = params.logicalSessionId ?: return
+    val functionId = params.functionId ?: return
+    val producer = params.producer ?: return
+    json.put("schema_version", REPORT_SCHEMA_V2)
+        .put("run_id", runId)
+        .put("nonce", nonce)
+        .put("logical_session_id", logicalSessionId)
+        .put("function_id", functionId)
+        .put("producer", producer)
+        .put("requested", JSONObject()
+            .put("iterations", params.iterations.toInt())
+            .put("warmup", params.warmup.toInt()))
+        .put("observed", JSONObject()
+            .put("iterations", samplesNs.length())
+            .put("warmup", if (status == "success") params.warmup.toInt() else 0))
+        .put("samples_ns", samplesNs)
+        .put("outcome", JSONObject().put("status", status).also {
+            if (errorCode != null && message != null) {
+                it.put("error", JSONObject().put("code", errorCode).put("message", message))
+            }
+        })
 }
 
 private fun optionalLong(json: JSONObject, key: String): Long? {

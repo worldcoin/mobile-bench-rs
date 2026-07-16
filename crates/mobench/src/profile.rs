@@ -11,7 +11,8 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::{
-    DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunSpec,
+    DevicePlatform, MobileTarget, ProjectLayoutOptions, ResolvedMatrixDevice, RunEnvelopeIdentity,
+    RunSpec,
     flamegraph_viewer::{
         ArtifactLink as ViewerArtifactLink, FlamegraphMode, FlamegraphViewerDoc, FrameSourceLink,
         ViewerHarnessTimelineSpan, ViewerMetadataItem, ViewerTraceEvent, ViewerTraceLane,
@@ -3067,7 +3068,8 @@ fn execute_local_android_capture(
         browserstack: None,
         ios_xcuitest: None,
     };
-    persist_mobile_spec(&layout, &spec, false)?;
+    let identity = RunEnvelopeIdentity::generate(MobileTarget::Android)?;
+    persist_mobile_spec(&layout, &spec, &identity, false)?;
 
     let build = run_android_build(&layout, "", false, false)?;
     let android_root = layout.output_dir.join("android");
@@ -3350,7 +3352,8 @@ fn execute_local_ios_capture(args: &ProfileRunArgs, manifest: &mut ProfileManife
         browserstack: None,
         ios_xcuitest: None,
     };
-    persist_mobile_spec(&layout, &spec, false)?;
+    let identity = RunEnvelopeIdentity::generate(MobileTarget::Ios)?;
+    persist_mobile_spec(&layout, &spec, &identity, false)?;
 
     let requested_device = resolve_profile_device(args)?;
     let simulator = resolve_local_ios_simulator(requested_device.as_ref())?;

@@ -1318,6 +1318,7 @@ dependencies = [
  "criterion",
  "ctrlc",
  "dotenvy",
+ "getrandom 0.3.4",
  "inferno",
  "inventory",
  "jsonschema",
