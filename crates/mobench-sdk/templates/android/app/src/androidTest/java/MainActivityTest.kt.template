@@ -25,47 +25,28 @@ class MainActivityTest {
 
     @Test
     fun showsBenchOutput() {
-        var timeoutMs = benchmarkTimeoutMs
-        var pollMs = heartbeatMs
-        activityRule.scenario.onActivity { activity ->
-            timeoutMs = TimeUnit.SECONDS.toMillis(activity.benchmarkTimeoutSecs())
-            pollMs = TimeUnit.SECONDS.toMillis(activity.heartbeatIntervalSecs()).coerceAtLeast(1000L)
-        }
-
-        val deadline = System.currentTimeMillis() + timeoutMs
+        val deadline = System.currentTimeMillis() + benchmarkTimeoutMs
         var completed = false
-        var failed = false
-        var failureJson: String? = null
 
         while (System.currentTimeMillis() < deadline) {
             activityRule.scenario.onActivity { activity ->
-                activity.checkWorkerExit()
                 completed = activity.isBenchmarkComplete()
-                failed = activity.isBenchmarkFailed()
-                failureJson = activity.getBenchmarkFailureJson()
             }
-            if (completed || failed) {
+            if (completed) {
                 break
             }
 
             Log.i("BenchRunnerTest", "Waiting for benchmark output...")
             try {
-                Thread.sleep(pollMs)
+                Thread.sleep(heartbeatMs.coerceAtLeast(1000L))
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 fail("Interrupted while waiting for benchmark output")
             }
         }
 
-        if (!completed && !failed) {
-            activityRule.scenario.onActivity { activity ->
-                failureJson = activity.emitTimeoutFailureFromTest()
-                failed = true
-            }
-        }
-
-        if (failed) {
-            fail("Benchmark failed before BENCH_JSON: ${failureJson ?: "missing failure payload"}")
+        if (!completed) {
+            fail("Benchmark did not complete before the timeout")
         }
 
         onView(withId(R.id.result_text))
