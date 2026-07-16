@@ -29,6 +29,10 @@ use mobench_report::{markdown_inline_code, markdown_inline_field_text};
 use mobench_runtime::{rounded_percent_u64, saturating_sum_u64};
 use mobench_sdk::types::NativeLibraryArtifact;
 
+mod symbol_cache;
+
+use symbol_cache::ResolutionCache;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProfileBackend {
@@ -2410,12 +2414,16 @@ where
     let mut lines = Vec::new();
     let mut resolved_frames = 0;
     let mut unresolved_frames = 0;
+    let mut symbol_cache = ResolutionCache::<(String, u64), String>::default();
 
     for line in folded_stacks.lines().filter(|line| !line.trim().is_empty()) {
         let symbolized =
             mobench_sdk::builders::android::symbolize_android_native_stack_line_with_resolver(
                 line,
-                |library_name, offset| resolve(library_name, offset),
+                |library_name, offset| {
+                    let key = (library_name.to_owned(), offset);
+                    symbol_cache.get_or_resolve(key, || resolve(library_name, offset))
+                },
             );
         resolved_frames += symbolized.resolved_frames;
         unresolved_frames += symbolized.unresolved_frames;
@@ -2591,6 +2599,7 @@ fn collect_android_frame_location_records(
     llvm_addr2line_path: &Path,
 ) -> Result<Vec<FrameLocationRecord>> {
     let mut records = BTreeMap::<String, FrameLocationRecord>::new();
+    let mut location_cache = ResolutionCache::<(PathBuf, u64), FrameLocationRecord>::default();
     for line in folded_stacks.lines().filter(|line| !line.trim().is_empty()) {
         let Some((stack, _count)) = split_folded_stack_line(line) else {
             continue;
@@ -2604,9 +2613,11 @@ fn collect_android_frame_location_records(
             else {
                 continue;
             };
-            let Some(record) =
+            let cache_key = (library_path.to_path_buf(), offset);
+            let record = location_cache.get_or_resolve(cache_key, || {
                 resolve_android_frame_location_with_tool(llvm_addr2line_path, library_path, offset)
-            else {
+            });
+            let Some(record) = record else {
                 continue;
             };
             records.entry(record.frame.clone()).or_insert(record);
@@ -6302,6 +6313,33 @@ mod tests {
         assert_eq!(record.resolved_frames, 1);
         assert_eq!(record.unresolved_frames, 0);
         assert!(report.contains("sample_fns::fibonacci"));
+    }
+
+    #[test]
+    fn android_symbolization_caches_resolved_and_unresolved_native_frames() {
+        let mut resolver_calls = Vec::new();
+        let folded = concat!(
+            "root;libsample_fns.so[+94138];libsample_fns.so[+777] 1\n",
+            "root;libsample_fns.so[+94138];libsample_fns.so[+777] 2\n",
+            "root;libsample_fns.so[+94138] 3",
+        );
+
+        let (symbolized, record, _) =
+            symbolize_android_folded_stacks_with_resolver(folded, |library_name, offset| {
+                resolver_calls.push((library_name.to_owned(), offset));
+                (offset == 94_138).then(|| "sample_fns::fibonacci".to_owned())
+            });
+
+        assert_eq!(
+            resolver_calls,
+            vec![
+                ("libsample_fns.so".to_owned(), 94_138),
+                ("libsample_fns.so".to_owned(), 777),
+            ]
+        );
+        assert_eq!(record.resolved_frames, 3);
+        assert_eq!(record.unresolved_frames, 2);
+        assert!(symbolized.contains("sample_fns::fibonacci"));
     }
 
     #[test]
