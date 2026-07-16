@@ -278,6 +278,7 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) crate_name: String,
     pub(crate) library_name: String,
     pub(crate) android_abis: Option<Vec<String>>,
+    pub(crate) ffi_backend: mobench_sdk::FfiBackend,
     pub(crate) ios_completion_timeout_secs: Option<u64>,
     pub(crate) ios_deployment_target: String,
     pub(crate) ios_runner: Option<String>,
@@ -1557,6 +1558,19 @@ pub(crate) fn resolve_project_layout(
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
     let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
+    let ffi_backend = match raw_config
+        .as_ref()
+        .and_then(|cfg| toml_string(cfg, &["project", "ffi_backend"]))
+        .as_deref()
+    {
+        None | Some("uniffi") => mobench_sdk::FfiBackend::Uniffi,
+        Some("native-c-abi") => mobench_sdk::FfiBackend::NativeCAbi,
+        Some("boltffi" | "bolt-ffi") => mobench_sdk::FfiBackend::BoltFfi,
+        Some(backend) => bail!(
+            "Unsupported project.ffi_backend '{}'; expected uniffi, native-c-abi, or boltffi",
+            backend
+        ),
+    };
     let ios_completion_timeout_secs = config
         .as_ref()
         .and_then(|cfg| cfg.browserstack.ios_completion_timeout_secs);
@@ -1594,6 +1608,7 @@ pub(crate) fn resolve_project_layout(
         crate_name,
         library_name,
         android_abis,
+        ffi_backend,
         ios_completion_timeout_secs,
         ios_deployment_target,
         ios_runner,
@@ -3501,7 +3516,8 @@ pub(crate) fn run_ios_build(
             .deployment_target(ios_deployment_target)
             .runner(Some(ios_runner))
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -3539,7 +3555,8 @@ fn package_ios_xcuitest_artifacts(
             .deployment_target(ios_deployment_target)
             .runner(Some(ios_runner))
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
     let profile = if release {
         mobench_sdk::BuildProfile::Release
     } else {
@@ -5769,7 +5786,8 @@ pub(crate) fn run_android_build(
             .verbose(true)
             .dry_run(dry_run)
             .crate_dir(&layout.crate_dir)
-            .output_dir(&layout.output_dir);
+            .output_dir(&layout.output_dir)
+            .ffi_backend(layout.ffi_backend);
     let result = builder.build(&cfg)?;
     Ok(result)
 }
@@ -5974,7 +5992,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/3] Building Android APK...");
                 let result = builder.build(&build_config)?;
                 println!("[3/3] Done!");
@@ -5991,7 +6010,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/3] Building iOS xcframework...");
                 let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                     Ok(builder.build(&build_config)?)
@@ -6010,7 +6030,8 @@ fn cmd_build(
                 .verbose(false)
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[2/5] Building Android APK...");
                 let android_result = android_builder.build(&build_config)?;
 
@@ -6024,7 +6045,8 @@ fn cmd_build(
                 .deployment_target(ios_deployment_target.clone())
                 .runner(Some(ios_runner))
                 .output_dir(&effective_output_dir)
-                .crate_dir(&layout.crate_dir);
+                .crate_dir(&layout.crate_dir)
+                .ffi_backend(layout.ffi_backend);
                 println!("[4/5] Building iOS xcframework...");
                 let ios_result =
                     with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
@@ -6082,7 +6104,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(builder.build(&build_config)?)
             })?;
@@ -6104,7 +6127,8 @@ fn cmd_build(
             .deployment_target(ios_deployment_target.clone())
             .runner(Some(ios_runner))
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(builder.build(&build_config)?)
             })?;
@@ -6125,7 +6149,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let android_result = android_builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
@@ -6143,7 +6168,8 @@ fn cmd_build(
             .verbose(verbose)
             .dry_run(dry_run)
             .output_dir(&effective_output_dir)
-            .crate_dir(&layout.crate_dir);
+            .crate_dir(&layout.crate_dir)
+            .ffi_backend(layout.ffi_backend);
             let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
                 Ok(ios_builder.build(&build_config)?)
             })?;
@@ -6246,7 +6272,8 @@ fn cmd_package_ipa(
             .deployment_target(ios_deployment_target)
             .runner(Some(ios_runner))
             .crate_dir(&layout.crate_dir)
-            .output_dir(&effective_output_dir);
+            .output_dir(&effective_output_dir)
+            .ffi_backend(layout.ffi_backend);
 
     let signing_method: mobench_sdk::builders::SigningMethod = method.into();
     let ipa_path = builder
@@ -6294,7 +6321,8 @@ fn cmd_package_xcuitest(
             .deployment_target(ios_deployment_target)
             .runner(Some(ios_runner))
             .crate_dir(&layout.crate_dir)
-            .output_dir(&effective_output_dir);
+            .output_dir(&effective_output_dir)
+            .ffi_backend(layout.ffi_backend);
 
     let zip_path = builder
         .package_xcuitest(scheme)
@@ -7869,6 +7897,7 @@ resolver = "2"
             br#"[project]
 crate = "zk-mobile-bench"
 library_name = "zk_mobile_bench"
+ffi_backend = "native-c-abi"
 
 [android]
 abis = ["arm64-v8a", "x86_64"]
@@ -8211,6 +8240,7 @@ project = "proj"
         assert_eq!(layout.crate_dir, crate_dir);
         assert_eq!(layout.crate_name, "zk-mobile-bench");
         assert_eq!(layout.library_name, "zk_mobile_bench");
+        assert_eq!(layout.ffi_backend, mobench_sdk::FfiBackend::NativeCAbi);
         assert_eq!(
             layout.android_abis,
             Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()])
