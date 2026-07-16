@@ -19,10 +19,10 @@ jobs:
       functions: '["bench_mobile::bench_passport_complete_age_check_prove"]'
       functions_ios: '["bench_mobile::bench_passport_complete_age_check_prove"]'
       functions_android: '["bench_mobile::bench_passport_complete_age_check_prove"]'
-      platform: both
+      platform: android
       device_profile: smoke
       iterations: "1"
       warmup: "0"
-      mobench_ref: 1676877ae347ab76089c9665ed7d3d6ff70925bc
+      mobench_ref: 53f37ec80b9e35fdd2f947e2691b8260f218853b
       head_sha: bb36bc058eceafc44ddee1477c0fc5833b6402b3
       requested_by: codex-manual-validation
