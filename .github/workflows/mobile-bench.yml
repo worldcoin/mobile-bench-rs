@@ -19,7 +19,7 @@ jobs:
       functions: '["bench_mobile::bench_passport_complete_age_check_prove"]'
       functions_ios: '["bench_mobile::bench_passport_complete_age_check_prove"]'
       functions_android: '["bench_mobile::bench_passport_complete_age_check_prove"]'
-      platform: both
+      platform: android
       device_profile: smoke
       iterations: "1"
       warmup: "0"
