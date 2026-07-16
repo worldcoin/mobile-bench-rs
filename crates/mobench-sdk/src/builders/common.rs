@@ -465,7 +465,9 @@ pub fn embed_bench_spec<S: serde::Serialize>(
     output_dir: &Path,
     spec: &S,
 ) -> Result<(), BenchError> {
-    let spec_json = serde_json::to_string_pretty(spec)
+    let spec_value = serde_json::to_value(spec)
+        .map_err(|e| BenchError::Build(format!("Failed to serialize bench spec: {}", e)))?;
+    let spec_json = serde_json::to_string_pretty(&spec_value)
         .map_err(|e| BenchError::Build(format!("Failed to serialize bench spec: {}", e)))?;
 
     // Generated Android/iOS projects include these output-local resources even
@@ -530,9 +532,75 @@ pub fn embed_bench_spec<S: serde::Serialize>(
                 e
             ))
         })?;
+
+        if let Some(function) = spec_value
+            .get("function")
+            .and_then(serde_json::Value::as_str)
+        {
+            bind_ios_xcuitest_to_requested_function(output_dir, function)?;
+        }
     }
 
     Ok(())
+}
+
+fn bind_ios_xcuitest_to_requested_function(
+    output_dir: &Path,
+    function: &str,
+) -> Result<(), BenchError> {
+    const EXPECTED_FUNCTION_PREFIX: &str = "private let expectedBenchmarkFunction = ";
+
+    let test_source =
+        output_dir.join("ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift");
+    if !test_source.exists() {
+        return Ok(());
+    }
+
+    let contents = std::fs::read_to_string(&test_source).map_err(|e| {
+        BenchError::Build(format!(
+            "Failed to read iOS XCUITest source at {}: {}",
+            test_source.display(),
+            e
+        ))
+    })?;
+    let escaped_function: String = function.chars().flat_map(char::escape_default).collect();
+    let mut replacements = 0usize;
+    let mut updated = String::with_capacity(contents.len() + escaped_function.len());
+
+    for line in contents.split_inclusive('\n') {
+        let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = line_without_newline.trim_start();
+        if trimmed.starts_with(EXPECTED_FUNCTION_PREFIX) {
+            let indentation = &line_without_newline[..line_without_newline.len() - trimmed.len()];
+            updated.push_str(indentation);
+            updated.push_str(EXPECTED_FUNCTION_PREFIX);
+            updated.push('"');
+            updated.push_str(&escaped_function);
+            updated.push('"');
+            replacements += 1;
+        } else {
+            updated.push_str(line_without_newline);
+        }
+        if line.ends_with('\n') {
+            updated.push('\n');
+        }
+    }
+
+    if replacements != 1 {
+        return Err(BenchError::Build(format!(
+            "Expected exactly one XCUITest benchmark-function binding in {}, found {}",
+            test_source.display(),
+            replacements
+        )));
+    }
+
+    std::fs::write(&test_source, updated).map_err(|e| {
+        BenchError::Build(format!(
+            "Failed to bind iOS XCUITest to requested function in {}: {}",
+            test_source.display(),
+            e
+        ))
+    })
 }
 
 /// Represents a benchmark specification for embedding.
@@ -965,6 +1033,15 @@ members = ["crates/*"]
             android_heartbeat_interval_secs: Some(5),
         };
 
+        let ios_test_source =
+            temp_dir.join("ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift");
+        std::fs::create_dir_all(ios_test_source.parent().unwrap()).unwrap();
+        std::fs::write(
+            &ios_test_source,
+            "final class BenchRunnerUITests {\n    private let expectedBenchmarkFunction = \"test_crate::generated_default\"\n}\n",
+        )
+        .unwrap();
+
         embed_bench_spec(&temp_dir, &spec).expect("embed spec");
 
         let android_spec = temp_dir.join("target/mobile-spec/android/bench_spec.json");
@@ -985,6 +1062,12 @@ members = ["crates/*"]
         let json: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(json["android_benchmark_timeout_secs"], 30);
         assert_eq!(json["android_heartbeat_interval_secs"], 5);
+        let ios_test_contents = std::fs::read_to_string(ios_test_source).unwrap();
+        assert!(
+            ios_test_contents
+                .contains("private let expectedBenchmarkFunction = \"test_crate::first_run\"")
+        );
+        assert!(!ios_test_contents.contains("test_crate::generated_default"));
 
         std::fs::remove_dir_all(&temp_dir).unwrap();
     }

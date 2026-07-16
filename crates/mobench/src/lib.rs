@@ -806,6 +806,7 @@ pub fn run() -> Result<()> {
                                 );
                                 let packaged = package_ios_xcuitest_artifacts(
                                     &layout,
+                                    &spec,
                                     release,
                                     spec.ios_completion_timeout_secs,
                                     spec.ios_deployment_target.as_deref(),
@@ -3603,6 +3604,7 @@ pub(crate) fn run_ios_build(
 
 fn package_ios_xcuitest_artifacts(
     layout: &ResolvedProjectLayout,
+    spec: &RunSpec,
     release: bool,
     ios_completion_timeout_secs: Option<u64>,
     ios_deployment_target: Option<&str>,
@@ -3633,6 +3635,11 @@ fn package_ios_xcuitest_artifacts(
     builder
         .build(&cfg)
         .context("Failed to build iOS xcframework before packaging")?;
+    // `build()` refreshes generated XCUITest sources from the crate's detected
+    // default. Re-embed after generation so the compiled test suite is bound to
+    // the function requested for this run, not a stale scaffolding default.
+    embed_spec_into_apps(&layout.output_dir, spec)
+        .context("Failed to bind generated iOS artifacts to the current bench spec")?;
     let app = builder
         .package_ipa("BenchRunner", mobench_sdk::builders::SigningMethod::AdHoc)
         .context("Failed to package iOS IPA for BrowserStack")?;
