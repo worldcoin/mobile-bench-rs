@@ -2119,6 +2119,12 @@ mod tests {
         let main_activity = fs::read_to_string(&main_activity_path).unwrap();
         assert!(main_activity.contains("BENCH_RESULT_OK"));
         assert!(!main_activity.contains("private const val RESULT_OK"));
+        assert!(main_activity.contains("fun benchmarkTimeoutSecs()"));
+        assert!(main_activity.contains("fun heartbeatIntervalSecs()"));
+        assert!(main_activity.contains("fun checkWorkerExit()"));
+        assert!(main_activity.contains("fun isBenchmarkFailed()"));
+        assert!(main_activity.contains("fun getBenchmarkFailureJson()"));
+        assert!(main_activity.contains("fun emitTimeoutFailureFromTest()"));
 
         let test_activity_path = android_dir
             .join("app/src/androidTest/java/dev/world/mybenchproject/MainActivityTest.kt");
@@ -2204,6 +2210,12 @@ mod tests {
         assert!(main_activity.contains("bench_spec.json"));
         assert!(main_activity.contains("BENCH_RESULT_OK"));
         assert!(!main_activity.contains("private const val RESULT_OK"));
+        assert!(main_activity.contains("fun benchmarkTimeoutSecs()"));
+        assert!(main_activity.contains("fun heartbeatIntervalSecs()"));
+        assert!(main_activity.contains("fun checkWorkerExit()"));
+        assert!(main_activity.contains("fun isBenchmarkFailed()"));
+        assert!(main_activity.contains("fun getBenchmarkFailureJson()"));
+        assert!(main_activity.contains("fun emitTimeoutFailureFromTest()"));
         assert!(
             !main_activity.contains("uniffi."),
             "native Android runner must not import UniFFI bindings:\n{}",
@@ -2238,6 +2250,12 @@ mod tests {
         assert!(main_activity.contains("import com.mobench.boltbenchmark.runBenchmarkJson"));
         assert!(main_activity.contains("runBenchmarkJson(specJson = spec.toString())"));
         assert!(main_activity.contains("fun isBenchmarkComplete()"));
+        assert!(main_activity.contains("fun benchmarkTimeoutSecs()"));
+        assert!(main_activity.contains("fun heartbeatIntervalSecs()"));
+        assert!(main_activity.contains("fun checkWorkerExit()"));
+        assert!(main_activity.contains("fun isBenchmarkFailed()"));
+        assert!(main_activity.contains("fun getBenchmarkFailureJson()"));
+        assert!(main_activity.contains("fun emitTimeoutFailureFromTest()"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(
             !main_activity.contains("uniffi."),

@@ -24,6 +24,8 @@ import org.json.JSONObject
 private const val DEFAULT_FUNCTION = "{{DEFAULT_FUNCTION}}"
 private const val DEFAULT_ITERATIONS = 20u
 private const val DEFAULT_WARMUP = 3u
+private const val DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS = {{ANDROID_BENCHMARK_TIMEOUT_SECS}}L
+private const val DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS = {{ANDROID_HEARTBEAT_INTERVAL_SECS}}L
 private const val FUNCTION_EXTRA = "bench_function"
 private const val ITERATIONS_EXTRA = "bench_iterations"
 private const val WARMUP_EXTRA = "bench_warmup"
@@ -37,9 +39,13 @@ private const val BENCH_RESULT_ERROR = 2
 private const val FOREGROUND_NOTIFICATION_ID = 1001
 private const val FOREGROUND_CHANNEL_ID = "mobench_benchmark"
 private const val FOREGROUND_CHANNEL_NAME = "Mobench benchmark"
+private const val FAILURE_SCHEMA_VERSION = 1
 
 class MainActivity : AppCompatActivity() {
     @Volatile private var benchmarkComplete = false
+    @Volatile private var benchmarkFailed = false
+    @Volatile private var failureJson: String? = null
+    private lateinit var params: BenchParams
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,7 +54,7 @@ class MainActivity : AppCompatActivity() {
         val resultText = findViewById<TextView>(R.id.result_text)
         resultText?.text = "Running benchmark..."
 
-        val params = resolveBenchParams()
+        params = resolveBenchParams()
         val resultReceiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
@@ -60,6 +66,7 @@ class MainActivity : AppCompatActivity() {
                 if (resultCode == BENCH_RESULT_OK) {
                     android.util.Log.i("BenchRunner", "Benchmark worker completed")
                 } else {
+                    emitFailure("exception", display)
                     android.util.Log.e("BenchRunner", display)
                 }
             }
@@ -86,6 +93,39 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun isBenchmarkComplete(): Boolean = benchmarkComplete
+
+    fun isBenchmarkFailed(): Boolean = benchmarkFailed
+
+    fun getBenchmarkFailureJson(): String? = failureJson
+
+    fun benchmarkTimeoutSecs(): Long = DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS
+
+    fun heartbeatIntervalSecs(): Long = DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS
+
+    fun checkWorkerExit(): String? = failureJson
+
+    fun emitTimeoutFailureFromTest(): String {
+        return emitFailure(
+            "timeout",
+            "Timed out waiting ${DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS}s for benchmark completion",
+        )
+    }
+
+    private fun emitFailure(kind: String, message: String): String {
+        failureJson?.let { return it }
+        val payload = JSONObject()
+            .put("schema_version", FAILURE_SCHEMA_VERSION)
+            .put("platform", "android")
+            .put("function_name", params.function)
+            .put("kind", kind)
+            .put("message", message)
+            .toString()
+        failureJson = payload
+        benchmarkFailed = true
+        benchmarkComplete = true
+        android.util.Log.e("BenchRunner", "BENCH_FAILURE_JSON $payload")
+        return payload
+    }
 
     private fun resolveBenchParams(): BenchParams {
         val assetParams = loadBenchParamsFromAssets()
