@@ -5,7 +5,6 @@ use mobench_provider::{
     AdapterRun, CollectedOutput, ExpectedSession as ProviderExpectedSession, ProviderRun,
 };
 use reqwest::Url;
-use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -18,6 +17,7 @@ mod extraction;
 mod polling;
 mod reconciliation;
 mod scheduling;
+mod uploads;
 
 pub(crate) use adapter::BrowserStackProviderAdapter;
 #[cfg(test)]
@@ -260,7 +260,6 @@ pub(crate) fn completed_browserstack_collection(
         reports,
     })
 }
-use std::time::Instant;
 
 /// Format a file size in human-readable format (MB or KB).
 fn format_file_size(bytes: u64) -> String {
@@ -360,117 +359,6 @@ impl BrowserStackClient {
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
-    }
-
-    /// Upload an Espresso app-under-test APK to BrowserStack.
-    pub fn upload_espresso_app(&self, artifact: &Path) -> Result<AppUpload> {
-        if !artifact.exists() {
-            return Err(anyhow!("app artifact not found at {:?}", artifact));
-        }
-
-        let file_size = get_file_size(artifact);
-        println!("Uploading Android APK ({})...", format_file_size(file_size));
-        let start = Instant::now();
-
-        let form = Form::new().file("file", artifact)?;
-        let resp = self
-            .http
-            .post(self.api("app-automate/espresso/v2/app"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .multipart(form)
-            .send()
-            .context("uploading app to BrowserStack")?;
-
-        let result = parse_response(resp, "app upload")?;
-        let elapsed = start.elapsed().as_secs();
-        println!("  Uploaded Android APK (took {}s)", elapsed);
-
-        Ok(result)
-    }
-
-    /// Upload an Espresso test-suite APK to BrowserStack.
-    pub fn upload_espresso_test_suite(&self, artifact: &Path) -> Result<TestSuiteUpload> {
-        if !artifact.exists() {
-            return Err(anyhow!("test suite artifact not found at {:?}", artifact));
-        }
-
-        let file_size = get_file_size(artifact);
-        println!(
-            "Uploading Android test APK ({})...",
-            format_file_size(file_size)
-        );
-        let start = Instant::now();
-
-        let form = Form::new().file("file", artifact)?;
-        let resp = self
-            .http
-            .post(self.api("app-automate/espresso/v2/test-suite"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .multipart(form)
-            .send()
-            .context("uploading test suite to BrowserStack")?;
-
-        let result = parse_response(resp, "test suite upload")?;
-        let elapsed = start.elapsed().as_secs();
-        println!("  Uploaded Android test APK (took {}s)", elapsed);
-
-        Ok(result)
-    }
-
-    pub fn upload_xcuitest_app(&self, artifact: &Path) -> Result<AppUpload> {
-        if !artifact.exists() {
-            return Err(anyhow!("iOS app artifact not found at {:?}", artifact));
-        }
-
-        let file_size = get_file_size(artifact);
-        println!("Uploading iOS app IPA ({})...", format_file_size(file_size));
-        let start = Instant::now();
-
-        let form = Form::new().file("file", artifact)?;
-        let resp = self
-            .http
-            .post(self.api("app-automate/xcuitest/v2/app"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .multipart(form)
-            .send()
-            .context("uploading iOS app to BrowserStack")?;
-
-        let result = parse_response(resp, "iOS app upload")?;
-        let elapsed = start.elapsed().as_secs();
-        println!("  Uploaded iOS app IPA (took {}s)", elapsed);
-
-        Ok(result)
-    }
-
-    pub fn upload_xcuitest_test_suite(&self, artifact: &Path) -> Result<TestSuiteUpload> {
-        if !artifact.exists() {
-            return Err(anyhow!(
-                "iOS XCUITest suite artifact not found at {:?}",
-                artifact
-            ));
-        }
-
-        let file_size = get_file_size(artifact);
-        println!(
-            "Uploading iOS XCUITest runner ({})...",
-            format_file_size(file_size)
-        );
-        let start = Instant::now();
-
-        let form = Form::new().file("file", artifact)?;
-        let resp = self
-            .http
-            .post(self.api("app-automate/xcuitest/v2/test-suite"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .multipart(form)
-            .send()
-            .context("uploading iOS XCUITest suite to BrowserStack")?;
-
-        let result = parse_response(resp, "iOS XCUITest suite upload")?;
-        let elapsed = start.elapsed().as_secs();
-        println!("  Uploaded iOS XCUITest runner (took {}s)", elapsed);
-
-        Ok(result)
     }
 
     fn api(&self, path: &str) -> String {
