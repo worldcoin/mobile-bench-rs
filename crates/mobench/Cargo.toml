@@ -66,6 +66,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 thiserror.workspace = true
 getrandom.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 criterion = "0.5"
 inventory = "0.3"
