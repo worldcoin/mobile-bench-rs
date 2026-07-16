@@ -57,14 +57,15 @@
 //! builder.build(&config)?;
 //! ```
 
-use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
+use super::common::{
+    ToolCommand, get_cargo_target_dir, host_lib_path, run_tool_command, validate_project_root,
+};
 use crate::types::{
     BenchError, BuildConfig, BuildProfile, BuildResult, NativeLibraryArtifact, Target,
 };
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Android builder that handles the complete build pipeline.
 ///
@@ -440,13 +441,13 @@ impl AndroidBuilder {
 
     fn run_boltffi_pack_android(&self, config: &BuildConfig) -> Result<(), BenchError> {
         let crate_dir = self.find_crate_dir()?;
-        let mut cmd = Command::new("boltffi");
+        let mut cmd = ToolCommand::path_search("boltffi");
         cmd.arg("pack").arg("android").arg("--regenerate");
         if matches!(config.profile, BuildProfile::Release) {
             cmd.arg("--release");
         }
         cmd.current_dir(&crate_dir);
-        run_command(cmd, "boltffi pack android")
+        run_tool_command(cmd, "boltffi pack android")
     }
 
     fn collect_packaged_native_libraries(
@@ -669,7 +670,7 @@ impl AndroidBuilder {
                 println!("  Building for {}", abi);
             }
 
-            let mut cmd = Command::new("cargo");
+            let mut cmd = ToolCommand::path_search("cargo");
             cmd.arg("ndk")
                 .arg("--target")
                 .arg(&abi)
@@ -748,7 +749,10 @@ impl AndroidBuilder {
 
     /// Checks if cargo-ndk is installed
     fn check_cargo_ndk(&self) -> Result<(), BenchError> {
-        let output = Command::new("cargo").arg("ndk").arg("--version").output();
+        let output = ToolCommand::path_search("cargo")
+            .arg("ndk")
+            .arg("--version")
+            .output();
 
         match output {
             Ok(output) if output.status.success() => Ok(()),
@@ -791,10 +795,10 @@ impl AndroidBuilder {
         }
 
         // Build host library to feed uniffi-bindgen
-        let mut build_cmd = Command::new("cargo");
+        let mut build_cmd = ToolCommand::path_search("cargo");
         build_cmd.arg("build");
         build_cmd.current_dir(&crate_dir);
-        run_command(build_cmd, "cargo build (host)")?;
+        run_tool_command(build_cmd, "cargo build (host)")?;
 
         let lib_path = host_lib_path(&crate_dir, &self.crate_name)?;
         let out_dir = self
@@ -806,7 +810,7 @@ impl AndroidBuilder {
             .join("java");
 
         // Try cargo run first (works if crate has uniffi-bindgen binary target)
-        let cargo_run_result = Command::new("cargo")
+        let cargo_run_result = ToolCommand::path_search("cargo")
             .args([
                 "run",
                 "-p",
@@ -836,7 +840,7 @@ impl AndroidBuilder {
             }
         } else {
             // Fall back to global uniffi-bindgen
-            let uniffi_available = Command::new("uniffi-bindgen")
+            let uniffi_available = ToolCommand::path_search("uniffi-bindgen")
                 .arg("--version")
                 .output()
                 .map(|o| o.status.success())
@@ -857,7 +861,7 @@ impl AndroidBuilder {
                 ));
             }
 
-            let mut cmd = Command::new("uniffi-bindgen");
+            let mut cmd = ToolCommand::path_search("uniffi-bindgen");
             cmd.arg("generate")
                 .arg("--library")
                 .arg(&lib_path)
@@ -865,7 +869,7 @@ impl AndroidBuilder {
                 .arg("kotlin")
                 .arg("--out-dir")
                 .arg(&out_dir);
-            run_command(cmd, "uniffi-bindgen kotlin")?;
+            run_tool_command(cmd, "uniffi-bindgen kotlin")?;
         }
 
         if self.verbose {
@@ -1059,7 +1063,7 @@ impl AndroidBuilder {
         println!("Gradle wrapper not found, generating...");
 
         // Check if gradle is available
-        let gradle_available = Command::new("gradle")
+        let gradle_available = ToolCommand::path_search("gradle")
             .arg("--version")
             .output()
             .map(|o| o.status.success())
@@ -1080,7 +1084,7 @@ impl AndroidBuilder {
         }
 
         // Run gradle wrapper to generate gradlew
-        let mut cmd = Command::new("gradle");
+        let mut cmd = ToolCommand::path_search("gradle");
         cmd.arg("wrapper")
             .arg("--gradle-version")
             .arg("8.5")
@@ -1150,7 +1154,7 @@ impl AndroidBuilder {
         };
 
         // Run Gradle build
-        let mut cmd = Command::new("./gradlew");
+        let mut cmd = ToolCommand::explicit(android_dir.join("gradlew"))?;
         cmd.arg(gradle_task).current_dir(&android_dir);
 
         if self.verbose {
@@ -1345,7 +1349,7 @@ impl AndroidBuilder {
             BuildProfile::Release => "release",
         };
 
-        let mut cmd = Command::new("./gradlew");
+        let mut cmd = ToolCommand::explicit(android_dir.join("gradlew"))?;
         cmd.arg(format!("-PmobenchTestBuildType={profile_name}"))
             .arg(gradle_task)
             .current_dir(&android_dir);
@@ -1531,7 +1535,8 @@ pub fn resolve_android_native_symbol_with_tool(
     library_path: &Path,
     offset: u64,
 ) -> Option<String> {
-    let output = Command::new(tool_path)
+    let output = ToolCommand::explicit(tool_path)
+        .ok()?
         .args(["-Cfpe"])
         .arg(library_path)
         .arg(format!("0x{offset:x}"))

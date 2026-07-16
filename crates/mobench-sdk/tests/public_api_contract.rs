@@ -48,6 +48,7 @@ fn v0_1_43_functions_modules_and_macros_remain_reachable() {
     let _ = mobench_sdk::native_c_abi::mobench_run_benchmark_json_impl;
     let _ = mobench_sdk::codegen::generate_project;
     let _ = mobench_sdk::builders::common::create_bench_meta;
+    let _ = mobench_sdk::builders::common::run_command;
     let _ = mobench_sdk::VERSION;
 
     let discovered = mobench_sdk::list_benchmark_names();

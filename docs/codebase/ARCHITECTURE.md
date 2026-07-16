@@ -1,6 +1,9 @@
 # Architecture
 
-Updated: 2026-07-15. Release line: `0.1.43`.
+Updated: 2026-07-16. Release line: `0.1.43`.
+
+The in-progress 0.2 rewrite foundations and their verification status are
+documented in [../0.2-rewrite-architecture.md](../0.2-rewrite-architecture.md).
 
 mobench has two product surfaces:
 
@@ -19,6 +22,23 @@ mobench has two product surfaces:
   native C ABI exports.
 - `mobench-macros`: `#[benchmark]` proc macro registration with setup,
   teardown, per-iteration setup, and compile-time signature validation.
+
+## Rewrite Foundation Crates
+
+- `mobench-runtime`: bounded counts, released distribution policies, and
+  overflow-safe resource aggregation.
+- `mobench-domain`: bounded mobile framing and the strict versioned report
+  envelope.
+- `mobench-report`: context-specific Markdown, link, inline-code, and CSV
+  encoders.
+- `mobench-process`: executable provenance, subprocess policy, bounded capture,
+  cancellation, cleanup, and reaping.
+- `mobench-artifacts`: validated roots, isolated workspaces, immutable
+  publications, manifests, latest snapshots, recovery, leases, and retention.
+
+These crates currently support the compatibility-preserving strangler rewrite.
+They are internal architecture boundaries until the 0.2 release process
+explicitly decides which of them become independently supported public crates.
 
 ## Runtime Layers
 

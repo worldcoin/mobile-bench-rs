@@ -193,16 +193,14 @@ fn validate_benchmark_counts(iterations: u32, warmup: u32) -> Result<(), TimingE
         return Err(TimingError::NoIterations { count: iterations });
     }
     if iterations > MAX_BENCHMARK_COUNT {
-        return Err(TimingError::TooManyIterations {
-            count: iterations,
-            maximum: MAX_BENCHMARK_COUNT,
-        });
+        return Err(TimingError::Execution(format!(
+            "iterations must not exceed {MAX_BENCHMARK_COUNT} (got {iterations})"
+        )));
     }
     if warmup > MAX_BENCHMARK_COUNT {
-        return Err(TimingError::TooManyWarmupIterations {
-            count: warmup,
-            maximum: MAX_BENCHMARK_COUNT,
-        });
+        return Err(TimingError::Execution(format!(
+            "warmup must not exceed {MAX_BENCHMARK_COUNT} (got {warmup})"
+        )));
     }
     Ok(())
 }
@@ -1043,24 +1041,6 @@ pub enum TimingError {
         count: u32,
     },
 
-    /// The measured iteration count exceeds the bounded runtime contract.
-    #[error("iterations must not exceed {maximum} (got {count})")]
-    TooManyIterations {
-        /// The rejected iteration count.
-        count: u32,
-        /// The maximum supported count.
-        maximum: u32,
-    },
-
-    /// The warmup iteration count exceeds the bounded runtime contract.
-    #[error("warmup must not exceed {maximum} (got {count})")]
-    TooManyWarmupIterations {
-        /// The rejected warmup count.
-        count: u32,
-        /// The maximum supported count.
-        maximum: u32,
-    },
-
     /// The benchmark function failed during execution.
     ///
     /// Contains a description of the failure.
@@ -1701,11 +1681,12 @@ mod tests {
         assert!(BenchSpec::new("maximum", MAX_BENCHMARK_COUNT, MAX_BENCHMARK_COUNT).is_ok());
         assert!(matches!(
             BenchSpec::new("iterations", out_of_range, 0),
-            Err(TimingError::TooManyIterations { .. })
+            Err(TimingError::Execution(message))
+                if message.contains("iterations must not exceed")
         ));
         assert!(matches!(
             BenchSpec::new("warmup", 1, out_of_range),
-            Err(TimingError::TooManyWarmupIterations { .. })
+            Err(TimingError::Execution(message)) if message.contains("warmup must not exceed")
         ));
 
         let serialized =
@@ -1723,7 +1704,8 @@ mod tests {
                 executed = true;
                 Ok(())
             }),
-            Err(TimingError::TooManyIterations { .. })
+            Err(TimingError::Execution(message))
+                if message.contains("iterations must not exceed")
         ));
         assert!(!executed);
     }

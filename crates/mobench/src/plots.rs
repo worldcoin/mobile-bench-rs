@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use mobench_artifacts::ApprovedRoot;
-use mobench_process::DeclaredExecutable;
+use mobench_process::{
+    DeclaredExecutable, EnvironmentPolicy, ProcessLimits, ProcessRunner, ProcessSpec,
+    WorkingDirectoryPolicy,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,6 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlotFunctionInput {
@@ -570,6 +574,8 @@ const PLOT_SCRIPT_NAME: &str = "render_sina_plot.py";
 const PLOT_STYLE_NAME: &str = "mobench_light.mplstyle";
 const PLOT_SCRIPT: &str = include_str!("../python/render_sina_plot.py");
 const PLOT_STYLE: &str = include_str!("../python/mobench_light.mplstyle");
+const PLOT_RENDER_TIMEOUT: Duration = Duration::from_secs(60);
+const PLOT_RENDER_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
 
 static ASSET_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -729,19 +735,32 @@ fn try_render_with_python(
     input_path: &Path,
     output_path: &Path,
 ) -> std::result::Result<(), RenderAttemptError> {
-    let output = python
-        .command()
-        .arg(script_path)
-        .arg("--input")
-        .arg(input_path)
-        .arg("--output")
-        .arg(output_path)
-        .output();
+    let spec = ProcessSpec::new(
+        python.clone(),
+        vec![
+            script_path.as_os_str().to_owned(),
+            "--input".into(),
+            input_path.as_os_str().to_owned(),
+            "--output".into(),
+            output_path.as_os_str().to_owned(),
+        ],
+        WorkingDirectoryPolicy::Inherit,
+        EnvironmentPolicy::Inherit,
+        ProcessLimits::new(
+            PLOT_RENDER_TIMEOUT,
+            PLOT_RENDER_OUTPUT_MAX_BYTES,
+            PLOT_RENDER_OUTPUT_MAX_BYTES,
+        ),
+    );
+    let output = ProcessRunner::run(&spec);
 
     let output = match output {
         Ok(output) => output,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Err(RenderAttemptError::NotFound(err));
+        Err(err) if err.spawn_error_kind() == Some(io::ErrorKind::NotFound) => {
+            return Err(RenderAttemptError::NotFound(io::Error::new(
+                io::ErrorKind::NotFound,
+                err,
+            )));
         }
         Err(err) => return Err(RenderAttemptError::Failed(err.into())),
     };
@@ -750,14 +769,30 @@ fn try_render_with_python(
         return Ok(());
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let details = match (stdout.is_empty(), stderr.is_empty()) {
+    let mut stderr = String::from_utf8_lossy(&output.stderr.bytes)
+        .trim()
+        .to_string();
+    let mut stdout = String::from_utf8_lossy(&output.stdout.bytes)
+        .trim()
+        .to_string();
+    if output.stderr.truncated {
+        stderr.push_str(" [truncated]");
+    }
+    if output.stdout.truncated {
+        stdout.push_str(" [truncated]");
+    }
+    let mut details = match (stdout.is_empty(), stderr.is_empty()) {
         (true, true) => "renderer exited unsuccessfully".to_string(),
         (false, true) => format!("renderer stdout: {stdout}"),
         (true, false) => format!("renderer stderr: {stderr}"),
         (false, false) => format!("renderer stdout: {stdout}; stderr: {stderr}"),
     };
+    if output.timed_out {
+        details = format!(
+            "renderer timed out after {}s; {details}",
+            PLOT_RENDER_TIMEOUT.as_secs()
+        );
+    }
 
     Err(RenderAttemptError::Failed(anyhow::anyhow!(
         "{} failed for {}",

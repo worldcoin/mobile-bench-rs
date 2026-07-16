@@ -12,6 +12,7 @@ android/.gradle/
 android/app/build/
 **/.gradle/
 **/build/
+**/__pycache__/
 ios/BenchRunner/BenchRunner.xcodeproj/
 **/xcuserdata/
 **/DerivedData/

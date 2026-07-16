@@ -266,9 +266,7 @@ impl From<crate::types::BenchError> for BenchErrorVariant {
     fn from(err: crate::types::BenchError) -> Self {
         match err {
             crate::types::BenchError::Runner(runner_err) => match runner_err {
-                crate::timing::TimingError::NoIterations { .. }
-                | crate::timing::TimingError::TooManyIterations { .. }
-                | crate::timing::TimingError::TooManyWarmupIterations { .. } => {
+                crate::timing::TimingError::NoIterations { .. } => {
                     BenchErrorVariant::InvalidIterations
                 }
                 crate::timing::TimingError::Execution(msg) => {
@@ -300,11 +298,7 @@ impl From<crate::types::BenchError> for BenchErrorVariant {
 impl From<crate::timing::TimingError> for BenchErrorVariant {
     fn from(err: crate::timing::TimingError) -> Self {
         match err {
-            crate::timing::TimingError::NoIterations { .. }
-            | crate::timing::TimingError::TooManyIterations { .. }
-            | crate::timing::TimingError::TooManyWarmupIterations { .. } => {
-                BenchErrorVariant::InvalidIterations
-            }
+            crate::timing::TimingError::NoIterations { .. } => BenchErrorVariant::InvalidIterations,
             crate::timing::TimingError::Execution(msg) => {
                 BenchErrorVariant::ExecutionFailed { reason: msg }
             }

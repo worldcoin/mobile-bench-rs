@@ -57,6 +57,7 @@ dotenvy = "0.15"
 time.workspace = true
 sha2 = "0.10"
 comfy-table = "7"
+ctrlc = "3"
 tempfile = "3"
 inferno = { version = "0.12", default-features = false }
 tracing = "0.1"

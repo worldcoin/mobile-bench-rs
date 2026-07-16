@@ -123,6 +123,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
+use mobench_process::StdinPolicy;
 use mobench_report::{
     csv_field, markdown_inline_field_text, markdown_link_destination, markdown_table_field_text,
 };
@@ -165,6 +166,7 @@ pub(crate) use doctor::{
     PrereqCheck, cmd_check, cmd_config_validate, cmd_doctor, collect_issues,
     print_check_results_json, print_check_results_text,
 };
+use process_adapter::ToolCommand;
 
 mod browserstack;
 mod cli;
@@ -173,9 +175,41 @@ mod doctor;
 mod flamegraph_viewer;
 mod github;
 mod plots;
+mod process_adapter;
 mod profile;
 mod split_runs;
 pub(crate) mod summarize;
+
+/// Install the CLI's cooperative interrupt handler once.
+///
+/// The first Ctrl-C cancels bounded child-process scopes so they can be killed
+/// and reaped. A second Ctrl-C exits immediately with the conventional code.
+pub fn install_interrupt_handler() -> Result<()> {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    if INSTALLED.get().is_some() {
+        return Ok(());
+    }
+    let cancellation = mobench_process::global_cancellation_token();
+    let signals = std::sync::Arc::new(AtomicUsize::new(0));
+    ctrlc::set_handler(move || {
+        if signals.fetch_add(1, Ordering::SeqCst) == 0 {
+            cancellation.cancel();
+        } else {
+            std::process::exit(130);
+        }
+    })
+    .context("installing Ctrl-C handler")?;
+    let _ = INSTALLED.set(());
+    Ok(())
+}
+
+/// Whether the CLI received a cooperative interruption request.
+pub fn interruption_requested() -> bool {
+    mobench_process::global_cancellation_token().is_cancelled()
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct BrowserStackConfig {
@@ -294,6 +328,43 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) output_dir: PathBuf,
     pub(crate) default_function: Option<String>,
+}
+
+// Builder settings added after the released public config structs became
+// constructible API. Keep them in a private deserialization layer so adding
+// TOML keys does not add fields to those exhaustive public structs.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LayoutConfigExtensions {
+    project: LayoutProjectExtensions,
+    ios: LayoutIosExtensions,
+    browserstack: LayoutBrowserStackExtensions,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LayoutProjectExtensions {
+    ffi_backend: Option<mobench_sdk::FfiBackend>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LayoutIosExtensions {
+    runner: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LayoutBrowserStackExtensions {
+    android_benchmark_timeout_secs: Option<u64>,
+    android_heartbeat_interval_secs: Option<u64>,
+}
+
+fn load_layout_config_extensions(path: &Path) -> Result<LayoutConfigExtensions> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+    toml::from_str(&contents)
+        .with_context(|| format!("Failed to parse config file: {}", path.display()))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1324,11 +1395,12 @@ fn resolve_existing_path_arg(base: &Path, path: Option<&Path>) -> Result<Option<
 }
 
 fn cargo_metadata_from(start: &Path) -> Option<CargoMetadataOutput> {
-    let output = std::process::Command::new("cargo")
+    let mut command = ToolCommand::path_search("cargo");
+    command
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .current_dir(start)
-        .output()
-        .ok()?;
+        .timeout(Duration::from_secs(30));
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1336,11 +1408,12 @@ fn cargo_metadata_from(start: &Path) -> Option<CargoMetadataOutput> {
 }
 
 fn git_root_from(start: &Path) -> Option<PathBuf> {
-    let output = std::process::Command::new("git")
+    let mut command = ToolCommand::path_search("git");
+    command
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(start)
-        .output()
-        .ok()?;
+        .timeout(Duration::from_secs(30));
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1502,6 +1575,11 @@ pub(crate) fn resolve_project_layout(
         Some((config, path)) => (Some(config), Some(path)),
         None => (None, None),
     };
+    let extensions = config_path
+        .as_deref()
+        .map(load_layout_config_extensions)
+        .transpose()?
+        .unwrap_or_default();
 
     let project_root = resolve_project_root_for_layout(
         &start_dir,
@@ -1537,10 +1615,7 @@ pub(crate) fn resolve_project_layout(
         .as_ref()
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
-    let ffi_backend = config
-        .as_ref()
-        .and_then(|cfg| cfg.project.ffi_backend)
-        .unwrap_or_default();
+    let ffi_backend = extensions.project.ffi_backend.unwrap_or_default();
     let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
     let ios_completion_timeout_secs = config
         .as_ref()
@@ -1549,13 +1624,9 @@ pub(crate) fn resolve_project_layout(
         .as_ref()
         .map(|cfg| cfg.ios.deployment_target.clone())
         .unwrap_or_else(|| mobench_sdk::codegen::DEFAULT_IOS_DEPLOYMENT_TARGET.to_string());
-    let ios_runner = config.as_ref().and_then(|cfg| cfg.ios.runner.clone());
-    let android_benchmark_timeout_secs = config
-        .as_ref()
-        .and_then(|cfg| cfg.browserstack.android_benchmark_timeout_secs);
-    let android_heartbeat_interval_secs = config
-        .as_ref()
-        .and_then(|cfg| cfg.browserstack.android_heartbeat_interval_secs);
+    let ios_runner = extensions.ios.runner;
+    let android_benchmark_timeout_secs = extensions.browserstack.android_benchmark_timeout_secs;
+    let android_heartbeat_interval_secs = extensions.browserstack.android_heartbeat_interval_secs;
     let configured_output_dir = config
         .as_ref()
         .and_then(|cfg| cfg.project.output_dir.as_deref())
@@ -1920,9 +1991,8 @@ fn run_request_with_extra_args(request: &RunRequest, extra_args: &[String]) -> R
     let summary_csv = request.output_dir.join("summary.csv");
     let results_csv = request.output_dir.join("results.csv");
 
-    let mut cmd = std::process::Command::new(
-        env::current_exe().context("resolving current mobench executable")?,
-    );
+    let mut cmd =
+        ToolCommand::explicit(env::current_exe().context("resolving current mobench executable")?)?;
     cmd.arg("run")
         .arg("--target")
         .arg(request.target.as_str())
@@ -1989,13 +2059,25 @@ fn run_request_with_extra_args(request: &RunRequest, extra_args: &[String]) -> R
     if request.progress {
         cmd.arg("--progress");
     }
+    cmd.stdin(StdinPolicy::Inherit)
+        .inherit_output()
+        .timeout(Duration::from_secs(
+            request.fetch_timeout_secs.saturating_add(30 * 60),
+        ));
 
-    let status = cmd.status().with_context(|| {
+    let outcome = cmd.run().with_context(|| {
         format!(
-            "running `cargo mobench run` for target {}",
+            "running `mobench run` for target {}",
             request.target.as_str()
         )
     })?;
+    if outcome.timed_out {
+        bail!(
+            "`mobench run` exceeded its {} second process deadline",
+            request.fetch_timeout_secs.saturating_add(30 * 60)
+        );
+    }
+    let status = outcome.status;
     let exit_code = status.code().unwrap_or(1);
     if !status.success() && status.code().is_none() {
         bail!("`cargo mobench run` terminated unexpectedly");
@@ -3477,34 +3559,6 @@ fn validate_ios_device_entries_support_deployment_target(
     Ok(())
 }
 
-fn with_ios_benchmark_timeout_env<T>(
-    timeout_secs: Option<u64>,
-    f: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    let Some(timeout_secs) = timeout_secs else {
-        return f();
-    };
-
-    let previous = env::var_os("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS");
-    println!("Using iOS benchmark completion timeout: {timeout_secs}s");
-
-    unsafe {
-        env::set_var(
-            "MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS",
-            timeout_secs.to_string(),
-        )
-    };
-
-    let result = f();
-
-    match previous {
-        Some(value) => unsafe { env::set_var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS", value) },
-        None => unsafe { env::remove_var("MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS") },
-    }
-
-    result
-}
-
 pub(crate) fn run_ios_build(
     layout: &ResolvedProjectLayout,
     release: bool,
@@ -3522,6 +3576,7 @@ pub(crate) fn run_ios_build(
         .dry_run(dry_run)
         .deployment_target(ios_deployment_target)
         .runner(Some(ios_runner))
+        .benchmark_timeout_secs(ios_completion_timeout_secs)
         .crate_dir(&layout.crate_dir)
         .output_dir(&layout.output_dir);
     let profile = if release {
@@ -3535,8 +3590,10 @@ pub(crate) fn run_ios_build(
         incremental: true,
         android_abis: None,
     };
-    let result =
-        with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || Ok(builder.build(&cfg)?))?;
+    if let Some(timeout_secs) = ios_completion_timeout_secs {
+        println!("Using iOS benchmark completion timeout: {timeout_secs}s");
+    }
+    let result = builder.build(&cfg)?;
     let header = layout
         .output_dir
         .join("ios/include")
@@ -3559,6 +3616,7 @@ fn package_ios_xcuitest_artifacts(
         .verbose(true)
         .deployment_target(ios_deployment_target)
         .runner(Some(ios_runner))
+        .benchmark_timeout_secs(ios_completion_timeout_secs)
         .crate_dir(&layout.crate_dir)
         .output_dir(&layout.output_dir);
     let profile = if release {
@@ -3572,7 +3630,8 @@ fn package_ios_xcuitest_artifacts(
         incremental: true,
         android_abis: None,
     };
-    with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || Ok(builder.build(&cfg)?))
+    builder
+        .build(&cfg)
         .context("Failed to build iOS xcframework before packaging")?;
     let app = builder
         .package_ipa("BenchRunner", mobench_sdk::builders::SigningMethod::AdHoc)
@@ -5958,12 +6017,13 @@ fn cmd_build(
                 let builder = ios_builder_for_layout(&layout)
                     .verbose(false)
                     .dry_run(dry_run)
+                    .deployment_target(ios_deployment_target.clone())
+                    .runner(Some(ios_runner))
+                    .benchmark_timeout_secs(ios_completion_timeout_secs)
                     .output_dir(&effective_output_dir)
                     .crate_dir(&layout.crate_dir);
                 println!("[2/3] Building iOS xcframework...");
-                let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                    Ok(builder.build(&build_config)?)
-                })?;
+                let result = builder.build(&build_config)?;
                 println!("[3/3] Done!");
                 if !dry_run {
                     println!("\n\u{2713} Framework: {:?}", result.app_path);
@@ -5985,13 +6045,11 @@ fn cmd_build(
                     .dry_run(dry_run)
                     .deployment_target(ios_deployment_target.clone())
                     .runner(Some(ios_runner))
+                    .benchmark_timeout_secs(ios_completion_timeout_secs)
                     .output_dir(&effective_output_dir)
                     .crate_dir(&layout.crate_dir);
                 println!("[4/5] Building iOS xcframework...");
-                let ios_result =
-                    with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                        Ok(ios_builder.build(&build_config)?)
-                    })?;
+                let ios_result = ios_builder.build(&build_config)?;
 
                 println!("[5/5] Done!");
                 if !dry_run {
@@ -6042,9 +6100,7 @@ fn cmd_build(
                 .dry_run(dry_run)
                 .output_dir(&effective_output_dir)
                 .crate_dir(&layout.crate_dir);
-            let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                Ok(builder.build(&build_config)?)
-            })?;
+            let result = builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built Android APK");
                 println!("\n[checkmark] Android build completed!");
@@ -6059,11 +6115,10 @@ fn cmd_build(
                 .dry_run(dry_run)
                 .deployment_target(ios_deployment_target.clone())
                 .runner(Some(ios_runner))
+                .benchmark_timeout_secs(ios_completion_timeout_secs)
                 .output_dir(&effective_output_dir)
                 .crate_dir(&layout.crate_dir);
-            let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                Ok(builder.build(&build_config)?)
-            })?;
+            let result = builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
@@ -6092,11 +6147,12 @@ fn cmd_build(
             let ios_builder = ios_builder_for_layout(&layout)
                 .verbose(verbose)
                 .dry_run(dry_run)
+                .deployment_target(ios_deployment_target)
+                .runner(Some(ios_runner))
+                .benchmark_timeout_secs(ios_completion_timeout_secs)
                 .output_dir(&effective_output_dir)
                 .crate_dir(&layout.crate_dir);
-            let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
-                Ok(ios_builder.build(&build_config)?)
-            })?;
+            let ios_result = ios_builder.build(&build_config)?;
             if !dry_run {
                 println!("\u{2713} Built iOS xcframework");
                 println!("\n[checkmark] iOS build completed!");
@@ -7722,7 +7778,9 @@ fn cmd_fixture_cache_key(
 }
 
 fn command_version_line(cmd: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(cmd).args(args).output().ok()?;
+    let mut command = ToolCommand::explicit(cmd).ok()?;
+    command.args(args).timeout(Duration::from_secs(30));
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }

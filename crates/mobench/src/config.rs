@@ -85,11 +85,6 @@ pub struct ProjectConfig {
     /// This must be a relative, non-symlinked descendant of the project root.
     /// Defaults to `target/mobench/` if not specified.
     pub output_dir: Option<PathBuf>,
-
-    /// FFI backend used by generated Android and iOS runners.
-    ///
-    /// Defaults to UniFFI if not specified.
-    pub ffi_backend: Option<mobench_sdk::FfiBackend>,
 }
 
 /// Android-specific configuration.
@@ -146,11 +141,6 @@ pub struct IosConfig {
     ///
     /// If not specified, ad-hoc signing is used.
     pub team_id: Option<String>,
-
-    /// Generated iOS app runner (`swiftui` or `uikit-legacy`).
-    ///
-    /// If not specified, mobench selects a runner compatible with the deployment target.
-    pub runner: Option<String>,
 }
 
 impl Default for IosConfig {
@@ -159,7 +149,6 @@ impl Default for IosConfig {
             bundle_id: "dev.world.bench".to_string(),
             deployment_target: "15.0".to_string(),
             team_id: None,
-            runner: None,
         }
     }
 }
@@ -200,12 +189,6 @@ impl Default for BenchmarksConfig {
 pub struct BrowserStackConfig {
     /// Timeout in seconds for the generated iOS XCUITest harness to wait for benchmark completion.
     pub ios_completion_timeout_secs: Option<u64>,
-
-    /// Timeout in seconds for the generated Android benchmark watchdog.
-    pub android_benchmark_timeout_secs: Option<u64>,
-
-    /// Interval in seconds for Android benchmark heartbeat logging.
-    pub android_heartbeat_interval_secs: Option<u64>,
 }
 
 impl MobenchConfig {
@@ -329,7 +312,6 @@ impl MobenchConfig {
                 crate_name: Some(crate_name.to_string()),
                 library_name: Some(library_name.clone()),
                 output_dir: None, // Use default (target/mobench/)
-                ffi_backend: Some(mobench_sdk::FfiBackend::Uniffi),
             },
             android: AndroidConfig {
                 package: package.clone(),
@@ -341,7 +323,6 @@ impl MobenchConfig {
                 bundle_id: package,
                 deployment_target: "15.0".to_string(),
                 team_id: None,
-                runner: None,
             },
             benchmarks: BenchmarksConfig {
                 default_function: Some(format!("{}::my_benchmark", library_name)),
@@ -557,16 +538,12 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = MobenchConfig::default();
-        assert_eq!(config.project.ffi_backend, None);
         assert_eq!(config.android.min_sdk, 24);
         assert_eq!(config.android.target_sdk, 34);
         assert_eq!(config.ios.deployment_target, "15.0");
-        assert_eq!(config.ios.runner, None);
         assert_eq!(config.benchmarks.default_iterations, 100);
         assert_eq!(config.benchmarks.default_warmup, 10);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, None);
-        assert_eq!(config.browserstack.android_benchmark_timeout_secs, None);
-        assert_eq!(config.browserstack.android_heartbeat_interval_secs, None);
     }
 
     #[test]
@@ -574,52 +551,9 @@ mod tests {
         let config = MobenchConfig::starter("my-bench");
         assert_eq!(config.project.crate_name, Some("my-bench".to_string()));
         assert_eq!(config.project.library_name, Some("my_bench".to_string()));
-        assert_eq!(
-            config.project.ffi_backend,
-            Some(mobench_sdk::FfiBackend::Uniffi)
-        );
         assert_eq!(config.android.package, "dev.world.mybench");
         assert_eq!(config.ios.bundle_id, "dev.world.mybench");
-        assert_eq!(config.ios.runner, None);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, None);
-        assert_eq!(config.browserstack.android_benchmark_timeout_secs, None);
-        assert_eq!(config.browserstack.android_heartbeat_interval_secs, None);
-    }
-
-    #[test]
-    fn test_project_config_deserializes_supported_ffi_backends() {
-        let cases = [
-            ("uniffi", mobench_sdk::FfiBackend::Uniffi),
-            ("native-c-abi", mobench_sdk::FfiBackend::NativeCAbi),
-            ("boltffi", mobench_sdk::FfiBackend::BoltFfi),
-            ("bolt-ffi", mobench_sdk::FfiBackend::BoltFfi),
-        ];
-
-        for (configured, expected) in cases {
-            let config: MobenchConfig = toml::from_str(&format!(
-                r#"[project]
-ffi_backend = "{configured}"
-"#
-            ))
-            .expect("deserialize ffi backend");
-
-            assert_eq!(config.project.ffi_backend, Some(expected));
-        }
-    }
-
-    #[test]
-    fn test_missing_builder_configuration_deserializes_to_none() {
-        let config: MobenchConfig = toml::from_str(
-            r#"[project]
-crate = "test-bench"
-"#,
-        )
-        .expect("deserialize minimal config");
-
-        assert_eq!(config.project.ffi_backend, None);
-        assert_eq!(config.ios.runner, None);
-        assert_eq!(config.browserstack.android_benchmark_timeout_secs, None);
-        assert_eq!(config.browserstack.android_heartbeat_interval_secs, None);
     }
 
     #[test]
@@ -665,7 +599,6 @@ android_heartbeat_interval_secs = 5
         assert_eq!(config.android.target_sdk, 33);
         assert_eq!(config.ios.bundle_id, "com.test.bench");
         assert_eq!(config.ios.deployment_target, "14.0");
-        assert_eq!(config.ios.runner.as_deref(), Some("uikit-legacy"));
         assert_eq!(
             config.benchmarks.default_function,
             Some("test_bench::test_fn".to_string())
@@ -673,11 +606,6 @@ android_heartbeat_interval_secs = 5
         assert_eq!(config.benchmarks.default_iterations, 50);
         assert_eq!(config.benchmarks.default_warmup, 5);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, Some(1200));
-        assert_eq!(
-            config.browserstack.android_benchmark_timeout_secs,
-            Some(600)
-        );
-        assert_eq!(config.browserstack.android_heartbeat_interval_secs, Some(5));
     }
 
     #[test]

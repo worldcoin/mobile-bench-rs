@@ -17,10 +17,19 @@
 //! - Where it happened (paths, commands)
 //! - How to fix it (specific commands or configuration changes)
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+#[cfg(test)]
+use std::process::ExitStatus;
+use std::process::{Command, Output};
+use std::time::Duration;
 
+use mobench_process::{
+    DeclaredExecutable, EnvironmentPolicy, ProcessLimits, ProcessRunner, ProcessSpec,
+    WorkingDirectoryPolicy,
+};
 use serde::Deserialize;
 
 use crate::types::BenchError;
@@ -28,6 +37,104 @@ use crate::types::BenchError;
 #[derive(Deserialize)]
 struct CargoMetadata {
     target_directory: String,
+}
+
+const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const TOOL_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+
+/// Builders-side adapter for one declared, bounded external tool invocation.
+#[derive(Debug, Clone)]
+pub(crate) struct ToolCommand {
+    executable: DeclaredExecutable,
+    arguments: Vec<OsString>,
+    working_directory: WorkingDirectoryPolicy,
+    environment: EnvironmentPolicy,
+    timeout: Duration,
+}
+
+impl ToolCommand {
+    pub(crate) fn path_search(name: &'static str) -> Self {
+        Self {
+            executable: DeclaredExecutable::path_search(name)
+                .expect("fixed tool name must be one PATH-search component"),
+            arguments: Vec::new(),
+            working_directory: WorkingDirectoryPolicy::Inherit,
+            environment: EnvironmentPolicy::Inherit,
+            timeout: DEFAULT_TOOL_TIMEOUT,
+        }
+    }
+
+    pub(crate) fn explicit(path: impl AsRef<Path>) -> Result<Self, BenchError> {
+        let path = path.as_ref();
+        let executable = DeclaredExecutable::explicit_override(path).map_err(|error| {
+            BenchError::Build(format!(
+                "Invalid explicit tool path {}: {error}",
+                path.display()
+            ))
+        })?;
+        Ok(Self {
+            executable,
+            arguments: Vec::new(),
+            working_directory: WorkingDirectoryPolicy::Inherit,
+            environment: EnvironmentPolicy::Inherit,
+            timeout: DEFAULT_TOOL_TIMEOUT,
+        })
+    }
+
+    pub(crate) fn arg(&mut self, argument: impl AsRef<OsStr>) -> &mut Self {
+        self.arguments.push(argument.as_ref().to_os_string());
+        self
+    }
+
+    pub(crate) fn args<I, S>(&mut self, arguments: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.arguments.extend(
+            arguments
+                .into_iter()
+                .map(|argument| argument.as_ref().to_os_string()),
+        );
+        self
+    }
+
+    pub(crate) fn current_dir(&mut self, path: impl AsRef<Path>) -> &mut Self {
+        self.working_directory = WorkingDirectoryPolicy::Path(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub(crate) fn timeout(&mut self, timeout: Duration) -> &mut Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub(crate) fn output(&self) -> Result<Output, BenchError> {
+        let spec = ProcessSpec::new(
+            self.executable.clone(),
+            self.arguments.clone(),
+            self.working_directory.clone(),
+            self.environment.clone(),
+            ProcessLimits::new(self.timeout, TOOL_OUTPUT_LIMIT, TOOL_OUTPUT_LIMIT),
+        );
+        let outcome = ProcessRunner::run(&spec)
+            .map_err(|error| BenchError::Build(format!("Failed to run external tool: {error}")))?;
+        if outcome.cancelled {
+            return Err(BenchError::Build(
+                "External tool was interrupted".to_owned(),
+            ));
+        }
+        outcome.into_complete_output().map_err(|error| {
+            BenchError::Build(format!(
+                "External tool output exceeded the complete-capture contract: {error}"
+            ))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status(&self) -> Result<ExitStatus, BenchError> {
+        self.output().map(|output| output.status)
+    }
 }
 
 /// Validates that the project root is a valid directory for building.
@@ -99,20 +206,21 @@ pub fn validate_project_root(project_root: &Path, crate_name: &str) -> Result<()
 /// Prints a warning to stderr if falling back to the default target directory due to
 /// cargo metadata failures or parsing issues.
 pub fn get_cargo_target_dir(crate_dir: &Path) -> Result<PathBuf, BenchError> {
-    let output = Command::new("cargo")
+    let mut command = ToolCommand::path_search("cargo");
+    command
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .current_dir(crate_dir)
-        .output()
-        .map_err(|e| {
-            BenchError::Build(format!(
-                "Failed to run cargo metadata.\n\n\
+        .timeout(Duration::from_secs(30));
+    let output = command.output().map_err(|e| {
+        BenchError::Build(format!(
+            "Failed to run cargo metadata.\n\n\
                  Working directory: {}\n\
                  Error: {}\n\n\
                  Ensure cargo is installed and on PATH.",
-                crate_dir.display(),
-                e
-            ))
-        })?;
+            crate_dir.display(),
+            e
+        ))
+    })?;
 
     if !output.status.success() {
         // Fall back to crate_dir/target if cargo metadata fails
@@ -218,7 +326,7 @@ pub fn host_lib_path(crate_dir: &Path, crate_name: &str) -> Result<PathBuf, Benc
 ///
 /// # Returns
 /// `Ok(())` if the command succeeds, or a `BenchError` with detailed output on failure.
-pub fn run_command(mut cmd: Command, description: &str) -> Result<(), BenchError> {
+pub(crate) fn run_tool_command(cmd: ToolCommand, description: &str) -> Result<(), BenchError> {
     let output = cmd.output().map_err(|e| {
         BenchError::Build(format!(
             "Failed to start {}.\n\n\
@@ -240,6 +348,53 @@ pub fn run_command(mut cmd: Command, description: &str) -> Result<(), BenchError
         )));
     }
     Ok(())
+}
+
+/// Runs an externally configured command with consistent error handling.
+///
+/// This compatibility entry point preserves the released builder API while
+/// routing execution through Mobench's bounded process supervisor. Program,
+/// arguments, current directory, and explicit environment edits are copied
+/// from `cmd`; stdout and stderr are captured completely up to the builder
+/// limits, as they were by the historical `Command::output` implementation.
+pub fn run_command(cmd: Command, description: &str) -> Result<(), BenchError> {
+    let executable = DeclaredExecutable::explicit_override(cmd.get_program()).map_err(|error| {
+        BenchError::Build(format!(
+            "Failed to declare {description} executable: {error}"
+        ))
+    })?;
+    let working_directory = cmd
+        .get_current_dir()
+        .map_or(WorkingDirectoryPolicy::Inherit, |path| {
+            WorkingDirectoryPolicy::Path(path.to_path_buf())
+        });
+    let mut set = BTreeMap::new();
+    let mut remove = BTreeSet::new();
+    for (name, value) in cmd.get_envs() {
+        match value {
+            Some(value) => {
+                set.insert(name.to_os_string(), value.to_os_string());
+            }
+            None => {
+                remove.insert(name.to_os_string());
+            }
+        }
+    }
+    let environment = if set.is_empty() && remove.is_empty() {
+        EnvironmentPolicy::Inherit
+    } else {
+        EnvironmentPolicy::InheritWith { set, remove }
+    };
+    run_tool_command(
+        ToolCommand {
+            executable,
+            arguments: cmd.get_args().map(OsStr::to_os_string).collect(),
+            working_directory,
+            environment,
+            timeout: DEFAULT_TOOL_TIMEOUT,
+        },
+        description,
+    )
 }
 
 /// Reads the package name from a Cargo.toml file.
@@ -447,10 +602,11 @@ pub struct BenchMeta {
 
 /// Gets the current git commit hash (short form).
 pub fn get_git_commit() -> Option<String> {
-    let output = Command::new("git")
+    let mut command = ToolCommand::path_search("git");
+    command
         .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()?;
+        .timeout(Duration::from_secs(30));
+    let output = command.output().ok()?;
 
     if output.status.success() {
         let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -463,10 +619,11 @@ pub fn get_git_commit() -> Option<String> {
 
 /// Gets the current git branch name.
 pub fn get_git_branch() -> Option<String> {
-    let output = Command::new("git")
+    let mut command = ToolCommand::path_search("git");
+    command
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()?;
+        .timeout(Duration::from_secs(30));
+    let output = command.output().ok()?;
 
     if output.status.success() {
         let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -479,10 +636,11 @@ pub fn get_git_branch() -> Option<String> {
 
 /// Checks if the git working directory has uncommitted changes.
 pub fn is_git_dirty() -> Option<bool> {
-    let output = Command::new("git")
+    let mut command = ToolCommand::path_search("git");
+    command
         .args(["status", "--porcelain"])
-        .output()
-        .ok()?;
+        .timeout(Duration::from_secs(30));
+    let output = command.output().ok()?;
 
     if output.status.success() {
         let status = String::from_utf8_lossy(&output.stdout);
@@ -494,7 +652,9 @@ pub fn is_git_dirty() -> Option<bool> {
 
 /// Gets the Rust version.
 pub fn get_rust_version() -> Option<String> {
-    let output = Command::new("rustc").args(["--version"]).output().ok()?;
+    let mut command = ToolCommand::path_search("rustc");
+    command.arg("--version").timeout(Duration::from_secs(30));
+    let output = command.output().ok()?;
 
     if output.status.success() {
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -678,8 +838,8 @@ mod tests {
 
     #[test]
     fn test_run_command_not_found() {
-        let cmd = Command::new("nonexistent-command-12345");
-        let result = run_command(cmd, "test command");
+        let cmd = ToolCommand::path_search("nonexistent-command-12345");
+        let result = run_tool_command(cmd, "test command");
         assert!(result.is_err());
         let err = result.unwrap_err();
         let msg = format!("{}", err);

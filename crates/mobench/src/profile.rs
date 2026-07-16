@@ -5,9 +5,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write as IoWrite};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::Duration;
 use tracing::info;
 
 use crate::{
@@ -18,10 +18,12 @@ use crate::{
         count_folded_stack_lines, derive_benchmark_focused_folded_stacks,
         render_flamegraph_viewer_html, render_standalone_flamegraph_svg, summarize_folded_stacks,
     },
-    load_dotenv_for_layout, persist_mobile_spec, repo_root, resolve_devices_for_profile,
-    resolve_project_layout, run_android_build, run_ios_build, validate_benchmark_function,
+    load_dotenv_for_layout, persist_mobile_spec,
+    process_adapter::ToolCommand,
+    repo_root, resolve_devices_for_profile, resolve_project_layout, run_android_build,
+    run_ios_build, validate_benchmark_function,
 };
-use mobench_artifacts::{ArtifactId, LatestArtifact, RunWorkspace};
+use mobench_artifacts::{ArtifactId, LatestArtifact, LatestSnapshot, RunWorkspace};
 use mobench_report::{markdown_inline_code, markdown_inline_field_text};
 use mobench_runtime::{rounded_percent_u64, saturating_sum_u64};
 use mobench_sdk::types::NativeLibraryArtifact;
@@ -693,9 +695,9 @@ fn write_profile_session_outputs(
     std::fs::write(&run_summary_path, rendered_summary.as_bytes())?;
     write_profile_manifest(&run_profile_path, &published_manifest)?;
 
+    write_requested_trace_events_output(args, &published_manifest)?;
     let required = [artifact_id("profile.json")?, artifact_id("summary.md")?];
     let published = workspace.publish(&required)?;
-    write_requested_trace_events_output(args, &published_manifest)?;
     published.refresh_latest(&[
         LatestArtifact::same(required[0].clone()),
         LatestArtifact::same(required[1].clone()),
@@ -757,6 +759,63 @@ fn write_requested_trace_events_output(
         "mobench-trace-events",
     )?;
     Ok(())
+}
+
+fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+
+    let mut staged = tempfile::Builder::new()
+        .prefix(".mobench-trace-events-")
+        .tempfile_in(parent)
+        .with_context(|| format!("creating atomic staging file in {}", parent.display()))?;
+    staged
+        .write_all(contents)
+        .with_context(|| format!("writing atomic staging file for {}", path.display()))?;
+    staged
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("syncing atomic staging file for {}", path.display()))?;
+
+    if take_trace_export_failure_before_commit() {
+        bail!("injected trace export failure before atomic commit");
+    }
+
+    staged
+        .persist(path)
+        .with_context(|| format!("atomically replacing {}", path.display()))?;
+    sync_parent_directory(parent)
+        .with_context(|| format!("syncing parent directory {}", parent.display()))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(parent: &Path) -> Result<()> {
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_parent: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static FAIL_TRACE_EXPORT_BEFORE_COMMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn take_trace_export_failure_before_commit() -> bool {
+    FAIL_TRACE_EXPORT_BEFORE_COMMIT.with(|fail| fail.replace(false))
+}
+
+#[cfg(not(test))]
+fn take_trace_export_failure_before_commit() -> bool {
+    false
 }
 
 fn write_semantic_phase_sidecar(manifest: &ProfileManifest) -> Result<()> {
@@ -823,6 +882,51 @@ fn prepare_viewer_timeline_payload(
     );
     let trace_path = write_chronological_trace_sidecar(
         &trace_path,
+        manifest,
+        &lanes,
+        total_duration_ns,
+        "mobench-harness-timeline",
+    )?;
+    Ok(TimelinePayload {
+        note: build_timeline_note(&lanes),
+        lanes,
+        total_duration_ns,
+        trace_path,
+    })
+}
+
+fn prepare_differential_viewer_timeline_payload(
+    candidate_run_dir: &Path,
+    processed_root: &Path,
+    manifest: &ProfileManifest,
+) -> Result<TimelinePayload> {
+    let source_trace_path = artifact_path_by_label(
+        &manifest.native_capture.processed_artifacts,
+        "chronological-trace",
+    )
+    .map(|path| resolve_manifest_artifact_path(candidate_run_dir, path, "chronological-trace"))
+    .transpose()?;
+    if let Some(trace_path) = source_trace_path.as_ref()
+        && trace_path.exists()
+        && let Ok(record) = load_chronological_trace_record(trace_path)
+    {
+        let lanes = sanitize_trace_lanes(&record);
+        return Ok(TimelinePayload {
+            total_duration_ns: Some(record.total_duration_ns),
+            note: build_timeline_note(&lanes),
+            lanes,
+            trace_path: Some(trace_path.clone()),
+        });
+    }
+
+    let lanes = build_harness_only_viewer_timeline_lanes(manifest);
+    let total_duration_ns = compute_timeline_total_duration_ns(
+        &build_viewer_harness_timeline(manifest),
+        manifest.capture_metadata.sample_duration_secs,
+    );
+    let derived_trace_path = processed_root.join("chronological-trace.json");
+    let trace_path = write_chronological_trace_sidecar(
+        &derived_trace_path,
         manifest,
         &lanes,
         total_duration_ns,
@@ -1031,9 +1135,12 @@ fn refresh_differential_flamegraph_viewer_from_manifest_path(
         .parent()
         .context("differential viewer path must have a parent directory")?;
 
-    let baseline_manifest = load_profile_manifest(&baseline_path)?;
-    let candidate_manifest = load_profile_manifest(&candidate_path)?;
-    let candidate_run_dir = candidate_path
+    let baseline = load_profile_manifest_for_read(&baseline_path)?;
+    let candidate = load_profile_manifest_for_read(&candidate_path)?;
+    let baseline_manifest = baseline.manifest;
+    let candidate_manifest = candidate.manifest;
+    let candidate_run_dir = candidate
+        .source_path
         .parent()
         .context("candidate manifest path must have a parent directory")?;
 
@@ -1073,8 +1180,11 @@ fn refresh_differential_flamegraph_viewer_from_manifest_path(
     );
 
     let harness_timeline = build_viewer_harness_timeline(&candidate_manifest);
-    let timeline_payload =
-        prepare_viewer_timeline_payload(candidate_run_dir, processed_root, &candidate_manifest)?;
+    let timeline_payload = prepare_differential_viewer_timeline_payload(
+        candidate_run_dir,
+        processed_root,
+        &candidate_manifest,
+    )?;
     let source_links =
         load_viewer_source_links(candidate_run_dir, processed_root, &candidate_manifest)?;
     let browser_title =
@@ -1559,10 +1669,7 @@ fn write_trace_events_contract(
     source_kind: &str,
 ) -> Result<()> {
     let trace = chronological_trace_record(manifest, lanes, total_duration_ns, source_kind);
-    if let Some(parent) = trace_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(trace_path, serde_json::to_vec_pretty(&trace)?)
+    write_file_atomically(trace_path, &serde_json::to_vec_pretty(&trace)?)
         .with_context(|| format!("writing {}", trace_path.display()))?;
     Ok(())
 }
@@ -1677,6 +1784,109 @@ fn resolve_run_relative_path(run_output_dir: &Path, path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         run_output_dir.join(path)
+    }
+}
+
+fn validate_profile_manifest_artifact_paths(
+    manifest_path: &Path,
+    manifest: &ProfileManifest,
+) -> Result<()> {
+    let run_dir = manifest_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    for artifact in manifest
+        .native_capture
+        .raw_artifacts
+        .iter()
+        .chain(manifest.native_capture.processed_artifacts.iter())
+    {
+        resolve_manifest_artifact_path(run_dir, &artifact.path, &artifact.label)?;
+    }
+    if let Some(path) = manifest.semantic_profile.spans_path.as_ref() {
+        resolve_manifest_artifact_path(run_dir, path, "semantic phases")?;
+    }
+    if let Some(path) = manifest.semantic_profile.timeline_path.as_ref() {
+        resolve_manifest_artifact_path(run_dir, path, "semantic timeline")?;
+    }
+    Ok(())
+}
+
+fn resolve_manifest_artifact_path(run_dir: &Path, path: &Path, label: &str) -> Result<PathBuf> {
+    let canonical_run_dir = std::fs::canonicalize(run_dir)
+        .with_context(|| format!("canonicalizing profile run directory {}", run_dir.display()))?;
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        canonical_run_dir.join(path)
+    };
+    let normalized = normalize_absolute_path(&candidate)?;
+    let projected = canonicalize_with_missing_components(&normalized)?;
+    if !projected.starts_with(&canonical_run_dir) {
+        bail!(
+            "profile manifest artifact `{label}` resolves outside profile run directory {}: {}",
+            canonical_run_dir.display(),
+            path.display()
+        );
+    }
+    Ok(projected)
+}
+
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        bail!(
+            "profile artifact path is not absolute after resolution: {}",
+            path.display()
+        );
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                normalized.push(component.as_os_str());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    bail!(
+                        "profile artifact path escapes its filesystem root: {}",
+                        path.display()
+                    );
+                }
+            }
+            std::path::Component::Normal(name) => normalized.push(name),
+        }
+    }
+    Ok(normalized)
+}
+
+fn canonicalize_with_missing_components(path: &Path) -> Result<PathBuf> {
+    let mut current = path.to_path_buf();
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(&current) {
+            Ok(mut canonical) => {
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = current.file_name().with_context(|| {
+                    format!("resolving missing profile artifact path {}", path.display())
+                })?;
+                missing.push(name.to_os_string());
+                if !current.pop() {
+                    bail!("could not resolve profile artifact path {}", path.display());
+                }
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("resolving profile artifact path {}", path.display())
+                });
+            }
+        }
     }
 }
 
@@ -1808,21 +2018,23 @@ pub fn cmd_profile_summarize(args: &ProfileSummarizeArgs) -> Result<()> {
 }
 
 pub fn cmd_profile_diff(args: &ProfileDiffArgs) -> Result<()> {
-    let baseline_manifest = load_profile_manifest(&args.baseline)?;
-    let candidate_manifest = load_profile_manifest(&args.candidate)?;
+    let baseline = load_profile_manifest_for_read(&args.baseline)?;
+    let candidate = load_profile_manifest_for_read(&args.candidate)?;
+    let baseline_manifest = baseline.manifest;
+    let candidate_manifest = candidate.manifest;
     validate_profile_diff_inputs(
-        &args.baseline,
+        &baseline.source_path,
         &baseline_manifest,
-        &args.candidate,
+        &candidate.source_path,
         &candidate_manifest,
     )?;
 
-    let baseline_run_dir = args
-        .baseline
+    let baseline_run_dir = baseline
+        .source_path
         .parent()
         .context("baseline manifest path must have a parent directory")?;
-    let candidate_run_dir = args
-        .candidate
+    let candidate_run_dir = candidate
+        .source_path
         .parent()
         .context("candidate manifest path must have a parent directory")?;
     let diff_run_id = ArtifactId::new(format!(
@@ -1869,8 +2081,8 @@ pub fn cmd_profile_diff(args: &ProfileDiffArgs) -> Result<()> {
     let summary_path = diff_run_dir.join("summary.md");
     let diff_manifest = DifferentialViewerManifest {
         run_id: diff_run_id.to_string(),
-        baseline: path_string(&args.baseline),
-        candidate: path_string(&args.candidate),
+        baseline: path_string(&baseline.source_path),
+        candidate: path_string(&candidate.source_path),
         target: Some(candidate_manifest.target),
         function: Some(candidate_manifest.function.clone()),
         backend: Some(candidate_manifest.backend),
@@ -2040,7 +2252,8 @@ fn resolve_required_processed_artifact(
     label: &str,
 ) -> Result<PathBuf> {
     artifact_path_by_label(&manifest.native_capture.processed_artifacts, label)
-        .map(|path| resolve_run_relative_path(run_output_dir, path))
+        .map(|path| resolve_manifest_artifact_path(run_output_dir, path, label))
+        .transpose()?
         .filter(|path| path.exists())
         .with_context(|| {
             format!(
@@ -2406,10 +2619,12 @@ fn resolve_android_frame_location_with_tool(
     library_path: &Path,
     offset: u64,
 ) -> Option<FrameLocationRecord> {
-    let output = Command::new(tool_path)
+    let output = ToolCommand::explicit(tool_path)
+        .ok()?
         .args(["-Cfpe"])
         .arg(library_path)
         .arg(format!("0x{offset:x}"))
+        .timeout(Duration::from_secs(30))
         .output()
         .ok()?;
     if !output.status.success() {
@@ -2726,10 +2941,9 @@ fn prepend_path_env(toolchain: &AndroidProfilerToolchain) -> Option<std::ffi::Os
 }
 
 fn ensure_android_device_connected(toolchain: &AndroidProfilerToolchain) -> Result<()> {
-    let output = Command::new(&toolchain.adb_path)
-        .arg("devices")
-        .output()
-        .context("failed to run `adb devices`")?;
+    let mut command = ToolCommand::explicit(&toolchain.adb_path)?;
+    command.arg("devices").timeout(Duration::from_secs(30));
+    let output = command.output().context("failed to run `adb devices`")?;
     if !output.status.success() {
         bail!("adb devices failed with status {}", output.status);
     }
@@ -2752,10 +2966,9 @@ fn sdk_root_emulator_hint(sdk_root: &Path) -> Option<String> {
     if !emulator_path.exists() {
         return None;
     }
-    let output = Command::new(&emulator_path)
-        .arg("-list-avds")
-        .output()
-        .ok()?;
+    let mut command = ToolCommand::explicit(&emulator_path).ok()?;
+    command.arg("-list-avds").timeout(Duration::from_secs(30));
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -2799,12 +3012,13 @@ fn run_android_stackcollapse(
     perf_data_path: &Path,
     working_dir: &Path,
 ) -> Result<String> {
-    let mut command = Command::new(&toolchain.python_path);
+    let mut command = ToolCommand::explicit(&toolchain.python_path)?;
     command
         .arg(&toolchain.stackcollapse_path)
         .arg("-i")
         .arg(perf_data_path)
-        .current_dir(working_dir);
+        .current_dir(working_dir)
+        .timeout(Duration::from_secs(5 * 60));
     if let Some(path_env) = prepend_path_env(toolchain) {
         command.env("PATH", path_env);
     }
@@ -2881,7 +3095,7 @@ fn execute_local_android_capture(
     }
     std::fs::create_dir_all(&processed_root)?;
 
-    let mut install = Command::new(&toolchain.adb_path);
+    let mut install = ToolCommand::explicit(&toolchain.adb_path)?;
     install.arg("install").arg("-r").arg(&build.app_path);
     if let Some(path_env) = prepend_path_env(&toolchain) {
         install.env("PATH", path_env.clone());
@@ -2906,7 +3120,7 @@ fn execute_local_android_capture(
         ));
     }
 
-    let mut profiler = Command::new(&toolchain.python_path);
+    let mut profiler = ToolCommand::explicit(&toolchain.python_path)?;
     profiler
         .arg(&toolchain.app_profiler_path)
         .arg("-p")
@@ -2924,7 +3138,10 @@ fn execute_local_android_capture(
             raw_perf_path
                 .parent()
                 .context("simpleperf artifact path missing parent directory")?,
-        );
+        )
+        .timeout(Duration::from_secs(
+            DEFAULT_ANDROID_CAPTURE_DURATION_SECS + 2 * 60,
+        ));
     if let Some(path_env) = prepend_path_env(&toolchain) {
         profiler.env("PATH", path_env);
     }
@@ -3019,7 +3236,7 @@ fn prepare_android_profile_capture(
 }
 
 fn android_force_stop(toolchain: &AndroidProfilerToolchain, package_name: &str) -> Result<()> {
-    let output = Command::new(&toolchain.adb_path)
+    let output = ToolCommand::explicit(&toolchain.adb_path)?
         .args(["shell", "am", "force-stop"])
         .arg(package_name)
         .output()
@@ -3036,7 +3253,7 @@ fn android_force_stop(toolchain: &AndroidProfilerToolchain, package_name: &str) 
 }
 
 fn android_clear_logcat(toolchain: &AndroidProfilerToolchain) -> Result<()> {
-    let output = Command::new(&toolchain.adb_path)
+    let output = ToolCommand::explicit(&toolchain.adb_path)?
         .args(["logcat", "-c"])
         .output()
         .context("clearing Android logcat before warm profile capture")?;
@@ -3057,7 +3274,7 @@ fn android_start_activity(
     activity_name: &str,
 ) -> Result<()> {
     let component = format!("{package_name}/{activity_name}");
-    let output = Command::new(&toolchain.adb_path)
+    let output = ToolCommand::explicit(&toolchain.adb_path)?
         .args(["shell", "am", "start", "-W", "-n"])
         .arg(&component)
         .output()
@@ -3090,7 +3307,7 @@ fn wait_for_android_bench_log_marker(
 }
 
 fn android_read_logcat(toolchain: &AndroidProfilerToolchain) -> Result<String> {
-    let output = Command::new(&toolchain.adb_path)
+    let output = ToolCommand::explicit(&toolchain.adb_path)?
         .args(["logcat", "-d", "-s", "BenchRunner:I", "MainActivity:D"])
         .output()
         .context("reading Android logcat for warm profile capture")?;
@@ -3313,7 +3530,7 @@ fn run_local_ios_warmup_pass(
 fn resolve_local_ios_simulator(
     requested: Option<&ResolvedProfileDevice>,
 ) -> Result<LocalIosSimulator> {
-    let output = Command::new("xcrun")
+    let output = ToolCommand::path_search("xcrun")
         .args(["simctl", "list", "devices", "available", "--json"])
         .output()
         .context("listing available iOS simulators with simctl")?;
@@ -3435,8 +3652,9 @@ fn ios_versions_match(requested: &str, candidate: &str) -> bool {
 }
 
 fn ensure_local_ios_simulator_booted(simulator: &LocalIosSimulator) -> Result<()> {
-    let output = Command::new("xcrun")
+    let output = ToolCommand::path_search("xcrun")
         .args(["simctl", "bootstatus", &simulator.udid, "-b"])
+        .timeout(Duration::from_secs(5 * 60))
         .output()
         .with_context(|| format!("booting iOS simulator {}", simulator.identifier()))?;
     if !output.status.success() {
@@ -3471,7 +3689,7 @@ fn build_local_ios_simulator_app(
         .output_dir
         .join("ios")
         .join("profile-simulator-build");
-    let mut cmd = Command::new("xcodebuild");
+    let mut cmd = ToolCommand::path_search("xcodebuild");
     cmd.arg("-project")
         .arg(&project_path)
         .arg("-target")
@@ -3510,7 +3728,7 @@ fn build_local_ios_simulator_app(
 }
 
 fn install_local_ios_app(simulator: &LocalIosSimulator, app_path: &Path) -> Result<()> {
-    let output = Command::new("xcrun")
+    let output = ToolCommand::path_search("xcrun")
         .args(["simctl", "install", &simulator.udid])
         .arg(app_path)
         .output()
@@ -3559,7 +3777,7 @@ fn launch_local_ios_app(
     std::fs::write(&stdout_path, "")?;
     std::fs::write(&stderr_path, "")?;
 
-    let mut cmd = Command::new("xcrun");
+    let mut cmd = ToolCommand::path_search("xcrun");
     cmd.args(["simctl", "launch"])
         .arg(format!("--stdout={}", stdout_path.display()))
         .arg(format!("--stderr={}", stderr_path.display()))
@@ -3611,7 +3829,7 @@ fn parse_simctl_launch_pid(stdout: &str) -> Result<u32> {
 }
 
 fn terminate_local_ios_app(simulator: &LocalIosSimulator, bundle_id: &str) -> Result<()> {
-    let output = Command::new("xcrun")
+    let output = ToolCommand::path_search("xcrun")
         .args(["simctl", "terminate", &simulator.udid, bundle_id])
         .output()
         .with_context(|| {
@@ -3639,13 +3857,14 @@ fn terminate_local_ios_app(simulator: &LocalIosSimulator, bundle_id: &str) -> Re
 }
 
 fn run_ios_sample_capture(pid: u32, output_path: &Path) -> Result<()> {
-    let output = Command::new("sample")
+    let output = ToolCommand::path_search("sample")
         .arg(pid.to_string())
         .arg(DEFAULT_IOS_CAPTURE_DURATION_SECS.to_string())
         .arg("1")
         .arg("-mayDie")
         .arg("-file")
         .arg(output_path)
+        .timeout(Duration::from_secs(DEFAULT_IOS_CAPTURE_DURATION_SECS + 60))
         .output()
         .with_context(|| format!("sampling iOS simulator process {pid}"))?;
     if !output.status.success() {
@@ -4140,7 +4359,7 @@ fn resolve_android_runtime_abi(toolchain: &AndroidProfilerToolchain) -> Result<O
 }
 
 fn read_android_device_property(adb_path: &Path, property: &str) -> Result<Option<String>> {
-    let output = Command::new(adb_path)
+    let output = ToolCommand::explicit(adb_path)?
         .args(["shell", "getprop", property])
         .output()
         .with_context(|| format!("reading Android device property {property}"))?;
@@ -4165,8 +4384,77 @@ fn load_profile_manifest(path: &Path) -> Result<ProfileManifest> {
     Ok(serde_json::from_str(&body)?)
 }
 
+struct LoadedProfileManifest {
+    manifest: ProfileManifest,
+    source_path: PathBuf,
+}
+
+fn load_profile_manifest_for_read(path: &Path) -> Result<LoadedProfileManifest> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let has_transactional_latest = match std::fs::symlink_metadata(parent.join(".mobench-latest")) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspecting transactional profile snapshot root {}",
+                    parent.display()
+                )
+            });
+        }
+    };
+
+    let (manifest, source_path) = if has_transactional_latest {
+        let destination = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("profile manifest alias must have a UTF-8 file name")?;
+        let destination = ArtifactId::new(destination)
+            .context("profile manifest alias is not one safe artifact name")?;
+        let snapshot =
+            LatestSnapshot::open(parent).context("opening committed profile artifact snapshot")?;
+        let mapping = snapshot
+            .manifest()
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.destination_relative_path == destination.as_str())
+            .with_context(|| {
+                format!(
+                    "committed latest generation {} does not contain profile alias `{}`",
+                    snapshot.generation(),
+                    destination
+                )
+            })?;
+        let source = ArtifactId::new(mapping.source_relative_path.clone())
+            .context("latest profile source is not one safe artifact name")?;
+        let publication = ArtifactId::new(snapshot.manifest().source_publication_id.clone())
+            .context("latest profile publication is not one safe artifact name")?;
+        let source_path = snapshot
+            .root()
+            .path()
+            .join(publication.as_str())
+            .join(source.as_str());
+        let body = snapshot
+            .read_artifact(&destination)
+            .context("reading committed profile manifest snapshot")?;
+        let manifest =
+            serde_json::from_slice(&body).context("parsing committed profile manifest snapshot")?;
+        (manifest, source_path)
+    } else {
+        (load_profile_manifest(path)?, path.to_path_buf())
+    };
+    validate_profile_manifest_artifact_paths(&source_path, &manifest)?;
+    Ok(LoadedProfileManifest {
+        manifest,
+        source_path,
+    })
+}
+
 pub fn cmd_profile_summarize_for_test(args: &ProfileSummarizeArgs) -> Result<String> {
-    let manifest = load_profile_manifest(&args.profile)?;
+    let manifest = load_profile_manifest_for_read(&args.profile)?.manifest;
     match args.output_format {
         ProfileSummaryFormat::Markdown => Ok(render_profile_markdown(&manifest)),
         ProfileSummaryFormat::Json => Ok(serde_json::to_string_pretty(&manifest)?),
@@ -5279,6 +5567,13 @@ mod tests {
 
         let mut candidate_manifest = baseline_manifest.clone();
         candidate_manifest.run_id = "candidate-run".into();
+        candidate_manifest
+            .native_capture
+            .processed_artifacts
+            .push(ArtifactRecord {
+                label: "chronological-trace".into(),
+                path: PathBuf::from("artifacts/processed/chronological-trace.json"),
+            });
 
         std::fs::write(
             baseline_run_dir.join("profile.json"),
@@ -5350,6 +5645,17 @@ mod tests {
         assert!(html.contains("Candidate Run"));
         assert!(html.contains("Chronological trace"));
         assert!(html.contains("Exact harness time"));
+        assert!(
+            diff_processed_dir
+                .join("chronological-trace.json")
+                .is_file()
+        );
+        assert!(
+            !candidate_run_dir
+                .join("artifacts/processed/chronological-trace.json")
+                .exists(),
+            "differential rendering must not synthesize artifacts in the candidate run"
+        );
     }
 
     #[test]
@@ -5428,6 +5734,60 @@ mod tests {
         assert!(!manifest.viewer_path.contains(".mobench-staging"));
         assert!(output_dir.join("profile-diff.json").is_file());
         assert!(output_dir.join("summary.md").is_file());
+    }
+
+    #[test]
+    fn profile_diff_rejects_candidate_artifacts_outside_the_candidate_run_without_writing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let baseline_run_dir = dir.path().join("baseline-run");
+        let candidate_run_dir = dir.path().join("candidate-run");
+        std::fs::create_dir_all(baseline_run_dir.join("artifacts/processed"))
+            .expect("create baseline processed dir");
+        std::fs::create_dir_all(candidate_run_dir.join("artifacts/processed"))
+            .expect("create candidate processed dir");
+
+        for run_dir in [&baseline_run_dir, &candidate_run_dir] {
+            std::fs::write(
+                run_dir.join("artifacts/processed/stacks.folded"),
+                "root;sample_fns::fibonacci 4\n",
+            )
+            .expect("write full folded stacks");
+            std::fs::write(
+                run_dir.join("artifacts/processed/benchmark.focused.folded"),
+                "sample_fns::run_benchmark;sample_fns::fibonacci 4\n",
+            )
+            .expect("write focused folded stacks");
+        }
+
+        let mut baseline_manifest = sample_manifest();
+        baseline_manifest.run_id = "baseline-run".into();
+        let mut candidate_manifest = baseline_manifest.clone();
+        candidate_manifest.run_id = "candidate-run".into();
+        let escaped_trace = dir.path().join("outside/chronological-trace.json");
+        candidate_manifest
+            .native_capture
+            .processed_artifacts
+            .push(ArtifactRecord {
+                label: "chronological-trace".into(),
+                path: escaped_trace.clone(),
+            });
+        write_profile_manifest(&baseline_run_dir.join("profile.json"), &baseline_manifest)
+            .expect("write baseline manifest");
+        write_profile_manifest(&candidate_run_dir.join("profile.json"), &candidate_manifest)
+            .expect("write candidate manifest");
+
+        let output_dir = dir.path().join("diff");
+        let error = cmd_profile_diff(&ProfileDiffArgs {
+            baseline: baseline_run_dir.join("profile.json"),
+            candidate: candidate_run_dir.join("profile.json"),
+            output_dir: output_dir.clone(),
+            normalize: false,
+        })
+        .expect_err("reject escaped candidate artifact");
+
+        assert!(error.to_string().contains("outside profile run directory"));
+        assert!(!escaped_trace.exists());
+        assert!(!output_dir.exists());
     }
 
     #[test]
@@ -5731,6 +6091,69 @@ mod tests {
 
         assert!(rendered.contains("sample_fns::fibonacci"));
         assert!(rendered.contains("Profile Summary"));
+    }
+
+    #[test]
+    fn summarize_reads_the_committed_snapshot_instead_of_a_torn_legacy_alias() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let logical_id = ArtifactId::new("profile-snapshot").expect("logical ID");
+        let workspace =
+            RunWorkspace::allocate(dir.path(), &logical_id).expect("allocate workspace");
+        write_profile_manifest(
+            &workspace.staging_path().join("profile.json"),
+            &sample_manifest(),
+        )
+        .expect("write staged manifest");
+        std::fs::write(workspace.staging_path().join("summary.md"), "summary")
+            .expect("write staged summary");
+        let required = [
+            ArtifactId::new("profile.json").expect("profile ID"),
+            ArtifactId::new("summary.md").expect("summary ID"),
+        ];
+        let published = workspace.publish(&required).expect("publish run");
+        published
+            .refresh_latest(&[
+                LatestArtifact::same(required[0].clone()),
+                LatestArtifact::same(required[1].clone()),
+            ])
+            .expect("commit latest snapshot");
+
+        std::fs::write(dir.path().join("profile.json"), "torn legacy alias")
+            .expect("corrupt compatibility alias");
+        let rendered = cmd_profile_summarize_for_test(&ProfileSummarizeArgs {
+            profile: dir.path().join("profile.json"),
+            output: None,
+            output_format: ProfileSummaryFormat::Markdown,
+        })
+        .expect("summarize committed snapshot");
+
+        assert!(rendered.contains("sample_fns::fibonacci"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("profile.json"))
+                .expect("read untouched compatibility alias"),
+            "torn legacy alias",
+            "a read-only snapshot consumer must not repair or rewrite compatibility aliases"
+        );
+    }
+
+    #[test]
+    fn summarize_rejects_artifact_paths_outside_the_manifest_run() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let run_dir = dir.path().join("run");
+        std::fs::create_dir_all(&run_dir).expect("create run dir");
+        let manifest_path = run_dir.join("profile.json");
+        let mut manifest = sample_manifest();
+        manifest.native_capture.raw_artifacts[0].path = dir.path().join("outside/sample.perf");
+        write_profile_manifest(&manifest_path, &manifest).expect("write manifest");
+
+        let error = cmd_profile_summarize_for_test(&ProfileSummarizeArgs {
+            profile: manifest_path,
+            output: None,
+            output_format: ProfileSummaryFormat::Markdown,
+        })
+        .expect_err("reject escaped artifact path");
+
+        assert!(error.to_string().contains("outside profile run directory"));
     }
 
     #[test]
@@ -6614,6 +7037,60 @@ mod tests {
         assert_eq!(trace["source"]["kind"], "mobench-trace-events");
         assert_eq!(trace["total_duration_ns"], 0);
         assert_eq!(trace["lanes"].as_array().expect("lanes array").len(), 0);
+    }
+
+    #[test]
+    fn trace_export_failure_preserves_previous_target_and_prevents_profile_publication() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let output_dir = dir.path().join("profiles");
+        let trace_path = dir.path().join("consumer/trace-events.json");
+        std::fs::create_dir_all(&output_dir).expect("create profile output dir");
+        std::fs::create_dir_all(trace_path.parent().expect("trace parent"))
+            .expect("create trace output dir");
+        std::fs::write(output_dir.join("profile.json"), "previous profile")
+            .expect("seed previous profile alias");
+        std::fs::write(output_dir.join("summary.md"), "previous summary")
+            .expect("seed previous summary alias");
+        std::fs::write(&trace_path, "previous trace").expect("seed previous trace export");
+
+        let mut args = sample_run_args(
+            MobileTarget::Android,
+            ProfileProvider::Local,
+            ProfileBackend::AndroidNative,
+            ProfileFormat::Both,
+        );
+        args.output_dir = output_dir.clone();
+        args.trace_events_output = Some(trace_path.clone());
+        FAIL_TRACE_EXPORT_BEFORE_COMMIT.with(|fail| fail.set(true));
+
+        let error = cmd_profile_run(&args, true).expect_err("fail trace export before commit");
+
+        assert!(format!("{error:#}").contains("injected trace export failure"));
+        assert_eq!(
+            std::fs::read_to_string(&trace_path).expect("read previous trace export"),
+            "previous trace"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("profile.json"))
+                .expect("read previous profile alias"),
+            "previous profile"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("summary.md"))
+                .expect("read previous summary alias"),
+            "previous summary"
+        );
+        let published_prefix = format!("{}--", build_run_id(args.target, &args.function));
+        assert!(
+            std::fs::read_dir(&output_dir)
+                .expect("list profile output dir")
+                .filter_map(|entry| entry.ok())
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&published_prefix)),
+            "trace export failure must not publish a run directory"
+        );
     }
 
     #[test]
