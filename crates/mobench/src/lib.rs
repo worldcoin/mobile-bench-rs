@@ -1069,7 +1069,8 @@ pub fn run() -> Result<()> {
                         mobench_provider::StartedRun::from_handle(provider_handle),
                         &mobench_process::global_cancellation_token(),
                     )
-                    .map_err(|error| anyhow!("BrowserStack provider failed to collect: {error}"))
+                    .map_err(anyhow::Error::new)
+                    .context("BrowserStack provider failed to collect")
                     .and_then(completed_browserstack_collection);
                 match provider_result {
                     Ok(collection) => {

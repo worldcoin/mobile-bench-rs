@@ -78,19 +78,16 @@ pub(crate) struct BrowserStackRunHandle {
 pub(crate) struct BrowserStackReport {
     pub(crate) benchmark: Value,
     pub(crate) performance_metrics: PerformanceMetrics,
+    pub(crate) observed_device_id: String,
 }
 
 #[derive(Debug, Error)]
-#[error("{message}")]
-pub(crate) struct BrowserStackAdapterError {
-    message: String,
-}
+#[error(transparent)]
+pub(crate) struct BrowserStackAdapterError(#[from] anyhow::Error);
 
 impl BrowserStackAdapterError {
     fn from_anyhow(error: anyhow::Error) -> Self {
-        Self {
-            message: error.to_string(),
-        }
+        Self(error)
     }
 }
 
@@ -100,6 +97,12 @@ struct CollectedBrowserStackSession {
     benchmark_results: Vec<Value>,
     benchmark_failures: Vec<Value>,
     performance_metrics: PerformanceMetrics,
+}
+
+#[derive(Clone, Debug)]
+struct ReconciledDeviceSession {
+    requested_device_id: String,
+    observed: DeviceSession,
 }
 
 fn browserstack_failure_diagnostic(failures: &[Value]) -> Option<String> {
@@ -132,81 +135,176 @@ fn classify_browserstack_result_completeness(
     completed_browserstack_results(run)
 }
 
+#[cfg(test)]
 fn browserstack_adapter_run(
     expected_sessions: &[DeviceSession],
     collected_sessions: Vec<CollectedBrowserStackSession>,
 ) -> AdapterRun<BrowserStackReport> {
+    let reconciled = expected_sessions
+        .iter()
+        .cloned()
+        .map(|observed| ReconciledDeviceSession {
+            requested_device_id: observed.device.clone(),
+            observed,
+        })
+        .collect::<Vec<_>>();
+    browserstack_adapter_run_with_bindings(&reconciled, collected_sessions)
+}
+
+fn browserstack_adapter_run_with_bindings(
+    expected_sessions: &[ReconciledDeviceSession],
+    collected_sessions: Vec<CollectedBrowserStackSession>,
+) -> AdapterRun<BrowserStackReport> {
+    let observed_by_session = expected_sessions
+        .iter()
+        .map(|session| {
+            (
+                session.observed.session_id.as_str(),
+                session.observed.device.as_str(),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     AdapterRun {
         expected: expected_sessions
             .iter()
             .map(|session| ProviderExpectedSession {
-                session_id: session.session_id.clone(),
-                device_id: session.device.clone(),
-                status: session.status.clone(),
+                session_id: session.observed.session_id.clone(),
+                device_id: session.requested_device_id.clone(),
+                status: session.observed.status.clone(),
             })
             .collect(),
         collected: collected_sessions
             .into_iter()
-            .map(|session| CollectedOutput {
-                session_id: session.session_id,
-                reports: session
-                    .benchmark_results
-                    .into_iter()
-                    .map(|benchmark| BrowserStackReport {
-                        benchmark,
-                        performance_metrics: session.performance_metrics.clone(),
-                    })
-                    .collect(),
-                failure: browserstack_failure_diagnostic(&session.benchmark_failures),
+            .map(|session| {
+                let observed_device_id = observed_by_session
+                    .get(session.session_id.as_str())
+                    .copied()
+                    .unwrap_or("unknown")
+                    .to_owned();
+                CollectedOutput {
+                    session_id: session.session_id,
+                    reports: session
+                        .benchmark_results
+                        .into_iter()
+                        .map(|benchmark| BrowserStackReport {
+                            benchmark,
+                            performance_metrics: session.performance_metrics.clone(),
+                            observed_device_id: observed_device_id.clone(),
+                        })
+                        .collect(),
+                    failure: browserstack_failure_diagnostic(&session.benchmark_failures),
+                }
             })
             .collect(),
     }
 }
 
-fn validate_requested_device_sessions(
-    requested_devices: &[String],
-    observed_sessions: &[DeviceSession],
-) -> Result<()> {
-    let mut requested = std::collections::BTreeMap::<&str, usize>::new();
-    for device in requested_devices {
-        *requested.entry(device.as_str()).or_default() += 1;
-    }
-    let mut observed = std::collections::BTreeMap::<&str, usize>::new();
-    for session in observed_sessions {
-        *observed.entry(session.device.as_str()).or_default() += 1;
-    }
-    if requested == observed {
-        return Ok(());
-    }
-
-    let missing = requested
-        .iter()
-        .filter_map(|(device, requested_count)| {
-            let observed_count = observed.get(device).copied().unwrap_or_default();
-            (*requested_count > observed_count)
-                .then(|| format!("{device} ({} missing)", *requested_count - observed_count))
-        })
-        .collect::<Vec<_>>();
-    let unexpected = observed
-        .iter()
-        .filter_map(|(device, observed_count)| {
-            let requested_count = requested.get(device).copied().unwrap_or_default();
-            (*observed_count > requested_count).then(|| {
-                format!(
-                    "{device} ({} unexpected)",
-                    *observed_count - requested_count
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-
-    Err(anyhow!(
-        "BrowserStack device matrix did not match the scheduled request; missing [{}]; unexpected [{}]",
-        missing.join(", "),
-        unexpected.join(", ")
-    ))
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DeviceSelector<'a> {
+    name: &'a str,
+    version: Vec<u32>,
 }
 
+fn parse_device_selector(selector: &str) -> Option<DeviceSelector<'_>> {
+    let (name, version) = selector.rsplit_once('-')?;
+    let version = version
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+    (!name.is_empty() && !version.is_empty()).then_some(DeviceSelector { name, version })
+}
+
+fn requested_selector_matches_observed(requested: &str, observed: &str) -> bool {
+    let (Some(requested), Some(observed)) = (
+        parse_device_selector(requested),
+        parse_device_selector(observed),
+    ) else {
+        return false;
+    };
+    if requested.name != observed.name {
+        return false;
+    }
+    if requested.version.len() == 1 {
+        requested.version.first() == observed.version.first()
+    } else {
+        requested.version == observed.version
+    }
+}
+
+fn reconcile_requested_device_sessions(
+    requested_devices: &[String],
+    observed_sessions: &[DeviceSession],
+) -> Result<Vec<ReconciledDeviceSession>> {
+    let mut unique_requested = std::collections::BTreeSet::new();
+    for requested in requested_devices {
+        if parse_device_selector(requested).is_none() {
+            return Err(anyhow!(
+                "BrowserStack requested device selector is invalid: {requested}"
+            ));
+        }
+        if !unique_requested.insert(requested.as_str()) {
+            return Err(anyhow!(
+                "BrowserStack requested device selector is duplicated: {requested}"
+            ));
+        }
+    }
+
+    let mut unmatched = (0..observed_sessions.len()).collect::<Vec<_>>();
+    let mut reconciled = Vec::with_capacity(requested_devices.len());
+    for requested in requested_devices {
+        let candidates = unmatched
+            .iter()
+            .copied()
+            .filter(|index| {
+                requested_selector_matches_observed(requested, &observed_sessions[*index].device)
+            })
+            .collect::<Vec<_>>();
+        match candidates.as_slice() {
+            [] => {
+                return Err(anyhow!(
+                    "BrowserStack requested device had no compatible observed session: {requested}; observed [{}]",
+                    observed_sessions
+                        .iter()
+                        .map(|session| session.device.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            [index] => {
+                reconciled.push(ReconciledDeviceSession {
+                    requested_device_id: requested.clone(),
+                    observed: observed_sessions[*index].clone(),
+                });
+                unmatched.retain(|candidate| candidate != index);
+            }
+            _ => {
+                return Err(anyhow!(
+                    "BrowserStack requested device matched multiple observed sessions: {requested}; candidates [{}]",
+                    candidates
+                        .iter()
+                        .map(|index| observed_sessions[*index].device.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
+
+    if !unmatched.is_empty() {
+        return Err(anyhow!(
+            "BrowserStack returned unexpected observed sessions: [{}]",
+            unmatched
+                .iter()
+                .map(|index| observed_sessions[*index].device.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok(reconciled)
+}
+
+#[cfg(test)]
 fn provider_device_identifier(details: &SessionDetails) -> String {
     BrowserStackDevice {
         device: details.device.clone(),
@@ -249,7 +347,7 @@ pub(crate) fn completed_browserstack_collection(
             .expect("complete Provider Session has exactly one report");
         reports.push(BrowserStackCollectedReport {
             requested_device_id: assessment.device_id.clone(),
-            observed_device_id: assessment.device_id.clone(),
+            observed_device_id: report.observed_device_id.clone(),
             transport_session_id: assessment.session_id.clone(),
             benchmark: report.benchmark.clone(),
         });
@@ -397,9 +495,7 @@ impl ProviderAdapter for BrowserStackProviderAdapter {
         cancellation: &ProcessCancellation,
     ) -> std::result::Result<Self::Handle, Self::Error> {
         if cancellation.is_cancelled() {
-            return Err(BrowserStackAdapterError {
-                message: "BrowserStack start was cancelled".to_owned(),
-            });
+            return Err(anyhow!("BrowserStack start was cancelled").into());
         }
 
         match &request.artifacts {
@@ -409,9 +505,7 @@ impl ProviderAdapter for BrowserStackProviderAdapter {
                     .upload_espresso_app(app)
                     .map_err(BrowserStackAdapterError::from_anyhow)?;
                 if cancellation.is_cancelled() {
-                    return Err(BrowserStackAdapterError {
-                        message: "BrowserStack start was cancelled after app upload".to_owned(),
-                    });
+                    return Err(anyhow!("BrowserStack start was cancelled after app upload").into());
                 }
                 let test_upload = self
                     .client
@@ -439,9 +533,7 @@ impl ProviderAdapter for BrowserStackProviderAdapter {
                     .upload_xcuitest_app(app)
                     .map_err(BrowserStackAdapterError::from_anyhow)?;
                 if cancellation.is_cancelled() {
-                    return Err(BrowserStackAdapterError {
-                        message: "BrowserStack start was cancelled after app upload".to_owned(),
-                    });
+                    return Err(anyhow!("BrowserStack start was cancelled after app upload").into());
                 }
                 let test_upload = self
                     .client
@@ -1353,21 +1445,20 @@ impl BrowserStackClient {
             true,
             cancellation,
         )?;
-        let mut verified_sessions = build_status.devices.clone();
-        if let Some(requested_devices) = requested_devices {
-            for session in &mut verified_sessions {
-                let details = self
-                    .get_session_details(build_id, &session.session_id)
-                    .with_context(|| {
-                        format!(
-                            "fetching observed BrowserStack device identity for session {}",
-                            session.session_id
-                        )
-                    })?;
-                session.device = provider_device_identifier(&details);
+        let verified_sessions = match requested_devices {
+            Some(requested_devices) => {
+                reconcile_requested_device_sessions(requested_devices, &build_status.devices)?
             }
-            validate_requested_device_sessions(requested_devices, &verified_sessions)?;
-        }
+            None => build_status
+                .devices
+                .iter()
+                .cloned()
+                .map(|observed| ReconciledDeviceSession {
+                    requested_device_id: observed.device.clone(),
+                    observed,
+                })
+                .collect(),
+        };
 
         println!("Build completed with status: {}", build_status.status);
         println!(
@@ -1377,7 +1468,8 @@ impl BrowserStackClient {
 
         let mut collected_sessions = Vec::with_capacity(verified_sessions.len());
 
-        for device in &verified_sessions {
+        for reconciled in &verified_sessions {
+            let device = &reconciled.observed;
             if cancellation.is_cancelled() {
                 return Err(anyhow!("BrowserStack collection was cancelled"));
             }
@@ -1508,7 +1600,7 @@ impl BrowserStackClient {
             });
         }
 
-        Ok(browserstack_adapter_run(
+        Ok(browserstack_adapter_run_with_bindings(
             &verified_sessions,
             collected_sessions,
         ))
@@ -1950,8 +2042,27 @@ fn build_status_from_value(value: Value) -> Result<BuildStatus> {
             let device_name = entry
                 .get("device")
                 .and_then(|val| val.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+                .context("BrowserStack build device entry missing device name")?;
+            let observed_device_id = if parse_device_selector(device_name).is_some() {
+                device_name.to_owned()
+            } else {
+                let os_version = entry
+                    .get("os_version")
+                    .or_else(|| entry.get("osVersion"))
+                    .and_then(Value::as_str)
+                    .context("BrowserStack build device entry missing OS version")?;
+                BrowserStackDevice {
+                    device: device_name.to_owned(),
+                    os: entry
+                        .get("os")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                        .to_owned(),
+                    os_version: os_version.to_owned(),
+                    available: None,
+                }
+                .identifier()
+            };
             if let Some(sessions) = entry.get("sessions").and_then(|val| val.as_array()) {
                 for session in sessions {
                     let session_id = session
@@ -1966,7 +2077,7 @@ fn build_status_from_value(value: Value) -> Result<BuildStatus> {
                             .unwrap_or("unknown")
                             .to_string();
                         devices.push(DeviceSession {
-                            device: device_name.clone(),
+                            device: observed_device_id.clone(),
                             session_id: session_id.to_string(),
                             status: session_status,
                             device_logs: None,
@@ -2732,17 +2843,6 @@ mod tests {
                     }]
                 }),
             ),
-            ScriptedHttpResponse::json(
-                "/app-automate/builds/build-1/sessions/session-1",
-                json!({
-                    "automation_session": {
-                        "device": "Google Pixel 7",
-                        "os": "android",
-                        "os_version": "13.0",
-                        "duration": 201
-                    }
-                }),
-            ),
             ScriptedHttpResponse::text(
                 "/app-automate/espresso/v2/builds/build-1/sessions/session-1/devicelogs",
                 r#"{"function":"crate::bench","samples":[1,2,3]}"#,
@@ -2779,6 +2879,10 @@ mod tests {
         assert_eq!(
             run.sessions()[0].reports[0].benchmark["function"],
             "crate::bench"
+        );
+        assert_eq!(
+            run.sessions()[0].reports[0].observed_device_id,
+            "Google Pixel 7-13.0"
         );
     }
 
@@ -2840,14 +2944,70 @@ mod tests {
             },
         ];
 
-        let error = validate_requested_device_sessions(&requested, &observed)
+        let error = reconcile_requested_device_sessions(&requested, &observed)
             .expect_err("provider must reject a drifted device matrix");
 
-        assert!(error.to_string().contains("iPhone 14-16 (1 missing)"));
+        assert!(error.to_string().contains("iPhone 14-16"));
+        assert!(error.to_string().contains("Samsung Galaxy S23-13.0"));
+    }
+
+    #[test]
+    fn browserstack_major_version_selector_preserves_requested_and_observed_identity() {
+        let requested = vec!["iPhone 14-16".to_owned()];
+        let observed = vec![DeviceSession {
+            device: "iPhone 14-16.6".to_owned(),
+            session_id: "session-1".to_owned(),
+            status: "passed".to_owned(),
+            device_logs: None,
+        }];
+
+        let reconciled = reconcile_requested_device_sessions(&requested, &observed)
+            .expect("major selectors should accept a provider minor version");
+
+        assert_eq!(reconciled.len(), 1);
+        assert_eq!(reconciled[0].requested_device_id, "iPhone 14-16");
+        assert_eq!(reconciled[0].observed.device, "iPhone 14-16.6");
+    }
+
+    #[test]
+    fn browserstack_minor_version_selector_requires_an_exact_version() {
+        let requested = vec!["iPhone 14-16.0".to_owned()];
+        let observed = vec![DeviceSession {
+            device: "iPhone 14-16.6".to_owned(),
+            session_id: "session-1".to_owned(),
+            status: "passed".to_owned(),
+            device_logs: None,
+        }];
+
+        let error = reconcile_requested_device_sessions(&requested, &observed)
+            .expect_err("minor selectors must not float to another provider version");
+        assert!(error.to_string().contains("no compatible observed session"));
+    }
+
+    #[test]
+    fn browserstack_selector_reconciliation_rejects_ambiguous_observed_sessions() {
+        let requested = vec!["iPhone 14-16".to_owned()];
+        let observed = vec![
+            DeviceSession {
+                device: "iPhone 14-16.5".to_owned(),
+                session_id: "session-1".to_owned(),
+                status: "passed".to_owned(),
+                device_logs: None,
+            },
+            DeviceSession {
+                device: "iPhone 14-16.6".to_owned(),
+                session_id: "session-2".to_owned(),
+                status: "passed".to_owned(),
+                device_logs: None,
+            },
+        ];
+
+        let error = reconcile_requested_device_sessions(&requested, &observed)
+            .expect_err("floating selectors must reject ambiguous provider matches");
         assert!(
             error
                 .to_string()
-                .contains("Samsung Galaxy S23-13.0 (1 unexpected)")
+                .contains("matched multiple observed sessions")
         );
     }
 
@@ -3221,6 +3381,43 @@ Test completed
         assert_eq!(status.build_id, "test456");
         assert_eq!(status.status, "running");
         assert_eq!(status.devices.len(), 0);
+    }
+
+    #[test]
+    fn live_espresso_build_fixture_preserves_observed_device_identity() {
+        let value: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/browserstack/espresso-build-passed.json"
+        ))
+        .expect("valid captured Espresso build fixture");
+
+        let status = build_status_from_value(value).expect("parse Espresso build fixture");
+
+        assert_eq!(status.devices.len(), 1);
+        assert_eq!(status.devices[0].device, "Google Pixel 7-13.0");
+        assert_eq!(
+            status.devices[0].session_id,
+            "d7cee5734ae754a811beb3aacc1baba30e810232"
+        );
+    }
+
+    #[test]
+    fn live_xcuitest_build_fixture_reconciles_major_selector_with_observed_minor() {
+        let value: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/browserstack/xcuitest-build-passed.json"
+        ))
+        .expect("valid captured XCUITest build fixture");
+        let status = build_status_from_value(value).expect("parse XCUITest build fixture");
+
+        let reconciled =
+            reconcile_requested_device_sessions(&["iPhone 14-16".to_owned()], &status.devices)
+                .expect("reconcile captured XCUITest build fixture");
+
+        assert_eq!(reconciled[0].requested_device_id, "iPhone 14-16");
+        assert_eq!(reconciled[0].observed.device, "iPhone 14-16.6");
+        assert_eq!(
+            reconciled[0].observed.session_id,
+            "916636d2022ee39a8598ed338354af2bcd6c806f"
+        );
     }
 
     #[test]

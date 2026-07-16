@@ -1,0 +1,23 @@
+{
+  "id": "45ee4e2a2244e3df90eaa69c093dd67d3d9cd211",
+  "status": "passed",
+  "duration": 144,
+  "framework": "xcuitest",
+  "devices": [
+    {
+      "device": "iPhone 14",
+      "os": "ios",
+      "os_version": "16.6",
+      "sessions": [
+        {
+          "id": "916636d2022ee39a8598ed338354af2bcd6c806f",
+          "status": "passed",
+          "duration": 29
+        }
+      ]
+    }
+  ],
+  "input_capabilities": {
+    "devices": ["iPhone 14-16"]
+  }
+}

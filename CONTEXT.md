@@ -30,3 +30,9 @@
   host harness and returns real samples without a remote device farm.
 - **BrowserStack Provider** — the provider that uploads mobile artifacts,
   schedules remote device sessions, and collects their reports and telemetry.
+- **Requested Device Identity** — the exact selector committed in the Resolved
+  Run Plan. It remains stable even when a provider chooses a compatible minor
+  OS release.
+- **Observed Device Identity** — the device name and OS version authenticated by
+  the provider's terminal build response. It is preserved alongside, never
+  substituted for, the Requested Device Identity.
