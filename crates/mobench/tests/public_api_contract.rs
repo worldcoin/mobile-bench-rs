@@ -7,6 +7,7 @@ use mobench::{
     DeviceSelection, ExtractedBenchmarkResult, MobileTarget, Report, RunRequest, RunResult,
 };
 use serde::Deserialize;
+use std::path::Path;
 
 const BASELINE: &str = include_str!("fixtures/contracts/v0.1.43/baseline.json");
 const HOST_PERFORMANCE: &str = include_str!("fixtures/contracts/v0.1.43/host-performance.json");
@@ -192,4 +193,78 @@ fn adr_000_finding_map_is_complete_and_traceable() {
         assert_eq!(finding.first_passing_phase, 1);
         assert!(!finding.removal_gate.trim().is_empty());
     }
+}
+
+fn collect_workflow_files(root: &Path, files: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(root).expect("read workflow directory") {
+        let entry = entry.expect("read workflow entry");
+        let path = entry.path();
+        if path.is_dir() {
+            collect_workflow_files(&path, files);
+        } else if matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("yml" | "yaml")
+        ) {
+            files.push(path);
+        }
+    }
+}
+
+#[test]
+fn external_github_actions_and_gradle_distribution_are_immutable() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut workflows = Vec::new();
+    collect_workflow_files(&workspace.join(".github"), &mut workflows);
+    assert!(!workflows.is_empty());
+
+    for path in workflows {
+        let contents = std::fs::read_to_string(&path).expect("read workflow file");
+        for line in contents.lines() {
+            let Some(reference) = line.trim().strip_prefix("uses: ") else {
+                continue;
+            };
+            if reference.starts_with("./") {
+                continue;
+            }
+            let (action, revision) = reference.split_once('@').unwrap_or_else(|| {
+                panic!(
+                    "external action has no revision in {}: {line}",
+                    path.display()
+                )
+            });
+            let revision = revision.split_whitespace().next().unwrap_or_default();
+            assert!(
+                action.contains('/'),
+                "invalid action reference in {}: {line}",
+                path.display()
+            );
+            assert_eq!(
+                revision.len(),
+                40,
+                "external action is not pinned to a commit in {}: {line}",
+                path.display()
+            );
+            assert!(
+                revision
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit()),
+                "external action revision is not hexadecimal in {}: {line}",
+                path.display()
+            );
+        }
+    }
+
+    let wrapper =
+        std::fs::read_to_string(workspace.join("android/gradle/wrapper/gradle-wrapper.properties"))
+            .expect("read Gradle wrapper properties");
+    let checksum = wrapper
+        .lines()
+        .find_map(|line| line.strip_prefix("distributionSha256Sum="))
+        .expect("Gradle distribution checksum must be pinned");
+    assert_eq!(checksum.len(), 64);
+    assert!(
+        checksum
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
 }

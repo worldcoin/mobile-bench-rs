@@ -17,15 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: clippy, rustfmt
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -34,13 +34,17 @@ jobs:
         run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
+        uses: taiki-e/install-action@afc483d62172accfff644fa56e82b4dab50727fc # cargo-deny
+        with:
+          tool: cargo-deny
 
       - name: Dependency policy
         run: cargo deny check advisories bans licenses sources
 
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@cargo-semver-checks
+        uses: taiki-e/install-action@77f7de69a88565bdcf254b89775fc9b4d7e6e1d2 # cargo-semver-checks
+        with:
+          tool: cargo-semver-checks
 
       - name: Public API compatibility
         run: |
