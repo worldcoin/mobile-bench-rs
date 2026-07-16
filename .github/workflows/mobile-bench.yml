@@ -23,6 +23,6 @@ jobs:
       device_profile: smoke
       iterations: "1"
       warmup: "0"
-      mobench_ref: 53f37ec80b9e35fdd2f947e2691b8260f218853b
+      mobench_ref: 255c891da168743b5d234021552029e8a258bf54
       head_sha: bb36bc058eceafc44ddee1477c0fc5833b6402b3
       requested_by: codex-manual-validation
