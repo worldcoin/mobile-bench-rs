@@ -19,6 +19,22 @@ on:
         description: "Number of warmup iterations"
         type: string
         default: "1"
+      ios_device:
+        description: "BrowserStack iOS device name"
+        type: string
+        default: "iPhone 14"
+      ios_os_version:
+        description: "BrowserStack iOS OS version"
+        type: string
+        default: "16"
+      android_device:
+        description: "BrowserStack Android device name"
+        type: string
+        default: "Google Pixel 7"
+      android_os_version:
+        description: "BrowserStack Android OS version"
+        type: string
+        default: "13.0"
       mobench_version:
         description: "Mobench version to install from crates.io when mobench_ref is unset"
         type: string
@@ -42,7 +58,11 @@ jobs:
       platform: ${{ inputs.platform }}
       iterations: ${{ inputs.iterations }}
       warmup: ${{ inputs.warmup }}
-      device_profile: low-spec
+      device_profile: custom
+      ios_device: ${{ inputs.ios_device }}
+      ios_os_version: ${{ inputs.ios_os_version }}
+      android_device: ${{ inputs.android_device }}
+      android_os_version: ${{ inputs.android_os_version }}
       build_release: true
       mobench_version: ${{ inputs.mobench_version }}
       mobench_ref: ${{ inputs.mobench_ref }}
