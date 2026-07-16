@@ -1,0 +1,99 @@
+name: BrowserStack Artifact Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "BrowserStack runner platform"
+        required: true
+        type: choice
+        options:
+          - android
+          - ios
+      build_id:
+        description: "Existing BrowserStack build ID"
+        required: true
+        type: string
+      timeout_secs:
+        description: "Bounded wait for terminal build state"
+        required: false
+        type: string
+        default: "900"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browserstack-recover-${{ inputs.build_id }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Recover ${{ inputs.platform }} build ${{ inputs.build_id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: browserstack
+    env:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+    steps:
+      - name: Validate recovery request
+        shell: bash
+        env:
+          BUILD_ID: ${{ inputs.build_id }}
+          TIMEOUT_SECS: ${{ inputs.timeout_secs }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$BUILD_ID" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "build_id must be a 40-character lowercase hexadecimal BrowserStack ID" >&2
+            exit 2
+          fi
+          if ! [[ "$TIMEOUT_SECS" =~ ^[0-9]+$ ]] || (( TIMEOUT_SECS < 1 || TIMEOUT_SECS > 3600 )); then
+            echo "timeout_secs must be an integer from 1 through 3600" >&2
+            exit 2
+          fi
+
+      - name: Checkout recovery implementation
+        uses: actions/checkout@v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo inputs
+        uses: actions/cache@v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-browserstack-recover-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-browserstack-recover-
+
+      - name: Build Mobench recovery CLI
+        run: cargo build --locked --release -p mobench --bin mobench
+
+      - name: Resume and fetch existing build
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          BUILD_ID: ${{ inputs.build_id }}
+          TIMEOUT_SECS: ${{ inputs.timeout_secs }}
+        run: |
+          set -euo pipefail
+          target/release/mobench fetch \
+            --target "$PLATFORM" \
+            --build-id "$BUILD_ID" \
+            --output-dir target/browserstack-recovery \
+            --wait \
+            --poll-interval-secs 5 \
+            --timeout-secs "$TIMEOUT_SECS"
+
+      - name: Upload recovered evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browserstack-${{ inputs.platform }}-${{ inputs.build_id }}
+          path: target/browserstack-recovery/${{ inputs.build_id }}/
+          if-no-files-found: warn
+          retention-days: 14
