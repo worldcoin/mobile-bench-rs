@@ -11,6 +11,13 @@ use std::fmt;
 
 use thiserror::Error;
 
+mod execution;
+
+pub use execution::{
+    AdapterRun, CollectedOutput, ExecutionStage, ProviderAdapter, ProviderEngine,
+    ProviderExecutionError, ProviderRun, StartedRun,
+};
+
 /// Terminal result of reconciling a requested provider matrix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MatrixOutcome {

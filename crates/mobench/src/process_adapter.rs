@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use mobench_process::{
-    DeclaredExecutable, EnvironmentPolicy, OutputStreamPolicy, ProcessLimits, ProcessOutcome,
-    ProcessRunner, ProcessSpec, StdinPolicy, WorkingDirectoryPolicy,
+    DeclaredExecutable, EnvironmentPolicy, OutputStreamPolicy, ProcessCancellation, ProcessLimits,
+    ProcessOutcome, ProcessRunner, ProcessSpec, StdinPolicy, WorkingDirectoryPolicy,
 };
 
 pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -112,6 +112,18 @@ impl ToolCommand {
         Ok(outcome)
     }
 
+    pub(crate) fn run_cancellable(
+        &self,
+        cancellation: &ProcessCancellation,
+    ) -> Result<ProcessOutcome> {
+        let outcome = ProcessRunner::run_cancellable(&self.spec(), cancellation)
+            .with_context(|| format!("running external tool {}", self.program().display()))?;
+        if outcome.cancelled {
+            bail!("external tool {} was interrupted", self.program().display());
+        }
+        Ok(outcome)
+    }
+
     pub(crate) fn output(&self) -> Result<Output> {
         self.run()?.into_complete_output().with_context(|| {
             format!(
@@ -119,6 +131,17 @@ impl ToolCommand {
                 self.program().display()
             )
         })
+    }
+
+    pub(crate) fn output_cancellable(&self, cancellation: &ProcessCancellation) -> Result<Output> {
+        self.run_cancellable(cancellation)?
+            .into_complete_output()
+            .with_context(|| {
+                format!(
+                    "capturing complete output from {}",
+                    self.program().display()
+                )
+            })
     }
 
     pub(crate) fn program(&self) -> &Path {

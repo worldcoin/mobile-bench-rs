@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow};
+use mobench_process::ProcessCancellation;
 use mobench_provider::{
-    CollectedSession as ProviderCollectedSession, ExpectedSession as ProviderExpectedSession,
-    reconcile_sessions,
+    AdapterRun, CollectedOutput, ExpectedSession as ProviderExpectedSession, ProviderAdapter,
+    ProviderRun,
 };
 use mobench_runtime::Distribution;
 use reqwest::Url;
@@ -9,10 +10,74 @@ use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
 type BrowserStackResults = (
     std::collections::HashMap<String, Vec<Value>>,
     std::collections::HashMap<String, PerformanceMetrics>,
 );
+
+/// BrowserStack transport selected for one Provider Run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BrowserStackPlatform {
+    Espresso,
+    XcuiTest,
+}
+
+impl BrowserStackPlatform {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Espresso => "espresso",
+            Self::XcuiTest => "xcuitest",
+        }
+    }
+}
+
+/// Provider-specific artifacts required to start a BrowserStack run.
+#[derive(Clone, Debug)]
+pub(crate) enum BrowserStackArtifacts {
+    Espresso { app: PathBuf, test_suite: PathBuf },
+    XcuiTest { app: PathBuf, test_suite: PathBuf },
+}
+
+/// Resolved request accepted by the BrowserStack Adapter.
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserStackRunRequest {
+    pub(crate) devices: Vec<String>,
+    pub(crate) artifacts: BrowserStackArtifacts,
+}
+
+/// Durable BrowserStack build handle used by delayed collection.
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserStackRunHandle {
+    pub(crate) platform: BrowserStackPlatform,
+    pub(crate) requested_devices: Vec<String>,
+    pub(crate) app_url: String,
+    pub(crate) test_suite_url: Option<String>,
+    pub(crate) build_id: String,
+}
+
+/// One benchmark report and the telemetry attributed to its Provider Session.
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserStackReport {
+    pub(crate) benchmark: Value,
+    pub(crate) performance_metrics: PerformanceMetrics,
+}
+
+#[derive(Debug, Error)]
+#[error("{message}")]
+pub(crate) struct BrowserStackAdapterError {
+    message: String,
+}
+
+impl BrowserStackAdapterError {
+    fn from_anyhow(error: anyhow::Error) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct CollectedBrowserStackSession {
@@ -41,54 +106,125 @@ fn browserstack_failure_diagnostic(failures: &[Value]) -> Option<String> {
     ))
 }
 
+#[cfg(test)]
 fn classify_browserstack_result_completeness(
     expected_sessions: &[DeviceSession],
     collected_sessions: Vec<CollectedBrowserStackSession>,
 ) -> Result<BrowserStackResults> {
-    let expected = expected_sessions
-        .iter()
-        .map(|session| ProviderExpectedSession {
-            session_id: session.session_id.clone(),
-            device_id: session.device.clone(),
-            status: session.status.clone(),
-        })
-        .collect::<Vec<_>>();
-    let collected = collected_sessions
-        .iter()
-        .map(|session| ProviderCollectedSession {
-            session_id: session.session_id.clone(),
-            report_count: session.benchmark_results.len(),
-            failure: browserstack_failure_diagnostic(&session.benchmark_failures),
-        })
-        .collect::<Vec<_>>();
-    let assessment = reconcile_sessions(&expected, &collected)
+    let run = browserstack_adapter_run(expected_sessions, collected_sessions)
+        .reconcile()
         .map_err(|error| anyhow!("BrowserStack result set is ambiguous; {error}"))?;
-    if !assessment.is_complete() {
+    completed_browserstack_results(run)
+}
+
+fn browserstack_adapter_run(
+    expected_sessions: &[DeviceSession],
+    collected_sessions: Vec<CollectedBrowserStackSession>,
+) -> AdapterRun<BrowserStackReport> {
+    AdapterRun {
+        expected: expected_sessions
+            .iter()
+            .map(|session| ProviderExpectedSession {
+                session_id: session.session_id.clone(),
+                device_id: session.device.clone(),
+                status: session.status.clone(),
+            })
+            .collect(),
+        collected: collected_sessions
+            .into_iter()
+            .map(|session| CollectedOutput {
+                session_id: session.session_id,
+                reports: session
+                    .benchmark_results
+                    .into_iter()
+                    .map(|benchmark| BrowserStackReport {
+                        benchmark,
+                        performance_metrics: session.performance_metrics.clone(),
+                    })
+                    .collect(),
+                failure: browserstack_failure_diagnostic(&session.benchmark_failures),
+            })
+            .collect(),
+    }
+}
+
+fn validate_requested_device_sessions(
+    requested_devices: &[String],
+    observed_sessions: &[DeviceSession],
+) -> Result<()> {
+    let mut requested = std::collections::BTreeMap::<&str, usize>::new();
+    for device in requested_devices {
+        *requested.entry(device.as_str()).or_default() += 1;
+    }
+    let mut observed = std::collections::BTreeMap::<&str, usize>::new();
+    for session in observed_sessions {
+        *observed.entry(session.device.as_str()).or_default() += 1;
+    }
+    if requested == observed {
+        return Ok(());
+    }
+
+    let missing = requested
+        .iter()
+        .filter_map(|(device, requested_count)| {
+            let observed_count = observed.get(device).copied().unwrap_or_default();
+            (*requested_count > observed_count)
+                .then(|| format!("{device} ({} missing)", *requested_count - observed_count))
+        })
+        .collect::<Vec<_>>();
+    let unexpected = observed
+        .iter()
+        .filter_map(|(device, observed_count)| {
+            let requested_count = requested.get(device).copied().unwrap_or_default();
+            (*observed_count > requested_count).then(|| {
+                format!(
+                    "{device} ({} unexpected)",
+                    *observed_count - requested_count
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Err(anyhow!(
+        "BrowserStack device matrix did not match the scheduled request; missing [{}]; unexpected [{}]",
+        missing.join(", "),
+        unexpected.join(", ")
+    ))
+}
+
+pub(crate) fn completed_browserstack_results(
+    run: ProviderRun<BrowserStackReport>,
+) -> Result<BrowserStackResults> {
+    if !run.assessment().is_complete() {
         return Err(anyhow!(
-            "BrowserStack result set is incomplete; {assessment}"
+            "BrowserStack result set is incomplete; {}",
+            run.assessment()
         ));
     }
 
-    let mut collected_by_session = collected_sessions
-        .into_iter()
-        .map(|session| (session.session_id.clone(), session))
-        .collect::<std::collections::HashMap<_, _>>();
     let mut benchmark_results = std::collections::HashMap::new();
     let mut performance_metrics = std::collections::HashMap::new();
-    for expected in expected_sessions {
-        let collected = collected_by_session
-            .remove(&expected.session_id)
-            .expect("all expected sessions were checked above");
-        benchmark_results.insert(expected.device.clone(), collected.benchmark_results);
-        if collected.performance_metrics.sample_count > 0 {
-            performance_metrics.insert(expected.device.clone(), collected.performance_metrics);
+    for (assessment, collected) in run
+        .assessment()
+        .sessions()
+        .iter()
+        .zip(run.sessions().iter())
+    {
+        let report = collected
+            .reports
+            .first()
+            .expect("complete Provider Session has exactly one report");
+        benchmark_results.insert(assessment.device_id.clone(), vec![report.benchmark.clone()]);
+        if report.performance_metrics.sample_count > 0 {
+            performance_metrics.insert(
+                assessment.device_id.clone(),
+                report.performance_metrics.clone(),
+            );
         }
     }
 
     Ok((benchmark_results, performance_metrics))
 }
-
-use std::path::Path;
 use std::time::Instant;
 
 /// Format a file size in human-readable format (MB or KB).
@@ -105,6 +241,21 @@ fn format_file_size(bytes: u64) -> String {
 /// Get file size from path, returning 0 if unable to read metadata.
 fn get_file_size(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+fn sleep_cancellable(
+    duration: std::time::Duration,
+    cancellation: &ProcessCancellation,
+) -> Result<()> {
+    let started = Instant::now();
+    while started.elapsed() < duration {
+        if cancellation.is_cancelled() {
+            return Err(anyhow!("BrowserStack collection was cancelled"));
+        }
+        let remaining = duration.saturating_sub(started.elapsed());
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
+    }
+    Ok(())
 }
 
 /// A device available on BrowserStack for testing.
@@ -166,6 +317,138 @@ pub struct BrowserStackClient {
     auth: BrowserStackAuth,
     base_url: String,
     project: Option<String>,
+}
+
+/// BrowserStack Adapter at the provider Seam.
+#[derive(Debug, Clone)]
+pub(crate) struct BrowserStackProviderAdapter {
+    client: BrowserStackClient,
+    timeout_secs: u64,
+    poll_interval_secs: u64,
+}
+
+impl BrowserStackProviderAdapter {
+    pub(crate) const fn new(
+        client: BrowserStackClient,
+        timeout_secs: u64,
+        poll_interval_secs: u64,
+    ) -> Self {
+        Self {
+            client,
+            timeout_secs,
+            poll_interval_secs,
+        }
+    }
+}
+
+impl ProviderAdapter for BrowserStackProviderAdapter {
+    type Request = BrowserStackRunRequest;
+    type Handle = BrowserStackRunHandle;
+    type Report = BrowserStackReport;
+    type Error = BrowserStackAdapterError;
+
+    fn start(
+        &self,
+        request: &Self::Request,
+        cancellation: &ProcessCancellation,
+    ) -> std::result::Result<Self::Handle, Self::Error> {
+        if cancellation.is_cancelled() {
+            return Err(BrowserStackAdapterError {
+                message: "BrowserStack start was cancelled".to_owned(),
+            });
+        }
+
+        match &request.artifacts {
+            BrowserStackArtifacts::Espresso { app, test_suite } => {
+                let app_upload = self
+                    .client
+                    .upload_espresso_app(app)
+                    .map_err(BrowserStackAdapterError::from_anyhow)?;
+                if cancellation.is_cancelled() {
+                    return Err(BrowserStackAdapterError {
+                        message: "BrowserStack start was cancelled after app upload".to_owned(),
+                    });
+                }
+                let test_upload = self
+                    .client
+                    .upload_espresso_test_suite(test_suite)
+                    .map_err(BrowserStackAdapterError::from_anyhow)?;
+                let run = self
+                    .client
+                    .schedule_espresso_run(
+                        &request.devices,
+                        &app_upload.app_url,
+                        &test_upload.test_suite_url,
+                    )
+                    .map_err(BrowserStackAdapterError::from_anyhow)?;
+                Ok(BrowserStackRunHandle {
+                    platform: BrowserStackPlatform::Espresso,
+                    requested_devices: request.devices.clone(),
+                    app_url: app_upload.app_url,
+                    test_suite_url: Some(test_upload.test_suite_url),
+                    build_id: run.build_id,
+                })
+            }
+            BrowserStackArtifacts::XcuiTest { app, test_suite } => {
+                let app_upload = self
+                    .client
+                    .upload_xcuitest_app(app)
+                    .map_err(BrowserStackAdapterError::from_anyhow)?;
+                if cancellation.is_cancelled() {
+                    return Err(BrowserStackAdapterError {
+                        message: "BrowserStack start was cancelled after app upload".to_owned(),
+                    });
+                }
+                let test_upload = self
+                    .client
+                    .upload_xcuitest_test_suite(test_suite)
+                    .map_err(BrowserStackAdapterError::from_anyhow)?;
+                let run = self
+                    .client
+                    .schedule_xcuitest_run(
+                        &request.devices,
+                        &app_upload.app_url,
+                        &test_upload.test_suite_url,
+                    )
+                    .map_err(BrowserStackAdapterError::from_anyhow)?;
+                Ok(BrowserStackRunHandle {
+                    platform: BrowserStackPlatform::XcuiTest,
+                    requested_devices: request.devices.clone(),
+                    app_url: app_upload.app_url,
+                    test_suite_url: Some(test_upload.test_suite_url),
+                    build_id: run.build_id,
+                })
+            }
+        }
+    }
+
+    fn collect(
+        &self,
+        handle: &Self::Handle,
+        cancellation: &ProcessCancellation,
+    ) -> std::result::Result<AdapterRun<Self::Report>, Self::Error> {
+        self.client
+            .wait_and_collect_adapter_run(
+                &handle.build_id,
+                handle.platform,
+                Some(&handle.requested_devices),
+                self.timeout_secs,
+                self.poll_interval_secs,
+                cancellation,
+            )
+            .map_err(BrowserStackAdapterError::from_anyhow)
+    }
+
+    fn cancel(
+        &self,
+        _handle: &Self::Handle,
+        _cancellation: &ProcessCancellation,
+    ) -> std::result::Result<(), Self::Error> {
+        // BrowserStack does not expose a stable cross-runner cancellation call
+        // in this Adapter yet. Cancellation stops local polling immediately;
+        // the remote build remains visible for later fetch and diagnostics.
+        Ok(())
+    }
 }
 
 impl BrowserStackClient {
@@ -527,6 +810,25 @@ impl BrowserStackClient {
         poll_interval_secs: u64,
         allow_terminal_failure_status: bool,
     ) -> Result<BuildStatus> {
+        self.poll_build_completion_cancellable(
+            build_id,
+            platform,
+            timeout_secs,
+            poll_interval_secs,
+            allow_terminal_failure_status,
+            &mobench_process::global_cancellation_token(),
+        )
+    }
+
+    fn poll_build_completion_cancellable(
+        &self,
+        build_id: &str,
+        platform: &str,
+        timeout_secs: u64,
+        poll_interval_secs: u64,
+        allow_terminal_failure_status: bool,
+        cancellation: &ProcessCancellation,
+    ) -> Result<BuildStatus> {
         use std::time::{Duration, Instant};
 
         let start = Instant::now();
@@ -534,6 +836,9 @@ impl BrowserStackClient {
         let poll_interval = Duration::from_secs(poll_interval_secs);
 
         loop {
+            if cancellation.is_cancelled() {
+                return Err(anyhow!("BrowserStack collection was cancelled"));
+            }
             let status = match platform {
                 "espresso" => self.get_espresso_build_status(build_id)?,
                 "xcuitest" => self.get_xcuitest_build_status(build_id)?,
@@ -561,7 +866,7 @@ impl BrowserStackClient {
                             timeout_secs
                         ));
                     }
-                    std::thread::sleep(poll_interval);
+                    sleep_cancellable(poll_interval, cancellation)?;
                 }
             }
         }
@@ -962,20 +1267,51 @@ impl BrowserStackClient {
         timeout_secs: Option<u64>,
         poll_interval_secs: Option<u64>,
     ) -> Result<BrowserStackResults> {
-        let timeout = timeout_secs.unwrap_or(300);
-        let poll_interval = poll_interval_secs.unwrap_or(5);
+        let platform = match platform {
+            "espresso" => BrowserStackPlatform::Espresso,
+            "xcuitest" => BrowserStackPlatform::XcuiTest,
+            _ => return Err(anyhow!("unsupported platform: {platform}")),
+        };
+        let run = self
+            .wait_and_collect_adapter_run(
+                build_id,
+                platform,
+                None,
+                timeout_secs.unwrap_or(300),
+                poll_interval_secs.unwrap_or(5),
+                &mobench_process::global_cancellation_token(),
+            )?
+            .reconcile()
+            .map_err(|error| anyhow!("BrowserStack result set is ambiguous; {error}"))?;
+        completed_browserstack_results(run)
+    }
+
+    fn wait_and_collect_adapter_run(
+        &self,
+        build_id: &str,
+        platform: BrowserStackPlatform,
+        requested_devices: Option<&[String]>,
+        timeout: u64,
+        poll_interval: u64,
+        cancellation: &ProcessCancellation,
+    ) -> Result<AdapterRun<BrowserStackReport>> {
+        let platform = platform.as_str();
 
         println!(
             "Waiting for build {} to complete (timeout: {}s, poll: {}s)...",
             build_id, timeout, poll_interval
         );
-        let build_status = self.poll_build_completion_with_terminal_failures(
+        let build_status = self.poll_build_completion_cancellable(
             build_id,
             platform,
             timeout,
             poll_interval,
             true,
+            cancellation,
         )?;
+        if let Some(requested_devices) = requested_devices {
+            validate_requested_device_sessions(requested_devices, &build_status.devices)?;
+        }
 
         println!("Build completed with status: {}", build_status.status);
         println!(
@@ -986,6 +1322,9 @@ impl BrowserStackClient {
         let mut collected_sessions = Vec::with_capacity(build_status.devices.len());
 
         for device in &build_status.devices {
+            if cancellation.is_cancelled() {
+                return Err(anyhow!("BrowserStack collection was cancelled"));
+            }
             println!(
                 "  Fetching logs for {} (session: {})...",
                 device.device, device.session_id
@@ -1113,7 +1452,10 @@ impl BrowserStackClient {
             });
         }
 
-        classify_browserstack_result_completeness(&build_status.devices, collected_sessions)
+        Ok(browserstack_adapter_run(
+            &build_status.devices,
+            collected_sessions,
+        ))
     }
 
     /// Fetch session details from BrowserStack API.
@@ -2166,6 +2508,280 @@ mod tests {
         });
 
         (format!("http://{addr}"), handle)
+    }
+
+    struct ScriptedHttpResponse {
+        path: &'static str,
+        status: &'static str,
+        content_type: &'static str,
+        body: String,
+    }
+
+    impl ScriptedHttpResponse {
+        fn json(path: &'static str, body: Value) -> Self {
+            Self {
+                path,
+                status: "200 OK",
+                content_type: "application/json",
+                body: body.to_string(),
+            }
+        }
+
+        fn text(path: &'static str, body: impl Into<String>) -> Self {
+            Self {
+                path,
+                status: "200 OK",
+                content_type: "text/plain",
+                body: body.into(),
+            }
+        }
+
+        fn not_found(path: &'static str) -> Self {
+            Self {
+                path,
+                status: "404 Not Found",
+                content_type: "application/json",
+                body: json!({"error": "not found"}).to_string(),
+            }
+        }
+    }
+
+    fn read_scripted_request(stream: &mut std::net::TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set request read timeout");
+        let mut request = Vec::new();
+        let mut header_end = None;
+        let mut content_length = 0usize;
+        loop {
+            let mut buffer = [0_u8; 4096];
+            let bytes_read = stream.read(&mut buffer).expect("read scripted request");
+            if bytes_read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..bytes_read]);
+            if header_end.is_none()
+                && let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                let end = index + 4;
+                let headers = String::from_utf8_lossy(&request[..end]);
+                content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or_default();
+                header_end = Some(end);
+            }
+            if header_end.is_some_and(|end| request.len() >= end + content_length) {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    fn spawn_browserstack_script_server(
+        responses: Vec<ScriptedHttpResponse>,
+    ) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind scripted test server");
+        let addr = listener.local_addr().expect("read scripted server address");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded_requests = Arc::clone(&requests);
+        let handle = thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept scripted request");
+                let request = read_scripted_request(&mut stream);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                assert_eq!(path, response.path, "unexpected scripted request");
+                recorded_requests.lock().unwrap().push(request);
+                let wire_response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.status,
+                    response.content_type,
+                    response.body.len(),
+                    response.body
+                );
+                stream
+                    .write_all(wire_response.as_bytes())
+                    .expect("write scripted response");
+            }
+        });
+        (format!("http://{addr}"), requests, handle)
+    }
+
+    #[test]
+    fn browserstack_adapter_start_maps_espresso_request_into_durable_handle() {
+        let responses = vec![
+            ScriptedHttpResponse::json(
+                "/app-automate/espresso/v2/app",
+                json!({"app_url": "bs://app-1"}),
+            ),
+            ScriptedHttpResponse::json(
+                "/app-automate/espresso/v2/test-suite",
+                json!({"test_suite_url": "bs://suite-1"}),
+            ),
+            ScriptedHttpResponse::json(
+                "/app-automate/espresso/v2/build",
+                json!({"build_id": "build-1"}),
+            ),
+        ];
+        let (base_url, requests, server) = spawn_browserstack_script_server(responses);
+        let workspace = tempfile::tempdir().expect("create artifact directory");
+        let app = workspace.path().join("app.apk");
+        let test_suite = workspace.path().join("test.apk");
+        std::fs::write(&app, b"app").expect("write app fixture");
+        std::fs::write(&test_suite, b"test").expect("write test fixture");
+        let adapter = BrowserStackProviderAdapter::new(test_client_with_base_url(base_url), 1, 0);
+        let engine = mobench_provider::ProviderEngine::new(adapter);
+        let request = BrowserStackRunRequest {
+            devices: vec!["Google Pixel 7-13.0".to_owned()],
+            artifacts: BrowserStackArtifacts::Espresso { app, test_suite },
+        };
+
+        let handle = engine
+            .start(&request, &ProcessCancellation::default())
+            .expect("start BrowserStack adapter")
+            .into_handle();
+        server.join().expect("join scripted server");
+
+        assert_eq!(handle.platform, BrowserStackPlatform::Espresso);
+        assert_eq!(handle.requested_devices, request.devices);
+        assert_eq!(handle.app_url, "bs://app-1");
+        assert_eq!(handle.test_suite_url.as_deref(), Some("bs://suite-1"));
+        assert_eq!(handle.build_id, "build-1");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[2].contains("Google Pixel 7-13.0"));
+    }
+
+    #[test]
+    fn browserstack_adapter_collect_resumes_a_durable_handle() {
+        let responses = vec![
+            ScriptedHttpResponse::json(
+                "/app-automate/espresso/v2/builds/build-1",
+                json!({
+                    "build_id": "build-1",
+                    "status": "done",
+                    "devices": [{
+                        "device": "Google Pixel 7-13.0",
+                        "session_id": "session-1",
+                        "status": "passed"
+                    }]
+                }),
+            ),
+            ScriptedHttpResponse::text(
+                "/app-automate/espresso/v2/builds/build-1/sessions/session-1/devicelogs",
+                r#"{"function":"crate::bench","samples":[1,2,3]}"#,
+            ),
+            ScriptedHttpResponse::not_found(
+                "/app-automate/builds/build-1/sessions/session-1/appprofiling/v2",
+            ),
+        ];
+        let (base_url, _requests, server) = spawn_browserstack_script_server(responses);
+        let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+            test_client_with_base_url(base_url),
+            1,
+            0,
+        ));
+        let handle = BrowserStackRunHandle {
+            platform: BrowserStackPlatform::Espresso,
+            requested_devices: vec!["Google Pixel 7-13.0".to_owned()],
+            app_url: "bs://app-1".to_owned(),
+            test_suite_url: Some("bs://suite-1".to_owned()),
+            build_id: "build-1".to_owned(),
+        };
+
+        let run = engine
+            .collect(
+                mobench_provider::StartedRun::from_handle(handle),
+                &ProcessCancellation::default(),
+            )
+            .expect("collect resumed BrowserStack run");
+        server.join().expect("join scripted server");
+
+        assert!(run.assessment().is_complete());
+        assert_eq!(run.sessions().len(), 1);
+        assert_eq!(run.sessions()[0].session_id, "session-1");
+        assert_eq!(
+            run.sessions()[0].reports[0].benchmark["function"],
+            "crate::bench"
+        );
+    }
+
+    #[test]
+    fn browserstack_adapter_cancels_during_poll_sleep() {
+        let responses = vec![ScriptedHttpResponse::json(
+            "/app-automate/espresso/v2/builds/build-1",
+            json!({"build_id": "build-1", "status": "running", "devices": []}),
+        )];
+        let (base_url, _requests, server) = spawn_browserstack_script_server(responses);
+        let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+            test_client_with_base_url(base_url),
+            30,
+            10,
+        ));
+        let handle = BrowserStackRunHandle {
+            platform: BrowserStackPlatform::Espresso,
+            requested_devices: vec!["Google Pixel 7-13.0".to_owned()],
+            app_url: "bs://app-1".to_owned(),
+            test_suite_url: Some("bs://suite-1".to_owned()),
+            build_id: "build-1".to_owned(),
+        };
+        let cancellation = ProcessCancellation::default();
+        let request_cancellation = cancellation.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            request_cancellation.cancel();
+        });
+        let started = Instant::now();
+
+        let error = engine
+            .collect(
+                mobench_provider::StartedRun::from_handle(handle),
+                &cancellation,
+            )
+            .expect_err("polling should be cancelled");
+        canceller.join().expect("join cancellation thread");
+        server.join().expect("join scripted server");
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn browserstack_adapter_rejects_requested_device_matrix_drift() {
+        let requested = vec!["Google Pixel 7-13.0".to_owned(), "iPhone 14-16".to_owned()];
+        let observed = vec![
+            DeviceSession {
+                device: "Google Pixel 7-13.0".to_owned(),
+                session_id: "session-1".to_owned(),
+                status: "passed".to_owned(),
+                device_logs: None,
+            },
+            DeviceSession {
+                device: "Samsung Galaxy S23-13.0".to_owned(),
+                session_id: "session-2".to_owned(),
+                status: "passed".to_owned(),
+                device_logs: None,
+            },
+        ];
+
+        let error = validate_requested_device_sessions(&requested, &observed)
+            .expect_err("provider must reject a drifted device matrix");
+
+        assert!(error.to_string().contains("iPhone 14-16 (1 missing)"));
+        assert!(
+            error
+                .to_string()
+                .contains("Samsung Galaxy S23-13.0 (1 unexpected)")
+        );
     }
 
     #[test]

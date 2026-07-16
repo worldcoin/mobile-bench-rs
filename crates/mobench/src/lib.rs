@@ -146,7 +146,11 @@ use time::format_description::well_known::Rfc3339;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
-use browserstack::{BrowserStackAuth, BrowserStackClient};
+use browserstack::{
+    BrowserStackArtifacts, BrowserStackAuth, BrowserStackClient, BrowserStackPlatform,
+    BrowserStackProviderAdapter, BrowserStackRunHandle, BrowserStackRunRequest,
+    completed_browserstack_results,
+};
 #[cfg(test)]
 pub(crate) use cli::CiTarget;
 pub use cli::MobileTarget;
@@ -166,6 +170,7 @@ pub(crate) use doctor::{
     PrereqCheck, cmd_check, cmd_config_validate, cmd_doctor, collect_issues,
     print_check_results_json, print_check_results_text,
 };
+use local_provider::{LocalProviderAdapter, LocalRunRequest};
 use process_adapter::ToolCommand;
 
 mod browserstack;
@@ -174,6 +179,7 @@ pub mod config;
 mod doctor;
 mod flamegraph_viewer;
 mod github;
+mod local_provider;
 mod plots;
 mod process_adapter;
 mod profile;
@@ -711,15 +717,47 @@ pub fn run() -> Result<()> {
                 persist_mobile_spec(&layout, &spec, release)?;
             }
 
-            // Skip local smoke test - sample-fns uses direct dispatch, not inventory registry
-            // Benchmarks will run on the actual mobile device
-            if !progress {
-                println!("Skipping local smoke test - benchmarks will run on mobile device");
-            }
-            let local_report = json!({
-                "skipped": true,
-                "reason": "Local smoke test disabled - benchmarks run on mobile device only"
-            });
+            let local_report = if local_only && !cli.dry_run {
+                if progress {
+                    println!("[2/4] Running benchmark through local provider...");
+                } else {
+                    println!("Running host benchmark through local provider...");
+                }
+                let engine =
+                    mobench_provider::ProviderEngine::new(LocalProviderAdapter::new(&layout));
+                let request = LocalRunRequest {
+                    function: spec.function.clone(),
+                    iterations: spec.iterations,
+                    warmup: spec.warmup,
+                    release,
+                };
+                let run = engine
+                    .execute(&request, &mobench_process::global_cancellation_token())
+                    .map_err(|error| anyhow!("local provider failed: {error}"))?;
+                if !run.assessment().is_complete() {
+                    bail!(
+                        "local provider returned an incomplete run: {}",
+                        run.assessment()
+                    );
+                }
+                run.sessions()
+                    .first()
+                    .and_then(|session| session.reports.first())
+                    .cloned()
+                    .context("local provider completed without one benchmark report")?
+            } else {
+                if !progress && !local_only {
+                    println!("Skipping host benchmark - benchmarks will run on mobile devices");
+                }
+                json!({
+                    "skipped": true,
+                    "reason": if cli.dry_run {
+                        "Local provider skipped during dry-run"
+                    } else {
+                        "Host benchmark disabled - benchmarks run on mobile devices"
+                    }
+                })
+            };
             let mut remote_run = None;
             let artifacts = if local_only {
                 if !progress {
@@ -870,9 +908,25 @@ pub fn run() -> Result<()> {
                     creds.project,
                 )?;
 
-                let platform = match run_summary.spec.target {
-                    MobileTarget::Android => "espresso",
-                    MobileTarget::Ios => "xcuitest",
+                let provider_handle = match remote {
+                    RemoteRun::Android { app_url, build_id } => BrowserStackRunHandle {
+                        platform: BrowserStackPlatform::Espresso,
+                        requested_devices: run_summary.spec.devices.clone(),
+                        app_url: app_url.clone(),
+                        test_suite_url: None,
+                        build_id: build_id.clone(),
+                    },
+                    RemoteRun::Ios {
+                        app_url,
+                        test_suite_url,
+                        build_id,
+                    } => BrowserStackRunHandle {
+                        platform: BrowserStackPlatform::XcuiTest,
+                        requested_devices: run_summary.spec.devices.clone(),
+                        app_url: app_url.clone(),
+                        test_suite_url: Some(test_suite_url.clone()),
+                        build_id: build_id.clone(),
+                    },
                 };
 
                 let dashboard_url = format!(
@@ -884,12 +938,20 @@ pub fn run() -> Result<()> {
                 println!("Dashboard: {}", dashboard_url);
 
                 let mut browserstack_artifacts_fetched = false;
-                match client.wait_and_fetch_all_results_with_poll(
-                    build_id,
-                    platform,
-                    Some(fetch_timeout_secs),
-                    Some(fetch_poll_interval_secs),
-                ) {
+                let provider =
+                    mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+                        client.clone(),
+                        fetch_timeout_secs,
+                        fetch_poll_interval_secs,
+                    ));
+                let provider_result = provider
+                    .collect(
+                        mobench_provider::StartedRun::from_handle(provider_handle),
+                        &mobench_process::global_cancellation_token(),
+                    )
+                    .map_err(|error| anyhow!("BrowserStack provider failed to collect: {error}"))
+                    .and_then(completed_browserstack_results);
+                match provider_result {
                     Ok((bench_results, perf_metrics)) => {
                         println!(
                             "\n✓ Successfully fetched results from {} device(s)",
@@ -3870,18 +3932,19 @@ fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path, test_apk: &Path) ->
         creds.project.clone(),
     )?;
 
-    // Upload the app-under-test APK.
-    let upload = client.upload_espresso_app(apk)?;
-
-    // Upload the Espresso test-suite APK produced by Gradle.
-    let test_upload = client.upload_espresso_test_suite(test_apk)?;
-
-    // Schedule the Espresso build with both app and testSuite, as required by BrowserStack.
-    let run = client.schedule_espresso_run(
-        &spec.devices,
-        &upload.app_url,
-        &test_upload.test_suite_url,
-    )?;
+    let engine =
+        mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(client, 300, 5));
+    let request = BrowserStackRunRequest {
+        devices: spec.devices.clone(),
+        artifacts: BrowserStackArtifacts::Espresso {
+            app: apk.to_path_buf(),
+            test_suite: test_apk.to_path_buf(),
+        },
+    };
+    let run = engine
+        .start(&request, &mobench_process::global_cancellation_token())
+        .map_err(|error| anyhow!("BrowserStack provider failed to start: {error}"))?
+        .into_handle();
 
     // Print dashboard link early so users can monitor progress
     println!();
@@ -3896,7 +3959,7 @@ fn trigger_browserstack_espresso(spec: &RunSpec, apk: &Path, test_apk: &Path) ->
     println!("Waiting for results...");
 
     Ok(RemoteRun::Android {
-        app_url: upload.app_url,
+        app_url: run.app_url,
         build_id: run.build_id,
     })
 }
@@ -3917,13 +3980,19 @@ fn trigger_browserstack_xcuitest(
         creds.project.clone(),
     )?;
 
-    let app_upload = client.upload_xcuitest_app(&artifacts.app)?;
-    let test_upload = client.upload_xcuitest_test_suite(&artifacts.test_suite)?;
-    let run = client.schedule_xcuitest_run(
-        &spec.devices,
-        &app_upload.app_url,
-        &test_upload.test_suite_url,
-    )?;
+    let engine =
+        mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(client, 300, 5));
+    let request = BrowserStackRunRequest {
+        devices: spec.devices.clone(),
+        artifacts: BrowserStackArtifacts::XcuiTest {
+            app: artifacts.app.clone(),
+            test_suite: artifacts.test_suite.clone(),
+        },
+    };
+    let run = engine
+        .start(&request, &mobench_process::global_cancellation_token())
+        .map_err(|error| anyhow!("BrowserStack provider failed to start: {error}"))?
+        .into_handle();
 
     // Print dashboard link early so users can monitor progress
     println!();
@@ -3938,8 +4007,10 @@ fn trigger_browserstack_xcuitest(
     println!("Waiting for results...");
 
     Ok(RemoteRun::Ios {
-        app_url: app_upload.app_url,
-        test_suite_url: test_upload.test_suite_url,
+        app_url: run.app_url,
+        test_suite_url: run
+            .test_suite_url
+            .context("BrowserStack XCUITest start omitted the test-suite URL")?,
         build_id: run.build_id,
     })
 }

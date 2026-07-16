@@ -1336,6 +1336,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tempfile",
+ "thiserror 1.0.69",
  "time",
  "toml 0.8.23",
  "tracing",
@@ -1390,6 +1391,7 @@ dependencies = [
 name = "mobench-provider"
 version = "0.1.43"
 dependencies = [
+ "mobench-process",
  "thiserror 1.0.69",
 ]
 
