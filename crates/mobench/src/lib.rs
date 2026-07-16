@@ -183,6 +183,7 @@ mod local_provider;
 mod plots;
 mod process_adapter;
 mod profile;
+mod run_lifecycle;
 mod split_runs;
 pub(crate) mod summarize;
 
@@ -645,6 +646,22 @@ pub fn run() -> Result<()> {
             )?;
             let run_identity = RunEnvelopeIdentity::generate(spec.target)?;
             let summary_paths = resolve_summary_paths(output.as_deref())?;
+            let lifecycle_expected_sessions = if local_only {
+                vec!["host".to_owned()]
+            } else if fetch {
+                spec.devices.clone()
+            } else {
+                Vec::new()
+            };
+            let run_lifecycle = run_lifecycle::ResolvedRunPlan::new(
+                run_identity.run_id.clone(),
+                spec.target,
+                spec.function.clone(),
+                mobench_domain::ReportCounts::new(spec.iterations, spec.warmup)
+                    .context("invalid resolved run counts")?,
+                lifecycle_expected_sessions,
+            )?
+            .begin();
             let output_dir = layout.output_dir.clone();
             let run_span = tracing::info_span!(
                 "benchmark_run",
@@ -1170,6 +1187,8 @@ pub fn run() -> Result<()> {
                 println!("No BrowserStack run to fetch (devices not provided?)");
             }
 
+            let collected_run = run_lifecycle.collect(bound_reports)?;
+
             let mut baseline_compare_path = None;
             let mut baseline_snapshot_path = None;
             if let Some(baseline_source) = baseline.as_deref() {
@@ -1191,24 +1210,17 @@ pub fn run() -> Result<()> {
             }
 
             run_summary.summary = build_summary(&run_summary)?;
-            info!("writing benchmark summaries");
-            write_summary(
-                &run_summary,
-                &summary_paths,
-                summary_csv,
-                plots::PlotMode::Off,
-            )?;
-            write_summary_v2(
-                &summary_paths,
-                &run_identity,
-                &run_summary.spec,
-                &bound_reports,
-            )?;
 
             let mut compare_report = None;
             let mut regression_findings: Vec<RegressionFinding> = Vec::new();
             if let Some(baseline_path) = baseline_compare_path.as_deref() {
-                let report = compare_summaries(baseline_path, &summary_paths.json)?;
+                let baseline_summary = load_run_summary(baseline_path)?;
+                let report = compare_run_summaries(
+                    baseline_path,
+                    &summary_paths.json,
+                    &baseline_summary,
+                    &run_summary,
+                );
                 regression_findings = detect_regressions(&report, regression_threshold_pct);
                 compare_report = Some(report);
             }
@@ -1220,13 +1232,50 @@ pub fn run() -> Result<()> {
                     snapshot_path.display()
                 );
             }
+
+            info!("preparing benchmark summaries");
+            let (mut summary_value, markdown, csv) = prepare_summary_artifacts(
+                &run_summary,
+                &summary_paths,
+                summary_csv,
+                plots::PlotMode::Off,
+            )?;
             if let Some(report) = &compare_report {
-                inject_compare_into_summary(
-                    &summary_paths.json,
+                inject_compare_into_summary_value(
+                    &mut summary_value,
                     report,
                     regression_threshold_pct,
                     baseline.as_deref(),
-                )?;
+                );
+            }
+            let canonical_path = summary_paths.json.with_file_name("summary.v2.json");
+            let report_artifacts = run_lifecycle::ReportArtifacts::new(
+                &summary_paths.json,
+                summary_value,
+                &summary_paths.markdown,
+                markdown,
+                csv.map(|contents| (summary_paths.csv.as_path(), contents)),
+                &canonical_path,
+            )?;
+            let committed_run = collected_run.prepare(report_artifacts)?.commit()?;
+            info!(
+                publication = %committed_run.published_path().display(),
+                outcome = ?committed_run.outcome(),
+                stable_artifacts = committed_run.stable_paths().len(),
+                "committed benchmark report publication"
+            );
+            println!("Wrote run summary to {:?}", summary_paths.json);
+            println!("Wrote markdown summary to {:?}", summary_paths.markdown);
+            if summary_csv {
+                println!("Wrote CSV summary to {:?}", summary_paths.csv);
+            }
+            println!("Wrote canonical v2 summary to {:?}", canonical_path);
+
+            if !committed_run.outcome().is_complete() && pending_browserstack_error.is_none() {
+                pending_browserstack_error = Some(format!(
+                    "benchmark run did not complete every expected session: {:?}",
+                    committed_run.outcome()
+                ));
             }
 
             if ci {
@@ -4572,70 +4621,18 @@ fn build_summary(run_summary: &RunSummary) -> Result<SummaryReport> {
     })
 }
 
-fn write_summary(
+fn prepare_summary_artifacts(
     summary: &RunSummary,
     paths: &SummaryPaths,
     summary_csv: bool,
     plot_mode: plots::PlotMode,
-) -> Result<()> {
-    let json = serde_json::to_string_pretty(summary)?;
-    ensure_parent_dir(&paths.json)?;
-    write_file(&paths.json, json.as_bytes())?;
-    println!("Wrote run summary to {:?}", paths.json);
-
+) -> Result<(Value, String, Option<String>)> {
     let summary_value = serde_json::to_value(summary).context("serializing run summary")?;
     let markdown_dir = paths.markdown.parent().unwrap_or_else(|| Path::new("."));
     let markdown =
         render_summary_markdown_from_output_with_plots(&summary_value, markdown_dir, plot_mode)?;
-    ensure_parent_dir(&paths.markdown)?;
-    write_file(&paths.markdown, markdown.as_bytes())?;
-    println!("Wrote markdown summary to {:?}", paths.markdown);
-
-    if summary_csv {
-        let csv = render_csv_summary(&summary.summary);
-        ensure_parent_dir(&paths.csv)?;
-        write_file(&paths.csv, csv.as_bytes())?;
-        println!("Wrote CSV summary to {:?}", paths.csv);
-    }
-    Ok(())
-}
-
-#[derive(Serialize)]
-struct CanonicalSummaryV2<'a> {
-    schema_version: &'static str,
-    run_id: &'a str,
-    target: MobileTarget,
-    function_id: &'a str,
-    requested: mobench_domain::ReportCounts,
-    reports: &'a [mobench_domain::BoundRunReportV2],
-}
-
-fn summary_v2_path(paths: &SummaryPaths) -> PathBuf {
-    paths.json.with_file_name("summary.v2.json")
-}
-
-fn write_summary_v2(
-    paths: &SummaryPaths,
-    identity: &RunEnvelopeIdentity,
-    spec: &RunSpec,
-    reports: &[mobench_domain::BoundRunReportV2],
-) -> Result<()> {
-    let summary = CanonicalSummaryV2 {
-        schema_version: "mobench.summary/v2",
-        run_id: &identity.run_id,
-        target: spec.target,
-        function_id: &spec.function,
-        requested: mobench_domain::ReportCounts::new(spec.iterations, spec.warmup)
-            .context("invalid canonical summary counts")?,
-        reports,
-    };
-    let path = summary_v2_path(paths);
-    let encoded =
-        serde_json::to_vec_pretty(&summary).context("serializing canonical summary v2")?;
-    ensure_parent_dir(&path)?;
-    write_file(&path, &encoded)?;
-    println!("Wrote canonical v2 summary to {:?}", path);
-    Ok(())
+    let csv = summary_csv.then(|| render_csv_summary(&summary.summary));
+    Ok((summary_value, markdown, csv))
 }
 
 const EXIT_REGRESSION: i32 = 2;
@@ -4947,6 +4944,20 @@ fn compare_summaries(baseline: &Path, candidate: &Path) -> Result<CompareReport>
     let baseline_summary = load_run_summary(baseline)?;
     let candidate_summary = load_run_summary(candidate)?;
 
+    Ok(compare_run_summaries(
+        baseline,
+        candidate,
+        &baseline_summary,
+        &candidate_summary,
+    ))
+}
+
+fn compare_run_summaries(
+    baseline: &Path,
+    candidate: &Path,
+    baseline_summary: &RunSummary,
+    candidate_summary: &RunSummary,
+) -> CompareReport {
     let baseline_map = summary_lookup(&baseline_summary.summary);
     let candidate_map = summary_lookup(&candidate_summary.summary);
 
@@ -4995,11 +5006,11 @@ fn compare_summaries(baseline: &Path, candidate: &Path) -> Result<CompareReport>
         }
     }
 
-    Ok(CompareReport {
+    CompareReport {
         baseline: baseline.to_path_buf(),
         candidate: candidate.to_path_buf(),
         rows,
-    })
+    }
 }
 
 fn load_run_summary(path: &Path) -> Result<RunSummary> {
@@ -5130,17 +5141,12 @@ fn resolve_artifact_baseline(reference: &str) -> Result<PathBuf> {
     )
 }
 
-fn inject_compare_into_summary(
-    summary_json: &Path,
+fn inject_compare_into_summary_value(
+    summary_value: &mut Value,
     report: &CompareReport,
     threshold_pct: f64,
     baseline_source: Option<&str>,
-) -> Result<()> {
-    let summary_text =
-        fs::read_to_string(summary_json).with_context(|| format!("reading {:?}", summary_json))?;
-    let mut summary_value: Value = serde_json::from_str(&summary_text)
-        .with_context(|| format!("parsing {:?}", summary_json))?;
-
+) {
     let compare_value = json!({
         "baseline": report.baseline.display().to_string(),
         "baseline_source": baseline_source,
@@ -5163,11 +5169,6 @@ fn inject_compare_into_summary(
     if let Some(obj) = summary_value.as_object_mut() {
         obj.insert("comparison".to_string(), compare_value);
     }
-    write_file(
-        summary_json,
-        serde_json::to_string_pretty(&summary_value)?.as_bytes(),
-    )?;
-    Ok(())
 }
 
 fn write_compare_report(report: &CompareReport, output: Option<&Path>) -> Result<()> {

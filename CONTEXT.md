@@ -2,6 +2,10 @@
 
 - **Run Specification** — the fully resolved benchmark request: function,
   counts, target, device selection, provider policy, and output policy.
+- **Resolved Run Plan** — the command-level Run Specification after identity,
+  expected Provider Sessions, counts, and report publication policy have been
+  validated. It is the only state from which provider evidence may be
+  collected.
 - **Provider Run** — one execution of a Run Specification through a provider.
   It may contain one or many Provider Sessions.
 - **Provider Session** — one provider attempt for one requested device.
@@ -14,6 +18,14 @@
   result-less.
 - **Matrix Outcome** — the complete, partial, or failed result obtained by
   reconciling every expected Provider Session with collected evidence.
+- **Prepared Run** — validated provider evidence plus fully encoded canonical
+  and compatibility reports that are eligible for atomic publication.
+- **Committed Run** — the immutable publication and stable-alias receipt for a
+  Prepared Run. A run is not externally complete until this receipt exists.
+- **Run Outcome** — the command-level complete, partial, or failed result after
+  successful bound reports are reconciled with every session in the Resolved
+  Run Plan. It is distinct from one provider's Matrix Outcome because it also
+  governs report preparation and publication.
 - **Local Provider** — the provider that executes a benchmark through a local
   host harness and returns real samples without a remote device farm.
 - **BrowserStack Provider** — the provider that uploads mobile artifacts,
