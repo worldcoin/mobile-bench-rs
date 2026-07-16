@@ -104,6 +104,7 @@ env:
 jobs:
   benchmark:
     name: Example fixture benchmark
+    if: inputs.requested_by != 'browserstack-recovery'
     uses: ./.github/workflows/reusable-bench.yml
     with:
       crate_path: ${{ inputs.crate_path }}
@@ -130,3 +131,76 @@ jobs:
       BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
       MOBENCH_APP_PRIVATE_KEY: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
       MOBENCH_APP_ID: ${{ secrets.MOBENCH_APP_ID }}
+
+  # Compatibility bridge for diagnosing existing BrowserStack builds before the
+  # dedicated recovery workflow lands on the default branch. In this mode the
+  # existing head_sha input carries the BrowserStack build ID, not a Git SHA.
+  recover-browserstack:
+    name: Recover ${{ inputs.platform }} build ${{ inputs.head_sha }}
+    if: inputs.requested_by == 'browserstack-recovery'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: browserstack
+    env:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+    steps:
+      - name: Validate recovery request
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          BUILD_ID: ${{ inputs.head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PLATFORM" != "android" && "$PLATFORM" != "ios" ]]; then
+            echo "recovery platform must be android or ios" >&2
+            exit 2
+          fi
+          if ! [[ "$BUILD_ID" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "head_sha must carry a 40-character lowercase hexadecimal BrowserStack build ID" >&2
+            exit 2
+          fi
+
+      - name: Checkout recovery implementation
+        uses: actions/checkout@v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo inputs
+        uses: actions/cache@v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-browserstack-recover-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-browserstack-recover-
+
+      - name: Build Mobench recovery CLI
+        run: cargo build --locked --release -p mobench --bin mobench
+
+      - name: Resume and fetch existing build
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          BUILD_ID: ${{ inputs.head_sha }}
+        run: |
+          set -euo pipefail
+          target/release/mobench fetch \
+            --target "$PLATFORM" \
+            --build-id "$BUILD_ID" \
+            --output-dir target/browserstack-recovery \
+            --wait \
+            --poll-interval-secs 5 \
+            --timeout-secs 900
+
+      - name: Upload recovered evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browserstack-${{ inputs.platform }}-${{ inputs.head_sha }}
+          path: target/browserstack-recovery/${{ inputs.head_sha }}/
+          if-no-files-found: warn
+          retention-days: 14
