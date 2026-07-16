@@ -5,7 +5,9 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   provekit-pr451:
