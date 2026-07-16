@@ -172,6 +172,8 @@ pub(crate) use doctor::{
 };
 use local_provider::{LocalProviderAdapter, LocalRunRequest};
 use process_adapter::ToolCommand;
+pub(crate) use report_binding::RunEnvelopeIdentity;
+use report_binding::bind_report_value;
 
 mod browserstack;
 mod cli;
@@ -183,6 +185,7 @@ mod local_provider;
 mod plots;
 mod process_adapter;
 mod profile;
+mod report_binding;
 mod run_lifecycle;
 mod split_runs;
 pub(crate) mod summarize;
@@ -286,87 +289,6 @@ pub(crate) struct RunSpec {
     pub(crate) browserstack: Option<BrowserStackConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) ios_xcuitest: Option<IosXcuitestArtifacts>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RunEnvelopeIdentity {
-    run_id: String,
-    nonce: String,
-    logical_session_id: String,
-    producer: String,
-}
-
-impl RunEnvelopeIdentity {
-    pub(crate) fn generate(target: MobileTarget) -> Result<Self> {
-        Ok(Self {
-            run_id: format!("run-{}", random_hex::<16>()?),
-            nonce: format!("nonce-{}", random_hex::<32>()?),
-            logical_session_id: format!("logical-session-{}", random_hex::<16>()?),
-            producer: match target {
-                MobileTarget::Android => "android-runner",
-                MobileTarget::Ios => "ios-runner",
-            }
-            .to_owned(),
-        })
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn bind_report_value(
-    report: &Value,
-    identity: &RunEnvelopeIdentity,
-    spec: &RunSpec,
-    provider_id: &str,
-    provider_run_id: &str,
-    transport_session_id: &str,
-    requested_device_id: &str,
-    observed_device_id: &str,
-) -> Result<mobench_domain::BoundRunReportV2> {
-    let identifier = |value: &str, field: &str| {
-        mobench_domain::ReportIdentifier::parse(value.to_owned())
-            .with_context(|| format!("invalid {field} in v2 report binding"))
-    };
-    let expected = mobench_domain::ExpectedReportIdentity::new(
-        mobench_domain::ReportIdentity::new(
-            identifier(&identity.run_id, "run_id")?,
-            identifier(&identity.nonce, "nonce")?,
-            identifier(&identity.logical_session_id, "logical_session_id")?,
-            identifier(&spec.function, "function_id")?,
-            identifier(&identity.producer, "producer")?,
-        ),
-        mobench_domain::ReportCounts::new(spec.iterations, spec.warmup)
-            .context("invalid requested v2 report counts")?,
-    );
-    let encoded = serde_json::to_vec(report).context("serializing collected v2 report")?;
-    let envelope = expected
-        .validate_json(&encoded)
-        .context("collected producer report failed strict v2 validation")?;
-    let binding = mobench_domain::ProviderReportBinding::new(
-        identifier(provider_id, "provider_id")?,
-        identifier(provider_run_id, "provider_run_id")?,
-        identifier(transport_session_id, "transport_session_id")?,
-        identifier(requested_device_id, "requested_device_id")?,
-        identifier(observed_device_id, "observed_device_id")?,
-    );
-    let expected_binding = mobench_domain::ExpectedProviderBinding::new(
-        identifier(provider_id, "provider_id")?,
-        identifier(provider_run_id, "provider_run_id")?,
-        identifier(transport_session_id, "transport_session_id")?,
-        identifier(requested_device_id, "requested_device_id")?,
-    );
-    expected
-        .bind(envelope, binding, &expected_binding)
-        .context("collected report failed provider binding validation")
-}
-
-fn random_hex<const N: usize>() -> Result<String> {
-    let mut bytes = [0_u8; N];
-    getrandom::fill(&mut bytes).map_err(|error| anyhow!("generating run identity: {error}"))?;
-    let mut encoded = String::with_capacity(N * 2);
-    for byte in bytes {
-        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    Ok(encoded)
 }
 
 #[derive(Debug, Serialize, Deserialize)]

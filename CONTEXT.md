@@ -36,3 +36,6 @@
 - **Observed Device Identity** — the device name and OS version authenticated by
   the provider's terminal build response. It is preserved alongside, never
   substituted for, the Requested Device Identity.
+- **Report Binding** — the single transition that validates a producer envelope
+  against the resolved run identity and then attaches authenticated provider
+  run, transport-session, requested-device, and observed-device evidence.
