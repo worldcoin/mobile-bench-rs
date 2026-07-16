@@ -1399,6 +1399,11 @@ dependencies = [
 [[package]]
 name = "mobench-report"
 version = "0.1.43"
+dependencies = [
+ "mobench-domain",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "mobench-runtime"

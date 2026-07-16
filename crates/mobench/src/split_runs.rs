@@ -1,9 +1,12 @@
 use crate::{
-    BenchmarkResourceUsage, BenchmarkStats, CiMergeSplitRunsArgs, DeviceSummary, MobileTarget,
-    SummaryReport, compute_sample_stats, ensure_parent_dir, json_value_to_u64, render_csv_summary,
-    render_markdown_summary, summary_report_from_value, write_file,
+    CiMergeSplitRunsArgs, MobileTarget, compute_sample_stats, ensure_parent_dir, json_value_to_u64,
+    summary_report_from_value, write_file,
 };
 use anyhow::{Context, Result, anyhow, bail};
+use mobench_report::{
+    BenchmarkResourceUsage, BenchmarkStats, DeviceSummary, SummaryReport as CanonicalSummaryReport,
+    render_csv_summary, render_markdown_summary,
+};
 use mobench_runtime::{ResourceAccumulator, ResourceAggregate, ResourceSample};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -11,6 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+
+type SummaryReport = CanonicalSummaryReport<MobileTarget>;
 
 pub(crate) fn cmd_ci_merge_split_runs(args: CiMergeSplitRunsArgs, dry_run: bool) -> Result<()> {
     let merged = merge_split_run_summaries(

@@ -125,7 +125,16 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use mobench_process::StdinPolicy;
 use mobench_report::{
-    csv_field, markdown_inline_field_text, markdown_link_destination, markdown_table_field_text,
+    BenchmarkFailureStats, BenchmarkResourceUsage, BenchmarkStats, CompareReport, DeviceSummary,
+    RegressionFinding, SummaryReport as CanonicalSummaryReport,
+    compare_summaries as compare_summary_models, comparison_json, csv_field, detect_regressions,
+    format_duration_smart, format_failure_elapsed_ms, markdown_inline_field_text,
+    markdown_link_destination, render_compare_markdown, render_csv_summary, render_junit_report,
+    render_markdown_summary,
+};
+#[cfg(test)]
+use mobench_report::{
+    CompareRow, MEMORY_BASELINE_GAP_NOTE, format_cpu_total_duration_ms, format_ms,
 };
 use mobench_runtime::{
     CliV1Summary, Distribution, MAX_BENCHMARK_COUNT, ResourceAccumulator, ResourceAggregate,
@@ -397,71 +406,7 @@ struct CargoMetadataOutput {
     packages: Vec<CargoMetadataPackage>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct SummaryReport {
-    generated_at: String,
-    generated_at_unix: u64,
-    target: MobileTarget,
-    function: String,
-    iterations: u32,
-    warmup: u32,
-    devices: Vec<String>,
-    device_summaries: Vec<DeviceSummary>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct DeviceSummary {
-    device: String,
-    benchmarks: Vec<BenchmarkStats>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct BenchmarkStats {
-    function: String,
-    samples: usize,
-    mean_ns: Option<u64>,
-    median_ns: Option<u64>,
-    p95_ns: Option<u64>,
-    min_ns: Option<u64>,
-    max_ns: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    resource_usage: Option<BenchmarkResourceUsage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    failure: Option<BenchmarkFailureStats>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct BenchmarkFailureStats {
-    kind: String,
-    message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    elapsed_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    exit_reason: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-struct BenchmarkResourceUsage {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cpu_total_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cpu_median_ms: Option<u64>,
-    /// Legacy alias for `peak_memory_growth_kb`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    peak_memory_kb: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    peak_memory_growth_kb: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    process_peak_memory_kb: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    total_pss_kb: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    private_dirty_kb: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    native_heap_kb: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    java_heap_kb: Option<u64>,
-}
+type SummaryReport = CanonicalSummaryReport<MobileTarget>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "platform", rename_all = "lowercase")]
@@ -4581,109 +4526,6 @@ fn append_github_step_summary(contents: &str, summary_path: &str) -> Result<()> 
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-struct RegressionFinding {
-    device: String,
-    function: String,
-    metric: String,
-    delta_pct: f64,
-}
-
-fn detect_regressions(report: &CompareReport, threshold_pct: f64) -> Vec<RegressionFinding> {
-    let mut findings = Vec::new();
-    for row in &report.rows {
-        if let Some(delta) = row.median_delta_pct
-            && delta > threshold_pct
-        {
-            findings.push(RegressionFinding {
-                device: row.device.clone(),
-                function: row.function.clone(),
-                metric: "median".to_string(),
-                delta_pct: delta,
-            });
-        }
-        if let Some(delta) = row.p95_delta_pct
-            && delta > threshold_pct
-        {
-            findings.push(RegressionFinding {
-                device: row.device.clone(),
-                function: row.function.clone(),
-                metric: "p95".to_string(),
-                delta_pct: delta,
-            });
-        }
-    }
-    findings
-}
-
-fn render_junit_report(summary: &SummaryReport, regressions: &[RegressionFinding]) -> String {
-    let mut output = String::new();
-    let mut failures_by_case: HashMap<(String, String), Vec<&RegressionFinding>> = HashMap::new();
-    for finding in regressions {
-        failures_by_case
-            .entry((finding.device.clone(), finding.function.clone()))
-            .or_default()
-            .push(finding);
-    }
-
-    let mut total_tests = 0;
-    let mut total_failures = 0;
-
-    for device in &summary.device_summaries {
-        total_tests += device.benchmarks.len();
-        for bench in &device.benchmarks {
-            if failures_by_case.contains_key(&(device.device.clone(), bench.function.clone())) {
-                total_failures += 1;
-            }
-        }
-    }
-
-    let _ = writeln!(output, r#"<?xml version="1.0" encoding="UTF-8"?>"#);
-    let _ = writeln!(
-        output,
-        r#"<testsuite name="mobench" tests="{}" failures="{}">"#,
-        total_tests, total_failures
-    );
-
-    for device in &summary.device_summaries {
-        for bench in &device.benchmarks {
-            let case_name = format!("{}::{}", device.device, bench.function);
-            let time_secs = bench
-                .median_ns
-                .map(|ns| ns as f64 / 1_000_000_000.0)
-                .unwrap_or(0.0);
-            let _ = writeln!(
-                output,
-                r#"  <testcase name="{}" classname="{}" time="{:.6}">"#,
-                escape_xml(&case_name),
-                escape_xml(&device.device),
-                time_secs
-            );
-            if let Some(findings) =
-                failures_by_case.get(&(device.device.clone(), bench.function.clone()))
-            {
-                let mut details = String::new();
-                for finding in findings {
-                    let _ = writeln!(
-                        details,
-                        "{} regression: {:+.2}%",
-                        finding.metric, finding.delta_pct
-                    );
-                }
-                let _ = writeln!(
-                    output,
-                    r#"    <failure message="Performance regression">{}</failure>"#,
-                    escape_xml(details.trim())
-                );
-            }
-            let _ = writeln!(output, "  </testcase>");
-        }
-    }
-
-    let _ = writeln!(output, "</testsuite>");
-    output
-}
-
 fn write_junit_report(
     path: &Path,
     summary: &SummaryReport,
@@ -4694,15 +4536,6 @@ fn write_junit_report(
     write_file(path, report.as_bytes())?;
     println!("Wrote JUnit report to {:?}", path);
     Ok(())
-}
-
-fn escape_xml(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 /// Print a final summary with all artifact correlation information (C3).
@@ -4842,27 +4675,6 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Serialize)]
-struct CompareReport {
-    baseline: PathBuf,
-    candidate: PathBuf,
-    rows: Vec<CompareRow>,
-}
-
-#[derive(Debug, Serialize)]
-struct CompareRow {
-    device: String,
-    function: String,
-    baseline_median_ns: Option<u64>,
-    candidate_median_ns: Option<u64>,
-    median_delta_pct: Option<f64>,
-    median_label: String,
-    baseline_p95_ns: Option<u64>,
-    candidate_p95_ns: Option<u64>,
-    p95_delta_pct: Option<f64>,
-    p95_label: String,
-}
-
 fn compare_summaries(baseline: &Path, candidate: &Path) -> Result<CompareReport> {
     let baseline_summary = load_run_summary(baseline)?;
     let candidate_summary = load_run_summary(candidate)?;
@@ -4881,94 +4693,17 @@ fn compare_run_summaries(
     baseline_summary: &RunSummary,
     candidate_summary: &RunSummary,
 ) -> CompareReport {
-    let baseline_map = summary_lookup(&baseline_summary.summary);
-    let candidate_map = summary_lookup(&candidate_summary.summary);
-
-    let mut rows = Vec::new();
-    let mut devices: BTreeMap<String, ()> = BTreeMap::new();
-    devices.extend(baseline_map.keys().map(|k| (k.clone(), ())));
-    devices.extend(candidate_map.keys().map(|k| (k.clone(), ())));
-
-    for device in devices.keys() {
-        let mut functions: BTreeMap<String, ()> = BTreeMap::new();
-        if let Some(entry) = baseline_map.get(device) {
-            functions.extend(entry.keys().map(|k| (k.clone(), ())));
-        }
-        if let Some(entry) = candidate_map.get(device) {
-            functions.extend(entry.keys().map(|k| (k.clone(), ())));
-        }
-
-        for function in functions.keys() {
-            let baseline_stats = baseline_map
-                .get(device)
-                .and_then(|entry| entry.get(function));
-            let candidate_stats = candidate_map
-                .get(device)
-                .and_then(|entry| entry.get(function));
-
-            let baseline_median = baseline_stats.and_then(|s| s.median_ns);
-            let candidate_median = candidate_stats.and_then(|s| s.median_ns);
-            let median_delta = percent_delta(baseline_median, candidate_median);
-
-            let baseline_p95 = baseline_stats.and_then(|s| s.p95_ns);
-            let candidate_p95 = candidate_stats.and_then(|s| s.p95_ns);
-            let p95_delta = percent_delta(baseline_p95, candidate_p95);
-
-            rows.push(CompareRow {
-                device: device.clone(),
-                function: function.clone(),
-                baseline_median_ns: baseline_median,
-                candidate_median_ns: candidate_median,
-                median_delta_pct: median_delta,
-                median_label: delta_label(median_delta, 0.0).to_string(),
-                baseline_p95_ns: baseline_p95,
-                candidate_p95_ns: candidate_p95,
-                p95_delta_pct: p95_delta,
-                p95_label: delta_label(p95_delta, 0.0).to_string(),
-            });
-        }
-    }
-
-    CompareReport {
-        baseline: baseline.to_path_buf(),
-        candidate: candidate.to_path_buf(),
-        rows,
-    }
+    compare_summary_models(
+        baseline,
+        candidate,
+        &baseline_summary.summary,
+        &candidate_summary.summary,
+    )
 }
 
 fn load_run_summary(path: &Path) -> Result<RunSummary> {
     let contents = fs::read_to_string(path).with_context(|| format!("reading {:?}", path))?;
     serde_json::from_str(&contents).with_context(|| format!("parsing summary {:?}", path))
-}
-
-fn summary_lookup(summary: &SummaryReport) -> BTreeMap<String, BTreeMap<String, BenchmarkStats>> {
-    let mut map = BTreeMap::new();
-    for device in &summary.device_summaries {
-        let mut functions = BTreeMap::new();
-        for bench in &device.benchmarks {
-            functions.insert(bench.function.clone(), bench.clone());
-        }
-        map.insert(device.device.clone(), functions);
-    }
-    map
-}
-
-fn percent_delta(baseline: Option<u64>, candidate: Option<u64>) -> Option<f64> {
-    let baseline = baseline? as f64;
-    let candidate = candidate? as f64;
-    if baseline == 0.0 {
-        return None;
-    }
-    Some(((candidate - baseline) / baseline) * 100.0)
-}
-
-fn delta_label(delta: Option<f64>, threshold_pct: f64) -> &'static str {
-    match delta {
-        Some(value) if value >= threshold_pct => "regressed",
-        Some(value) if value <= -threshold_pct => "improved",
-        Some(_) => "neutral",
-        None => "neutral",
-    }
 }
 
 fn resolve_baseline_source(source: &str) -> Result<PathBuf> {
@@ -5070,27 +4805,11 @@ fn inject_compare_into_summary_value(
     threshold_pct: f64,
     baseline_source: Option<&str>,
 ) {
-    let compare_value = json!({
-        "baseline": report.baseline.display().to_string(),
-        "baseline_source": baseline_source,
-        "candidate": report.candidate.display().to_string(),
-        "threshold_pct": threshold_pct,
-        "rows": report.rows.iter().map(|row| json!({
-            "device": row.device,
-            "function": row.function,
-            "baseline_median_ns": row.baseline_median_ns,
-            "candidate_median_ns": row.candidate_median_ns,
-            "median_delta_pct": row.median_delta_pct,
-            "median_label": delta_label(row.median_delta_pct, threshold_pct),
-            "baseline_p95_ns": row.baseline_p95_ns,
-            "candidate_p95_ns": row.candidate_p95_ns,
-            "p95_delta_pct": row.p95_delta_pct,
-            "p95_label": delta_label(row.p95_delta_pct, threshold_pct),
-        })).collect::<Vec<_>>()
-    });
-
     if let Some(obj) = summary_value.as_object_mut() {
-        obj.insert("comparison".to_string(), compare_value);
+        obj.insert(
+            "comparison".to_string(),
+            comparison_json(report, threshold_pct, baseline_source),
+        );
     }
 }
 
@@ -5104,48 +4823,6 @@ fn write_compare_report(report: &CompareReport, output: Option<&Path>) -> Result
         println!("{markdown}");
     }
     Ok(())
-}
-
-fn render_compare_markdown(report: &CompareReport) -> String {
-    let mut output = String::new();
-    let _ = writeln!(output, "### Benchmark Comparison");
-    let _ = writeln!(output);
-    let _ = writeln!(
-        output,
-        "- Baseline: {}",
-        markdown_inline_field_text(&report.baseline.display().to_string())
-    );
-    let _ = writeln!(
-        output,
-        "- Candidate: {}",
-        markdown_inline_field_text(&report.candidate.display().to_string())
-    );
-    let _ = writeln!(output);
-    let _ = writeln!(
-        output,
-        "| Device | Function | Median base | Median cand | Median Δ% | Median Label | P95 base | P95 cand | P95 Δ% | P95 Label |"
-    );
-    let _ = writeln!(
-        output,
-        "| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |"
-    );
-    for row in &report.rows {
-        let _ = writeln!(
-            output,
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-            markdown_table_field_text(&row.device),
-            markdown_table_field_text(&row.function),
-            format_ms(row.baseline_median_ns),
-            format_ms(row.candidate_median_ns),
-            format_delta(row.median_delta_pct),
-            markdown_table_field_text(&row.median_label),
-            format_ms(row.baseline_p95_ns),
-            format_ms(row.candidate_p95_ns),
-            format_delta(row.p95_delta_pct),
-            markdown_table_field_text(&row.p95_label)
-        );
-    }
-    output
 }
 
 #[derive(Debug, Deserialize)]
@@ -5433,12 +5110,6 @@ fn upsert_github_pr_comment(pr_number: &str, marker: &str, body: &str) -> Result
     Ok(())
 }
 
-fn format_delta(value: Option<f64>) -> String {
-    value
-        .map(|delta| format!("{:+.2}%", delta))
-        .unwrap_or_else(|| "-".to_string())
-}
-
 fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
     let samples = extract_samples(&run_summary.local_report);
     if samples.is_empty() {
@@ -5467,24 +5138,6 @@ fn summarize_local_report(run_summary: &RunSummary) -> Option<DeviceSummary> {
             failure: None,
         }],
     })
-}
-
-impl BenchmarkResourceUsage {
-    fn peak_memory_growth_or_legacy_kb(&self) -> Option<u64> {
-        self.peak_memory_growth_kb.or(self.peak_memory_kb)
-    }
-
-    fn is_empty(&self) -> bool {
-        self.cpu_total_ms.is_none()
-            && self.cpu_median_ms.is_none()
-            && self.peak_memory_kb.is_none()
-            && self.peak_memory_growth_kb.is_none()
-            && self.process_peak_memory_kb.is_none()
-            && self.total_pss_kb.is_none()
-            && self.private_dirty_kb.is_none()
-            && self.native_heap_kb.is_none()
-            && self.java_heap_kb.is_none()
-    }
 }
 
 type SampleStats = CliV1Summary;
@@ -5646,331 +5299,6 @@ fn benchmark_failure_stats(entry: &Value) -> Option<BenchmarkFailureStats> {
         elapsed_ms: entry.get("elapsed_ms").and_then(json_value_to_u64),
         exit_reason,
     })
-}
-
-fn render_markdown_summary(summary: &SummaryReport) -> String {
-    let mut output = String::new();
-    let devices = if summary.devices.is_empty() {
-        "none".to_string()
-    } else {
-        summary
-            .devices
-            .iter()
-            .map(|device| markdown_inline_field_text(device))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-
-    let _ = writeln!(output, "### Benchmark Summary");
-    let _ = writeln!(output);
-    let _ = writeln!(
-        output,
-        "- Generated: {}",
-        markdown_inline_field_text(&summary.generated_at)
-    );
-    let _ = writeln!(
-        output,
-        "- Target: {}",
-        markdown_inline_field_text(summary.target.display_name())
-    );
-    let _ = writeln!(
-        output,
-        "- Function: {}",
-        markdown_inline_field_text(&summary.function)
-    );
-    let _ = writeln!(
-        output,
-        "- Iterations/Warmup: {} / {}",
-        summary.iterations, summary.warmup
-    );
-    let _ = writeln!(output, "- Devices: {}", devices);
-    let _ = writeln!(output);
-
-    if summary.device_summaries.is_empty() {
-        let _ = writeln!(output, "No benchmark samples were collected.");
-        return output;
-    }
-
-    let has_failures = summary.device_summaries.iter().any(|device| {
-        device
-            .benchmarks
-            .iter()
-            .any(|benchmark| benchmark.failure.is_some())
-    });
-    if has_failures {
-        let _ = writeln!(
-            output,
-            "| Device | Function | Status | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak | Elapsed | Exit reason |"
-        );
-        let _ = writeln!(
-            output,
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
-        );
-    } else {
-        let _ = writeln!(
-            output,
-            "| Device | Function | Samples | Warmup | Wall mean / iter | Wall total | CPU median / iter | CPU total | CPU / wall | Peak growth | Process peak |"
-        );
-        let _ = writeln!(
-            output,
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-        );
-    }
-    for device in &summary.device_summaries {
-        for bench in &device.benchmarks {
-            if has_failures {
-                let _ = writeln!(
-                    output,
-                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                    markdown_table_field_text(&device.device),
-                    markdown_table_field_text(&bench.function),
-                    format_benchmark_status(bench),
-                    bench.samples,
-                    summary.warmup,
-                    format_ms(bench.mean_ns),
-                    format_wall_total(bench.mean_ns, bench.samples),
-                    format_cpu_median_ms(bench.resource_usage.as_ref()),
-                    format_cpu_total_ms(bench.resource_usage.as_ref()),
-                    format_cpu_wall_ratio(
-                        bench.mean_ns,
-                        bench.samples,
-                        bench.resource_usage.as_ref()
-                    ),
-                    format_peak_memory(
-                        bench
-                            .resource_usage
-                            .as_ref()
-                            .and_then(BenchmarkResourceUsage::peak_memory_growth_or_legacy_kb)
-                    ),
-                    format_peak_memory(
-                        bench
-                            .resource_usage
-                            .as_ref()
-                            .and_then(|usage| usage.process_peak_memory_kb)
-                    ),
-                    format_failure_elapsed_ms(bench.failure.as_ref()),
-                    markdown_table_field_text(
-                        bench
-                            .failure
-                            .as_ref()
-                            .and_then(|failure| failure.exit_reason.as_deref())
-                            .unwrap_or("-"),
-                    ),
-                );
-            } else {
-                let _ = writeln!(
-                    output,
-                    "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                    markdown_table_field_text(&device.device),
-                    markdown_table_field_text(&bench.function),
-                    bench.samples,
-                    summary.warmup,
-                    format_ms(bench.mean_ns),
-                    format_wall_total(bench.mean_ns, bench.samples),
-                    format_cpu_median_ms(bench.resource_usage.as_ref()),
-                    format_cpu_total_ms(bench.resource_usage.as_ref()),
-                    format_cpu_wall_ratio(
-                        bench.mean_ns,
-                        bench.samples,
-                        bench.resource_usage.as_ref()
-                    ),
-                    format_peak_memory(
-                        bench
-                            .resource_usage
-                            .as_ref()
-                            .and_then(BenchmarkResourceUsage::peak_memory_growth_or_legacy_kb)
-                    ),
-                    format_peak_memory(
-                        bench
-                            .resource_usage
-                            .as_ref()
-                            .and_then(|usage| usage.process_peak_memory_kb)
-                    ),
-                );
-            }
-        }
-    }
-    let _ = writeln!(output);
-    if summary_has_memory_baseline_gap(summary) {
-        let _ = writeln!(output, "_Note: {}_", MEMORY_BASELINE_GAP_NOTE);
-        let _ = writeln!(output);
-    }
-
-    output
-}
-
-fn format_benchmark_status(bench: &BenchmarkStats) -> String {
-    if let Some(failure) = &bench.failure {
-        format!("failed ({})", markdown_table_field_text(&failure.kind))
-    } else {
-        "ok".to_string()
-    }
-}
-
-fn format_failure_elapsed_ms(failure: Option<&BenchmarkFailureStats>) -> String {
-    failure
-        .and_then(|failure| failure.elapsed_ms)
-        .map(|elapsed_ms| format!("{:.3}s", elapsed_ms as f64 / 1_000.0))
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn render_csv_summary(summary: &SummaryReport) -> String {
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb"
-    );
-    for device in &summary.device_summaries {
-        for bench in &device.benchmarks {
-            let _ = writeln!(
-                output,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                csv_field(&device.device),
-                csv_field(&bench.function),
-                bench.samples,
-                bench.mean_ns.map_or(String::from(""), |v| v.to_string()),
-                bench.median_ns.map_or(String::from(""), |v| v.to_string()),
-                bench.p95_ns.map_or(String::from(""), |v| v.to_string()),
-                bench.min_ns.map_or(String::from(""), |v| v.to_string()),
-                bench.max_ns.map_or(String::from(""), |v| v.to_string()),
-                bench
-                    .resource_usage
-                    .as_ref()
-                    .and_then(|usage| usage.cpu_total_ms)
-                    .map_or(String::new(), |v| v.to_string()),
-                bench
-                    .resource_usage
-                    .as_ref()
-                    .and_then(|usage| usage.cpu_median_ms)
-                    .map_or(String::new(), |v| v.to_string()),
-                bench
-                    .resource_usage
-                    .as_ref()
-                    .and_then(|usage| usage.peak_memory_kb)
-                    .map_or(String::new(), |v| v.to_string()),
-                bench
-                    .resource_usage
-                    .as_ref()
-                    .and_then(BenchmarkResourceUsage::peak_memory_growth_or_legacy_kb)
-                    .map_or(String::new(), |v| v.to_string()),
-                bench
-                    .resource_usage
-                    .as_ref()
-                    .and_then(|usage| usage.process_peak_memory_kb)
-                    .map_or(String::new(), |v| v.to_string())
-            );
-        }
-    }
-    output
-}
-
-/// Formats a duration in nanoseconds to a human-readable string.
-///
-/// The function picks the appropriate unit based on the magnitude:
-/// - Uses milliseconds (ms) by default
-/// - Switches to seconds (s) if the value is >= 1000ms (1 second)
-///
-/// Examples:
-/// - 500_000 ns -> "0.500ms"
-/// - 1_500_000 ns -> "1.500ms"
-/// - 1_500_000_000 ns -> "1.500s"
-fn format_duration_smart(ns: u64) -> String {
-    let ms = ns as f64 / 1_000_000.0;
-    if ms >= 1000.0 {
-        // Convert to seconds
-        let secs = ms / 1000.0;
-        format!("{:.3}s", secs)
-    } else {
-        format!("{:.3}ms", ms)
-    }
-}
-
-fn format_ms(value: Option<u64>) -> String {
-    value
-        .map(format_duration_smart)
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn wall_total_ns(mean_ns: Option<u64>, samples: usize) -> Option<u64> {
-    let mean_ns = u128::from(mean_ns?);
-    let samples = u128::try_from(samples).ok()?;
-    Some(mean_ns.saturating_mul(samples).min(u128::from(u64::MAX)) as u64)
-}
-
-fn format_wall_total(mean_ns: Option<u64>, samples: usize) -> String {
-    wall_total_ns(mean_ns, samples)
-        .map(format_duration_smart)
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn format_cpu_median_ms(value: Option<&BenchmarkResourceUsage>) -> String {
-    value
-        .and_then(|usage| usage.cpu_median_ms)
-        .map(format_cpu_total_duration_ms)
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn format_cpu_total_ms(value: Option<&BenchmarkResourceUsage>) -> String {
-    value
-        .and_then(|usage| usage.cpu_total_ms)
-        .map(format_cpu_total_duration_ms)
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn format_cpu_wall_ratio(
-    mean_ns: Option<u64>,
-    samples: usize,
-    value: Option<&BenchmarkResourceUsage>,
-) -> String {
-    let cpu_total_ms = value.and_then(|usage| usage.cpu_total_ms);
-    match (wall_total_ns(mean_ns, samples), cpu_total_ms) {
-        (Some(wall_total_ns), Some(cpu_total_ms)) if wall_total_ns > 0 => {
-            let ratio = (cpu_total_ms as f64) / (wall_total_ns as f64 / 1_000_000.0) * 100.0;
-            format!("{ratio:.1}%")
-        }
-        _ => "-".to_string(),
-    }
-}
-
-fn format_cpu_total_duration_ms(ms: u64) -> String {
-    if ms < 1_000 {
-        format!("{ms}ms")
-    } else {
-        format!("{:.3}s", ms as f64 / 1_000.0)
-    }
-}
-
-const MEMORY_BASELINE_GAP_MIN_DIFF_KB: u64 = 256 * 1024;
-const MEMORY_BASELINE_GAP_RATIO: u64 = 4;
-const MEMORY_BASELINE_GAP_NOTE: &str =
-    "memory growth excludes warmup/baseline retained before the measured iteration.";
-
-fn summary_has_memory_baseline_gap(summary: &SummaryReport) -> bool {
-    summary.device_summaries.iter().any(|device| {
-        device.benchmarks.iter().any(|benchmark| {
-            benchmark
-                .resource_usage
-                .as_ref()
-                .is_some_and(resource_usage_has_memory_baseline_gap)
-        })
-    })
-}
-
-fn resource_usage_has_memory_baseline_gap(usage: &BenchmarkResourceUsage) -> bool {
-    let peak = usage.process_peak_memory_kb;
-    match (usage.peak_memory_growth_or_legacy_kb(), peak) {
-        (Some(growth), Some(peak)) if peak > growth => {
-            peak.saturating_sub(growth) >= MEMORY_BASELINE_GAP_MIN_DIFF_KB
-                && peak >= growth.saturating_mul(MEMORY_BASELINE_GAP_RATIO)
-        }
-        _ => false,
-    }
-}
-
-fn format_peak_memory(value_kb: Option<u64>) -> String {
-    value_kb
-        .map(|value| format!("{:.2} MB", value as f64 / 1024.0))
-        .unwrap_or_else(|| "-".to_string())
 }
 
 pub(crate) fn run_android_build(

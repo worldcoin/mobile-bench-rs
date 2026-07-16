@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use mobench_artifacts::{ArtifactId, ArtifactPathError, LatestArtifact, RunWorkspace};
 use mobench_domain::{BoundRunReportV2, ReportCounts, ReportOutcome};
-use serde::Serialize;
+use mobench_report::{CanonicalSummaryV2, RunOutcome};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -139,32 +139,6 @@ impl ResolvedRun {
 }
 
 /// Terminal command-level result derived from validated provider evidence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub(crate) enum RunOutcome {
-    /// Every expected Provider Session produced a successful bound report.
-    Complete {
-        expected_sessions: usize,
-        successful_sessions: usize,
-    },
-    /// Some, but not all, expected Provider Sessions produced successful reports.
-    Partial {
-        expected_sessions: usize,
-        successful_sessions: usize,
-    },
-    /// No expected Provider Session produced a successful report.
-    Failed {
-        expected_sessions: usize,
-        successful_sessions: usize,
-    },
-}
-
-impl RunOutcome {
-    pub(crate) const fn is_complete(self) -> bool {
-        matches!(self, Self::Complete { .. })
-    }
-}
-
 /// A collected run that is eligible for canonical report preparation.
 #[derive(Debug)]
 pub(crate) struct CollectedRun {
@@ -176,15 +150,14 @@ pub(crate) struct CollectedRun {
 impl CollectedRun {
     /// Prepare compatibility outputs and the canonical v2 report as one bundle.
     pub(crate) fn prepare(self, artifacts: ReportArtifacts) -> Result<PreparedRun, LifecycleError> {
-        let canonical = CanonicalSummaryV2 {
-            schema_version: "mobench.summary/v2",
-            run_id: &self.plan.run_id,
-            target: self.plan.target,
-            function_id: &self.plan.function_id,
-            requested: self.plan.requested,
-            lifecycle: self.outcome,
-            reports: &self.reports,
-        };
+        let canonical = CanonicalSummaryV2::new(
+            &self.plan.run_id,
+            self.plan.target,
+            &self.plan.function_id,
+            self.plan.requested,
+            self.outcome,
+            &self.reports,
+        );
         let canonical_json = serde_json::to_vec_pretty(&canonical)?;
         let compatibility_json = serde_json::to_vec_pretty(&artifacts.compatibility_json)?;
 
@@ -204,17 +177,6 @@ impl CollectedRun {
             files,
         })
     }
-}
-
-#[derive(Serialize)]
-struct CanonicalSummaryV2<'a> {
-    schema_version: &'static str,
-    run_id: &'a str,
-    target: MobileTarget,
-    function_id: &'a str,
-    requested: ReportCounts,
-    lifecycle: RunOutcome,
-    reports: &'a [BoundRunReportV2],
 }
 
 /// Compatibility report contents and their stable output names.
@@ -463,6 +425,7 @@ mod tests {
             id("test-provider"),
             id("provider-run"),
             id(&format!("transport-{device}")),
+            id(device),
             id(device),
         );
         expected

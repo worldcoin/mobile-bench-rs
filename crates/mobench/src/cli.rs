@@ -908,6 +908,12 @@ impl MobileTarget {
     }
 }
 
+impl std::fmt::Display for MobileTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.display_name())
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 #[clap(rename_all = "lowercase")]
 pub(crate) enum SdkTarget {

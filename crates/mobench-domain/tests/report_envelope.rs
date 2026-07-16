@@ -24,6 +24,7 @@ fn expected_provider_binding() -> ExpectedProviderBinding {
         identifier("build-456"),
         identifier("transport-session-789"),
         identifier("Google-Pixel-7-13.0"),
+        identifier("Google-Pixel-7-13.0"),
     )
 }
 
@@ -138,10 +139,50 @@ fn provider_binding_rejects_observed_device_drift() {
 
     assert!(matches!(
         error,
-        ReportBindingError::ObservedDeviceMismatch { requested, observed }
-            if requested.as_str() == "Google-Pixel-7-13.0"
+        ReportBindingError::ObservedDeviceMismatch { expected, observed }
+            if expected.as_str() == "Google-Pixel-7-13.0"
                 && observed.as_str() == "Google-Pixel-8-14.0"
     ));
+}
+
+#[test]
+fn provider_binding_preserves_distinct_requested_and_authenticated_observed_devices() {
+    let counts = ReportCounts::new(3, 1).expect("test counts are valid");
+    let report = ReportEnvelopeV2::new(
+        identity(),
+        counts,
+        counts,
+        vec![101, 99, 100],
+        ReportOutcome::Success,
+    )
+    .expect("construct valid report");
+    let binding = ProviderReportBinding::new(
+        identifier("browserstack"),
+        identifier("build-456"),
+        identifier("transport-session-789"),
+        identifier("iPhone-14-16"),
+        identifier("iPhone-14-16.3"),
+    );
+    let expected_binding = ExpectedProviderBinding::new(
+        identifier("browserstack"),
+        identifier("build-456"),
+        identifier("transport-session-789"),
+        identifier("iPhone-14-16"),
+        identifier("iPhone-14-16.3"),
+    );
+
+    let bound = expected()
+        .bind(report, binding, &expected_binding)
+        .expect("compatible provider resolution remains authenticated");
+
+    assert_eq!(
+        bound.binding().requested_device_id().as_str(),
+        "iPhone-14-16"
+    );
+    assert_eq!(
+        bound.binding().observed_device_id().as_str(),
+        "iPhone-14-16.3"
+    );
 }
 
 #[test]

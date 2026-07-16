@@ -411,6 +411,7 @@ pub struct ExpectedProviderBinding {
     provider_run_id: ReportIdentifier,
     transport_session_id: ReportIdentifier,
     requested_device_id: ReportIdentifier,
+    observed_device_id: ReportIdentifier,
 }
 
 impl ExpectedProviderBinding {
@@ -420,12 +421,14 @@ impl ExpectedProviderBinding {
         provider_run_id: ReportIdentifier,
         transport_session_id: ReportIdentifier,
         requested_device_id: ReportIdentifier,
+        observed_device_id: ReportIdentifier,
     ) -> Self {
         Self {
             provider_id,
             provider_run_id,
             transport_session_id,
             requested_device_id,
+            observed_device_id,
         }
     }
 
@@ -447,9 +450,9 @@ impl ExpectedProviderBinding {
             &self.requested_device_id,
             &binding.requested_device_id,
         )?;
-        if binding.observed_device_id != binding.requested_device_id {
+        if binding.observed_device_id != self.observed_device_id {
             return Err(ReportBindingError::ObservedDeviceMismatch {
-                requested: binding.requested_device_id.clone(),
+                expected: self.observed_device_id.clone(),
                 observed: binding.observed_device_id.clone(),
             });
         }
@@ -824,10 +827,10 @@ pub enum ReportBindingError {
         expected: ReportIdentifier,
         observed: ReportIdentifier,
     },
-    /// Provider reported a different device from the requested matrix entry.
-    #[error("provider observed device {observed}, expected requested device {requested}")]
+    /// Provider evidence did not match the authenticated observed device.
+    #[error("provider observed device {observed}, expected authenticated device {expected}")]
     ObservedDeviceMismatch {
-        requested: ReportIdentifier,
+        expected: ReportIdentifier,
         observed: ReportIdentifier,
     },
 }

@@ -63,6 +63,13 @@ jobs:
       - name: Publish dry run
         if: github.event_name == 'workflow_dispatch'
         run: |
-          cargo publish --dry-run -p mobench-macros
-          cargo publish --dry-run -p mobench-sdk
-          cargo publish --dry-run -p mobench
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "mobench") | .version')"
+          if cargo info "mobench@${version}" >/dev/null 2>&1; then
+            echo "mobench ${version} is already published; package the complete workspace without registry-collision verification"
+            cargo package --workspace --locked --no-verify \
+              --exclude sample-fns --exclude basic-benchmark --exclude ffi-benchmark
+          else
+            cargo package --workspace --locked --keep-going \
+              --exclude sample-fns --exclude basic-benchmark --exclude ffi-benchmark
+          fi

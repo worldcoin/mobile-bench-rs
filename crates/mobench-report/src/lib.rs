@@ -1,4 +1,21 @@
-//! Context-specific Mobench report encoders.
+//! Canonical Mobench report models and context-specific renderers.
+//!
+//! This crate is the report Module for Mobench. Provider and command Modules
+//! produce typed report data; JSON, Markdown, CSV, JUnit, comparison, and CI
+//! adapters render that data without reimplementing report semantics.
+
+mod model;
+mod render;
+
+pub use model::{
+    BenchmarkFailureStats, BenchmarkResourceUsage, BenchmarkStats, CanonicalSummaryV2,
+    CompareReport, CompareRow, DeviceSummary, RegressionFinding, RunOutcome, SummaryReport,
+};
+pub use render::{
+    MEMORY_BASELINE_GAP_NOTE, compare_summaries, comparison_json, detect_regressions,
+    format_cpu_total_duration_ms, format_duration_smart, format_failure_elapsed_ms, format_ms,
+    render_compare_markdown, render_csv_summary, render_junit_report, render_markdown_summary,
+};
 
 /// Encode untrusted text for an inline Markdown context, including headings.
 ///

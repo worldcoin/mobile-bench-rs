@@ -36,6 +36,10 @@
 - **Observed Device Identity** — the device name and OS version authenticated by
   the provider's terminal build response. It is preserved alongside, never
   substituted for, the Requested Device Identity.
+- **Provider Resolution** — the validated mapping from one Requested Device
+  Identity to one authenticated Observed Device Identity. Exact selectors must
+  remain exact; a major OS selector may resolve to one unambiguous provider
+  minor release. Both identities are bound independently in the report.
 - **Report Binding** — the single transition that validates a producer envelope
   against the resolved run identity and then attaches authenticated provider
   run, transport-session, requested-device, and observed-device evidence.

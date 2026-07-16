@@ -73,6 +73,7 @@ pub(crate) fn bind_report_value(
         identifier(provider_run_id, "provider_run_id")?,
         identifier(transport_session_id, "transport_session_id")?,
         identifier(requested_device_id, "requested_device_id")?,
+        identifier(observed_device_id, "observed_device_id")?,
     );
     expected
         .bind(envelope, binding, &expected_binding)
