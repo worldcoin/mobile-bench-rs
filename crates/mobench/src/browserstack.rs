@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 mod adapter;
+mod polling;
 mod reconciliation;
 
 pub(crate) use adapter::BrowserStackProviderAdapter;
@@ -269,21 +270,6 @@ fn format_file_size(bytes: u64) -> String {
 /// Get file size from path, returning 0 if unable to read metadata.
 fn get_file_size(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-}
-
-fn sleep_cancellable(
-    duration: std::time::Duration,
-    cancellation: &ProcessCancellation,
-) -> Result<()> {
-    let started = Instant::now();
-    while started.elapsed() < duration {
-        if cancellation.is_cancelled() {
-            return Err(anyhow!("BrowserStack collection was cancelled"));
-        }
-        let remaining = duration.saturating_sub(started.elapsed());
-        std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
-    }
-    Ok(())
 }
 
 /// A device available on BrowserStack for testing.
@@ -673,100 +659,6 @@ impl BrowserStackClient {
         let path = format!("app-automate/xcuitest/v2/builds/{}", build_id);
         let json = self.get_json(&path)?;
         build_status_from_value(json).context("parsing build status response")
-    }
-
-    /// Poll for build completion with timeout
-    ///
-    /// # Arguments
-    /// * `build_id` - The build ID to poll
-    /// * `platform` - "espresso" or "xcuitest"
-    /// * `timeout_secs` - Maximum time to wait in seconds (default: 600)
-    /// * `poll_interval_secs` - How often to check status in seconds (default: 10)
-    #[allow(dead_code)]
-    pub fn poll_build_completion(
-        &self,
-        build_id: &str,
-        platform: &str,
-        timeout_secs: u64,
-        poll_interval_secs: u64,
-    ) -> Result<BuildStatus> {
-        self.poll_build_completion_with_terminal_failures(
-            build_id,
-            platform,
-            timeout_secs,
-            poll_interval_secs,
-            false,
-        )
-    }
-
-    fn poll_build_completion_with_terminal_failures(
-        &self,
-        build_id: &str,
-        platform: &str,
-        timeout_secs: u64,
-        poll_interval_secs: u64,
-        allow_terminal_failure_status: bool,
-    ) -> Result<BuildStatus> {
-        self.poll_build_completion_cancellable(
-            build_id,
-            platform,
-            timeout_secs,
-            poll_interval_secs,
-            allow_terminal_failure_status,
-            &mobench_process::global_cancellation_token(),
-        )
-    }
-
-    fn poll_build_completion_cancellable(
-        &self,
-        build_id: &str,
-        platform: &str,
-        timeout_secs: u64,
-        poll_interval_secs: u64,
-        allow_terminal_failure_status: bool,
-        cancellation: &ProcessCancellation,
-    ) -> Result<BuildStatus> {
-        use std::time::{Duration, Instant};
-
-        let start = Instant::now();
-        let timeout = Duration::from_secs(timeout_secs);
-        let poll_interval = Duration::from_secs(poll_interval_secs);
-
-        loop {
-            if cancellation.is_cancelled() {
-                return Err(anyhow!("BrowserStack collection was cancelled"));
-            }
-            let status = match platform {
-                "espresso" => self.get_espresso_build_status(build_id)?,
-                "xcuitest" => self.get_xcuitest_build_status(build_id)?,
-                _ => return Err(anyhow!("unsupported platform: {}", platform)),
-            };
-
-            match status.status.to_lowercase().as_str() {
-                "done" | "passed" | "completed" => return Ok(status),
-                "failed" | "error" | "timeout" => {
-                    if allow_terminal_failure_status {
-                        return Ok(status);
-                    }
-                    return Err(anyhow!(
-                        "Build {} failed with status: {}",
-                        build_id,
-                        status.status
-                    ));
-                }
-                _ => {
-                    // Still running
-                    if start.elapsed() >= timeout {
-                        return Err(anyhow!(
-                            "Timeout waiting for build {} to complete (waited {} seconds)",
-                            build_id,
-                            timeout_secs
-                        ));
-                    }
-                    sleep_cancellable(poll_interval, cancellation)?;
-                }
-            }
-        }
     }
 
     /// Fetch device logs for a specific session
