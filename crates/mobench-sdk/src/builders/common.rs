@@ -20,7 +20,7 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 use std::process::ExitStatus;
 use std::process::{Command, Output};
 use std::time::Duration;
@@ -130,7 +130,7 @@ impl ToolCommand {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn status(&self) -> Result<ExitStatus, BenchError> {
         self.output().map(|output| output.status)
     }
