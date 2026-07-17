@@ -15,9 +15,56 @@ Crates.io release pages:
 
 No user-facing unreleased changes yet.
 
-## v0.1.44
+## v0.1.45
 
 Status: current supported release.
+
+Publication date: 2026-07-17. The prebuilt BrowserStack path passed on Android
+and iOS, including exact-head validation, secretless packaging, credentialed
+prebuilt execution, complete-matrix sanitization, and isolated reporting.
+
+### Secure Workflow Compatibility
+
+The reusable workflow now accepts an optional `prepare_script` for generic
+caller-owned fixture generation and toolchain setup. The value must be a
+normalized repository-relative path resolving to a regular file inside the
+exact PR checkout. It runs with `MOBENCH_CI_PREPARE=1` only in the secretless,
+read-only platform preparation jobs. A hook failure prevents packaging and
+manifest upload.
+
+Callers may select different benchmarks with `functions_ios` and
+`functions_android`; an empty platform input falls back to `functions`.
+Structured `ios_devices` and `android_devices` inputs accept arrays of
+`{"device":"...","os_version":"..."}` objects. They override the legacy
+single-device fields and device profile while preserving those fields as the
+compatibility fallback.
+
+Each function is packaged once per platform, then the trusted prebuilt runner
+submits all requested devices without rebuilding caller code. The run is
+complete only when every requested function/device pair has exactly one result.
+Missing, unexpected, and duplicate shards fail closed, while BrowserStack
+diagnostic artifacts remain available for investigating partial failures.
+
+The authorization invariant is unchanged: an authorized `/mobench` command
+authorizes a run but does not make the requested PR revision trusted. PR code
+still never executes in a job containing BrowserStack credentials or a
+write-capable repository token.
+
+### Migration From v0.1.44
+
+Existing callers remain compatible without new inputs. Update the reusable
+workflow reference and the explicitly installed mobench version to the final
+immutable `v0.1.45` release revision. Add `prepare_script` only when the project
+needs caller-specific preparation, and use the platform function/device inputs
+only when the shared selections are insufficient. Continue passing
+BrowserStack secrets explicitly; do not use `secrets: inherit`.
+
+The CLI package again declares `mobench` as its default binary, and SDK rustdoc
+examples consistently reference `0.1.45`.
+
+## v0.1.44
+
+Status: superseded by `v0.1.45`.
 
 Publication date: 2026-07-17. The prebuilt BrowserStack path passed on Android
 and iOS, including exact-head validation, secretless packaging, credentialed
@@ -232,7 +279,8 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.44` | 2026-07-17 | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Current supported release |
+| `v0.1.45` | 2026-07-17 | `mobench 0.1.45`, `mobench-sdk 0.1.45`, `mobench-macros 0.1.45` | Current supported release |
+| `v0.1.44` | 2026-07-17 | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Superseded by `v0.1.45` |
 | `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Superseded by `v0.1.44` |
 | `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Superseded by `v0.1.43` |
 | `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Superseded by `v0.1.42` |

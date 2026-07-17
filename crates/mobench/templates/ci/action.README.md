@@ -2,6 +2,12 @@
 
 Run benchmark-oriented `mobench` commands in GitHub Actions with caching, Android SDK setup, and artifact upload.
 
+> This local composite action checks out and executes the current revision. Use
+> it only for trusted revisions or secretless jobs. For fork pull requests with
+> BrowserStack credentials, use the generated `mobile-bench.yml`, which calls
+> the secure two-stage reusable workflow and never executes PR code in a
+> credentialed job.
+
 ## Usage
 
 ```yaml

@@ -1107,8 +1107,15 @@ impl BrowserStackClient {
                 .unwrap_or_default();
             }
 
-            if let Some(results) = device_benchmark_results {
-                benchmark_results.insert(device.device.clone(), results);
+            if let Some(results) = device_benchmark_results
+                && benchmark_results
+                    .insert(device.device.clone(), results)
+                    .is_some()
+            {
+                return Err(anyhow!(
+                    "BrowserStack returned duplicate result shards for device {}",
+                    device.device
+                ));
             }
             if let Some(failures) = device_failures {
                 benchmark_failures.insert(device.device.clone(), failures);

@@ -40,10 +40,14 @@ jobs:
     with:
       crate_path: crates/sample-fns
       functions: '["sample_fns::fibonacci"]'
+      functions_ios: '["sample_fns::fibonacci"]'
+      functions_android: '["sample_fns::fibonacci"]'
       platform: ${{ inputs.platform }}
       iterations: ${{ inputs.iterations }}
       warmup: ${{ inputs.warmup }}
       device_profile: low-spec
+      ios_devices: '[{"device":"iPhone SE 2020","os_version":"16"}]'
+      android_devices: '[{"device":"Motorola Moto G9 Play","os_version":"10.0"}]'
       build_release: true
       mobench_version: ${{ inputs.mobench_version }}
       mobench_ref: ${{ inputs.mobench_ref }}

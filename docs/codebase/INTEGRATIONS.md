@@ -1,6 +1,6 @@
 # Integrations
 
-Updated: 2026-07-17. Current release: `0.1.44`.
+Updated: 2026-07-17. Current release: `0.1.45`.
 
 ## BrowserStack
 
@@ -99,6 +99,11 @@ Primary artifact contracts:
 Android/iOS preparation run without secrets and with read-only permissions.
 They produce only enumerated prebuilt mobile artifacts and a path, size,
 SHA-256, platform, and benchmark-ABI manifest.
+
+An optional normalized `prepare_script` and all caller build tooling remain in
+those secretless jobs. Platform-specific function lists and structured device
+arrays are normalized before use; each function is built once, then the trusted
+phase requires the complete function/device result matrix.
 
 Credentialed BrowserStack jobs do not check out the caller and do not run
 caller-controlled build tools, scripts, dependencies, hooks, or binaries on the

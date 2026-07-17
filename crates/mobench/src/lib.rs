@@ -335,6 +335,12 @@ struct VerifiedPrebuiltEntry {
     test_suite: PathBuf,
 }
 
+#[derive(Debug)]
+struct ValidatedPrebuiltResults {
+    results: HashMap<String, Vec<Value>>,
+    device_identities: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedProjectLayout {
     pub(crate) project_root: PathBuf,
@@ -2709,19 +2715,87 @@ fn verify_prebuilt_manifest(
     Ok((manifest, verified))
 }
 
-fn validate_prebuilt_results(function: &str, results: &HashMap<String, Vec<Value>>) -> Result<()> {
-    for entries in results.values() {
-        for entry in entries {
-            let observed = entry
-                .get("function")
-                .and_then(Value::as_str)
-                .context("BrowserStack result omitted benchmark function")?;
-            if observed != function {
-                bail!("BrowserStack result function did not match prepared manifest");
+fn validate_prebuilt_results(
+    function: &str,
+    requested_devices: &[String],
+    results: &HashMap<String, Vec<Value>>,
+) -> Result<ValidatedPrebuiltResults> {
+    let expected = requested_devices.iter().collect::<BTreeSet<_>>();
+    if expected.len() != requested_devices.len() {
+        bail!("requested BrowserStack devices must be unique");
+    }
+    let mut matched = BTreeSet::new();
+    let mut canonical_by_observed = BTreeMap::new();
+    let mut unexpected = Vec::new();
+    for observed in results.keys() {
+        let candidate = if let Some(exact) = expected.get(observed) {
+            Some(*exact)
+        } else {
+            let candidates = expected
+                .iter()
+                .copied()
+                .filter(|requested| summarize::device_names_match(requested, observed))
+                .collect::<Vec<_>>();
+            if candidates.len() > 1 {
+                bail!(
+                    "ambiguous BrowserStack result device `{observed}` matched multiple requested devices"
+                );
             }
+            candidates.into_iter().next()
+        };
+        if let Some(candidate) = candidate {
+            if !matched.insert(candidate) {
+                bail!(
+                    "duplicate BrowserStack result device `{observed}` matched requested device `{candidate}`"
+                );
+            }
+            canonical_by_observed.insert(observed, candidate);
+        } else {
+            unexpected.push(observed);
         }
     }
-    Ok(())
+    let missing = expected.difference(&matched).copied().collect::<Vec<_>>();
+    if !missing.is_empty() || !unexpected.is_empty() {
+        bail!(
+            "incomplete BrowserStack result matrix for `{function}`; missing devices: {}; unexpected devices: {}",
+            missing
+                .iter()
+                .map(|value| value.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            unexpected
+                .iter()
+                .map(|value| value.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let mut normalized = HashMap::new();
+    let mut identities = HashMap::new();
+    for (device, entries) in results {
+        if entries.len() != 1 {
+            bail!(
+                "expected exactly one BrowserStack result shard for `{function}` on `{device}`, found {}",
+                entries.len()
+            );
+        }
+        let observed_function = entries[0]
+            .get("function")
+            .and_then(Value::as_str)
+            .context("BrowserStack result omitted benchmark function")?;
+        if observed_function != function {
+            bail!("BrowserStack result function did not match prepared manifest");
+        }
+        let canonical = canonical_by_observed
+            .get(device)
+            .context("validated BrowserStack device was not canonicalized")?;
+        normalized.insert(canonical.as_str().to_string(), entries.clone());
+        identities.insert(device.clone(), canonical.as_str().to_string());
+    }
+    Ok(ValidatedPrebuiltResults {
+        results: normalized,
+        device_identities: identities,
+    })
 }
 
 fn trusted_prebuilt_timeout(
@@ -2759,6 +2833,7 @@ fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
         || args.devices.iter().any(|device| {
             device.is_empty() || device.len() > 256 || device.chars().any(char::is_control)
         })
+        || args.devices.iter().collect::<BTreeSet<_>>().len() != args.devices.len()
     {
         bail!("at least one printable BrowserStack device is required");
     }
@@ -2833,7 +2908,6 @@ fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
             Some(timeout_secs),
             Some(args.fetch_poll_interval_secs),
         )?;
-        validate_prebuilt_results(&entry.function, &results)?;
         if args.fetch {
             fetch_browserstack_artifacts(
                 &client,
@@ -2845,6 +2919,19 @@ fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
                 args.fetch_timeout_secs,
             )?;
         }
+        let validated = validate_prebuilt_results(&entry.function, &args.devices, &results)?;
+        let metrics = metrics
+            .into_iter()
+            .map(|(device, metrics)| {
+                let canonical = validated
+                    .device_identities
+                    .get(&device)
+                    .cloned()
+                    .unwrap_or(device);
+                (canonical, metrics)
+            })
+            .collect::<HashMap<_, _>>();
+        let results = validated.results;
         let mut run_summary = RunSummary {
             spec,
             artifacts: None,
@@ -11948,6 +12035,94 @@ mod resource_usage_tests {
         assert_eq!(trusted_prebuilt_timeout(Some(300), 300, 1800), 360);
         assert_eq!(trusted_prebuilt_timeout(Some(21_600), 300, 1800), 1800);
         assert_eq!(trusted_prebuilt_timeout(None, 300, 1800), 300);
+    }
+
+    #[test]
+    fn prebuilt_results_require_complete_device_matrix() {
+        let devices = vec!["Pixel 7-13.0".to_string(), "Pixel 8-14.0".to_string()];
+        let complete = HashMap::from([
+            (
+                devices[0].clone(),
+                vec![json!({"function": "crate::bench", "samples": []})],
+            ),
+            (
+                devices[1].clone(),
+                vec![json!({"function": "crate::bench", "samples": []})],
+            ),
+        ]);
+        validate_prebuilt_results("crate::bench", &devices, &complete).unwrap();
+
+        let provider_name_without_version = HashMap::from([
+            (
+                "Pixel 7".to_string(),
+                vec![json!({"function": "crate::bench", "samples": []})],
+            ),
+            (
+                "Pixel 8".to_string(),
+                vec![json!({"function": "crate::bench", "samples": []})],
+            ),
+        ]);
+        let normalized =
+            validate_prebuilt_results("crate::bench", &devices, &provider_name_without_version)
+                .unwrap();
+        assert!(normalized.results.contains_key("Pixel 7-13.0"));
+        assert!(normalized.results.contains_key("Pixel 8-14.0"));
+
+        let missing = HashMap::from([(
+            devices[0].clone(),
+            vec![json!({"function": "crate::bench", "samples": []})],
+        )]);
+        let error = validate_prebuilt_results("crate::bench", &devices, &missing).unwrap_err();
+        assert!(error.to_string().contains("missing devices: Pixel 8-14.0"));
+    }
+
+    #[test]
+    fn prebuilt_results_reject_duplicate_and_unexpected_shards() {
+        let devices = vec!["Pixel 7-13.0".to_string()];
+        let duplicate = HashMap::from([(
+            devices[0].clone(),
+            vec![
+                json!({"function": "crate::bench"}),
+                json!({"function": "crate::bench"}),
+            ],
+        )]);
+        assert!(
+            validate_prebuilt_results("crate::bench", &devices, &duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly one BrowserStack result shard")
+        );
+
+        let unexpected = HashMap::from([(
+            "Pixel 8-14.0".to_string(),
+            vec![json!({"function": "crate::bench"})],
+        )]);
+        let error = validate_prebuilt_results("crate::bench", &devices, &unexpected).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unexpected devices: Pixel 8-14.0")
+        );
+
+        let duplicate_requests = vec![devices[0].clone(), devices[0].clone()];
+        assert!(
+            validate_prebuilt_results("crate::bench", &duplicate_requests, &HashMap::new())
+                .unwrap_err()
+                .to_string()
+                .contains("must be unique")
+        );
+
+        let ambiguous_devices = vec!["Pixel 7-13.0".to_string(), "Pixel 7-14.0".to_string()];
+        let ambiguous = HashMap::from([(
+            "Pixel 7".to_string(),
+            vec![json!({"function": "crate::bench"})],
+        )]);
+        assert!(
+            validate_prebuilt_results("crate::bench", &ambiguous_devices, &ambiguous)
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous BrowserStack result device")
+        );
     }
 
     #[test]

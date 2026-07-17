@@ -11,6 +11,21 @@ on:
         description: "JSON array or comma-separated benchmark function names"
         required: true
         type: string
+      functions_ios:
+        description: "Optional iOS function list; defaults to functions"
+        required: false
+        type: string
+        default: ""
+      functions_android:
+        description: "Optional Android function list; defaults to functions"
+        required: false
+        type: string
+        default: ""
+      prepare_script:
+        description: "Optional repository-relative shell script run only in secretless prepare jobs"
+        required: false
+        type: string
+        default: ""
       iterations:
         description: "Number of benchmark iterations"
         required: false
@@ -41,6 +56,11 @@ on:
         required: false
         type: string
         default: ""
+      ios_devices:
+        description: 'Optional JSON array of {"device":"...","os_version":"..."}; overrides the single-device/profile inputs'
+        required: false
+        type: string
+        default: ""
       android_device:
         description: "Custom Android device name"
         required: false
@@ -48,6 +68,11 @@ on:
         default: ""
       android_os_version:
         description: "Custom Android OS version"
+        required: false
+        type: string
+        default: ""
+      android_devices:
+        description: 'Optional JSON array of {"device":"...","os_version":"..."}; overrides the single-device/profile inputs'
         required: false
         type: string
         default: ""
@@ -126,9 +151,9 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  # Replace this with the immutable commit containing the final 0.1.44
+  # This must point to the immutable commit containing the 0.1.45 trusted
   # prepare/run-prebuilt implementation before enabling the workflow.
-  MOBENCH_TRUSTED_SHA: 3685fefccd7bce6b30d33fbcaf758dc06ae85ba5
+  MOBENCH_TRUSTED_SHA: a785455efe8a43c2689cff0d06fd45480373cdd5
 
 jobs:
   validate-request:
@@ -140,6 +165,10 @@ jobs:
     outputs:
       head_sha: ${{ steps.validate.outputs.head_sha }}
       head_repo: ${{ steps.validate.outputs.head_repo }}
+      functions_ios: ${{ steps.validate.outputs.functions_ios }}
+      functions_android: ${{ steps.validate.outputs.functions_android }}
+      ios_devices: ${{ steps.validate.outputs.ios_devices }}
+      android_devices: ${{ steps.validate.outputs.android_devices }}
     steps:
       - name: Validate full SHA and current PR head
         id: validate
@@ -150,6 +179,11 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           ALLOW_NON_PR: ${{ inputs.allow_non_pr }}
           CALLER_REPO: ${{ github.repository }}
+          FUNCTIONS: ${{ inputs.functions }}
+          FUNCTIONS_IOS: ${{ inputs.functions_ios }}
+          FUNCTIONS_ANDROID: ${{ inputs.functions_android }}
+          IOS_DEVICES: ${{ inputs.ios_devices }}
+          ANDROID_DEVICES: ${{ inputs.android_devices }}
         run: |
           set -euo pipefail
           sha="$REQUESTED_SHA"
@@ -184,6 +218,70 @@ jobs:
             exit 1
           fi
           printf 'head_sha=%s\nhead_repo=%s\n' "$sha" "$head_repo" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json, os, re
+
+          def normalize_functions(value, label):
+              value = value.strip()
+              if value.startswith('['):
+                  try:
+                      functions = json.loads(value)
+                  except json.JSONDecodeError as error:
+                      raise SystemExit(f'{label} must be a JSON string array or comma-separated list: {error}')
+                  if not isinstance(functions, list) or not all(isinstance(item, str) for item in functions):
+                      raise SystemExit(f'{label} must be a JSON string array')
+              else:
+                  functions = value.split(',')
+              functions = [item.strip() for item in functions if item.strip()]
+              if not 1 <= len(functions) <= 64:
+                  raise SystemExit(f'{label} must contain 1..64 benchmark functions')
+              if len(set(functions)) != len(functions):
+                  raise SystemExit(f'{label} contains duplicate benchmark functions')
+              if any(len(item) > 512 or any(ord(char) < 32 or ord(char) == 127 for char in item) for item in functions):
+                  raise SystemExit(f'{label} contains an invalid benchmark function')
+              return json.dumps(functions, separators=(',', ':'))
+
+          def normalize_devices(value, label):
+              if not value.strip():
+                  return ''
+              try:
+                  devices = json.loads(value)
+              except json.JSONDecodeError as error:
+                  raise SystemExit(f'{label} must be a JSON array: {error}')
+              if not isinstance(devices, list) or not 1 <= len(devices) <= 16:
+                  raise SystemExit(f'{label} must contain 1..16 devices')
+              device_pattern = re.compile(r'^[A-Za-z0-9._+()/ -]{1,100}$')
+              os_pattern = re.compile(r'^[A-Za-z0-9._+-]{1,32}$')
+              normalized = []
+              seen = set()
+              for index, item in enumerate(devices):
+                  if not isinstance(item, dict) or set(item) != {'device', 'os_version'}:
+                      raise SystemExit(f'{label}[{index}] must contain only device and os_version')
+                  device, os_version = item['device'], item['os_version']
+                  if not isinstance(device, str) or not isinstance(os_version, str):
+                      raise SystemExit(f'{label}[{index}] fields must be strings')
+                  if not device_pattern.fullmatch(device) or not os_pattern.fullmatch(os_version):
+                      raise SystemExit(f'{label}[{index}] contains an invalid device or OS version')
+                  spec = f'{device}-{os_version}'
+                  if spec in seen:
+                      raise SystemExit(f'{label} contains duplicate devices')
+                  seen.add(spec)
+                  normalized.append({'device': device, 'os_version': os_version})
+              return json.dumps(normalized, separators=(',', ':'))
+
+          shared = os.environ['FUNCTIONS']
+          ios_functions = os.environ['FUNCTIONS_IOS'].strip() or shared
+          android_functions = os.environ['FUNCTIONS_ANDROID'].strip() or shared
+          outputs = {
+              'functions_ios': normalize_functions(ios_functions, 'functions_ios'),
+              'functions_android': normalize_functions(android_functions, 'functions_android'),
+              'ios_devices': normalize_devices(os.environ['IOS_DEVICES'], 'ios_devices'),
+              'android_devices': normalize_devices(os.environ['ANDROID_DEVICES'], 'android_devices'),
+          }
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              for key, value in outputs.items():
+                  output.write(f'{key}={value}\n')
+          PY
 
   # Build the trusted control-plane binary from the immutable commit containing
   # this reusable workflow. It is compiled in a job with no secrets, no
@@ -266,7 +364,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.44 --locked
+            cargo install mobench --version 0.1.45 --locked
           fi
           brew install xcodegen
       - name: Install caller-selected binding generator
@@ -315,11 +413,45 @@ jobs:
               out.extend(['[project]', f'ffi_backend = "{backend}"'])
           path.write_text('\n'.join(out) + '\n')
           PY
+      - name: Run caller preparation hook (untrusted)
+        if: inputs.prepare_script != ''
+        working-directory: caller
+        shell: bash
+        env:
+          MOBENCH_CI_PREPARE: "1"
+          MOBENCH_PLATFORM: ios
+          PREPARE_SCRIPT: ${{ inputs.prepare_script }}
+        run: |
+          set -euo pipefail
+          script="$(python3 - <<'PY'
+          import os
+          from pathlib import Path, PurePosixPath
+
+          raw = os.environ['PREPARE_SCRIPT']
+          if (not raw or len(raw) > 512 or '\\' in raw
+                  or any(ord(char) < 32 or ord(char) == 127 for char in raw)):
+              raise SystemExit('prepare_script is not a valid repository-relative path')
+          relative = PurePosixPath(raw)
+          if relative.is_absolute() or raw != relative.as_posix() or any(part in ('', '.', '..') for part in relative.parts):
+              raise SystemExit('prepare_script must be a normalized repository-relative path')
+          root = Path.cwd().resolve(strict=True)
+          try:
+              resolved = (root / Path(*relative.parts)).resolve(strict=True)
+              resolved.relative_to(root)
+          except (FileNotFoundError, RuntimeError, ValueError):
+              raise SystemExit('prepare_script is missing or escapes the caller checkout')
+          if not resolved.is_file():
+              raise SystemExit('prepare_script must resolve to a regular file')
+          print(resolved)
+          PY
+          )"
+          bash -- "$script"
       - name: Prepare iOS packages and manifest
         working-directory: caller
         shell: bash
         env:
-          FUNCTIONS_JSON: ${{ inputs.functions }}
+          MOBENCH_CI_PREPARE: "1"
+          FUNCTIONS_JSON: ${{ needs.validate-request.outputs.functions_ios }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
           CRATE_PATH: ${{ inputs.crate_path }}
@@ -407,7 +539,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.44 --locked
+            cargo install mobench --version 0.1.45 --locked
           fi
       - name: Install caller-selected binding generator
         shell: bash
@@ -455,11 +587,45 @@ jobs:
               out.extend(['[project]', f'ffi_backend = "{backend}"'])
           path.write_text('\n'.join(out) + '\n')
           PY
+      - name: Run caller preparation hook (untrusted)
+        if: inputs.prepare_script != ''
+        working-directory: caller
+        shell: bash
+        env:
+          MOBENCH_CI_PREPARE: "1"
+          MOBENCH_PLATFORM: android
+          PREPARE_SCRIPT: ${{ inputs.prepare_script }}
+        run: |
+          set -euo pipefail
+          script="$(python3 - <<'PY'
+          import os
+          from pathlib import Path, PurePosixPath
+
+          raw = os.environ['PREPARE_SCRIPT']
+          if (not raw or len(raw) > 512 or '\\' in raw
+                  or any(ord(char) < 32 or ord(char) == 127 for char in raw)):
+              raise SystemExit('prepare_script is not a valid repository-relative path')
+          relative = PurePosixPath(raw)
+          if relative.is_absolute() or raw != relative.as_posix() or any(part in ('', '.', '..') for part in relative.parts):
+              raise SystemExit('prepare_script must be a normalized repository-relative path')
+          root = Path.cwd().resolve(strict=True)
+          try:
+              resolved = (root / Path(*relative.parts)).resolve(strict=True)
+              resolved.relative_to(root)
+          except (FileNotFoundError, RuntimeError, ValueError):
+              raise SystemExit('prepare_script is missing or escapes the caller checkout')
+          if not resolved.is_file():
+              raise SystemExit('prepare_script must resolve to a regular file')
+          print(resolved)
+          PY
+          )"
+          bash -- "$script"
       - name: Prepare Android packages and manifest
         working-directory: caller
         shell: bash
         env:
-          FUNCTIONS_JSON: ${{ inputs.functions }}
+          MOBENCH_CI_PREPARE: "1"
+          FUNCTIONS_JSON: ${{ needs.validate-request.outputs.functions_android }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
           CRATE_PATH: ${{ inputs.crate_path }}
@@ -516,43 +682,58 @@ jobs:
           current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
-      - name: Resolve and validate iOS device
+      - name: Resolve and validate iOS devices
         id: device
         shell: bash
         env:
           DEVICE_PROFILE: ${{ inputs.device_profile }}
           DEVICE_OVERRIDE: ${{ inputs.ios_device }}
           OS_OVERRIDE: ${{ inputs.ios_os_version }}
+          STRUCTURED_DEVICES: ${{ needs.validate-request.outputs.ios_devices }}
         run: |
           set -euo pipefail
           chmod +x trusted-bin/cargo-mobench
-          if [ -n "$DEVICE_OVERRIDE" ] && [ -n "$OS_OVERRIDE" ]; then
+          if [ -n "$STRUCTURED_DEVICES" ]; then
+            specs="$(jq -cer '[.[] | .device + "-" + .os_version]' <<<"$STRUCTURED_DEVICES")"
+          elif [ -n "$DEVICE_OVERRIDE" ] && [ -n "$OS_OVERRIDE" ]; then
             device="$DEVICE_OVERRIDE"; os="$OS_OVERRIDE"
+            specs="$(jq -cn --arg spec "$device-$os" '[$spec]')"
+          elif [ -n "$DEVICE_OVERRIDE" ] || [ -n "$OS_OVERRIDE" ]; then
+            echo "::error::ios_device and ios_os_version must be provided together"
+            exit 2
           else
             json="$(trusted-bin/cargo-mobench devices resolve --platform ios --profile "$DEVICE_PROFILE" --format json)"
-            device="$(jq -r '.device // .name' <<<"$json")"; os="$(jq -r '.os_version' <<<"$json")"
+            specs="$(jq -cer 'if (.devices | type) == "array" then [.devices[] | (.identifier // ((.device // .name) + "-" + .os_version))] else [(.identifier // ((.device // .name) + "-" + .os_version))] end' <<<"$json")"
           fi
           device_pattern='^[A-Za-z0-9._+()/ -]{1,100}$'
           os_pattern='^[A-Za-z0-9._+-]{1,32}$'
-          [[ "$device" =~ $device_pattern && "$os" =~ $os_pattern ]] || exit 2
-          printf 'spec=%s-%s\n' "$device" "$os" >> "$GITHUB_OUTPUT"
+          count="$(jq -er 'length' <<<"$specs")"
+          [ "$count" -ge 1 ] && [ "$count" -le 16 ] || exit 2
+          while IFS= read -r spec; do
+            device="${spec%-*}"; os="${spec##*-}"
+            [[ "$device" =~ $device_pattern && "$os" =~ $os_pattern ]] || exit 2
+          done < <(jq -er '.[]' <<<"$specs")
+          [ "$(jq -er 'unique | length' <<<"$specs")" -eq "$count" ] || exit 2
+          printf 'specs=%s\n' "$specs" >> "$GITHUB_OUTPUT"
       - name: Upload, run, and fetch iOS benchmark
         shell: bash
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
           HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
-          DEVICE_SPEC: ${{ steps.device.outputs.spec }}
-          FUNCTIONS_JSON: ${{ inputs.functions }}
+          DEVICE_SPECS: ${{ steps.device.outputs.specs }}
+          FUNCTIONS_JSON: ${{ needs.validate-request.outputs.functions_ios }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
         run: |
           set -euo pipefail
+          device_args=()
+          while IFS= read -r spec; do device_args+=(--devices "$spec"); done < <(jq -er '.[]' <<<"$DEVICE_SPECS")
           trusted-bin/cargo-mobench ci run-prebuilt \
             --manifest prebuilt/ios/manifest.json --expected-source-sha "$HEAD_SHA" \
             --expected-platform ios --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
-            --devices "$DEVICE_SPEC" --fetch --fetch-output-dir target/browserstack \
+            "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/ios
       - name: Upload iOS results
         if: always()
@@ -606,43 +787,58 @@ jobs:
           current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
-      - name: Resolve and validate Android device
+      - name: Resolve and validate Android devices
         id: device
         shell: bash
         env:
           DEVICE_PROFILE: ${{ inputs.device_profile }}
           DEVICE_OVERRIDE: ${{ inputs.android_device }}
           OS_OVERRIDE: ${{ inputs.android_os_version }}
+          STRUCTURED_DEVICES: ${{ needs.validate-request.outputs.android_devices }}
         run: |
           set -euo pipefail
           chmod +x trusted-bin/cargo-mobench
-          if [ -n "$DEVICE_OVERRIDE" ] && [ -n "$OS_OVERRIDE" ]; then
+          if [ -n "$STRUCTURED_DEVICES" ]; then
+            specs="$(jq -cer '[.[] | .device + "-" + .os_version]' <<<"$STRUCTURED_DEVICES")"
+          elif [ -n "$DEVICE_OVERRIDE" ] && [ -n "$OS_OVERRIDE" ]; then
             device="$DEVICE_OVERRIDE"; os="$OS_OVERRIDE"
+            specs="$(jq -cn --arg spec "$device-$os" '[$spec]')"
+          elif [ -n "$DEVICE_OVERRIDE" ] || [ -n "$OS_OVERRIDE" ]; then
+            echo "::error::android_device and android_os_version must be provided together"
+            exit 2
           else
             json="$(trusted-bin/cargo-mobench devices resolve --platform android --profile "$DEVICE_PROFILE" --format json)"
-            device="$(jq -r '.device // .name' <<<"$json")"; os="$(jq -r '.os_version' <<<"$json")"
+            specs="$(jq -cer 'if (.devices | type) == "array" then [.devices[] | (.identifier // ((.device // .name) + "-" + .os_version))] else [(.identifier // ((.device // .name) + "-" + .os_version))] end' <<<"$json")"
           fi
           device_pattern='^[A-Za-z0-9._+()/ -]{1,100}$'
           os_pattern='^[A-Za-z0-9._+-]{1,32}$'
-          [[ "$device" =~ $device_pattern && "$os" =~ $os_pattern ]] || exit 2
-          printf 'spec=%s-%s\n' "$device" "$os" >> "$GITHUB_OUTPUT"
+          count="$(jq -er 'length' <<<"$specs")"
+          [ "$count" -ge 1 ] && [ "$count" -le 16 ] || exit 2
+          while IFS= read -r spec; do
+            device="${spec%-*}"; os="${spec##*-}"
+            [[ "$device" =~ $device_pattern && "$os" =~ $os_pattern ]] || exit 2
+          done < <(jq -er '.[]' <<<"$specs")
+          [ "$(jq -er 'unique | length' <<<"$specs")" -eq "$count" ] || exit 2
+          printf 'specs=%s\n' "$specs" >> "$GITHUB_OUTPUT"
       - name: Upload, run, and fetch Android benchmark
         shell: bash
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
           HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
-          DEVICE_SPEC: ${{ steps.device.outputs.spec }}
-          FUNCTIONS_JSON: ${{ inputs.functions }}
+          DEVICE_SPECS: ${{ steps.device.outputs.specs }}
+          FUNCTIONS_JSON: ${{ needs.validate-request.outputs.functions_android }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
         run: |
           set -euo pipefail
+          device_args=()
+          while IFS= read -r spec; do device_args+=(--devices "$spec"); done < <(jq -er '.[]' <<<"$DEVICE_SPECS")
           trusted-bin/cargo-mobench ci run-prebuilt \
             --manifest prebuilt/android/manifest.json --expected-source-sha "$HEAD_SHA" \
             --expected-platform android --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
-            --devices "$DEVICE_SPEC" --fetch --fetch-output-dir target/browserstack \
+            "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/android
       - name: Upload Android results
         if: always()
@@ -701,13 +897,14 @@ jobs:
           allowed = {'summary.json', 'summary.md', 'results.csv'}
           unsafe = re.compile(r'[\x00-\x1f\x7f]|[<>`\[\]|!]|(?:^|\n)::')
           for root in roots:
+              files = set()
               for p in root.rglob('*'):
                   if p.is_symlink() or (p.is_file() and p.stat().st_size > 50 * 1024 * 1024):
                       raise SystemExit('unsafe report artifact')
-              summaries = list(root.rglob('summary.json'))
-              if len(summaries) != 1 or summaries[0].name not in allowed:
-                  raise SystemExit('expected exactly one summary.json')
-              payload = json.loads(summaries[0].read_text())
+                  if p.is_file(): files.add(p.relative_to(root).as_posix())
+              if files != allowed:
+                  raise SystemExit('expected exactly summary.json, summary.md, and results.csv')
+              payload = json.loads((root / 'summary.json').read_text())
               def check(v, depth=0):
                   if depth > 32: raise SystemExit('report nesting too deep')
                   if isinstance(v, str) and (len(v) > 4096 or unsafe.search(v)):
@@ -725,8 +922,8 @@ jobs:
           chmod +x trusted-bin/cargo-mobench
           mkdir -p rendered
           for platform in ios android; do
-            summary="$(find "results/$platform" -type f -name summary.json -print -quit 2>/dev/null || true)"
-            if [ -n "$summary" ]; then
+            summary="results/$platform/summary.json"
+            if [ -f "$summary" ]; then
               mkdir -p "rendered/$platform"
               trusted-bin/cargo-mobench report summarize --summary "$summary" \
                 --output "rendered/$platform/summary.md" --plots off
@@ -754,12 +951,12 @@ jobs:
           mkdir -p history-bundle
           platforms='[]'
           for platform in ios android; do
-            source="$(find "results/$platform" -type f -name summary.json -print -quit 2>/dev/null || true)"
-            [ -n "$source" ] || continue
+            source="results/$platform/summary.json"
+            [ -f "$source" ] || continue
             mkdir -p "history-bundle/$platform"
             cp "$source" "history-bundle/$platform/summary.json"
-            csv="$(find "results/$platform" -type f -name results.csv -print -quit 2>/dev/null || true)"
-            [ -z "$csv" ] || cp "$csv" "history-bundle/$platform/results.csv"
+            csv="results/$platform/results.csv"
+            [ ! -f "$csv" ] || cp "$csv" "history-bundle/$platform/results.csv"
             platforms="$(jq --arg p "$platform" '. + [$p]' <<<"$platforms")"
           done
           jq -n --arg sha "$HEAD_SHA" --arg pr "$PR_NUMBER" --arg by "$REQUESTED_BY" \
