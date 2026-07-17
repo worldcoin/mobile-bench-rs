@@ -2512,6 +2512,22 @@ mod tests {
     }
 
     #[test]
+    fn test_android_runners_emit_collectable_chunked_benchmark_reports() {
+        let generated_runner =
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template");
+        let native_runner = include_str!("native_templates/android/MainActivity.kt.template");
+        let boltffi_runner = include_str!("boltffi_templates/android/MainActivity.kt.template");
+
+        for runner in [generated_runner, native_runner, boltffi_runner] {
+            assert!(runner.contains("BENCH_JSON_START"));
+            assert!(runner.contains("BENCH_JSON_CHUNK"));
+            assert!(runner.contains("BENCH_JSON_END"));
+            assert!(runner.contains("val chunkSize = 1000"));
+            assert!(runner.contains("Character.isHighSurrogate"));
+        }
+    }
+
+    #[test]
     fn generated_android_test_uses_configured_timeout_and_heartbeat() {
         let temp_dir = env::temp_dir().join("mobench-sdk-android-timeout-test");
         let _ = fs::remove_dir_all(&temp_dir);

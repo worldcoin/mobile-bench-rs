@@ -228,7 +228,7 @@ class BenchmarkWorkerService : Service() {
                 runProcessPeakMemoryKb = processMemorySampler.stop()
             }
             val json = buildNativeBenchReportJson(rawReport, runProcessPeakMemoryKb)
-            android.util.Log.i("BenchRunner", "BENCH_JSON ${json}")
+            logBenchJson(json)
             formatNativeBenchReport(json)
         } catch (e: Exception) {
             android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
@@ -240,6 +240,22 @@ class BenchmarkWorkerService : Service() {
 
         return WorkerBenchmarkResult(displayText = display, errorMessage = null)
     }
+}
+
+private fun logBenchJson(json: String) {
+    // Stay below logcat's byte limit even when a chunk contains multibyte UTF-8.
+    val chunkSize = 1000
+    android.util.Log.i("BenchRunner", "BENCH_JSON_START")
+    var offset = 0
+    while (offset < json.length) {
+        var end = minOf(offset + chunkSize, json.length)
+        if (end < json.length && Character.isHighSurrogate(json[end - 1]) && Character.isLowSurrogate(json[end])) {
+            end -= 1
+        }
+        android.util.Log.i("BenchRunner", "BENCH_JSON_CHUNK ${json.substring(offset, end)}")
+        offset = end
+    }
+    android.util.Log.i("BenchRunner", "BENCH_JSON_END")
 }
 
 private data class BenchParams(

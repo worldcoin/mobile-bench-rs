@@ -485,11 +485,15 @@ class BenchmarkWorkerService : Service() {
 }
 
 private fun logBenchJson(json: String) {
-    val chunkSize = 3000
+    // Stay below logcat's byte limit even when a chunk contains multibyte UTF-8.
+    val chunkSize = 1000
     android.util.Log.i("BenchRunner", "BENCH_JSON_START")
     var offset = 0
     while (offset < json.length) {
-        val end = minOf(offset + chunkSize, json.length)
+        var end = minOf(offset + chunkSize, json.length)
+        if (end < json.length && Character.isHighSurrogate(json[end - 1]) && Character.isLowSurrogate(json[end])) {
+            end -= 1
+        }
         android.util.Log.i("BenchRunner", "BENCH_JSON_CHUNK ${json.substring(offset, end)}")
         offset = end
     }
