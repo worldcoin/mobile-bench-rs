@@ -84,6 +84,14 @@ def test_trusted_control_plane_is_from_a_literal_commit() -> None:
     assert "repository: worldcoin/mobile-bench-rs" in trusted
     assert "ref: ${{ env.MOBENCH_TRUSTED_SHA }}" in trusted
     assert "github.workflow_sha" not in trusted
+    cargo_toml = subprocess.run(
+        ["git", "show", f"{match.group(1)}:Cargo.toml"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert 'version = "0.1.45"' in cargo_toml
 
 
 def test_untrusted_uploads_are_enumerated() -> None:
@@ -259,6 +267,16 @@ def test_generated_workflow_uses_secure_reusable_boundary() -> None:
     assert "actions/checkout" not in GENERATED_WORKFLOW
     assert "runs-on:" not in GENERATED_WORKFLOW
     assert "worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@" in GENERATED_WORKFLOW
+    workflow_ref = re.search(r"reusable-bench\.yml@([0-9a-f]{40})", GENERATED_WORKFLOW)
+    assert workflow_ref
+    pinned_workflow = subprocess.run(
+        ["git", "show", f"{workflow_ref.group(1)}:.github/workflows/reusable-bench.yml"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert "MOBENCH_TRUSTED_SHA: a785455efe8a43c2689cff0d06fd45480373cdd5" in pinned_workflow
     assert "prepare_script:" in GENERATED_WORKFLOW
     assert "functions_ios:" in GENERATED_WORKFLOW
     assert "functions_android:" in GENERATED_WORKFLOW

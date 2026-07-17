@@ -60,7 +60,7 @@ permissions:
 
 jobs:
   benchmark:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@REPLACE_WITH_V0_1_45_COMMIT_SHA
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@3dc3d5be6add73a1b2f6c3edefb862fd485356c2
     with:
       head_sha: ${{ inputs.head_sha }}
       pr_number: ${{ inputs.pr_number }}
