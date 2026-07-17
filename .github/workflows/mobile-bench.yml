@@ -90,9 +90,9 @@ on:
 
 permissions:
   actions: read
-  contents: write
-  issues: write
+  contents: read
   pull-requests: write
+  checks: write
 
 concurrency:
   group: mobench-${{ inputs.pr_number != '' && inputs.pr_number || github.run_id }}

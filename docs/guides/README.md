@@ -1,6 +1,6 @@
 # mobench Guides
 
-Current release line: **0.1.43**.
+Current release candidate: **0.1.44**.
 
 These guides cover the current mobench CLI, SDK, generated mobile runners,
 BrowserStack execution, CI outputs, artifact fetching, and local native
@@ -19,6 +19,9 @@ profiling.
 - [browserstack-ci.md](browserstack-ci.md): BrowserStack credentials,
   deterministic device resolution, `ci run`, split-sample merging, PR reporting,
   baselines, and artifact fetching.
+- [reusable-workflow-security.md](reusable-workflow-security.md): secure
+  two-stage reusable workflow, artifact-manifest trust boundary, permissions,
+  report isolation, and caller migration.
 - [browserstack-metrics.md](browserstack-metrics.md): timing/resource metrics,
   CSV columns, BrowserStack log parsing, and local profiling boundaries.
 - [fetch-results.md](fetch-results.md): `--fetch`, `mobench fetch`, and

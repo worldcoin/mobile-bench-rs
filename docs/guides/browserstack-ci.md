@@ -1,10 +1,15 @@
 # BrowserStack CI Guide
 
-Current release: **0.1.43**.
+Current release candidate: **0.1.44**.
 
 This guide covers BrowserStack benchmark execution, deterministic device
 resolution, CI contract outputs, artifact fetching, PR reporting, and baseline
 regression checks. Native stack/flamegraph profiling remains local-only.
+
+For pull-request-triggered BrowserStack runs, use the reusable workflow's
+two-stage prepare/prebuilt architecture. See
+[Reusable Workflow Security](reusable-workflow-security.md). A maintainer trust
+check alone does not make a pull-request revision safe to run with credentials.
 
 ## Credentials
 
@@ -200,6 +205,13 @@ cargo mobench ci run \
 ```
 
 ## GitHub Action Usage
+
+The local action example below is suitable for trusted revisions or host-only
+runs. Do not adapt it into a credentialed fork-PR job that checks out and builds
+the pull request. Fork-PR BrowserStack callers should use
+`.github/workflows/reusable-bench.yml` at an immutable `v0.1.44` commit and pass
+BrowserStack secrets explicitly; the reusable workflow performs the untrusted
+prepare and trusted prebuilt stages automatically.
 
 Minimal workflow:
 

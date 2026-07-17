@@ -1,6 +1,6 @@
 # Integrations
 
-Updated: 2026-07-15. Release line: `0.1.43`.
+Updated: 2026-07-17. Release candidate: `0.1.44`.
 
 ## BrowserStack
 
@@ -92,6 +92,20 @@ Primary artifact contracts:
 - BrowserStack fetch: session JSON, logs, and available provider artifacts.
 - Profiling self-test: profile manifest, summary, folded stacks, flamegraphs,
   and viewer artifacts.
+
+### Reusable Workflow Trust Boundary
+
+`reusable-bench.yml` is split across security domains. PR-head validation and
+Android/iOS preparation run without secrets and with read-only permissions.
+They produce only enumerated prebuilt mobile artifacts and a path, size,
+SHA-256, platform, and benchmark-ABI manifest.
+
+Credentialed BrowserStack jobs do not check out the caller and do not run
+caller-controlled build tools, scripts, dependencies, hooks, or binaries on the
+GitHub runner. They use a trusted SHA-pinned mobench release to verify and upload
+the prebuilt packages. Summarization is read-only; sticky PR/check publishing is
+a separate, narrowly write-enabled job. See
+[Reusable Workflow Security](../guides/reusable-workflow-security.md).
 
 ## Local Configuration And Credentials
 

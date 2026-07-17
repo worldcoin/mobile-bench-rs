@@ -8,7 +8,7 @@ annotated Rust function, validates the benchmark signature at compile time, and
 registers it through `inventory` so `mobench-sdk` and the `cargo mobench` CLI
 can discover and run it.
 
-Current release: **0.1.43**.
+Current release candidate: **0.1.44**.
 
 ## Install
 
@@ -16,7 +16,7 @@ Most users should depend on `mobench-sdk`, which re-exports the macro:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.43"
+mobench-sdk = "0.1.44"
 inventory = "0.3"
 ```
 
@@ -24,8 +24,8 @@ Direct macro use is also supported:
 
 ```toml
 [dependencies]
-mobench-macros = "0.1.43"
-mobench-sdk = { version = "0.1.43", default-features = false, features = ["registry"] }
+mobench-macros = "0.1.44"
+mobench-sdk = { version = "0.1.44", default-features = false, features = ["registry"] }
 inventory = "0.3"
 ```
 
