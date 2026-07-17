@@ -17,12 +17,11 @@ No user-facing unreleased changes yet.
 
 ## v0.1.44
 
-Status: release candidate for the next supported release.
+Status: current supported release.
 
-Target release date: 2026-07-17. Crates.io publication remains pending. The
-prebuilt path is green on Android at the final release-candidate head and on
-iOS at an earlier release-candidate head; a final-head iOS rerun remains a
-release gate.
+Publication date: 2026-07-17. The prebuilt BrowserStack path passed on Android
+and iOS, including exact-head validation, secretless packaging, credentialed
+prebuilt execution, sanitization, and isolated reporting.
 
 ### BrowserStack Pull-Request Trust Boundary
 
@@ -96,7 +95,7 @@ need to copy the split-job YAML into their own repositories.
 
 ## v0.1.43
 
-Status: current supported release until `v0.1.44` is published.
+Status: superseded by `v0.1.44`.
 
 Publication date: 2026-07-05.
 
@@ -233,8 +232,8 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.44` | Pending | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Release candidate; publication and final-head iOS validation pending |
-| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Current supported release |
+| `v0.1.44` | 2026-07-17 | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Current supported release |
+| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Superseded by `v0.1.44` |
 | `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Superseded by `v0.1.43` |
 | `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Superseded by `v0.1.42` |
 | `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Superseded by `v0.1.41` |

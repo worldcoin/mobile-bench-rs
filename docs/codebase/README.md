@@ -1,6 +1,6 @@
 # Codebase Reference
 
-Updated: 2026-07-17. Release candidate: `0.1.44`.
+Updated: 2026-07-17. Current release: `0.1.44`.
 
 These notes describe the current repository structure, implementation
 boundaries, integration points, and release-sensitive public surface. For user

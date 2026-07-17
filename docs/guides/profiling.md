@@ -1,6 +1,6 @@
 # Profiling Guide
 
-Current release candidate: **0.1.44**.
+Current release: **0.1.44**.
 
 `cargo mobench profile ...` is separate from normal benchmark execution. Use
 `cargo mobench run` or `cargo mobench ci run` for timing-focused benchmark

@@ -1,6 +1,6 @@
 # Reusable Workflow Security
 
-Current release candidate: **0.1.44**. The published release remains 0.1.43.
+Current release: **0.1.44**.
 
 The reusable BrowserStack workflow is secure by default for pull requests,
 including fork pull requests. Its core invariant is:
@@ -206,6 +206,6 @@ Release validation includes:
   BrowserStack run through the prebuilt path.
 
 The live Android and iOS BrowserStack runs are service-gated release checks and
-must be reported separately from host-side or static validation. For this
-release candidate, Android is green at the final candidate head and iOS is green
-at an earlier candidate head; rerun iOS at the final head before publication.
+must be reported separately from host-side or static validation. Release
+validation completed on both platforms through the prebuilt path, including a
+final-head iOS run.

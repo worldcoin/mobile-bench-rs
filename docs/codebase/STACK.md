@@ -1,6 +1,6 @@
 # Technology Stack
 
-Updated: 2026-07-17. Release candidate: `0.1.44`.
+Updated: 2026-07-17. Current release: `0.1.44`.
 
 ## Languages And Formats
 
