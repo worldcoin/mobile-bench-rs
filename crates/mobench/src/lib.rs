@@ -12067,7 +12067,22 @@ mod resource_usage_tests {
         let source = include_str!("lib.rs");
         let start = source.find("fn cmd_ci_run_prebuilt(").unwrap();
         let end = source[start..].find("\nfn cmd_ci_run(").unwrap() + start;
-        let body = &source[start..end];
+        let fetch_start = source.find("fn fetch_browserstack_artifacts(").unwrap();
+        let fetch_end = source[fetch_start..]
+            .find("\nfn validate_remote_path_segment(")
+            .unwrap()
+            + fetch_start;
+        let trigger_start = source.find("fn trigger_browserstack_espresso(").unwrap();
+        let trigger_end = source[trigger_start..]
+            .find("\nfn resolve_browserstack_credentials(")
+            .unwrap()
+            + trigger_start;
+        let surfaces = [
+            &source[start..end],
+            &source[fetch_start..fetch_end],
+            &source[trigger_start..trigger_end],
+            include_str!("browserstack.rs"),
+        ];
         for forbidden in [
             "run_request(",
             "resolve_project_layout(",
@@ -12075,8 +12090,12 @@ mod resource_usage_tests {
             "run_ios_build(",
             "package_ios_xcuitest_artifacts(",
             "std::process::Command",
+            "Command::new(",
         ] {
-            assert!(!body.contains(forbidden), "forbidden call: {forbidden}");
+            assert!(
+                surfaces.iter().all(|surface| !surface.contains(forbidden)),
+                "forbidden credentialed-path call: {forbidden}"
+            );
         }
     }
 

@@ -155,6 +155,12 @@ Update the reusable workflow reference to the immutable commit for the `v0.1.44`
 release and pass secrets explicitly:
 
 ```yaml
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+  checks: write
+
 jobs:
   mobench:
     uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@<v0.1.44-commit-sha>
@@ -170,7 +176,13 @@ jobs:
 ```
 
 Do not replace the immutable SHA with a mutable branch or tag and do not use
-`secrets: inherit`. Existing function, iteration, warmup, platform, device,
+`secrets: inherit`. The caller-level write grants allow the reusable workflow's
+isolated `report` job to update the sticky comment and check run; its prepare
+and BrowserStack jobs still downscope their own tokens to read-only permissions.
+The PR command path requires both `pr_number` and a full `head_sha`, including
+for fork PRs. A non-PR release self-test must opt out explicitly with
+`allow_non_pr: true`; it is not the secure default. Existing function,
+iteration, warmup, platform, device,
 artifact collection, summary, and sticky-comment inputs continue through the
 secure split workflow; callers do not need to duplicate its internal jobs.
 
@@ -180,7 +192,8 @@ Release validation includes:
 
 - hostile fixture coverage in which `build.rs`, a fixture hook, a dependency,
   and benchmark code attempt to read BrowserStack variables and write through
-  the GitHub token;
+  the GitHub token; the executable harness asserts empty secret captures and
+  intercepts each denied repository push;
 - static workflow tests proving credentialed jobs have no caller checkout or
   caller-controlled process execution;
 - manifest path/hash/size/platform/ABI rejection tests;

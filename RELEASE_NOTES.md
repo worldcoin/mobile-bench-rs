@@ -72,7 +72,9 @@ checkout.
 
 Existing callers should update their reusable workflow reference to the
 immutable `v0.1.44` release commit, keep passing the exact PR number/head SHA,
-and pass `BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY` explicitly.
+grant `actions: read`, `contents: read`, `pull-requests: write`, and
+`checks: write` at the caller level for reporting, and pass
+`BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY` explicitly.
 Do not use `secrets: inherit`. Platform, function, iteration, warmup, device,
 artifact, summary, and sticky-comment inputs remain available; callers do not
 need to copy the split-job YAML into their own repositories.

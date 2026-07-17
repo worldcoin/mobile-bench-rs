@@ -39,6 +39,8 @@ No user-facing unreleased changes yet.
 - Workflow-level permissions are empty; jobs receive only the read or narrowly
   scoped write permissions they need. Plot-branch publication remains an
   explicit, protected opt-in instead of a default benchmark permission.
+- `/mobench` dispatches exact fork PR heads instead of treating fork origin as
+  trust, and PR callers must supply both the PR number and full head SHA.
 - Third-party workflow actions are pinned to immutable commit SHAs and
   BrowserStack secrets must be passed explicitly.
 

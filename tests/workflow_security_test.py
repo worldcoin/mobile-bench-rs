@@ -2,12 +2,18 @@
 """Static regression tests for the reusable BrowserStack trust boundary."""
 
 from pathlib import Path
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/reusable-bench.yml").read_text()
 PLOT_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-publish-plots.yml").read_text()
+PR_COMMAND = (ROOT / ".github/workflows/reusable-pr-command.yml").read_text()
+SELFTEST_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-selftest.yml").read_text()
 
 
 def job(name: str, next_name: str | None = None) -> str:
@@ -49,6 +55,18 @@ def test_pr_revision_is_current_and_exact() -> None:
         assert "ref: ${{ needs.validate-request.outputs.head_sha }}" in text
     for name, following in (("run-ios", "run-android"), ("run-android", "summarize")):
         assert "Revalidate current PR head before credential use" in job(name, following)
+    assert "pr_number is required unless allow_non_pr is explicitly enabled" in validation
+    assert "${current,,}" not in WORKFLOW
+    assert "tr '[:upper:]' '[:lower:]'" in WORKFLOW
+    assert "allow_non_pr: true" in SELFTEST_WORKFLOW
+
+
+def test_pr_command_dispatches_fork_heads() -> None:
+    assert "head.repo.full_name" not in PR_COMMAND
+    assert "skipping secret-bearing BrowserStack dispatch" not in PR_COMMAND
+    assert "^[0-9a-fA-F]{40}$" in PR_COMMAND
+    assert '-f head_sha="$HEAD_SHA"' in PR_COMMAND
+    assert '-f pr_number="$PR_NUMBER"' in PR_COMMAND
 
 
 def test_trusted_control_plane_is_from_a_literal_commit() -> None:
@@ -138,6 +156,78 @@ def test_malicious_fixture_covers_required_attack_surfaces() -> None:
         "git push",
     ):
         assert needle in texts
+
+
+def test_malicious_fixture_executes_without_secrets_or_repository_write() -> None:
+    source_fixture = ROOT / "tests/fixtures/malicious-pr"
+    with tempfile.TemporaryDirectory(prefix="mobench-malicious-pr-") as temp:
+        temp_root = Path(temp)
+        fixture = temp_root / "fixture"
+        shutil.copytree(source_fixture, fixture)
+        log_dir = temp_root / "logs"
+        shim_dir = temp_root / "bin"
+        log_dir.mkdir()
+        shim_dir.mkdir()
+        git_shim = shim_dir / "git"
+        git_shim.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$*\" >> \"$MOBENCH_ATTACK_LOG_DIR/git-push-attempts.txt\"\n"
+            "exit 1\n"
+        )
+        git_shim.chmod(0o755)
+
+        env = os.environ.copy()
+        for name in (
+            "BROWSERSTACK_USERNAME",
+            "BROWSERSTACK_ACCESS_KEY",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+        ):
+            env.pop(name, None)
+        env["MOBENCH_ATTACK_LOG_DIR"] = str(log_dir)
+        env["CARGO_TARGET_DIR"] = str(temp_root / "target")
+        env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+
+        subprocess.run(
+            ["cargo", "build", "--quiet", "--manifest-path", str(fixture / "Cargo.toml")],
+            cwd=ROOT,
+            env=env,
+            check=True,
+        )
+        hook = subprocess.run(
+            ["bash", str(fixture / "fixture-hook.sh")],
+            cwd=fixture,
+            env=env,
+            check=False,
+        )
+        assert hook.returncode != 0, "fixture hook push unexpectedly succeeded"
+        subprocess.run(
+            [
+                "cargo",
+                "run",
+                "--quiet",
+                "--manifest-path",
+                str(fixture / "Cargo.toml"),
+                "--bin",
+                "probe",
+            ],
+            cwd=ROOT,
+            env=env,
+            check=True,
+        )
+
+        for name in (
+            "build.rs-BROWSERSTACK_USERNAME",
+            "build.rs-BROWSERSTACK_ACCESS_KEY",
+            "build.rs-GITHUB_TOKEN",
+        ):
+            assert (log_dir / name).read_text() == ""
+        assert (log_dir / "dependency-build-secrets.txt").read_text() == "dependency-build:::"
+        assert (log_dir / "fixture-hook-secrets.txt").read_text() == "fixture-hook:::\n"
+        assert (log_dir / "benchmark-secrets.txt").read_text() == "::"
+        attempts = (log_dir / "git-push-attempts.txt").read_text().splitlines()
+        assert len(attempts) == 3
+        assert all(line.startswith("push origin HEAD:refs/heads/malicious-") for line in attempts)
 
 
 if __name__ == "__main__":

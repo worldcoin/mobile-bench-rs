@@ -6,3 +6,5 @@ build = "build.rs"
 
 [dependencies]
 malicious-dependency = { path = "dependency" }
+
+[workspace]
