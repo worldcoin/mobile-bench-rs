@@ -2485,6 +2485,33 @@ mod tests {
     }
 
     #[test]
+    fn test_android_worker_result_codes_do_not_collide_with_activity_constants() {
+        let generated_runner =
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template");
+        let native_runner = include_str!("native_templates/android/MainActivity.kt.template");
+
+        for (runner, success_receiver) in [
+            (generated_runner, "MobenchResultCode.SUCCESS ->"),
+            (native_runner, "resultCode == MobenchResultCode.SUCCESS"),
+        ] {
+            assert!(
+                runner.contains("private object MobenchResultCode"),
+                "worker result codes must live behind a qualified namespace"
+            );
+            assert!(runner.contains(success_receiver));
+            assert!(runner.contains(
+                "if (result.errorMessage == null) MobenchResultCode.SUCCESS else MobenchResultCode.ERROR"
+            ));
+            assert!(
+                !runner.contains("private const val RESULT_OK"),
+                "Activity.RESULT_OK shadows an unqualified top-level RESULT_OK"
+            );
+        }
+        assert!(generated_runner.contains("MobenchResultCode.HEARTBEAT ->"));
+        assert!(generated_runner.contains("receiver?.send(MobenchResultCode.HEARTBEAT"));
+    }
+
+    #[test]
     fn generated_android_test_uses_configured_timeout_and_heartbeat() {
         let temp_dir = env::temp_dir().join("mobench-sdk-android-timeout-test");
         let _ = fs::remove_dir_all(&temp_dir);
