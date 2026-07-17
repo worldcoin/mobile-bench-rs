@@ -106,11 +106,6 @@ on:
         required: false
         type: string
         default: ""
-      publish_plots:
-        description: "Opt in to pushing rendered plots to the mobench-plots branch"
-        required: false
-        type: boolean
-        default: false
     secrets:
       BROWSERSTACK_USERNAME:
         required: true
@@ -700,19 +695,8 @@ jobs:
                       for x in v: check(x, depth+1)
               check(payload)
           PY
-      - name: Setup Python for opt-in plot rendering
-        if: inputs.publish_plots
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.11"
-      - name: Install opt-in plot renderer
-        if: inputs.publish_plots
-        shell: bash
-        run: python -m pip install --disable-pip-version-check matplotlib==3.10.7
       - name: Render trusted summaries
         shell: bash
-        env:
-          PLOT_MODE: ${{ inputs.publish_plots && 'require' || 'off' }}
         run: |
           set -euo pipefail
           chmod +x trusted-bin/cargo-mobench
@@ -722,25 +706,9 @@ jobs:
             if [ -n "$summary" ]; then
               mkdir -p "rendered/$platform"
               trusted-bin/cargo-mobench report summarize --summary "$summary" \
-                --output "rendered/$platform/summary.md" --plots "$PLOT_MODE"
+                --output "rendered/$platform/summary.md" --plots off
             fi
           done
-      - name: Validate rendered SVGs
-        if: inputs.publish_plots
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          plots = list(Path('rendered').rglob('*.svg'))
-          if not plots:
-              raise SystemExit('plot publishing requested but no SVG was rendered')
-          for p in plots:
-              text = p.read_text(errors='strict')
-              lowered = text.lower()
-              if len(text) > 5_000_000 or any(x in lowered for x in ('<script', 'onload=', 'foreignobject', 'javascript:', 'http://', 'https://')):
-                  raise SystemExit('unsafe SVG')
-          PY
       - name: Write job summary
         shell: bash
         run: |
@@ -781,9 +749,7 @@ jobs:
           name: mobench-sanitized-report
           path: |
             rendered/ios/summary.md
-            rendered/ios/plots/*.svg
             rendered/android/summary.md
-            rendered/android/plots/*.svg
             results/ios/**/summary.json
             results/android/**/summary.json
           if-no-files-found: error
@@ -870,53 +836,3 @@ jobs:
               --annotation-path "$CRATE_PATH/src/lib.rs" \
               --regression-threshold-pct "$REGRESSION_THRESHOLD"
           done
-
-  publish-plots:
-    name: Publish plot branch (explicit opt in)
-    needs: summarize
-    if: inputs.publish_plots && needs.summarize.result == 'success'
-    runs-on: ubuntu-latest
-    environment: mobench-plots
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - name: Download sanitized report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: mobench-sanitized-report
-          path: report
-      - name: Publish inert plot assets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if ! find report -type f -path '*/plots/*.svg' -print -quit | grep -q .; then
-            echo "::notice::No plot assets were produced"
-            exit 0
-          fi
-          python3 - <<'PY'
-          from pathlib import Path
-          for p in Path('report').rglob('*.svg'):
-              text = p.read_text(errors='strict')
-              lowered = text.lower()
-              if len(text) > 5_000_000 or any(x in lowered for x in ('<script', 'onload=', 'foreignobject', 'javascript:', 'http://', 'https://')):
-                  raise SystemExit('unsafe SVG')
-          PY
-          remote="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-          root="$(mktemp -d)"
-          git clone --quiet --branch mobench-plots "$remote" "$root" 2>/dev/null || {
-            git clone --quiet "$remote" "$root"
-            git -C "$root" checkout --orphan mobench-plots
-            git -C "$root" rm -rf . >/dev/null 2>&1 || true
-          }
-          destination="$root/runs/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p "$destination"
-          find report -type f -path '*/plots/*.svg' -exec cp {} "$destination" \;
-          git -C "$root" config user.name github-actions
-          git -C "$root" config user.email github-actions@github.com
-          git -C "$root" add "runs/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          git -C "$root" commit -m "mobench plots for run ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          git -C "$root" push origin mobench-plots

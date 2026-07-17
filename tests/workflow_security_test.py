@@ -7,6 +7,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/reusable-bench.yml").read_text()
+PLOT_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-publish-plots.yml").read_text()
 
 
 def job(name: str, next_name: str | None = None) -> str:
@@ -93,18 +94,17 @@ def test_credentialed_jobs_never_checkout_or_build_caller_code() -> None:
 
 def test_reporting_is_separate_and_has_no_checkout() -> None:
     summarize = job("summarize", "report")
-    report = job("report", "publish-plots")
-    plots = job("publish-plots")
-    assert "actions/checkout" not in summarize + report + plots
+    report = job("report")
+    assert "actions/checkout" not in summarize + report
     assert "pull-requests: write" not in summarize
     assert "checks: write" not in summarize
     assert "pull-requests: write" in report and "checks: write" in report
     assert "contents: write" not in report
-    assert "if: inputs.publish_plots" in plots
-    assert "environment: mobench-plots" in plots
-    assert "contents: write" in plots
-    assert "--plots \"$PLOT_MODE\"" in summarize
-    assert "rendered/ios/plots/*.svg" in summarize
+    assert "contents: write" not in WORKFLOW
+    assert "workflow_dispatch:" in PLOT_WORKFLOW
+    assert "environment: mobench-plots" in PLOT_WORKFLOW
+    assert "contents: write" in PLOT_WORKFLOW
+    assert "--plots require" in PLOT_WORKFLOW
 
 
 def test_downloaded_reports_are_treated_as_untrusted() -> None:
@@ -113,11 +113,13 @@ def test_downloaded_reports_are_treated_as_untrusted() -> None:
     assert "p.is_symlink()" in summarize
     assert "report nesting too deep" in summarize
     assert "unsafe report field" in summarize
-    assert "unsafe SVG" in job("publish-plots")
+    assert "unsafe SVG" in PLOT_WORKFLOW
 
 
 def test_all_external_actions_are_immutable() -> None:
-    refs = re.findall(r"^\s*uses:\s*([^\s#]+)", WORKFLOW, re.MULTILINE)
+    refs = re.findall(
+        r"^\s*uses:\s*([^\s#]+)", WORKFLOW + "\n" + PLOT_WORKFLOW, re.MULTILINE
+    )
     assert refs
     for ref in refs:
         assert re.search(r"@[0-9a-f]{40}$", ref), ref

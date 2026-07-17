@@ -592,8 +592,9 @@ disabled or isolated from later trusted builds.
 
 Result summarization is read-only. Sticky PR/check publishing runs separately
 without a caller checkout and receives only the required `pull-requests: write`
-or `checks: write` permission. `contents: write` is disabled by default and may
-only be used by an explicitly enabled, protected plot-publishing job.
+or `checks: write` permission. `contents: write` is disabled throughout the
+benchmark workflow. Plot-branch publication is a separate manual workflow
+protected by the `mobench-plots` environment.
 
 Downloaded filenames, JSON, CSV, Markdown, benchmark names, device names, and
 provider fields are untrusted. Implementations must reject path/control/workflow

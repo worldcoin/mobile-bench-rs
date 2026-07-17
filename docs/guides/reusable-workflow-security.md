@@ -16,18 +16,19 @@ benchmark binaries trusted.
 
 The workflow separates code construction from provider access:
 
-1. `validate-pr-head` accepts only a 40-character commit SHA and confirms it is
+1. `validate-request` accepts only a 40-character commit SHA and confirms it is
    still the current head SHA of the requested pull request.
 2. `prepare-android` and `prepare-ios` check out that exact SHA, generate
    fixtures, compile/package the mobile runners, and upload a run-scoped handoff.
-3. `browserstack-android` and `browserstack-ios` download and verify the handoff,
+3. `run-android` and `run-ios` download and verify the handoff,
    upload the prebuilt artifacts, run them on BrowserStack devices, and fetch
    results. They do not check out the pull request.
 4. `summarize` combines read-only result artifacts.
 5. `report` publishes the sticky PR comment or check result without checking
    out or executing pull-request code.
-6. `publish-plots`, when explicitly enabled, is the only job allowed to request
-   `contents: write`; it is isolated behind a protected opt-in boundary.
+6. Plot-branch publication is a separate manual workflow,
+   `mobile-bench-publish-plots.yml`. It is the only workflow allowed to request
+   `contents: write` and is isolated behind the `mobench-plots` environment.
 
 ```mermaid
 flowchart LR
@@ -52,12 +53,12 @@ permission:
 
 | Job | Caller checkout or execution | GitHub permission | BrowserStack secrets | Protected environment |
 | --- | --- | --- | --- | --- |
-| `validate-pr-head` | No | `contents: read`, `pull-requests: read` | No | No |
+| `validate-request` | No | `contents: read`, `pull-requests: read` | No | No |
 | `prepare-android`, `prepare-ios` | Exact PR head; untrusted | `contents: read` | No | No |
-| `browserstack-android`, `browserstack-ios` | No | `{}` | Upload/run/fetch steps only | `browserstack` defense in depth |
-| `summarize` | No | `{}` | No | No |
+| `run-android`, `run-ios` | No | `actions: read`, `pull-requests: read` | Upload/run/fetch step only | `browserstack` defense in depth |
+| `summarize` | No | `actions: read` | No | No |
 | `report` | No | `pull-requests: write` and/or `checks: write` | No | No |
-| `publish-plots` | No | `contents: write` only when explicitly enabled | No | Protected opt-in |
+| separate plot workflow | No | `actions: read`, `contents: write` | No | Protected manual opt-in |
 
 BrowserStack values must be passed by name. `secrets: inherit` is not supported
 as a safe caller pattern. Environment approval can limit accidental execution,
@@ -78,7 +79,8 @@ Prepare uses:
 cargo mobench ci prepare \
   --target android \
   --source-sha "$PR_HEAD_SHA" \
-  --manifest target/mobench/prebuilt/android-manifest.json
+  --output-dir target/mobench/prebuilt/android \
+  --manifest target/mobench/prebuilt/android/manifest.json
 ```
 
 Use the corresponding `--target ios` invocation for the IPA and XCUITest suite.
