@@ -324,12 +324,14 @@ jobs:
           WARMUP: ${{ inputs.warmup }}
           CRATE_PATH: ${{ inputs.crate_path }}
           HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
-          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+          BUILD_RELEASE: ${{ inputs.build_release }}
         run: |
           set -euo pipefail
+          release_args=()
+          if [ "$BUILD_RELEASE" = true ]; then release_args+=(--release); fi
           cargo-mobench ci prepare --target ios \
             --functions "$FUNCTIONS_JSON" --iterations "$ITERATIONS" --warmup "$WARMUP" \
-            --crate-path "$CRATE_PATH" $RELEASE_FLAG --source-sha "$HEAD_SHA" \
+            --crate-path "$CRATE_PATH" "${release_args[@]}" --source-sha "$HEAD_SHA" \
             --output-dir target/mobench/prebuilt/ios \
             --manifest target/mobench/prebuilt/ios/manifest.json
       - name: Upload explicitly enumerated iOS packages
@@ -462,12 +464,14 @@ jobs:
           WARMUP: ${{ inputs.warmup }}
           CRATE_PATH: ${{ inputs.crate_path }}
           HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
-          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
+          BUILD_RELEASE: ${{ inputs.build_release }}
         run: |
           set -euo pipefail
+          release_args=()
+          if [ "$BUILD_RELEASE" = true ]; then release_args+=(--release); fi
           cargo-mobench ci prepare --target android \
             --functions "$FUNCTIONS_JSON" --iterations "$ITERATIONS" --warmup "$WARMUP" \
-            --crate-path "$CRATE_PATH" $RELEASE_FLAG --source-sha "$HEAD_SHA" \
+            --crate-path "$CRATE_PATH" "${release_args[@]}" --source-sha "$HEAD_SHA" \
             --output-dir target/mobench/prebuilt/android \
             --manifest target/mobench/prebuilt/android/manifest.json
       - name: Upload explicitly enumerated Android packages
@@ -817,15 +821,17 @@ jobs:
           set -euo pipefail
           marker='<!-- mobench-summary -->'
           body_file="$(mktemp)"
-          printf '%s\n## Mobench Benchmark Results\n\n' "$marker" > "$body_file"
-          for platform in ios android; do
-            summary="report/rendered/$platform/summary.md"
-            if [ -f "$summary" ]; then
-              printf '## %s Benchmark Results\n\n' "${platform^}" >> "$body_file"
-              cat "$summary" >> "$body_file"
-              printf '\n' >> "$body_file"
-            fi
-          done
+          {
+            printf '%s\n## Mobench Benchmark Results\n\n' "$marker"
+            for platform in ios android; do
+              summary="report/rendered/$platform/summary.md"
+              if [ -f "$summary" ]; then
+                printf '## %s Benchmark Results\n\n' "${platform^}"
+                cat "$summary"
+                printf '\n'
+              fi
+            done
+          } > "$body_file"
           jq -n --rawfile body "$body_file" '{body:$body}' > request.json
           existing="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq ".[] | select(.body | contains(\"${marker}\")) | .id" | head -1)"
           if [ -n "$existing" ]; then
