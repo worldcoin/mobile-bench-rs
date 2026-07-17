@@ -117,6 +117,7 @@ def test_reporting_is_separate_and_has_no_checkout() -> None:
     assert "pull-requests: write" not in summarize
     assert "checks: write" not in summarize
     assert "pull-requests: write" in report and "checks: write" in report
+    assert "if: always() && inputs.pr_number != ''" in report
     assert "contents: write" not in report
     assert "contents: write" not in WORKFLOW
     assert "workflow_dispatch:" in PLOT_WORKFLOW

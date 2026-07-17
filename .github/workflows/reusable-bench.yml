@@ -786,7 +786,9 @@ jobs:
   report:
     name: Publish PR and check-run reports
     needs: [validate-request, trusted-mobench, summarize]
-    if: inputs.pr_number != '' && needs.summarize.result == 'success'
+    # `always()` prevents an intentionally skipped platform from propagating
+    # GitHub's implicit success guard into this single-platform report job.
+    if: always() && inputs.pr_number != '' && needs.summarize.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: read
