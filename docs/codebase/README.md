@@ -1,6 +1,6 @@
 # Codebase Reference
 
-Updated: 2026-07-15. Release line: `0.1.43`.
+Updated: 2026-07-17. Current release: `0.1.44`.
 
 These notes describe the current repository structure, implementation
 boundaries, integration points, and release-sensitive public surface. For user
@@ -17,6 +17,8 @@ behavior contract, see [../specs/mobench-current-spec.md](../specs/mobench-curre
   and artifact types.
 - [INTEGRATIONS.md](INTEGRATIONS.md): BrowserStack, GitHub Actions, Android,
   iOS, generated runner backends, and local native profiling.
+- [../guides/reusable-workflow-security.md](../guides/reusable-workflow-security.md):
+  reusable workflow threat model, trust boundary, permissions, and migration.
 - [CONVENTIONS.md](CONVENTIONS.md): naming, output, config, docs, template,
   and error-handling conventions.
 - [TESTING.md](TESTING.md): host tests, tool-gated checks, service-gated checks,

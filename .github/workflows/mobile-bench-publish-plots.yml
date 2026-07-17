@@ -1,0 +1,119 @@
+name: Publish Mobench Plots
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Completed benchmark workflow run ID"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Render and publish inert plot assets
+    runs-on: ubuntu-latest
+    environment: mobench-plots
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Validate source run ID
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] || {
+            echo "::error::run_id must be a positive integer"
+            exit 2
+          }
+
+      - name: Download sanitized benchmark history
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mobench-history-bundle
+          path: history
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Checkout immutable mobench renderer
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: worldcoin/mobile-bench-rs
+          ref: 3685fefccd7bce6b30d33fbcaf758dc06ae85ba5
+          persist-credentials: false
+          path: trusted-mobench-src
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Build trusted renderer
+        working-directory: trusted-mobench-src
+        shell: bash
+        run: cargo build --locked --release -p mobench --bin cargo-mobench
+
+      - name: Install pinned plot dependency
+        shell: bash
+        run: python -m pip install --disable-pip-version-check matplotlib==3.10.7
+
+      - name: Render and validate plots from sanitized JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          renderer="$PWD/trusted-mobench-src/target/release/cargo-mobench"
+          mkdir -p rendered
+          for platform in ios android; do
+            summary="history/$platform/summary.json"
+            [ -f "$summary" ] || continue
+            mkdir -p "rendered/$platform"
+            "$renderer" report summarize --summary "$summary" \
+              --output "rendered/$platform/summary.md" --plots require
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+
+          plots = list(Path("rendered").rglob("*.svg"))
+          if not plots:
+              raise SystemExit("no plot SVGs were rendered")
+          for path in plots:
+              if path.is_symlink() or path.stat().st_size > 5_000_000:
+                  raise SystemExit("unsafe SVG file")
+              text = path.read_text(errors="strict")
+              lowered = text.lower()
+              forbidden = ("<script", "onload=", "foreignobject", "javascript:", "http://", "https://")
+              if any(value in lowered for value in forbidden):
+                  raise SystemExit("unsafe SVG content")
+          PY
+
+      - name: Publish to isolated plot branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SOURCE_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          root="$(mktemp -d)"
+          git clone --quiet --branch mobench-plots "$remote" "$root" 2>/dev/null || {
+            git clone --quiet "$remote" "$root"
+            git -C "$root" checkout --orphan mobench-plots
+            git -C "$root" rm -rf . >/dev/null 2>&1 || true
+          }
+          destination="$root/runs/$SOURCE_RUN_ID"
+          rm -rf "$destination"
+          mkdir -p "$destination"
+          cp -R rendered/. "$destination/"
+          git -C "$root" config user.name github-actions
+          git -C "$root" config user.email github-actions@github.com
+          git -C "$root" add "runs/$SOURCE_RUN_ID"
+          git -C "$root" commit -m "mobench plots for run $SOURCE_RUN_ID"
+          git -C "$root" push origin mobench-plots

@@ -1,6 +1,6 @@
 # Testing Guide
 
-Current release: **0.1.43**.
+Current release: **0.1.44**.
 
 This guide covers host tests, CLI validation, generated mobile artifacts,
 BrowserStack smoke tests, and local native profiling checks.
@@ -197,6 +197,28 @@ Expected files:
 - `target/mobench/ci/summary.md`
 - `target/mobench/ci/results.csv`
 - `target/mobench/ci/plots/*.svg` when plots are rendered
+
+## Reusable Workflow Trust-Boundary Tests
+
+Run the repository's workflow/self-tests and `actionlint` before release. The
+security regression fixture must demonstrate that hostile `build.rs`, fixture
+hook, dependency, and benchmark code receive neither BrowserStack variables nor
+a write-capable GitHub token. Static workflow tests must also prove that
+credentialed jobs have no caller checkout or caller-controlled process
+execution.
+
+Manifest tests cover path traversal, absolute/duplicate/unexpected paths,
+missing/extra files, size and SHA-256 mismatches, platform mismatches, and
+incompatible benchmark ABI metadata. Reporting tests cover untrusted filenames,
+benchmark names, JSON, CSV, Markdown/HTML, shell data, and GitHub workflow
+commands.
+
+Complete one Android and one iOS service-gated benchmark using
+`cargo mobench ci run-prebuilt` before publishing the release. These live runs
+are separate evidence from host tests and must not be inferred from static
+workflow validation. See
+[Reusable Workflow Security](reusable-workflow-security.md) for the job and
+permission model.
 
 ## Profiling Checks
 

@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       functions:
-        description: "JSON array of benchmark function names to run"
+        description: "JSON array or comma-separated benchmark function names"
         required: true
         type: string
       iterations:
@@ -25,78 +25,90 @@ on:
         description: "Target platform: android, ios, or both"
         required: false
         type: string
-        default: "both"
+        default: both
       device_profile:
         description: "Device profile: low-spec, mid-spec, high-spec, custom"
         required: false
         type: string
-        default: "low-spec"
+        default: low-spec
       ios_device:
-        description: "Custom iOS device name (required when device_profile=custom)"
+        description: "Custom iOS device name"
         required: false
         type: string
+        default: ""
       ios_os_version:
-        description: "Custom iOS OS version (required when device_profile=custom)"
+        description: "Custom iOS OS version"
         required: false
         type: string
+        default: ""
       android_device:
-        description: "Custom Android device name (required when device_profile=custom)"
+        description: "Custom Android device name"
         required: false
         type: string
+        default: ""
       android_os_version:
-        description: "Custom Android OS version (required when device_profile=custom)"
+        description: "Custom Android OS version"
         required: false
         type: string
+        default: ""
       rust_targets_ios:
         description: "Comma-separated iOS Rust targets"
         required: false
         type: string
-        default: "aarch64-apple-ios,aarch64-apple-ios-sim"
+        default: aarch64-apple-ios,aarch64-apple-ios-sim
       rust_targets_android:
         description: "Comma-separated Android Rust targets"
         required: false
         type: string
-        default: "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android"
+        default: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       build_release:
         description: "Build in release mode"
         required: false
         type: boolean
         default: true
       mobench_version:
-        description: "Mobench version to install"
+        description: "Mobench version used only in the untrusted prepare jobs"
         required: false
         type: string
         default: ""
       mobench_ref:
-        description: "Git ref for mobile-bench-rs (overrides mobench_version when set)"
+        description: "Mobench git ref used only in the untrusted prepare jobs"
         required: false
         type: string
+        default: ""
       ffi_backend:
         description: "mobench FFI backend to configure in caller/mobench.toml"
         required: false
         type: string
         default: ""
       pr_number:
-        description: "PR number for reporting"
+        description: "PR number for current-head validation and reporting"
         required: false
         type: string
+        default: ""
+      allow_non_pr:
+        description: "Explicitly allow a non-PR self-test (PR freshness checks are disabled)"
+        required: false
+        type: boolean
+        default: false
       requested_by:
         description: "Who triggered the run"
         required: false
         type: string
+        default: ""
       check_run_name:
         description: "GitHub Check Run name"
         required: false
         type: string
-        default: "Mobench"
+        default: Mobench
       regression_threshold_pct:
         description: "Regression threshold percentage"
         required: false
         type: string
         default: "5.0"
       head_sha:
-        description: "Exact commit SHA to checkout in the caller repo (for compile-gated runs)"
-        required: false
+        description: "Exact 40-character PR head commit SHA"
+        required: true
         type: string
     secrets:
       BROWSERSTACK_USERNAME:
@@ -108,449 +120,172 @@ on:
       MOBENCH_APP_ID:
         required: false
 
-permissions:
-  actions: read
-  contents: write
-  pull-requests: write
+# Every capability is granted to the one job that needs it. In particular,
+# PR-controlled build jobs never receive a write-capable token.
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
+  # Replace this with the immutable commit containing the final 0.1.44
+  # prepare/run-prebuilt implementation before enabling the workflow.
+  MOBENCH_TRUSTED_SHA: 3685fefccd7bce6b30d33fbcaf758dc06ae85ba5
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # iOS BrowserStack benchmark
-  # ---------------------------------------------------------------------------
-  ios:
-    name: iOS BrowserStack benchmark
-    if: inputs.platform == 'ios' || inputs.platform == 'both'
-    runs-on: macos-15
-    environment: browserstack
-
-    env:
-      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
-      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
-      IPHONEOS_DEPLOYMENT_TARGET: "13.0"
-      CFLAGS_aarch64_apple_ios: "-miphoneos-version-min=13.0"
-      CFLAGS_aarch64_apple_ios_sim: "-mios-simulator-version-min=13.0"
-      CFLAGS_x86_64_apple_ios: "-mios-simulator-version-min=13.0"
-      CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS: "-C link-arg=-miphoneos-version-min=13.0"
-      CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS: "-C link-arg=-mios-simulator-version-min=13.0"
-      CARGO_TARGET_X86_64_APPLE_IOS_RUSTFLAGS: "-C link-arg=-mios-simulator-version-min=13.0"
-
+  validate-request:
+    name: Validate requested PR revision
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      head_sha: ${{ steps.validate.outputs.head_sha }}
+      head_repo: ${{ steps.validate.outputs.head_repo }}
     steps:
-      - name: Checkout caller repo
-        uses: actions/checkout@v6.0.2
-        with:
-          path: caller
-          ref: ${{ inputs.head_sha || github.sha }}
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ inputs.rust_targets_ios }}
-
-      - name: Ensure iOS Rust targets
-        shell: bash
-        run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-          rustup component add rust-std --target aarch64-apple-ios
-          rustup component add rust-std --target aarch64-apple-ios-sim
-          rustup target list --installed | grep -E "ios|apple"
-
-      - name: Cache cargo registry/git
-        uses: actions/cache@v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-ios-${{ hashFiles('caller/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-ios-
-
-      - name: Cache cargo target
-        uses: actions/cache@v5.0.4
-        with:
-          path: caller/target
-          key: ${{ runner.os }}-target-ios-${{ hashFiles('caller/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-ios-
-
-      - name: Install mobench
+      - name: Validate full SHA and current PR head
+        id: validate
         shell: bash
         env:
-          MOBENCH_VERSION: ${{ inputs.mobench_version }}
-          MOBENCH_REF: ${{ inputs.mobench_ref }}
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          ALLOW_NON_PR: ${{ inputs.allow_non_pr }}
+          CALLER_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
-            echo "Installing mobench from git revision ${MOBENCH_REF}"
-            cargo install mobench \
-              --git https://github.com/worldcoin/mobile-bench-rs \
-              --rev "$MOBENCH_REF" \
-              --locked
-          elif [ -n "$MOBENCH_REF" ]; then
-            echo "Installing mobench from git branch ${MOBENCH_REF}"
-            cargo install mobench \
-              --git https://github.com/worldcoin/mobile-bench-rs \
-              --branch "$MOBENCH_REF" \
-              --locked
-          elif [ -n "$MOBENCH_VERSION" ]; then
-            echo "Installing mobench ${MOBENCH_VERSION} from crates.io"
-            cargo install mobench --version "$MOBENCH_VERSION" --locked
-          elif [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
-            echo "Installing mobench from caller/crates/mobench"
-            cargo install --path caller/crates/mobench --locked --force
-          else
-            echo "Installing latest mobench from crates.io"
-            cargo install mobench --locked
+          sha="$REQUESTED_SHA"
+          if [[ ! "$sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::head_sha must be a full 40-character commit SHA"
+            exit 1
           fi
-          mobench --version
+          sha="${sha,,}"
+          head_repo="$CALLER_REPO"
 
-      - name: Install uniffi-bindgen
-        shell: bash
-        run: |
-          set -euo pipefail
-          lockfile=$(find caller -name Cargo.lock -print -quit)
-          if [ -z "${lockfile}" ]; then
-            echo "No Cargo.lock found under caller/; skipping global uniffi-bindgen install"
-            exit 0
-          fi
-          uniffi_version=$(awk '
-            $0 == "[[package]]" { in_pkg=0 }
-            $0 == "name = \"uniffi_bindgen\"" { in_pkg=1; next }
-            in_pkg && /^version = / {
-              gsub(/^version = "|\"$/, "", $0)
-              print $0
-              exit
-            }
-          ' "${lockfile}")
-          if [ -n "${uniffi_version}" ]; then
-            cargo install \
-              --git https://github.com/mozilla/uniffi-rs \
-              --tag "v${uniffi_version}" \
-              uniffi-bindgen-cli \
-              --bin uniffi-bindgen
-          else
-            echo "No uniffi_bindgen entry in caller/Cargo.lock; skipping global uniffi-bindgen install"
+          if [ -z "$PR_NUMBER" ] && [ "$ALLOW_NON_PR" != true ]; then
+            echo "::error::pr_number is required unless allow_non_pr is explicitly enabled"
+            exit 1
           fi
 
-      - name: Install BoltFFI
-        if: inputs.ffi_backend == 'boltffi' || inputs.ffi_backend == 'bolt-ffi'
-        shell: bash
-        run: cargo install boltffi_cli --version 0.25.2 --locked
-
-      - name: Configure mobench FFI backend
-        if: inputs.ffi_backend != ''
-        working-directory: caller
-        shell: bash
-        env:
-          FFI_BACKEND: ${{ inputs.ffi_backend }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          backend = os.environ["FFI_BACKEND"]
-          path = Path("mobench.toml")
-          lines = path.read_text().splitlines() if path.exists() else []
-
-          out = []
-          in_project = False
-          saw_project = False
-          wrote_backend = False
-
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  if in_project and not wrote_backend:
-                      out.append(f'ffi_backend = "{backend}"')
-                      wrote_backend = True
-                  in_project = stripped == "[project]"
-                  saw_project = saw_project or in_project
-
-              if in_project and stripped.startswith("ffi_backend"):
-                  out.append(f'ffi_backend = "{backend}"')
-                  wrote_backend = True
-              else:
-                  out.append(line)
-
-          if saw_project:
-              if in_project and not wrote_backend:
-                  out.append(f'ffi_backend = "{backend}"')
-          else:
-              if out and out[-1] != "":
-                  out.append("")
-              out.extend(["[project]", f'ffi_backend = "{backend}"'])
-
-          path.write_text("\n".join(out) + "\n")
-          print(path.read_text())
-          PY
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Resolve iOS device
-        id: resolve_device
-        working-directory: caller
-        shell: bash
-        env:
-          DEVICE_PROFILE: ${{ inputs.device_profile }}
-          IOS_DEVICE_OVERRIDE: ${{ inputs.ios_device }}
-          IOS_OS_VERSION_OVERRIDE: ${{ inputs.ios_os_version }}
-        run: |
-          if [ -n "$IOS_DEVICE_OVERRIDE" ] && [ -n "$IOS_OS_VERSION_OVERRIDE" ]; then
-            echo "device_name=${IOS_DEVICE_OVERRIDE}" >> "$GITHUB_OUTPUT"
-            echo "os_version=${IOS_OS_VERSION_OVERRIDE}" >> "$GITHUB_OUTPUT"
-            echo "Using custom device: ${IOS_DEVICE_OVERRIDE} (${IOS_OS_VERSION_OVERRIDE})"
-          else
-            output=$(cargo-mobench devices resolve \
-              --platform ios \
-              --profile "${DEVICE_PROFILE}" \
-              --format json 2>&1) || {
-                echo "::error::Failed to resolve iOS device: $output"
-                exit 1
-              }
-            device_name=$(echo "$output" | jq -r '.device // .name')
-            os_version=$(echo "$output" | jq -r '.os_version')
-            echo "device_name=${device_name}" >> "$GITHUB_OUTPUT"
-            echo "os_version=${os_version}" >> "$GITHUB_OUTPUT"
-            echo "Resolved iOS device: ${device_name} (${os_version})"
-          fi
-
-      - name: Debug target sysroot
-        shell: bash
-        run: |
-          echo "=== Active toolchain ==="
-          rustup show active-toolchain
-          echo "=== Sysroot ==="
-          SYSROOT=$(rustc --print sysroot)
-          echo "$SYSROOT"
-          echo "=== iOS target libs ==="
-          ls "$SYSROOT/lib/rustlib/aarch64-apple-ios/lib/" 2>&1 | head -5 || echo "MISSING"
-          echo "=== which cargo-mobench ==="
-          which cargo-mobench
-          echo "=== mobench version ==="
-          cargo-mobench --version
-
-      - name: Build iOS artifacts
-        working-directory: caller
-        shell: bash
-        env:
-          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
-          CRATE_PATH: ${{ inputs.crate_path }}
-        run: |
-          set -euo pipefail
-          cargo-mobench build --target ios $RELEASE_FLAG --crate-path "$CRATE_PATH"
-          cargo-mobench package-ipa --method adhoc --crate-path "$CRATE_PATH"
-          cargo-mobench package-xcuitest --crate-path "$CRATE_PATH"
-          test -f target/mobench/ios/BenchRunner.ipa
-          test -f target/mobench/ios/BenchRunnerUITests.zip
-
-      - name: Run iOS benchmarks
-        working-directory: caller
-        shell: bash
-        env:
-          FUNCTIONS_JSON: ${{ inputs.functions }}
-          ITERATIONS: ${{ inputs.iterations }}
-          WARMUP: ${{ inputs.warmup }}
-          IOS_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
-          IOS_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
-          REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
-          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
-          CRATE_PATH: ${{ inputs.crate_path }}
-        run: |
-          set -euo pipefail
-          device_spec="${IOS_DEVICE}-${IOS_OS_VERSION}"
-          echo "Running iOS benchmarks on: ${device_spec}"
-          rm -rf target/mobench/ci/ios
-          rm -rf target/browserstack
-
-          cargo-mobench ci run \
-            --target ios \
-            --functions "${FUNCTIONS_JSON}" \
-            --iterations "${ITERATIONS}" \
-            --warmup "${WARMUP}" \
-            --devices "${device_spec}" \
-            --crate-path "$CRATE_PATH" \
-            $RELEASE_FLAG \
-            --fetch \
-            --regression-threshold-pct "${REGRESSION_THRESHOLD}" \
-            --plots off \
-            --output-dir target/mobench/ci/ios
-
-      - name: Upload iOS results
-        if: always()
-        uses: actions/upload-artifact@v7.0.0
-        with:
-          name: mobench-results-ios
-          path: |
-            caller/target/mobench/ci/ios/*.json
-            caller/target/mobench/ci/ios/*.csv
-            caller/target/browserstack/**
-          if-no-files-found: warn
-
-  # ---------------------------------------------------------------------------
-  # Android BrowserStack benchmark
-  # ---------------------------------------------------------------------------
-  android:
-    name: Android BrowserStack benchmark
-    if: inputs.platform == 'android' || inputs.platform == 'both'
-    runs-on: macos-14
-    environment: browserstack
-
-    env:
-      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
-      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
-
-    steps:
-      - name: Checkout caller repo
-        uses: actions/checkout@v6.0.2
-        with:
-          path: caller
-          ref: ${{ inputs.head_sha || github.sha }}
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ inputs.rust_targets_android }}
-
-      - name: Ensure Android Rust targets
-        shell: bash
-        run: |
-          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-          rustup component add rust-std --target aarch64-linux-android
-          rustup component add rust-std --target armv7-linux-androideabi
-          rustup component add rust-std --target x86_64-linux-android
-          rustup target list --installed | grep -E "android"
-
-      - name: Cache cargo registry/git
-        uses: actions/cache@v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-android-${{ hashFiles('caller/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-android-
-
-      - name: Cache cargo target
-        uses: actions/cache@v5.0.4
-        with:
-          path: caller/target
-          key: ${{ runner.os }}-target-android-${{ hashFiles('caller/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-android-
-
-      - name: Setup Android SDK/NDK
-        uses: android-actions/setup-android@v4.0.0
-
-      - name: Install SDK packages and resolve NDK
-        shell: bash
-        run: |
-          echo "ANDROID_HOME=${ANDROID_HOME}"
-
-          # Find sdkmanager
-          SDKMGR="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMGR" ]; then
-            SDKMGR=$(command -v sdkmanager 2>/dev/null || echo "sdkmanager")
-          fi
-          echo "Using sdkmanager: $SDKMGR"
-
-          # Install packages (best-effort — runner may already have them)
-          if ! $SDKMGR --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" 2>&1; then
-            echo "::warning::sdkmanager install returned non-zero; will attempt to use pre-installed packages"
-          fi
-
-          # Resolve NDK: prefer 26.1.10909125, fall back to latest available
-          echo "Available NDKs:"
-          ls "${ANDROID_HOME}/ndk/" 2>/dev/null || echo "  (none)"
-
-          if [ -d "${ANDROID_HOME}/ndk/26.1.10909125" ]; then
-            NDK_DIR="${ANDROID_HOME}/ndk/26.1.10909125"
-          else
-            NDK_VER=$(ls "${ANDROID_HOME}/ndk/" 2>/dev/null | sort -V | tail -1)
-            if [ -n "$NDK_VER" ]; then
-              echo "::warning::NDK 26.1.10909125 not found, using ${NDK_VER}"
-              NDK_DIR="${ANDROID_HOME}/ndk/${NDK_VER}"
-            else
-              echo "::error::No Android NDK found"
+          if [ -n "$PR_NUMBER" ]; then
+            if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::pr_number must be a positive integer"
+              exit 1
+            fi
+            pr_json="$(gh api "repos/${CALLER_REPO}/pulls/${PR_NUMBER}")"
+            current_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+            head_repo="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
+            if [ "$sha" != "${current_sha,,}" ]; then
+              echo "::error::Requested SHA is not the current head of the requested PR"
               exit 1
             fi
           fi
 
-          # Export for all subsequent steps
-          echo "ANDROID_NDK_HOME=${NDK_DIR}" >> "$GITHUB_ENV"
-          echo "Resolved ANDROID_NDK_HOME=${NDK_DIR}"
+          if [[ ! "$head_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Invalid PR head repository"
+            exit 1
+          fi
+          printf 'head_sha=%s\nhead_repo=%s\n' "$sha" "$head_repo" >> "$GITHUB_OUTPUT"
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+  # Build the trusted control-plane binary from the immutable commit containing
+  # this reusable workflow. It is compiled in a job with no secrets, no
+  # environment, and no PR checkout; credentialed jobs only download the binary.
+  trusted-mobench:
+    name: Build trusted mobench control plane
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable mobench workflow revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: worldcoin/mobile-bench-rs
+          ref: ${{ env.MOBENCH_TRUSTED_SHA }}
+          persist-credentials: false
+          path: trusted-mobench-src
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+      - name: Build trusted cargo-mobench
+        working-directory: trusted-mobench-src
+        shell: bash
+        run: cargo build --locked --release -p mobench --bin cargo-mobench
+      - name: Upload trusted cargo-mobench
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: trusted-cargo-mobench
+          path: trusted-mobench-src/target/release/cargo-mobench
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Install mobench
+  prepare-ios:
+    name: Prepare iOS artifacts (untrusted)
+    needs: validate-request
+    if: inputs.platform == 'ios' || inputs.platform == 'both'
+    runs-on: macos-15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Revalidate current PR head
+        if: inputs.pr_number != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
+          test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
+      - name: Checkout exact untrusted PR revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ needs.validate-request.outputs.head_repo }}
+          ref: ${{ needs.validate-request.outputs.head_sha }}
+          persist-credentials: false
+          path: caller
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          targets: ${{ inputs.rust_targets_ios }}
+      - name: Ensure required iOS Rust targets
+        shell: bash
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+      - name: Install untrusted build tooling
         shell: bash
         env:
           MOBENCH_VERSION: ${{ inputs.mobench_version }}
           MOBENCH_REF: ${{ inputs.mobench_ref }}
         run: |
           set -euo pipefail
-          if [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
-            echo "Installing mobench from git revision ${MOBENCH_REF}"
-            cargo install mobench \
-              --git https://github.com/worldcoin/mobile-bench-rs \
-              --rev "$MOBENCH_REF" \
-              --locked
-          elif [ -n "$MOBENCH_REF" ]; then
-            echo "Installing mobench from git branch ${MOBENCH_REF}"
-            cargo install mobench \
-              --git https://github.com/worldcoin/mobile-bench-rs \
-              --branch "$MOBENCH_REF" \
-              --locked
-          elif [ -n "$MOBENCH_VERSION" ]; then
-            echo "Installing mobench ${MOBENCH_VERSION} from crates.io"
-            cargo install mobench --version "$MOBENCH_VERSION" --locked
-          elif [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
-            echo "Installing mobench from caller/crates/mobench"
+          if [ -f caller/crates/mobench/Cargo.toml ]; then
             cargo install --path caller/crates/mobench --locked --force
+          elif [[ "$MOBENCH_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            cargo install mobench --git https://github.com/worldcoin/mobile-bench-rs --rev "$MOBENCH_REF" --locked
+          elif [ -n "$MOBENCH_REF" ]; then
+            cargo install mobench --git https://github.com/worldcoin/mobile-bench-rs --branch "$MOBENCH_REF" --locked
+          elif [ -n "$MOBENCH_VERSION" ]; then
+            cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            echo "Installing latest mobench from crates.io"
-            cargo install mobench --locked
+            cargo install mobench --version 0.1.44 --locked
           fi
-          mobench --version
-
-      - name: Install uniffi-bindgen
+          brew install xcodegen
+      - name: Install caller-selected binding generator
         shell: bash
+        env:
+          FFI_BACKEND: ${{ inputs.ffi_backend }}
         run: |
           set -euo pipefail
-          lockfile=$(find caller -name Cargo.lock -print -quit)
-          if [ -z "${lockfile}" ]; then
-            echo "No Cargo.lock found under caller/; skipping global uniffi-bindgen install"
-            exit 0
+          if [ "$FFI_BACKEND" = boltffi ] || [ "$FFI_BACKEND" = bolt-ffi ]; then
+            cargo install boltffi_cli --version 0.25.2 --locked
           fi
-          uniffi_version=$(awk '
-            $0 == "[[package]]" { in_pkg=0 }
-            $0 == "name = \"uniffi_bindgen\"" { in_pkg=1; next }
-            in_pkg && /^version = / {
-              gsub(/^version = "|\"$/, "", $0)
-              print $0
-              exit
-            }
-          ' "${lockfile}")
-          if [ -n "${uniffi_version}" ]; then
-            cargo install \
-              --git https://github.com/mozilla/uniffi-rs \
-              --tag "v${uniffi_version}" \
-              uniffi-bindgen-cli \
-              --bin uniffi-bindgen
-          else
-            echo "No uniffi_bindgen entry in caller/Cargo.lock; skipping global uniffi-bindgen install"
+          lockfile="$(find caller -name Cargo.lock -print -quit)"
+          [ -n "$lockfile" ] || exit 0
+          version="$(awk '$0 == "[[package]]" { p=0 } $0 == "name = \"uniffi_bindgen\"" { p=1; next } p && /^version = / { gsub(/^version = \"|\"$/, "", $0); print; exit }' "$lockfile")"
+          if [ -n "$version" ]; then
+            cargo install --git https://github.com/mozilla/uniffi-rs --tag "v${version}" \
+              uniffi-bindgen-cli --bin uniffi-bindgen
           fi
-
-      - name: Install BoltFFI
-        if: inputs.ffi_backend == 'boltffi' || inputs.ffi_backend == 'bolt-ffi'
-        shell: bash
-        run: cargo install boltffi_cli --version 0.25.2 --locked
-
-      - name: Configure mobench FFI backend
+      - name: Configure requested FFI backend
         if: inputs.ffi_backend != ''
         working-directory: caller
         shell: bash
@@ -558,704 +293,573 @@ jobs:
           FFI_BACKEND: ${{ inputs.ffi_backend }}
         run: |
           set -euo pipefail
+          case "$FFI_BACKEND" in uniffi|native-c-abi|boltffi|bolt-ffi) ;; *) exit 2;; esac
           python3 - <<'PY'
           import os
           from pathlib import Path
-
-          backend = os.environ["FFI_BACKEND"]
-          path = Path("mobench.toml")
+          backend = os.environ['FFI_BACKEND']
+          path = Path('mobench.toml')
           lines = path.read_text().splitlines() if path.exists() else []
-
-          out = []
-          in_project = False
-          saw_project = False
-          wrote_backend = False
-
+          out, in_project, saw, wrote = [], False, False, False
           for line in lines:
               stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  if in_project and not wrote_backend:
-                      out.append(f'ffi_backend = "{backend}"')
-                      wrote_backend = True
-                  in_project = stripped == "[project]"
-                  saw_project = saw_project or in_project
-
-              if in_project and stripped.startswith("ffi_backend"):
-                  out.append(f'ffi_backend = "{backend}"')
-                  wrote_backend = True
-              else:
-                  out.append(line)
-
-          if saw_project:
-              if in_project and not wrote_backend:
-                  out.append(f'ffi_backend = "{backend}"')
-          else:
-              if out and out[-1] != "":
-                  out.append("")
-              out.extend(["[project]", f'ffi_backend = "{backend}"'])
-
-          path.write_text("\n".join(out) + "\n")
-          print(path.read_text())
+              if stripped.startswith('[') and stripped.endswith(']'):
+                  if in_project and not wrote: out.append(f'ffi_backend = "{backend}"'); wrote = True
+                  in_project = stripped == '[project]'; saw = saw or in_project
+              if in_project and stripped.startswith('ffi_backend'):
+                  out.append(f'ffi_backend = "{backend}"'); wrote = True
+              else: out.append(line)
+          if saw and in_project and not wrote: out.append(f'ffi_backend = "{backend}"')
+          if not saw:
+              if out and out[-1] != '': out.append('')
+              out.extend(['[project]', f'ffi_backend = "{backend}"'])
+          path.write_text('\n'.join(out) + '\n')
           PY
-
-      - name: Resolve Android device
-        id: resolve_device
-        working-directory: caller
-        shell: bash
-        env:
-          DEVICE_PROFILE: ${{ inputs.device_profile }}
-          ANDROID_DEVICE_OVERRIDE: ${{ inputs.android_device }}
-          ANDROID_OS_VERSION_OVERRIDE: ${{ inputs.android_os_version }}
-        run: |
-          if [ -n "$ANDROID_DEVICE_OVERRIDE" ] && [ -n "$ANDROID_OS_VERSION_OVERRIDE" ]; then
-            echo "device_name=${ANDROID_DEVICE_OVERRIDE}" >> "$GITHUB_OUTPUT"
-            echo "os_version=${ANDROID_OS_VERSION_OVERRIDE}" >> "$GITHUB_OUTPUT"
-            echo "Using custom device: ${ANDROID_DEVICE_OVERRIDE} (${ANDROID_OS_VERSION_OVERRIDE})"
-          else
-            output=$(cargo-mobench devices resolve \
-              --platform android \
-              --profile "${DEVICE_PROFILE}" \
-              --format json 2>&1) || {
-                echo "::error::Failed to resolve Android device: $output"
-                exit 1
-              }
-            device_name=$(echo "$output" | jq -r '.device // .name')
-            os_version=$(echo "$output" | jq -r '.os_version')
-            echo "device_name=${device_name}" >> "$GITHUB_OUTPUT"
-            echo "os_version=${os_version}" >> "$GITHUB_OUTPUT"
-            echo "Resolved Android device: ${device_name} (${os_version})"
-          fi
-
-      - name: Build Android artifacts
-        working-directory: caller
-        shell: bash
-        env:
-          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
-          CRATE_PATH: ${{ inputs.crate_path }}
-        run: |
-          set -euo pipefail
-          cargo-mobench build --target android $RELEASE_FLAG --crate-path "$CRATE_PATH"
-
-      - name: Run Android benchmarks
+      - name: Prepare iOS packages and manifest
         working-directory: caller
         shell: bash
         env:
           FUNCTIONS_JSON: ${{ inputs.functions }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
-          ANDROID_DEVICE: ${{ steps.resolve_device.outputs.device_name }}
-          ANDROID_OS_VERSION: ${{ steps.resolve_device.outputs.os_version }}
-          REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
-          RELEASE_FLAG: ${{ inputs.build_release && '--release' || '' }}
           CRATE_PATH: ${{ inputs.crate_path }}
+          HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
+          BUILD_RELEASE: ${{ inputs.build_release }}
         run: |
           set -euo pipefail
-          device_spec="${ANDROID_DEVICE}-${ANDROID_OS_VERSION}"
-          echo "Running Android benchmarks on: ${device_spec}"
-          rm -rf target/mobench/ci/android
-          rm -rf target/browserstack
-
-          cargo-mobench ci run \
-            --target android \
-            --functions "${FUNCTIONS_JSON}" \
-            --iterations "${ITERATIONS}" \
-            --warmup "${WARMUP}" \
-            --devices "${device_spec}" \
-            --crate-path "$CRATE_PATH" \
-            $RELEASE_FLAG \
-            --fetch \
-            --regression-threshold-pct "${REGRESSION_THRESHOLD}" \
-            --plots off \
-            --output-dir target/mobench/ci/android
-
-      - name: Upload Android results
-        if: always()
-        uses: actions/upload-artifact@v7.0.0
+          release_args=()
+          if [ "$BUILD_RELEASE" = true ]; then release_args+=(--release); fi
+          cargo-mobench ci prepare --target ios \
+            --functions "$FUNCTIONS_JSON" --iterations "$ITERATIONS" --warmup "$WARMUP" \
+            --crate-path "$CRATE_PATH" "${release_args[@]}" --source-sha "$HEAD_SHA" \
+            --output-dir target/mobench/prebuilt/ios \
+            --manifest target/mobench/prebuilt/ios/manifest.json
+      - name: Upload explicitly enumerated iOS packages
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: mobench-results-android
+          name: mobench-prebuilt-ios
           path: |
-            caller/target/mobench/ci/android/*.json
-            caller/target/mobench/ci/android/*.csv
-            caller/target/browserstack/**
-          if-no-files-found: warn
+            caller/target/mobench/prebuilt/ios/manifest.json
+            caller/target/mobench/prebuilt/ios/entries/*/app.ipa
+            caller/target/mobench/prebuilt/ios/entries/*/test-suite.zip
+          if-no-files-found: error
+          retention-days: 1
 
-  # ---------------------------------------------------------------------------
-  # Summarize results from both platforms
-  # ---------------------------------------------------------------------------
-  summarize:
-    name: Summarize benchmark results
-    needs: [ios, android]
-    if: always() && (needs.ios.result == 'success' || needs.android.result == 'success')
-    runs-on: ubuntu-latest
-
+  prepare-android:
+    name: Prepare Android artifacts (untrusted)
+    needs: validate-request
+    if: inputs.platform == 'android' || inputs.platform == 'both'
+    runs-on: macos-14
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - name: Checkout caller repo
-        uses: actions/checkout@v6.0.2
+      - name: Revalidate current PR head
+        if: inputs.pr_number != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
+          test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
+      - name: Checkout exact untrusted PR revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          repository: ${{ needs.validate-request.outputs.head_repo }}
+          ref: ${{ needs.validate-request.outputs.head_sha }}
+          persist-credentials: false
           path: caller
-          ref: ${{ inputs.head_sha || github.sha }}
-
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install mobench
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          targets: ${{ inputs.rust_targets_android }}
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@651bceb6f9ca583f16b8d75b62c36ded2ae6fc9c # v4.0.0
+      - name: Install Android SDK packages and select NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$sdkmanager" ] || sdkmanager="$(command -v sdkmanager)"
+          "$sdkmanager" --install "platform-tools" "platforms;android-34" \
+            "build-tools;34.0.0" "ndk;26.1.10909125" >/dev/null
+          ndk="${ANDROID_HOME}/ndk/26.1.10909125"
+          [ -d "$ndk" ] || { echo "::error::Required Android NDK is unavailable"; exit 1; }
+          printf 'ANDROID_NDK_HOME=%s\nANDROID_NDK_ROOT=%s\n' "$ndk" "$ndk" >> "$GITHUB_ENV"
+      - name: Install untrusted build tooling
         shell: bash
         env:
           MOBENCH_VERSION: ${{ inputs.mobench_version }}
           MOBENCH_REF: ${{ inputs.mobench_ref }}
         run: |
           set -euo pipefail
-          if [ -n "$MOBENCH_REF" ] && printf '%s' "$MOBENCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
-            echo "Installing mobench from git revision ${MOBENCH_REF}"
-            cargo install mobench \
-              --git https://github.com/worldcoin/mobile-bench-rs \
-              --rev "$MOBENCH_REF" \
-              --locked
-          elif [ -n "$MOBENCH_REF" ]; then
-            echo "Installing mobench from git branch ${MOBENCH_REF}"
-            cargo install mobench \
-              --git https://github.com/worldcoin/mobile-bench-rs \
-              --branch "$MOBENCH_REF" \
-              --locked
-          elif [ -n "$MOBENCH_VERSION" ]; then
-            echo "Installing mobench ${MOBENCH_VERSION} from crates.io"
-            cargo install mobench --version "$MOBENCH_VERSION" --locked
-          elif [ -f caller/crates/mobench/Cargo.toml ] && grep -Eq '^name\s*=\s*"mobench"' caller/crates/mobench/Cargo.toml; then
-            echo "Installing mobench from caller/crates/mobench"
+          cargo install cargo-ndk --locked
+          if [ -f caller/crates/mobench/Cargo.toml ]; then
             cargo install --path caller/crates/mobench --locked --force
+          elif [[ "$MOBENCH_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            cargo install mobench --git https://github.com/worldcoin/mobile-bench-rs --rev "$MOBENCH_REF" --locked
+          elif [ -n "$MOBENCH_REF" ]; then
+            cargo install mobench --git https://github.com/worldcoin/mobile-bench-rs --branch "$MOBENCH_REF" --locked
+          elif [ -n "$MOBENCH_VERSION" ]; then
+            cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            echo "Installing latest mobench from crates.io"
-            cargo install mobench --locked
+            cargo install mobench --version 0.1.44 --locked
           fi
-          mobench --version
+      - name: Install caller-selected binding generator
+        shell: bash
+        env:
+          FFI_BACKEND: ${{ inputs.ffi_backend }}
+        run: |
+          set -euo pipefail
+          if [ "$FFI_BACKEND" = boltffi ] || [ "$FFI_BACKEND" = bolt-ffi ]; then
+            cargo install boltffi_cli --version 0.25.2 --locked
+          fi
+          lockfile="$(find caller -name Cargo.lock -print -quit)"
+          [ -n "$lockfile" ] || exit 0
+          version="$(awk '$0 == "[[package]]" { p=0 } $0 == "name = \"uniffi_bindgen\"" { p=1; next } p && /^version = / { gsub(/^version = \"|\"$/, "", $0); print; exit }' "$lockfile")"
+          if [ -n "$version" ]; then
+            cargo install --git https://github.com/mozilla/uniffi-rs --tag "v${version}" \
+              uniffi-bindgen-cli --bin uniffi-bindgen
+          fi
+      - name: Configure requested FFI backend
+        if: inputs.ffi_backend != ''
+        working-directory: caller
+        shell: bash
+        env:
+          FFI_BACKEND: ${{ inputs.ffi_backend }}
+        run: |
+          set -euo pipefail
+          case "$FFI_BACKEND" in uniffi|native-c-abi|boltffi|bolt-ffi) ;; *) exit 2;; esac
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          backend = os.environ['FFI_BACKEND']
+          path = Path('mobench.toml')
+          lines = path.read_text().splitlines() if path.exists() else []
+          out, in_project, saw, wrote = [], False, False, False
+          for line in lines:
+              stripped = line.strip()
+              if stripped.startswith('[') and stripped.endswith(']'):
+                  if in_project and not wrote: out.append(f'ffi_backend = "{backend}"'); wrote = True
+                  in_project = stripped == '[project]'; saw = saw or in_project
+              if in_project and stripped.startswith('ffi_backend'):
+                  out.append(f'ffi_backend = "{backend}"'); wrote = True
+              else: out.append(line)
+          if saw and in_project and not wrote: out.append(f'ffi_backend = "{backend}"')
+          if not saw:
+              if out and out[-1] != '': out.append('')
+              out.extend(['[project]', f'ffi_backend = "{backend}"'])
+          path.write_text('\n'.join(out) + '\n')
+          PY
+      - name: Prepare Android packages and manifest
+        working-directory: caller
+        shell: bash
+        env:
+          FUNCTIONS_JSON: ${{ inputs.functions }}
+          ITERATIONS: ${{ inputs.iterations }}
+          WARMUP: ${{ inputs.warmup }}
+          CRATE_PATH: ${{ inputs.crate_path }}
+          HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
+          BUILD_RELEASE: ${{ inputs.build_release }}
+        run: |
+          set -euo pipefail
+          release_args=()
+          if [ "$BUILD_RELEASE" = true ]; then release_args+=(--release); fi
+          cargo-mobench ci prepare --target android \
+            --functions "$FUNCTIONS_JSON" --iterations "$ITERATIONS" --warmup "$WARMUP" \
+            --crate-path "$CRATE_PATH" "${release_args[@]}" --source-sha "$HEAD_SHA" \
+            --output-dir target/mobench/prebuilt/android \
+            --manifest target/mobench/prebuilt/android/manifest.json
+      - name: Upload explicitly enumerated Android packages
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mobench-prebuilt-android
+          path: |
+            caller/target/mobench/prebuilt/android/manifest.json
+            caller/target/mobench/prebuilt/android/entries/*/app.apk
+            caller/target/mobench/prebuilt/android/entries/*/test.apk
+          if-no-files-found: error
+          retention-days: 1
 
+  run-ios:
+    name: Run prebuilt iOS packages on BrowserStack
+    needs: [validate-request, trusted-mobench, prepare-ios]
+    runs-on: ubuntu-latest
+    environment: browserstack
+    permissions:
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Download trusted mobench
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: trusted-cargo-mobench
+          path: trusted-bin
+      - name: Download exact run-scoped iOS packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mobench-prebuilt-ios
+          path: prebuilt/ios
+      - name: Revalidate current PR head before credential use
+        if: inputs.pr_number != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
+          test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
+      - name: Resolve and validate iOS device
+        id: device
+        shell: bash
+        env:
+          DEVICE_PROFILE: ${{ inputs.device_profile }}
+          DEVICE_OVERRIDE: ${{ inputs.ios_device }}
+          OS_OVERRIDE: ${{ inputs.ios_os_version }}
+        run: |
+          set -euo pipefail
+          chmod +x trusted-bin/cargo-mobench
+          if [ -n "$DEVICE_OVERRIDE" ] && [ -n "$OS_OVERRIDE" ]; then
+            device="$DEVICE_OVERRIDE"; os="$OS_OVERRIDE"
+          else
+            json="$(trusted-bin/cargo-mobench devices resolve --platform ios --profile "$DEVICE_PROFILE" --format json)"
+            device="$(jq -r '.device // .name' <<<"$json")"; os="$(jq -r '.os_version' <<<"$json")"
+          fi
+          device_pattern='^[A-Za-z0-9._+()/ -]{1,100}$'
+          os_pattern='^[A-Za-z0-9._+-]{1,32}$'
+          [[ "$device" =~ $device_pattern && "$os" =~ $os_pattern ]] || exit 2
+          printf 'spec=%s-%s\n' "$device" "$os" >> "$GITHUB_OUTPUT"
+      - name: Upload, run, and fetch iOS benchmark
+        shell: bash
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
+          DEVICE_SPEC: ${{ steps.device.outputs.spec }}
+          FUNCTIONS_JSON: ${{ inputs.functions }}
+          ITERATIONS: ${{ inputs.iterations }}
+          WARMUP: ${{ inputs.warmup }}
+        run: |
+          set -euo pipefail
+          trusted-bin/cargo-mobench ci run-prebuilt \
+            --manifest prebuilt/ios/manifest.json --expected-source-sha "$HEAD_SHA" \
+            --expected-platform ios --expected-functions "$FUNCTIONS_JSON" \
+            --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
+            --devices "$DEVICE_SPEC" --fetch --fetch-output-dir target/browserstack \
+            --output-dir target/mobench/ci/ios
+      - name: Upload iOS results
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mobench-results-ios
+          path: |
+            target/mobench/ci/ios/summary.json
+            target/mobench/ci/ios/summary.md
+            target/mobench/ci/ios/results.csv
+          if-no-files-found: warn
+      - name: Upload collected iOS BrowserStack diagnostics
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mobench-browserstack-ios
+          path: |
+            target/browserstack/**/*.json
+            target/browserstack/**/*.log
+            target/browserstack/**/*.txt
+          if-no-files-found: warn
+
+  run-android:
+    name: Run prebuilt Android packages on BrowserStack
+    needs: [validate-request, trusted-mobench, prepare-android]
+    runs-on: ubuntu-latest
+    environment: browserstack
+    permissions:
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Download trusted mobench
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: trusted-cargo-mobench
+          path: trusted-bin
+      - name: Download exact run-scoped Android packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mobench-prebuilt-android
+          path: prebuilt/android
+      - name: Revalidate current PR head before credential use
+        if: inputs.pr_number != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
+          test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
+      - name: Resolve and validate Android device
+        id: device
+        shell: bash
+        env:
+          DEVICE_PROFILE: ${{ inputs.device_profile }}
+          DEVICE_OVERRIDE: ${{ inputs.android_device }}
+          OS_OVERRIDE: ${{ inputs.android_os_version }}
+        run: |
+          set -euo pipefail
+          chmod +x trusted-bin/cargo-mobench
+          if [ -n "$DEVICE_OVERRIDE" ] && [ -n "$OS_OVERRIDE" ]; then
+            device="$DEVICE_OVERRIDE"; os="$OS_OVERRIDE"
+          else
+            json="$(trusted-bin/cargo-mobench devices resolve --platform android --profile "$DEVICE_PROFILE" --format json)"
+            device="$(jq -r '.device // .name' <<<"$json")"; os="$(jq -r '.os_version' <<<"$json")"
+          fi
+          device_pattern='^[A-Za-z0-9._+()/ -]{1,100}$'
+          os_pattern='^[A-Za-z0-9._+-]{1,32}$'
+          [[ "$device" =~ $device_pattern && "$os" =~ $os_pattern ]] || exit 2
+          printf 'spec=%s-%s\n' "$device" "$os" >> "$GITHUB_OUTPUT"
+      - name: Upload, run, and fetch Android benchmark
+        shell: bash
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
+          DEVICE_SPEC: ${{ steps.device.outputs.spec }}
+          FUNCTIONS_JSON: ${{ inputs.functions }}
+          ITERATIONS: ${{ inputs.iterations }}
+          WARMUP: ${{ inputs.warmup }}
+        run: |
+          set -euo pipefail
+          trusted-bin/cargo-mobench ci run-prebuilt \
+            --manifest prebuilt/android/manifest.json --expected-source-sha "$HEAD_SHA" \
+            --expected-platform android --expected-functions "$FUNCTIONS_JSON" \
+            --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
+            --devices "$DEVICE_SPEC" --fetch --fetch-output-dir target/browserstack \
+            --output-dir target/mobench/ci/android
+      - name: Upload Android results
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mobench-results-android
+          path: |
+            target/mobench/ci/android/summary.json
+            target/mobench/ci/android/summary.md
+            target/mobench/ci/android/results.csv
+          if-no-files-found: warn
+      - name: Upload collected Android BrowserStack diagnostics
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mobench-browserstack-android
+          path: |
+            target/browserstack/**/*.json
+            target/browserstack/**/*.log
+            target/browserstack/**/*.txt
+          if-no-files-found: warn
+
+  summarize:
+    name: Sanitize and summarize benchmark results
+    needs: [validate-request, trusted-mobench, run-ios, run-android]
+    if: always() && (needs.run-ios.result == 'success' || needs.run-android.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Download trusted mobench
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: trusted-cargo-mobench
+          path: trusted-bin
       - name: Download iOS results
-        if: needs.ios.result == 'success'
-        uses: actions/download-artifact@v8.0.1
+        if: needs.run-ios.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mobench-results-ios
           path: results/ios
-
       - name: Download Android results
-        if: needs.android.result == 'success'
-        uses: actions/download-artifact@v8.0.1
+        if: needs.run-android.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mobench-results-android
           path: results/android
-
-      - name: Setup Python for plot rendering
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.11"
-
-      - name: Install plot rendering dependencies
+      - name: Reject unsafe report paths and fields
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install matplotlib
-
-      - name: Render plot-capable platform summaries
+          python3 - <<'PY'
+          import json, re
+          from pathlib import Path
+          roots = [p for p in (Path('results/ios'), Path('results/android')) if p.exists()]
+          allowed = {'summary.json', 'summary.md', 'results.csv'}
+          unsafe = re.compile(r'[\x00-\x1f\x7f]|[<>`\[\]|!]|(?:^|\n)::')
+          for root in roots:
+              for p in root.rglob('*'):
+                  if p.is_symlink() or (p.is_file() and p.stat().st_size > 50 * 1024 * 1024):
+                      raise SystemExit('unsafe report artifact')
+              summaries = list(root.rglob('summary.json'))
+              if len(summaries) != 1 or summaries[0].name not in allowed:
+                  raise SystemExit('expected exactly one summary.json')
+              payload = json.loads(summaries[0].read_text())
+              def check(v, depth=0):
+                  if depth > 32: raise SystemExit('report nesting too deep')
+                  if isinstance(v, str) and (len(v) > 4096 or unsafe.search(v)):
+                      raise SystemExit('unsafe report field')
+                  if isinstance(v, dict):
+                      for k, x in v.items(): check(k, depth+1); check(x, depth+1)
+                  elif isinstance(v, list):
+                      for x in v: check(x, depth+1)
+              check(payload)
+          PY
+      - name: Render trusted summaries
         shell: bash
         run: |
           set -euo pipefail
+          chmod +x trusted-bin/cargo-mobench
           mkdir -p rendered
-          rendered_count=0
-
-          render_platform_summary() {
-            local platform="$1"
-            local results_dir="results/${platform}"
-            if [ ! -d "${results_dir}" ]; then
-              return 0
-            fi
-
-            local summary_json
-            summary_json=$(find "${results_dir}" -type f -path "*/mobench/ci/${platform}/summary.json" | head -1)
-            if [ -z "${summary_json}" ]; then
-              echo "::warning::No ${platform} summary.json found under ${results_dir}"
-              return 0
-            fi
-
-            mkdir -p "rendered/${platform}"
-
-            cargo-mobench ci summarize \
-              --results-dir "${results_dir}" \
-              --output-format table || true
-
-            cargo-mobench report summarize \
-              --summary "${summary_json}" \
-              --output "rendered/${platform}/summary.md" \
-              --plots require
-          }
-
           for platform in ios android; do
-            if render_platform_summary "${platform}"; then
-              if [ -f "rendered/${platform}/summary.md" ]; then
-                rendered_count=$((rendered_count + 1))
-              fi
+            summary="$(find "results/$platform" -type f -name summary.json -print -quit 2>/dev/null || true)"
+            if [ -n "$summary" ]; then
+              mkdir -p "rendered/$platform"
+              trusted-bin/cargo-mobench report summarize --summary "$summary" \
+                --output "rendered/$platform/summary.md" --plots off
             fi
           done
-
-          if [ "${rendered_count}" -eq 0 ]; then
-            echo "::error::No benchmark summaries were rendered."
-            exit 1
-          fi
-
-      - name: Build combined plot summary JSON
+      - name: Write job summary
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          rendered_root = Path("rendered")
-          rendered_root.mkdir(parents=True, exist_ok=True)
-          combined_dir = rendered_root / "combined"
-          combined_dir.mkdir(parents=True, exist_ok=True)
-
-          platform_summaries = []
-          for platform in ("ios", "android"):
-            results_dir = Path("results") / platform
-            if not results_dir.is_dir():
-              continue
-            matches = sorted(
-              path for path in results_dir.rglob("summary.json")
-              if path.as_posix().endswith(f"/mobench/ci/{platform}/summary.json")
-            )
-            if matches:
-              platform_summaries.append((platform, matches[0]))
-
-          if not platform_summaries:
-            raise SystemExit("No platform summary.json files found for combined plots")
-
-          def collect_benchmark_results(value, combined):
-            if isinstance(value, dict):
-              benchmark_results = value.get("benchmark_results")
-              if isinstance(benchmark_results, dict):
-                for device_label, entries in benchmark_results.items():
-                  bucket = combined.setdefault(device_label, [])
-                  if isinstance(entries, list):
-                    bucket.extend(entries)
-              for nested in value.values():
-                collect_benchmark_results(nested, combined)
-            elif isinstance(value, list):
-              for nested in value:
-                collect_benchmark_results(nested, combined)
-
-          combined_device_summaries = []
-          combined_devices = []
-          combined_benchmark_results = {}
-          primary_target = None
-          generated_at = None
-          generated_at_unix = 0
-          iterations = 0
-          warmup = 0
-
-          for platform, summary_path in platform_summaries:
-            payload = json.loads(summary_path.read_text())
-            summary = payload.get("summary")
-            if not isinstance(summary, dict):
-              raise SystemExit(f"Missing top-level summary in {summary_path}")
-
-            if primary_target is None:
-              primary_target = summary.get("target") or platform
-              iterations = int(summary.get("iterations") or 0)
-              warmup = int(summary.get("warmup") or 0)
-
-            for device in summary.get("devices") or []:
-              if device not in combined_devices:
-                combined_devices.append(device)
-            combined_device_summaries.extend(summary.get("device_summaries") or [])
-
-            ts = int(summary.get("generated_at_unix") or 0)
-            if generated_at is None or ts >= generated_at_unix:
-              generated_at_unix = ts
-              generated_at = summary.get("generated_at")
-
-            collect_benchmark_results(payload, combined_benchmark_results)
-
-          if primary_target is None:
-            raise SystemExit("Unable to infer a target for combined plots")
-
-          combined_summary = {
-            "summary": {
-              "generated_at": generated_at or "",
-              "generated_at_unix": generated_at_unix,
-              "target": primary_target,
-              "function": "combined-device-comparison",
-              "iterations": iterations,
-              "warmup": warmup,
-              "devices": combined_devices,
-              "device_summaries": combined_device_summaries,
-            },
-            "benchmark_results": combined_benchmark_results,
-          }
-
-          output_path = combined_dir / "summary.json"
-          output_path.write_text(json.dumps(combined_summary, indent=2) + "\n")
-          PY
-
-      - name: Render shared device comparison plots
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo-mobench report summarize \
-            --summary rendered/combined/summary.json \
-            --output rendered/combined/summary.md \
-            --plots require
-
-      - name: Publish plot assets
-        id: publish_plots
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          ASSET_BRANCH: mobench-plots
-        run: |
-          set -euo pipefail
-
-          if ! find rendered -type f -path "*/plots/*.svg" | grep -q .; then
-            echo "::error::Expected rendered plots under rendered/**/plots, but none were found."
-            exit 1
-          fi
-
-          remote="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-          asset_path="runs/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-
-          publish_once() {
-            local publish_root="$1"
-
-            if git clone --quiet --branch "${ASSET_BRANCH}" "${remote}" "${publish_root}" 2>/dev/null; then
-              :
-            else
-              git clone --quiet "${remote}" "${publish_root}"
-              git -C "${publish_root}" checkout --orphan "${ASSET_BRANCH}"
-              git -C "${publish_root}" rm -rf . >/dev/null 2>&1 || true
-            fi
-
-            git -C "${publish_root}" config user.name "github-actions[bot]"
-            git -C "${publish_root}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            mkdir -p "${publish_root}/${asset_path}"
-
-            for platform in ios android combined; do
-              if [ -d "rendered/${platform}/plots" ]; then
-                mkdir -p "${publish_root}/${asset_path}/${platform}"
-                rm -rf "${publish_root}/${asset_path}/${platform}/plots"
-                cp -R "rendered/${platform}/plots" "${publish_root}/${asset_path}/${platform}/plots"
-              fi
-            done
-
-            git -C "${publish_root}" add "${asset_path}"
-            if git -C "${publish_root}" diff --cached --quiet; then
-              echo "::error::No rendered plot asset changes were staged for publish."
-              return 1
-            fi
-
-            if git -C "${publish_root}" commit -m "mobench plots for run ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >/dev/null \
-              && git -C "${publish_root}" push origin "${ASSET_BRANCH}" >/dev/null; then
-              return 0
-            fi
-
-            return 1
-          }
-
-          published=0
-          for attempt in 1 2 3; do
-            publish_root="$(mktemp -d)"
-            if publish_once "${publish_root}"; then
-              published=1
-              break
-            fi
-            echo "::warning::Plot asset publish attempt ${attempt} failed; retrying with the latest branch state."
-          done
-
-          if [ "${published}" -ne 1 ]; then
-            echo "::error::Unable to publish plot assets after 3 attempts."
-            exit 1
-          fi
-
-          echo "base_url=https://raw.githubusercontent.com/${REPO}/${ASSET_BRANCH}/${asset_path}" >> "$GITHUB_OUTPUT"
-
-      - name: Rewrite rendered summaries for GitHub markdown
-        shell: bash
-        env:
-          PLOT_BASE_URL: ${{ steps.publish_plots.outputs.base_url }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import os
-          from pathlib import Path
-
-          plot_base_url = os.environ.get("PLOT_BASE_URL", "").rstrip("/")
-          if not plot_base_url:
-            raise SystemExit("Missing published plot base URL")
-
-          marker = "### Device Comparison Plots\n"
-
-          def strip_plot_block(text: str) -> str:
-            index = text.find(marker)
-            if index == -1:
-              return text.rstrip() + "\n"
-            return text[:index].rstrip() + "\n"
-
-          for platform in ("ios", "android"):
-            input_path = Path(f"rendered/{platform}/summary.md")
-            output_path = Path(f"rendered/{platform}/github-summary.md")
-            if not input_path.exists():
-              continue
-            output_path.write_text(strip_plot_block(input_path.read_text()))
-
-          combined_input = Path("rendered/combined/summary.md")
-          if combined_input.exists():
-            summary_markdown = combined_input.read_text()
-            index = summary_markdown.find(marker)
-            if index == -1:
-              raise SystemExit("Combined summary markdown did not include a Device Comparison Plots section")
-            plot_section = summary_markdown[index + len(marker):].lstrip()
-            plot_section = plot_section.replace(
-              "](plots/",
-              f"]({plot_base_url}/combined/plots/",
-            )
-            combined_output = Path("rendered/combined/github-summary.md")
-            combined_output.write_text(
-              "## Device Comparison Plots\n\n" + plot_section.rstrip() + "\n"
-            )
-          PY
-
-      - name: Summarize iOS results
-        if: needs.ios.result == 'success'
-        shell: bash
-        run: |
-          echo "## iOS Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -f rendered/ios/github-summary.md ]; then
-            cat rendered/ios/github-summary.md >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No iOS benchmark summary produced." >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Summarize Android results
-        if: needs.android.result == 'success'
-        shell: bash
-        run: |
-          echo "## Android Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -f rendered/android/github-summary.md ]; then
-            cat rendered/android/github-summary.md >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No Android benchmark summary produced." >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Summarize shared device comparison plots
-        shell: bash
-        run: |
-          if [ -f rendered/combined/github-summary.md ]; then
-            cat rendered/combined/github-summary.md >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::No combined plot summary was produced."
-            exit 1
-          fi
-
-      # NOTE: This step requires the caller workflow to have `pull-requests: write` permission
-      # so that github.token can post/update PR comments.
-      - name: Post sticky PR comment
-        if: inputs.pr_number != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          REPO: ${{ github.repository }}
-        run: |
-          MARKER="<!-- mobench-summary -->"
-
-          BODY="${MARKER}
-          ## Mobench Benchmark Results
-
-          "
-          if [ -f rendered/ios/github-summary.md ]; then
-            BODY="${BODY}## iOS Benchmark Results
-
-          $(cat rendered/ios/github-summary.md)
-
-          "
-          fi
-          if [ -f rendered/android/github-summary.md ]; then
-            BODY="${BODY}## Android Benchmark Results
-
-          $(cat rendered/android/github-summary.md)
-
-          "
-          fi
-          if [ -f rendered/combined/github-summary.md ]; then
-            BODY="${BODY}$(cat rendered/combined/github-summary.md)
-
-          "
-          fi
-
-          BODY="${BODY}
-          ---
-          *Posted by [mobench](https://github.com/worldcoin/mobile-bench-rs) · $(date -u '+%Y-%m-%d %H:%M UTC')*"
-
-          EXISTING_COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
-            2>/dev/null | head -1)
-
-          if [ -n "$EXISTING_COMMENT_ID" ]; then
-            gh api "repos/${REPO}/issues/comments/${EXISTING_COMMENT_ID}" \
-              -X PATCH \
-              -f body="${BODY}" \
-              --silent
-            echo "Updated existing PR comment #${EXISTING_COMMENT_ID}"
-          else
-            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-              -f body="${BODY}" \
-              --silent
-            echo "Created new PR comment"
-          fi
-
-      - name: Generate GitHub App token
-        id: app-token
-        if: inputs.pr_number != ''
-        continue-on-error: true
-        uses: actions/create-github-app-token@v3.0.0
-        with:
-          app-id: ${{ secrets.MOBENCH_APP_ID }}
-          private-key: ${{ secrets.MOBENCH_APP_PRIVATE_KEY }}
-
-      - name: Download baseline artifacts
-        if: steps.app-token.outcome == 'success'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          default_branch="${DEFAULT_BRANCH:-main}"
-          mkdir -p baseline
-
-          workflow_id=$(gh api "repos/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}" --jq '.workflow_id')
-          baseline_run_id=$(gh api "repos/${GH_REPO}/actions/workflows/${workflow_id}/runs?branch=${default_branch}&status=completed&per_page=20" \
-            --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID} and .conclusion == \"success\") | .id" | head -1)
-
-          if [ -z "${baseline_run_id}" ]; then
-            echo "::notice::No successful baseline run found on ${default_branch}; check runs will be descriptive only."
-            exit 0
-          fi
-
-          echo "Using baseline run ${baseline_run_id} from ${default_branch}"
           for platform in ios android; do
-            artifact_name="mobench-results-${platform}"
-            destination="baseline/${platform}"
-            mkdir -p "${destination}"
-
-            if gh run download "${baseline_run_id}" \
-              --repo "${GH_REPO}" \
-              --name "${artifact_name}" \
-              --dir "${destination}" >/dev/null 2>&1; then
-              if [ -f "${destination}/summary.json" ]; then
-                echo "Downloaded baseline ${artifact_name}"
-              else
-                echo "::warning::Downloaded ${artifact_name} from run ${baseline_run_id}, but summary.json was missing."
-              fi
-            else
-              echo "::notice::Baseline artifact ${artifact_name} not found in run ${baseline_run_id}."
+            if [ -f "rendered/$platform/summary.md" ]; then
+              printf '## %s Benchmark Results\n\n' "${platform^}" >> "$GITHUB_STEP_SUMMARY"
+              cat "rendered/$platform/summary.md" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-      - name: Create Check Run
-        if: steps.app-token.outcome == 'success'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          CHECK_RUN_NAME: ${{ inputs.check_run_name }}
-          REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
-          CRATE_PATH: ${{ inputs.crate_path }}
-          GH_REPO: ${{ github.repository }}
-          GH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          for dir in results/ios results/android; do
-            if [ -d "$dir" ]; then
-              PLATFORM=$(basename "$dir")
-              baseline_args=()
-              baseline_path="baseline/${PLATFORM}/summary.json"
-              if [ -f "$baseline_path" ]; then
-                baseline_args=(--baseline "$baseline_path")
-              fi
-              cargo-mobench ci check-run \
-                --results-dir "$dir" \
-                --repo "$GH_REPO" \
-                --sha "$GH_SHA" \
-                --name "$CHECK_RUN_NAME — ${PLATFORM}" \
-                --annotation-path "${CRATE_PATH}/src/lib.rs" \
-                --regression-threshold-pct "$REGRESSION_THRESHOLD" \
-                "${baseline_args[@]}" \
-                || true
-            fi
-          done
-
       - name: Build history bundle
         if: always()
         shell: bash
         env:
-          HEAD_SHA: ${{ inputs.head_sha || github.sha }}
+          HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
           REQUESTED_BY: ${{ inputs.requested_by }}
         run: |
+          set -euo pipefail
           mkdir -p history-bundle
-          TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-
-          # Collect all summary JSONs into the bundle
-          for dir in results/ios results/android; do
-            if [ -d "$dir" ]; then
-              PLATFORM=$(basename "$dir")
-              cp "$dir"/*.json "history-bundle/" 2>/dev/null || true
-              cp "$dir"/*.csv "history-bundle/" 2>/dev/null || true
-            fi
+          platforms='[]'
+          for platform in ios android; do
+            source="$(find "results/$platform" -type f -name summary.json -print -quit 2>/dev/null || true)"
+            [ -n "$source" ] || continue
+            mkdir -p "history-bundle/$platform"
+            cp "$source" "history-bundle/$platform/summary.json"
+            csv="$(find "results/$platform" -type f -name results.csv -print -quit 2>/dev/null || true)"
+            [ -z "$csv" ] || cp "$csv" "history-bundle/$platform/results.csv"
+            platforms="$(jq --arg p "$platform" '. + [$p]' <<<"$platforms")"
           done
-
-          if [ -d rendered ]; then
-            mkdir -p history-bundle/rendered
-            cp -R rendered/. history-bundle/rendered/
-          fi
-
-          # Detect which platform result directories exist
-          platforms="[]"
-          has_ios=false; has_android=false
-          [ -d "results/ios" ] && has_ios=true
-          [ -d "results/android" ] && has_android=true
-          if $has_ios && $has_android; then platforms='["ios","android"]'
-          elif $has_ios; then platforms='["ios"]'
-          elif $has_android; then platforms='["android"]'
-          fi
-
-          # Generate manifest
-          jq -n \
-            --arg ts "$TIMESTAMP" \
-            --arg sha "$HEAD_SHA" \
-            --arg pr "${PR_NUMBER:-}" \
-            --arg by "${REQUESTED_BY:-ci}" \
-            --arg ver "mobench-history-v1" \
+          jq -n --arg sha "$HEAD_SHA" --arg pr "$PR_NUMBER" --arg by "$REQUESTED_BY" \
             --argjson platforms "$platforms" \
-            '{
-              schema_version: $ver,
-              timestamp: $ts,
-              commit_sha: $sha,
-              pr_number: (if $pr != "" then ($pr | tonumber) else null end),
-              requested_by: $by,
-              platforms: $platforms
-            }' > history-bundle/manifest.json
-
+            '{schema_version:"mobench-history-v1",commit_sha:$sha,pr_number:(if $pr == "" then null else ($pr|tonumber) end),requested_by:$by,platforms:$platforms}' \
+            > history-bundle/manifest.json
+      - name: Upload sanitized report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mobench-sanitized-report
+          path: |
+            rendered/ios/summary.md
+            rendered/android/summary.md
+            results/ios/**/summary.json
+            results/android/**/summary.json
+          if-no-files-found: error
       - name: Upload history bundle
         if: always()
-        uses: actions/upload-artifact@v7.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: mobench-history-bundle
-          path: history-bundle/
+          path: |
+            history-bundle/manifest.json
+            history-bundle/ios/summary.json
+            history-bundle/ios/results.csv
+            history-bundle/android/summary.json
+            history-bundle/android/results.csv
           if-no-files-found: warn
+
+  report:
+    name: Publish PR and check-run reports
+    needs: [validate-request, trusted-mobench, summarize]
+    # `always()` prevents an intentionally skipped platform from propagating
+    # GitHub's implicit success guard into this single-platform report job.
+    if: always() && inputs.pr_number != '' && needs.summarize.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Download trusted mobench
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: trusted-cargo-mobench
+          path: trusted-bin
+      - name: Download sanitized report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mobench-sanitized-report
+          path: report
+      - name: Publish sticky PR comment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          marker='<!-- mobench-summary -->'
+          body_file="$(mktemp)"
+          {
+            printf '%s\n## Mobench Benchmark Results\n\n' "$marker"
+            for platform in ios android; do
+              summary="report/rendered/$platform/summary.md"
+              if [ -f "$summary" ]; then
+                printf '## %s Benchmark Results\n\n' "${platform^}"
+                cat "$summary"
+                printf '\n'
+              fi
+            done
+          } > "$body_file"
+          jq -n --rawfile body "$body_file" '{body:$body}' > request.json
+          existing="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq ".[] | select(.body | contains(\"${marker}\")) | .id" | head -1)"
+          if [ -n "$existing" ]; then
+            gh api "repos/${REPO}/issues/comments/${existing}" -X PATCH --input request.json --silent
+          else
+            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" -X POST --input request.json --silent
+          fi
+      - name: Create threshold-aware check runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
+          CHECK_NAME: ${{ inputs.check_run_name }}
+          REGRESSION_THRESHOLD: ${{ inputs.regression_threshold_pct }}
+          CRATE_PATH: ${{ inputs.crate_path }}
+        run: |
+          set -euo pipefail
+          chmod +x trusted-bin/cargo-mobench
+          [[ "$REGRESSION_THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]] || exit 2
+          [[ "$CRATE_PATH" != /* && "$CRATE_PATH" != *..* && "$CRATE_PATH" =~ ^[A-Za-z0-9._/-]+$ ]] || exit 2
+          for platform in ios android; do
+            results="report/results/$platform"
+            [ -d "$results" ] || continue
+            trusted-bin/cargo-mobench ci check-run \
+              --results-dir "$results" --repo "$REPO" --sha "$HEAD_SHA" \
+              --name "$CHECK_NAME — $platform" \
+              --annotation-path "$CRATE_PATH/src/lib.rs" \
+              --regression-threshold-pct "$REGRESSION_THRESHOLD"
+          done

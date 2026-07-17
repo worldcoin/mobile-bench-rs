@@ -1,6 +1,6 @@
 # Architecture
 
-Updated: 2026-07-15. Release line: `0.1.43`.
+Updated: 2026-07-17. Current release: `0.1.44`.
 
 mobench has two product surfaces:
 
@@ -103,6 +103,20 @@ Responsibilities:
   and optional `plots/*.svg`.
 - Compare against baselines and write optional JUnit output.
 - Publish sticky PR comments and GitHub Check Run summaries.
+
+Fork-PR BrowserStack CI has separate privilege domains:
+
+- `ci prepare` runs build-time caller code without secrets or write permission
+  and emits only enumerated mobile packages plus a cryptographic manifest.
+- `ci run-prebuilt` runs from a trusted immutable mobench release, verifies the
+  handoff, and performs provider operations without checking out or executing
+  the caller on the credentialed runner.
+- summarization is read-only, while PR/check publishing is isolated in a job
+  with only its narrow write permission.
+
+This split is an execution boundary, not merely a workflow organization
+convention. See
+[Reusable Workflow Security](../guides/reusable-workflow-security.md).
 
 BrowserStack benchmark timing/resource metrics are supported. BrowserStack
 native stack/flamegraph profiling is explicitly unsupported in this release.

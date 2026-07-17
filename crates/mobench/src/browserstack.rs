@@ -8,6 +8,7 @@ type BrowserStackResults = (
     std::collections::HashMap<String, Vec<Value>>,
     std::collections::HashMap<String, PerformanceMetrics>,
 );
+use std::io::{Read, copy};
 use std::path::Path;
 use std::time::Instant;
 
@@ -72,6 +73,10 @@ pub struct DeviceValidationError {
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
 const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
+const MAX_TEXT_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BINARY_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_BENCH_REPORT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BENCH_REPORT_CHUNKS: usize = 8192;
 
 #[derive(Debug, Clone)]
 pub struct BrowserStackAuth {
@@ -329,20 +334,36 @@ impl BrowserStackClient {
         let resp = self
             .asset_request(url)
             .send()
-            .with_context(|| format!("downloading BrowserStack asset {}", url))?;
+            .context("downloading BrowserStack asset")?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .with_context(|| format!("reading BrowserStack asset body {}", url))?;
         if !status.is_success() {
             return Err(anyhow!(
-                "BrowserStack asset download failed (status {}): {}",
-                status,
-                String::from_utf8_lossy(&bytes)
+                "BrowserStack asset download failed (status {})",
+                status
             ));
         }
-        std::fs::write(dest, bytes)
-            .with_context(|| format!("writing BrowserStack asset to {:?}", dest))?;
+        if resp
+            .content_length()
+            .is_some_and(|length| length > MAX_BINARY_ARTIFACT_BYTES)
+        {
+            return Err(anyhow!(
+                "BrowserStack asset exceeds {} bytes",
+                MAX_BINARY_ARTIFACT_BYTES
+            ));
+        }
+
+        let mut output = std::fs::File::create(dest)
+            .with_context(|| format!("creating BrowserStack asset file {:?}", dest))?;
+        let written = copy(&mut resp.take(MAX_BINARY_ARTIFACT_BYTES + 1), &mut output)
+            .context("streaming BrowserStack asset")?;
+        if written > MAX_BINARY_ARTIFACT_BYTES {
+            drop(output);
+            let _ = std::fs::remove_file(dest);
+            return Err(anyhow!(
+                "BrowserStack asset exceeds {} bytes",
+                MAX_BINARY_ARTIFACT_BYTES
+            ));
+        }
         Ok(())
     }
 
@@ -495,10 +516,11 @@ impl BrowserStackClient {
         platform: &str,
     ) -> Result<String> {
         let path = match platform {
-            "espresso" => format!(
-                "app-automate/espresso/v2/builds/{}/sessions/{}/devicelogs",
-                build_id, session_id
-            ),
+            "espresso" => {
+                return Err(anyhow!(
+                    "Espresso device logs are exposed per test case in session details"
+                ));
+            }
             "xcuitest" => format!(
                 "app-automate/xcuitest/v2/builds/{}/sessions/{}/devicelogs",
                 build_id, session_id
@@ -506,25 +528,8 @@ impl BrowserStackClient {
             _ => return Err(anyhow!("unsupported platform: {}", platform)),
         };
 
-        let resp = self
-            .http
-            .get(self.api(&path))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .send()
-            .with_context(|| format!("fetching device logs for session {}", session_id))?;
-
-        let status = resp.status();
-        let text = resp.text().context("reading device logs response")?;
-
-        if !status.is_success() {
-            return Err(anyhow!(
-                "Failed to fetch device logs (status {}): {}",
-                status,
-                text
-            ));
-        }
-
-        Ok(text)
+        self.download_text_url(&self.api(&path))
+            .with_context(|| format!("fetching device logs for session {}", session_id))
     }
 
     fn get_session_json(&self, build_id: &str, session_id: &str, platform: &str) -> Result<Value> {
@@ -547,16 +552,32 @@ impl BrowserStackClient {
         let resp = self
             .asset_request(url)
             .send()
-            .with_context(|| format!("downloading BrowserStack asset {}", url))?;
+            .context("downloading BrowserStack text asset")?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .with_context(|| format!("reading BrowserStack asset body {}", url))?;
         if !status.is_success() {
             return Err(anyhow!(
-                "BrowserStack asset download failed (status {}): {}",
-                status,
-                String::from_utf8_lossy(&bytes)
+                "BrowserStack text asset download failed (status {})",
+                status
+            ));
+        }
+        if resp
+            .content_length()
+            .is_some_and(|length| length > MAX_TEXT_ARTIFACT_BYTES as u64)
+        {
+            return Err(anyhow!(
+                "BrowserStack text artifact exceeds {} bytes",
+                MAX_TEXT_ARTIFACT_BYTES
+            ));
+        }
+
+        let mut bytes = Vec::new();
+        resp.take(MAX_TEXT_ARTIFACT_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .context("reading BrowserStack text asset body")?;
+        if bytes.len() > MAX_TEXT_ARTIFACT_BYTES {
+            return Err(anyhow!(
+                "BrowserStack text artifact exceeds {} bytes",
+                MAX_TEXT_ARTIFACT_BYTES
             ));
         }
 
@@ -577,6 +598,11 @@ impl BrowserStackClient {
     /// Supports both Android (BENCH_JSON) and iOS (BENCH_REPORT_JSON_START/END) formats
     pub fn extract_benchmark_results(&self, logs: &str) -> Result<Vec<Value>> {
         let mut results = Vec::new();
+
+        Self::extend_unique_results(
+            &mut results,
+            Self::extract_android_chunked_bench_json(logs)?,
+        );
 
         // First, try iOS-style markers: BENCH_REPORT_JSON_START ... BENCH_REPORT_JSON_END
         if let Some(json) = Self::extract_ios_bench_json(logs) {
@@ -615,6 +641,50 @@ impl BrowserStackClient {
         } else {
             Ok(results)
         }
+    }
+
+    fn extract_android_chunked_bench_json(logs: &str) -> Result<Vec<Value>> {
+        const START_MARKER: &str = "BENCH_JSON_START";
+        const CHUNK_MARKER: &str = "BENCH_JSON_CHUNK";
+        const END_MARKER: &str = "BENCH_JSON_END";
+
+        let mut results = Vec::new();
+        let mut report = None::<String>;
+        let mut chunk_count = 0usize;
+
+        for line in logs.lines() {
+            if let Some(index) = line.find(CHUNK_MARKER) {
+                if let Some(report) = report.as_mut() {
+                    let chunk = &line[index + CHUNK_MARKER.len()..];
+                    let chunk = chunk.strip_prefix(' ').unwrap_or(chunk);
+                    chunk_count += 1;
+                    if chunk_count > MAX_BENCH_REPORT_CHUNKS
+                        || report.len().saturating_add(chunk.len()) > MAX_BENCH_REPORT_BYTES
+                    {
+                        return Err(anyhow!(
+                            "Android benchmark report exceeds collection limits"
+                        ));
+                    }
+                    report.push_str(chunk);
+                }
+                continue;
+            }
+
+            if line.contains(START_MARKER) {
+                report = Some(String::new());
+                chunk_count = 0;
+                continue;
+            }
+
+            if line.contains(END_MARKER)
+                && let Some(report) = report.take()
+                && let Ok(json) = serde_json::from_str::<Value>(&report)
+            {
+                Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
+            }
+        }
+
+        Ok(results)
     }
 
     /// Extract structured Android benchmark failures from logs.
@@ -924,8 +994,17 @@ impl BrowserStackClient {
             let mut device_performance_metrics = PerformanceMetrics::default();
             let mut device_failures: Option<Vec<Value>> = None;
 
-            match self.get_device_logs(build_id, &device.session_id, platform) {
-                Ok(logs) => {
+            let live_logs = if platform == "espresso" {
+                // Espresso exposes instrumentation and device logs per test case in
+                // the session-details response, not at a session-level log endpoint.
+                None
+            } else {
+                Some(self.get_device_logs(build_id, &device.session_id, platform))
+            };
+
+            match live_logs {
+                None => {}
+                Some(Ok(logs)) => {
                     // Extract benchmark results
                     match self.extract_benchmark_results(&logs) {
                         Ok(results) => {
@@ -964,7 +1043,7 @@ impl BrowserStackClient {
                         }
                     }
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     println!("    Failed to fetch live logs: {}", e);
                 }
             }
@@ -1745,20 +1824,37 @@ struct BuildResponse {
 
 fn parse_response<T: DeserializeOwned>(resp: Response, context: &str) -> Result<T> {
     let status = resp.status();
-    let text = resp
-        .text()
-        .with_context(|| format!("reading BrowserStack API response body for {}", context))?;
-
     if !status.is_success() {
         return Err(anyhow!(
-            "BrowserStack API {} failed (status {}): {}",
+            "BrowserStack API {} failed (status {})",
             context,
-            status,
-            text
+            status
         ));
     }
 
-    serde_json::from_str(&text)
+    if resp
+        .content_length()
+        .is_some_and(|length| length > MAX_TEXT_ARTIFACT_BYTES as u64)
+    {
+        return Err(anyhow!(
+            "BrowserStack API {} response exceeds {} bytes",
+            context,
+            MAX_TEXT_ARTIFACT_BYTES
+        ));
+    }
+    let mut bytes = Vec::new();
+    resp.take(MAX_TEXT_ARTIFACT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("reading BrowserStack API response body for {}", context))?;
+    if bytes.len() > MAX_TEXT_ARTIFACT_BYTES {
+        return Err(anyhow!(
+            "BrowserStack API {} response exceeds {} bytes",
+            context,
+            MAX_TEXT_ARTIFACT_BYTES
+        ));
+    }
+
+    serde_json::from_slice(&bytes)
         .with_context(|| format!("parsing BrowserStack API response for {}", context))
 }
 
@@ -2163,6 +2259,29 @@ mod tests {
         (format!("http://{addr}"), handle)
     }
 
+    fn spawn_http_response(
+        status: &'static str,
+        body: &'static [u8],
+        content_length: u64,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().expect("read test server address");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buf = [0_u8; 4096];
+            let bytes_read = stream.read(&mut buf).expect("read request");
+            assert!(bytes_read > 0, "request must not be empty");
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response headers");
+            stream.write_all(body).expect("write response body");
+        });
+        (format!("http://{addr}"), handle)
+    }
+
     #[test]
     fn rejects_missing_artifact() {
         let client = BrowserStackClient::new(
@@ -2207,6 +2326,33 @@ mod tests {
         assert!(!should_authenticate_asset_url(
             "https://evil.example.com/browserstack/logs"
         ));
+    }
+
+    #[test]
+    fn api_errors_do_not_expose_untrusted_response_bodies() {
+        let (base_url, handle) = spawn_http_response(
+            "500 Internal Server Error",
+            b"provider failure\n::warning::injected",
+            38,
+        );
+        let client = test_client_with_base_url(base_url);
+        let error = client.get_json("failure").unwrap_err().to_string();
+        handle.join().unwrap();
+        assert!(error.contains("status 500"));
+        assert!(!error.contains("provider failure"));
+        assert!(!error.contains("::warning::"));
+    }
+
+    #[test]
+    fn binary_asset_download_rejects_oversized_content_length() {
+        let (url, handle) = spawn_http_response("200 OK", b"", MAX_BINARY_ARTIFACT_BYTES + 1);
+        let client = test_client_with_base_url("https://unused.example");
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("diagnostic.bin");
+        let error = client.download_url(&url, &destination).unwrap_err();
+        handle.join().unwrap();
+        assert!(error.to_string().contains("exceeds"));
+        assert!(!destination.exists());
     }
 
     #[test]
@@ -3521,5 +3667,73 @@ BENCH_REPORT_JSON_END
                 .map(std::vec::Vec::len),
             Some(2)
         );
+    }
+
+    #[test]
+    fn extract_results_from_session_artifacts_reassembles_android_chunked_logs() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let session_json = json!({
+            "testcases": {
+                "data": [{
+                    "testcases": [{
+                        "instrumentation_log": "https://api.browserstack.com/instrumentationlogs",
+                        "device_log": "https://api.browserstack.com/devicelogs"
+                    }]
+                }]
+            }
+        });
+
+        let (results, _) = client
+            .extract_results_from_session_artifacts(&session_json, |url| match url {
+                "https://api.browserstack.com/instrumentationlogs" => {
+                    Ok("instrumentation output without benchmark results".to_string())
+                }
+                "https://api.browserstack.com/devicelogs" => Ok(
+                    r#"
+                    07-17 13:27:10.000 I/BenchRunner: BENCH_JSON_START
+                    07-17 13:27:10.001 I/BenchRunner: BENCH_JSON_CHUNK {"spec":{"name":"bench_BENCH_JSON_END_chunked","iterations":2,
+                    07-17 13:27:10.002 I/BenchRunner: BENCH_JSON_CHUNK "warmup":1},"samples_ns":[10,20]}
+                    07-17 13:27:10.003 I/BenchRunner: BENCH_JSON_END
+                    "#
+                    .to_string(),
+                ),
+                other => Err(anyhow!("unexpected artifact url: {other}")),
+            })
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].get("function").and_then(|value| value.as_str()),
+            Some("bench_BENCH_JSON_END_chunked")
+        );
+        assert_eq!(
+            results[0].get("mean_ns").and_then(|value| value.as_u64()),
+            Some(15)
+        );
+    }
+
+    #[test]
+    fn extract_benchmark_results_rejects_oversized_android_chunked_report() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let oversized = "x".repeat(MAX_BENCH_REPORT_BYTES + 1);
+        let logs = format!("BENCH_JSON_START\nBENCH_JSON_CHUNK {oversized}\nBENCH_JSON_END\n");
+
+        let error = client.extract_benchmark_results(&logs).unwrap_err();
+        assert!(error.to_string().contains("exceeds collection limits"));
     }
 }

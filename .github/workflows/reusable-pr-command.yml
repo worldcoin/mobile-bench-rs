@@ -108,10 +108,12 @@ jobs:
           fi
           warmup="${warmup:-$DEFAULT_WARMUP}"
 
-          echo "platform=${platform}" >> "$GITHUB_OUTPUT"
-          echo "device_profile=${device_profile}" >> "$GITHUB_OUTPUT"
-          echo "iterations=${iterations}" >> "$GITHUB_OUTPUT"
-          echo "warmup=${warmup}" >> "$GITHUB_OUTPUT"
+          {
+            printf 'platform=%s\n' "$platform"
+            printf 'device_profile=%s\n' "$device_profile"
+            printf 'iterations=%s\n' "$iterations"
+            printf 'warmup=%s\n' "$warmup"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Get PR head SHA
         if: steps.trust.outputs.trusted == 'true'
@@ -119,20 +121,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.issue.pull_request.url }}
-          REPO: ${{ github.repository }}
         run: |
           head_sha=$(gh api "$PR_URL" --jq '.head.sha')
-          head_repo=$(gh api "$PR_URL" --jq '.head.repo.full_name')
-          if [ "$head_repo" != "$REPO" ]; then
-            echo "::warning::PR #${{ github.event.issue.number }} comes from ${head_repo}; skipping secret-bearing BrowserStack dispatch"
-            echo "trusted_head=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          [[ "$head_sha" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "::error::PR API returned an invalid head SHA"; exit 1; }
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
-          echo "trusted_head=true" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch benchmark workflow
-        if: steps.trust.outputs.trusted == 'true' && steps.pr.outputs.trusted_head == 'true'
+        if: steps.trust.outputs.trusted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW: ${{ inputs.benchmark_workflow }}

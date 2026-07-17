@@ -1,23 +1,27 @@
 flowchart TD
-    workflow["GitHub Actions or CI runner"]
-    doctor["Validate config, credentials, and prerequisites"]
-    resolve["Resolve device matrix\nand tags"]
-    build["Build release mobile artifacts\nAPK or IPA + XCUITest"]
-    upload["Upload artifacts to BrowserStack"]
+    request["PR number + exact current head SHA"]
+    validate["Validate PR head\nread-only"]
+    build["Untrusted prepare jobs\nno secrets, read-only"]
+    manifest["Enumerated APK/IPA/test artifacts\npath + size + SHA-256 + ABI manifest"]
+    verify["Credentialed jobs\nverify handoff, no caller checkout"]
+    upload["Upload verified opaque artifacts"]
     schedule["Schedule benchmark sessions"]
+    device["Mobile artifacts execute\nonly on BrowserStack devices"]
     collect["Collect runner output\nand provider metadata"]
     fetch["Optional artifact fetch\nlogs, session JSON, video links"]
     normalize["Normalize timing\nCPU and memory when available"]
     outputs["CI contract outputs\nsummary.json\nsummary.md\nresults.csv\nplots/*.svg"]
     regressions["Optional baseline comparison\nJUnit regression status"]
-    pr["Optional sticky PR comment"]
+    pr["Isolated sticky PR/check report\nnarrow write permission"]
 
-    workflow --> doctor
-    doctor --> resolve
-    resolve --> build
-    build --> upload
+    request --> validate
+    validate --> build
+    build --> manifest
+    manifest --> verify
+    verify --> upload
     upload --> schedule
-    schedule --> collect
+    schedule --> device
+    device --> collect
     collect --> fetch
     collect --> normalize
     fetch --> normalize

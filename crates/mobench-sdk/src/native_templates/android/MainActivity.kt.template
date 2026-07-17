@@ -32,11 +32,14 @@ private const val RUN_BENCHMARK_ACTION = "{{PACKAGE_NAME}}.RUN_BENCHMARK"
 private const val RESULT_RECEIVER_EXTRA = "bench_result_receiver"
 private const val RESULT_DISPLAY_EXTRA = "bench_display"
 private const val RESULT_ERROR_EXTRA = "bench_error"
-private const val RESULT_OK = 1
-private const val RESULT_ERROR = 2
 private const val FOREGROUND_NOTIFICATION_ID = 1001
 private const val FOREGROUND_CHANNEL_ID = "mobench_benchmark"
 private const val FOREGROUND_CHANNEL_NAME = "Mobench benchmark"
+
+private object MobenchResultCode {
+    const val SUCCESS = 1
+    const val ERROR = 2
+}
 
 class MainActivity : AppCompatActivity() {
     @Volatile private var benchmarkComplete = false
@@ -57,7 +60,7 @@ class MainActivity : AppCompatActivity() {
                 resultText?.text = display
                 benchmarkComplete = true
 
-                if (resultCode == RESULT_OK) {
+                if (resultCode == MobenchResultCode.SUCCESS) {
                     android.util.Log.i("BenchRunner", "Benchmark worker completed")
                 } else {
                     android.util.Log.e("BenchRunner", display)
@@ -156,7 +159,10 @@ class BenchmarkWorkerService : Service() {
                     putString(RESULT_DISPLAY_EXTRA, result.displayText)
                     result.errorMessage?.let { putString(RESULT_ERROR_EXTRA, it) }
                 }
-                resultReceiver?.send(if (result.errorMessage == null) RESULT_OK else RESULT_ERROR, bundle)
+                resultReceiver?.send(
+                    if (result.errorMessage == null) MobenchResultCode.SUCCESS else MobenchResultCode.ERROR,
+                    bundle
+                )
             } finally {
                 stopBenchmarkForeground()
                 stopSelf(startId)
@@ -222,7 +228,7 @@ class BenchmarkWorkerService : Service() {
                 runProcessPeakMemoryKb = processMemorySampler.stop()
             }
             val json = buildNativeBenchReportJson(rawReport, runProcessPeakMemoryKb)
-            android.util.Log.i("BenchRunner", "BENCH_JSON ${json}")
+            logBenchJson(json)
             formatNativeBenchReport(json)
         } catch (e: Exception) {
             android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
@@ -234,6 +240,22 @@ class BenchmarkWorkerService : Service() {
 
         return WorkerBenchmarkResult(displayText = display, errorMessage = null)
     }
+}
+
+private fun logBenchJson(json: String) {
+    // Stay below logcat's byte limit even when a chunk contains multibyte UTF-8.
+    val chunkSize = 1000
+    android.util.Log.i("BenchRunner", "BENCH_JSON_START")
+    var offset = 0
+    while (offset < json.length) {
+        var end = minOf(offset + chunkSize, json.length)
+        if (end < json.length && Character.isHighSurrogate(json[end - 1]) && Character.isLowSurrogate(json[end])) {
+            end -= 1
+        }
+        android.util.Log.i("BenchRunner", "BENCH_JSON_CHUNK ${json.substring(offset, end)}")
+        offset = end
+    }
+    android.util.Log.i("BenchRunner", "BENCH_JSON_END")
 }
 
 private data class BenchParams(

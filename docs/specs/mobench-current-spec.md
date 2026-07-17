@@ -2,9 +2,9 @@
 
 Status: current source-of-truth product/API specification.
 
-Release line: `0.1.43`.
+Current release: `0.1.44`.
 
-Last updated: 2026-07-15.
+Last updated: 2026-07-17.
 
 This spec describes the behavior, CLI surface, configuration files, output
 contracts, generated runner backends, and Rust APIs currently provided by
@@ -43,7 +43,7 @@ Workspace package defaults:
 - Edition: Rust 2024.
 - MSRV: Rust 1.85.
 - License: MIT.
-- Current version: `0.1.43`.
+- Current workspace version: `0.1.44`.
 
 ## Benchmark Authoring
 
@@ -382,6 +382,10 @@ Commands:
 - `config validate`: validate run configuration and referenced files.
 - `doctor`: validate local and CI prerequisites/configuration.
 - `ci run`: run full CI benchmark flow.
+- `ci prepare`: build/package an untrusted revision and write a prebuilt
+  artifact manifest without requiring provider credentials.
+- `ci run-prebuilt`: verify a prebuilt manifest and run BrowserStack upload,
+  execution, fetch, and normalization without invoking caller build code.
 - `ci merge-split-runs`: merge one-sample CI summaries into standard CI outputs.
 - `fetch`: fetch BrowserStack build artifacts.
 - `compare`: compare two run summaries for regressions.
@@ -496,6 +500,39 @@ Regression exit semantics:
 - Regression threshold failures are represented as regression failures and by
   the programmatic API as `regression_detected = true`.
 
+## `ci prepare` And `ci run-prebuilt` Behavior
+
+These commands form the reusable workflow's privilege boundary.
+
+`mobench ci prepare --target <android|ios> --source-sha <full-sha> --manifest
+<path>` may resolve the caller project, run fixture generation and hooks,
+compile Rust and generated mobile projects, and package the platform artifacts.
+It must not require or consume BrowserStack credentials. Its output is limited
+to explicitly allowed mobile artifacts and a machine-readable manifest
+containing normalized relative paths, artifact roles, file sizes, SHA-256
+digests, platform, and benchmark ABI metadata.
+
+`mobench ci run-prebuilt --manifest <path> --expected-source-sha <full-sha>
+--expected-platform <android|ios> --expected-functions <functions>
+--expected-iterations <count> --expected-warmup <count> --devices <selection>
+--output-dir <path>` validates the manifest and exact downloaded file set before
+using BrowserStack. It rejects source-SHA mismatch,
+absolute/traversing/duplicate paths, symlinks, missing or unexpected files,
+invalid roles, invalid sizes or digests, platform mismatches, and incompatible
+manifest/benchmark ABI versions.
+
+`run-prebuilt` may upload verified opaque mobile packages, create and poll
+BrowserStack sessions, fetch provider results, and normalize the standard CI
+outputs. It must never invoke Cargo, Gradle, Xcode, caller hooks, dependencies,
+fixture generators, benchmark binaries, or another file from a caller checkout
+on the credentialed GitHub runner. APKs, test APKs, IPAs, and XCUITest packages
+may execute only on BrowserStack devices.
+
+The stable output and selection behavior remains aligned with `ci run`,
+including functions, iterations, warmup, devices, artifact collection,
+`summary.json`, `summary.md`, `results.csv`, optional plots, and regression
+metadata.
+
 ## `ci merge-split-runs` Behavior
 
 `mobench ci merge-split-runs` merges CI outputs from lanes that run one measured
@@ -540,6 +577,30 @@ CSV rows include benchmark-scoped resource columns:
 Missing resource metrics are emitted as blank CSV fields.
 
 ## BrowserStack Behavior
+
+### Reusable Workflow Security Invariant
+
+The reusable workflow treats every requested pull-request revision as
+untrusted, even when an authorized maintainer requests the run. It accepts only
+a full commit SHA and verifies that SHA against the current head of the requested
+pull request before preparation.
+
+Workflow-level permissions are empty. PR validation and preparation have only
+the read permissions they require and no secrets or protected environment.
+Credentialed Android/iOS jobs do not check out or execute the caller and expose
+BrowserStack credentials only to fixed upload/run/fetch steps implemented by a
+trusted, immutable mobench revision. Caches from untrusted preparation are
+disabled or isolated from later trusted builds.
+
+Result summarization is read-only. Sticky PR/check publishing runs separately
+without a caller checkout and receives only the required `pull-requests: write`
+or `checks: write` permission. `contents: write` is disabled throughout the
+benchmark workflow. Plot-branch publication is a separate manual workflow
+protected by the `mobench-plots` environment.
+
+Downloaded filenames, JSON, CSV, Markdown, benchmark names, device names, and
+provider fields are untrusted. Implementations must reject path/control/workflow
+command injection and escape Markdown/HTML before publishing reports.
 
 Credentials resolve in this order:
 

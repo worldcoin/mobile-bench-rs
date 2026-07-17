@@ -15,9 +15,87 @@ Crates.io release pages:
 
 No user-facing unreleased changes yet.
 
-## v0.1.43
+## v0.1.44
 
 Status: current supported release.
+
+Publication date: 2026-07-17. The prebuilt BrowserStack path passed on Android
+and iOS, including exact-head validation, secretless packaging, credentialed
+prebuilt execution, sanitization, and isolated reporting.
+
+### BrowserStack Pull-Request Trust Boundary
+
+The reusable workflow now assumes that an authorized `/mobench` request can
+target a malicious fork revision. Authorization to request a benchmark is not
+treated as trust in the requested commit.
+
+- `validate-request` accepts only a full commit SHA and verifies that it is the
+  current head of the requested pull request.
+- `prepare-android` and `prepare-ios` check out that exact revision, run fixture
+  hooks and builds without BrowserStack secrets or protected environments, and
+  have read-only repository permissions. Their only handoff is an explicitly
+  enumerated mobile artifact set plus a machine-readable manifest.
+- `run-android` and `run-ios` do not check out the caller and
+  do not invoke caller scripts, Cargo, Gradle, Xcode, dependencies, fixture
+  generators, or mobile binaries on the GitHub runner. A trusted, immutable
+  mobench revision verifies the manifest and uploads only the prebuilt
+  APK/Android test APK or IPA/XCUITest suite. Mobile code executes only on
+  BrowserStack devices.
+- BrowserStack credentials are scoped to the upload/run/fetch operations in the
+  credentialed jobs. An environment approval is defense in depth, not the
+  security boundary.
+- Result summarization remains read-only. Sticky comments/check updates happen
+  in a separate reporting job with only the required PR/check write permission
+  and no caller checkout. Plot-branch writes are disabled unless a caller
+  explicitly opts into the protected publishing job.
+
+The artifact manifest binds the artifact set to one platform and benchmark ABI,
+and binds each normalized relative path to its artifact role, byte size, and
+SHA-256 digest. Verification rejects absolute or traversing paths, missing or
+unexpected files, invalid metadata, size mismatches, and digest mismatches
+before credentials are used.
+Downloaded report fields and filenames remain untrusted and are escaped or
+rejected before shell, workflow-command, path, Markdown, or HTML use.
+BrowserStack API bodies, device logs, and downloaded diagnostics are bounded;
+provider error bodies are not echoed into the Actions command stream, and
+manifest-provided completion timeouts cannot exceed the trusted runner cap.
+
+### New Two-Stage CLI Interface
+
+`cargo mobench ci prepare --target <android|ios> --source-sha <full-sha>
+--manifest <path>` builds and packages the untrusted revision and writes the
+artifact manifest.
+
+`cargo mobench ci run-prebuilt --manifest <path> --expected-source-sha
+<full-sha> --expected-platform <android|ios> --expected-functions <functions>
+--expected-iterations <count> --expected-warmup <count> --devices <selection>
+--output-dir <path>` verifies that handoff and performs only trusted BrowserStack
+upload, run, fetch, and report normalization.
+`run-prebuilt` never invokes build tools, caller hooks, or files from a caller
+checkout.
+
+### Android Result Handoff And Collection Fixes
+
+Android runner result codes now use a qualified mobench namespace instead of an
+unqualified `RESULT_OK` that can collide with `Activity.RESULT_OK`. BrowserStack
+Espresso collection now reads per-test-case logs, reconstructs bounded chunked
+benchmark JSON, and rejects oversized text/report payloads. The fix covers the
+UniFFI, native C ABI, and BoltFFI runner paths.
+
+### Migration For Reusable Workflow Callers
+
+Existing callers should update their reusable workflow reference to the
+immutable `v0.1.44` release commit, keep passing the exact PR number/head SHA,
+grant `actions: read`, `contents: read`, `pull-requests: write`, and
+`checks: write` at the caller level for reporting, and pass
+`BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY` explicitly.
+Do not use `secrets: inherit`. Platform, function, iteration, warmup, device,
+artifact, summary, and sticky-comment inputs remain available; callers do not
+need to copy the split-job YAML into their own repositories.
+
+## v0.1.43
+
+Status: superseded by `v0.1.44`.
 
 Publication date: 2026-07-05.
 
@@ -154,7 +232,8 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Current supported release |
+| `v0.1.44` | 2026-07-17 | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Current supported release |
+| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Superseded by `v0.1.44` |
 | `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Superseded by `v0.1.43` |
 | `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Superseded by `v0.1.42` |
 | `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Superseded by `v0.1.41` |

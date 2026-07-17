@@ -1017,13 +1017,13 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
 
         let mut header = format!(
             "### {} — {} ({} {})",
-            platform.platform.to_uppercase(),
-            platform.device.name,
-            platform.device.os,
-            platform.device.os_version,
+            markdown_text(&platform.platform.to_uppercase()),
+            markdown_text(&platform.device.name),
+            markdown_text(&platform.device.os),
+            markdown_text(&platform.device.os_version),
         );
         if let Some(chipset) = &platform.device.chipset {
-            header.push_str(&format!(" · {chipset}"));
+            header.push_str(&format!(" · {}", markdown_text(chipset)));
         }
         if let Some(ram) = platform.device.ram_gb {
             header.push_str(&format!(" · {ram} GB RAM"));
@@ -1061,11 +1061,14 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
 
         for bench in &platform.benchmarks {
             let mut row = if bench.failure.is_some() {
-                format!("| {} | **—** | — | — | — | — |", bench.label)
+                format!(
+                    "| {} | **—** | — | — | — | — |",
+                    markdown_text(&bench.label)
+                )
             } else {
                 format!(
                     "| {} | **{:.1}** | {:.1} | {:.1} | {:.1} | {:.1} |",
-                    bench.label,
+                    markdown_text(&bench.label),
                     bench.timing.avg_ms,
                     bench.timing.best_ms,
                     bench.timing.worst_ms,
@@ -1078,16 +1081,13 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
                 if let Some(failure) = &bench.failure {
                     row.push_str(&format!(
                         " failed | {}: {} ({}) | {} |",
-                        failure.kind,
-                        failure.message.replace('|', "\\|"),
+                        markdown_text(&failure.kind),
+                        markdown_text(&failure.message),
                         failure
                             .elapsed_ms
                             .map(|value| format!("{value}ms"))
                             .unwrap_or_else(|| "elapsed unknown".to_string()),
-                        failure
-                            .exit_reason
-                            .clone()
-                            .unwrap_or_else(|| "unavailable".to_string())
+                        markdown_text(failure.exit_reason.as_deref().unwrap_or("unavailable"))
                     ));
                 } else {
                     row.push_str(" passed | — | — |");
@@ -1120,6 +1120,28 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
         }
     }
 
+    output
+}
+
+fn markdown_text(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    for character in input.chars().take(1024) {
+        match character {
+            '\\' => output.push_str("\\\\"),
+            '|' => output.push_str("\\|"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '&' => output.push_str("&amp;"),
+            '`' => output.push_str("\\`"),
+            '*' | '[' | ']' => {
+                output.push('\\');
+                output.push(character);
+            }
+            '\r' | '\n' => output.push(' '),
+            character if character.is_control() => output.push('\u{fffd}'),
+            character => output.push(character),
+        }
+    }
     output
 }
 
@@ -1608,6 +1630,14 @@ mod tests {
         assert!(output.contains("### IOS"));
         assert!(output.contains("**1204.5**"));
         assert!(output.contains("| Benchmark |"));
+    }
+
+    #[test]
+    fn markdown_text_escapes_untrusted_report_markup() {
+        assert_eq!(
+            markdown_text("[device](https://evil)|<script>\n::warning::x"),
+            "\\[device\\](https://evil)\\|&lt;script&gt; ::warning::x"
+        );
     }
 
     #[test]

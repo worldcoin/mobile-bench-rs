@@ -74,14 +74,12 @@ on:
         default: ""
       pr_number:
         description: "PR number for sticky comment publishing"
-        required: false
+        required: true
         type: string
-        default: ""
       head_sha:
         description: "Exact commit SHA to benchmark"
-        required: false
+        required: true
         type: string
-        default: ""
       requested_by:
         description: "Who triggered the run"
         required: false
@@ -90,9 +88,9 @@ on:
 
 permissions:
   actions: read
-  contents: write
-  issues: write
+  contents: read
   pull-requests: write
+  checks: write
 
 concurrency:
   group: mobench-${{ inputs.pr_number != '' && inputs.pr_number || github.run_id }}

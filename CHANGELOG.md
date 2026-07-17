@@ -8,6 +8,54 @@ longer integration-oriented release notes and support status.
 
 No user-facing unreleased changes yet.
 
+## v0.1.44 - 2026-07-17
+
+### Security
+
+- Split the reusable BrowserStack workflow into untrusted prepare jobs and
+  credentialed prebuilt-run jobs. Pull-request code is built without secrets,
+  protected environments, or write-capable GitHub permissions; credentialed
+  jobs never check out or execute the pull-request revision on the GitHub
+  runner.
+- Added strict manifest verification for the enumerated APK, Android test APK,
+  IPA, and XCUITest artifacts, including normalized paths, platform and
+  benchmark ABI metadata, file sizes, and SHA-256 hashes.
+- Isolated sticky PR/check reporting from benchmark execution and treats report
+  artifacts, filenames, benchmark names, Markdown, CSV, and JSON as untrusted
+  input.
+
+### Added
+
+- Added `cargo mobench ci prepare` for unprivileged mobile builds and
+  `cargo mobench ci run-prebuilt` for trusted upload, BrowserStack execution,
+  result collection, and CI contract output from verified prebuilt artifacts.
+- Added trust-boundary regression fixtures covering hostile build scripts,
+  fixture hooks, dependencies, benchmark code, artifact paths, and report
+  fields.
+
+### Changed
+
+- Reusable workflow callers receive the two-stage architecture by default.
+- Workflow-level permissions are empty; jobs receive only the read or narrowly
+  scoped write permissions they need. Plot-branch publication remains an
+  explicit, protected opt-in instead of a default benchmark permission.
+- `/mobench` dispatches exact fork PR heads instead of treating fork origin as
+  trust, and PR callers must supply both the PR number and full head SHA.
+- Third-party workflow actions are pinned to immutable commit SHAs and
+  BrowserStack secrets must be passed explicitly.
+- Bounded credentialed BrowserStack API, device-log, and diagnostic downloads,
+  neutralized provider response bodies before runner logging, and capped
+  PR-provided completion timeouts against a trusted control-plane maximum.
+
+### Fixed
+
+- Prevented Android `ResultReceiver` success codes from colliding with
+  `Activity.RESULT_OK` across the UniFFI and native C ABI runners, and kept the
+  BoltFFI runner's result markers aligned with the collector contract.
+- Hardened BrowserStack Android result collection for per-test-case Espresso
+  logs and chunked benchmark JSON while bounding downloaded text and report
+  sizes.
+
 ## v0.1.43 - 2026-07-05
 
 ### Added

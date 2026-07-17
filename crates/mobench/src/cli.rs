@@ -448,12 +448,72 @@ pub(crate) enum CiCommand {
     },
     /// Run a full CI benchmark flow with stable output contract.
     Run(CiRunArgs),
+    /// Build and package untrusted mobile code into a verified prebuilt bundle.
+    Prepare(CiPrepareArgs),
+    /// Upload and run a prebuilt bundle without invoking caller build tooling.
+    RunPrebuilt(CiRunPrebuiltArgs),
     /// Merge one-sample CI summaries into a normal CI output set.
     MergeSplitRuns(CiMergeSplitRunsArgs),
     /// Summarize benchmark results with device metrics.
     Summarize(CiSummarizeArgs),
     /// Create a GitHub Check Run with benchmark results.
     CheckRun(CiCheckRunArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct CiPrepareArgs {
+    #[arg(long, value_enum)]
+    pub(crate) target: MobileTarget,
+    #[arg(long)]
+    pub(crate) crate_path: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) functions: Vec<String>,
+    #[arg(long, default_value_t = 100)]
+    pub(crate) iterations: u32,
+    #[arg(long, default_value_t = 10)]
+    pub(crate) warmup: u32,
+    #[arg(long)]
+    pub(crate) release: bool,
+    #[arg(long)]
+    pub(crate) source_sha: String,
+    #[arg(long, default_value = "target/mobench/prebuilt")]
+    pub(crate) output_dir: PathBuf,
+    #[arg(long, default_value = "target/mobench/prebuilt/manifest.json")]
+    pub(crate) manifest: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct CiRunPrebuiltArgs {
+    #[arg(long)]
+    pub(crate) manifest: PathBuf,
+    #[arg(long)]
+    pub(crate) expected_source_sha: String,
+    #[arg(long, value_enum)]
+    pub(crate) expected_platform: MobileTarget,
+    #[arg(long, required = true)]
+    pub(crate) expected_functions: Vec<String>,
+    #[arg(long)]
+    pub(crate) expected_iterations: u32,
+    #[arg(long)]
+    pub(crate) expected_warmup: u32,
+    #[arg(long, required = true)]
+    pub(crate) devices: Vec<String>,
+    #[arg(long, default_value = "target/mobench/ci")]
+    pub(crate) output_dir: PathBuf,
+    #[arg(long)]
+    pub(crate) fetch: bool,
+    #[arg(long, default_value = "target/browserstack")]
+    pub(crate) fetch_output_dir: PathBuf,
+    #[arg(long, default_value_t = 5)]
+    pub(crate) fetch_poll_interval_secs: u64,
+    #[arg(long, default_value_t = 300)]
+    pub(crate) fetch_timeout_secs: u64,
+    #[arg(
+        long,
+        default_value_t = 1800,
+        help = "Trusted upper bound for a prebuilt entry's completion timeout"
+    )]
+    pub(crate) max_completion_timeout_secs: u64,
 }
 
 #[derive(Subcommand, Debug)]

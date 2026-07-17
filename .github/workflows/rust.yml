@@ -53,6 +53,23 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      - name: Workflow trust-boundary regression tests
+        run: python3 tests/workflow_security_test.py
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      - name: Lint security-sensitive workflows
+        run: >-
+          "$(go env GOPATH)/bin/actionlint" -color
+          -ignore 'maximum number of inputs for "workflow_dispatch"'
+          .github/workflows/reusable-bench.yml
+          .github/workflows/mobile-bench-publish-plots.yml
+          .github/workflows/mobile-bench.yml
+          .github/workflows/mobile-bench-selftest.yml
+          .github/workflows/reusable-pr-command.yml
+          .github/workflows/rust.yml
+
       - name: Host benchmark smoke
         run: cargo bench -p mobench --features bench-support --bench host_contracts -- --test
 

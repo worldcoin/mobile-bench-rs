@@ -130,8 +130,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fmt::Write;
 use std::fs;
-use std::io::Write as IoWrite;
-use std::path::{Path, PathBuf};
+use std::io::{Read, Write as IoWrite};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -144,10 +144,10 @@ pub(crate) use cli::CiTarget;
 pub use cli::MobileTarget;
 pub(crate) use cli::PlotFixture;
 pub(crate) use cli::{
-    CheckOutputFormat, CiCheckRunArgs, CiCommand, CiMergeSplitRunsArgs, CiRunArgs, CiSummarizeArgs,
-    Cli, Command, ConfigCommand, ContractErrorCategory, DevicePlatform, DevicesCommand,
-    FixtureCommand, IosRunnerArg, IosSigningMethodArg, ProfileCommand, ReportCommand, SdkTarget,
-    SummarizeFormat, SummaryFormat,
+    CheckOutputFormat, CiCheckRunArgs, CiCommand, CiMergeSplitRunsArgs, CiPrepareArgs, CiRunArgs,
+    CiRunPrebuiltArgs, CiSummarizeArgs, Cli, Command, ConfigCommand, ContractErrorCategory,
+    DevicePlatform, DevicesCommand, FixtureCommand, IosRunnerArg, IosSigningMethodArg,
+    ProfileCommand, ReportCommand, SdkTarget, SummarizeFormat, SummaryFormat,
 };
 #[cfg(test)]
 pub(crate) use doctor::{
@@ -269,6 +269,70 @@ struct RunSummary {
     benchmark_failures: Option<BTreeMap<String, Vec<Value>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     performance_metrics: Option<BTreeMap<String, browserstack::PerformanceMetrics>>,
+}
+
+const PREBUILT_SCHEMA: &str = "mobench.prebuilt.v1";
+const PREBUILT_ABI: &str = "mobench-bench-spec-v1";
+const PREBUILT_MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const PREBUILT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const PREBUILT_MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const PREBUILT_MAX_TIMEOUT_SECS: u64 = 6 * 60 * 60;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum PrebuiltArtifactKind {
+    AndroidApp,
+    AndroidTestSuite,
+    IosApp,
+    IosTestSuite,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrebuiltArtifact {
+    kind: PrebuiltArtifactKind,
+    path: String,
+    size: u64,
+    sha256: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrebuiltEntry {
+    function: String,
+    iterations: u32,
+    warmup: u32,
+    completion_timeout_secs: Option<u64>,
+    artifacts: Vec<PrebuiltArtifact>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrebuiltAbi {
+    benchmark: String,
+    runner: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrebuiltManifest {
+    schema: String,
+    source_sha: String,
+    platform: MobileTarget,
+    build_profile: String,
+    mobench_version: String,
+    abi: PrebuiltAbi,
+    entries: Vec<PrebuiltEntry>,
+}
+
+#[derive(Debug)]
+struct VerifiedPrebuiltEntry {
+    function: String,
+    iterations: u32,
+    warmup: u32,
+    completion_timeout_secs: Option<u64>,
+    app: PathBuf,
+    test_suite: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -406,10 +470,17 @@ fn init_tracing(verbose: bool) {
 }
 
 pub fn run() -> Result<()> {
-    // Load dotenv globally as a baseline for commands that don't resolve a layout
-    // (e.g. fetch, doctor, ci run). Layout-aware commands reload from the resolved root.
-    load_dotenv_global();
     let cli = Cli::parse();
+    // A credentialed prebuilt run must not inspect caller-controlled project files,
+    // including dotenv files. Other commands retain the legacy convenience behavior.
+    if !matches!(
+        &cli.command,
+        Command::Ci {
+            command: CiCommand::RunPrebuilt(_)
+        }
+    ) {
+        load_dotenv_global();
+    }
     init_tracing(cli.verbose);
     debug!(
         dry_run = cli.dry_run,
@@ -1070,6 +1141,12 @@ pub fn run() -> Result<()> {
             }
             CiCommand::Run(args) => {
                 cmd_ci_run(args)?;
+            }
+            CiCommand::Prepare(args) => {
+                cmd_ci_prepare(args, cli.dry_run)?;
+            }
+            CiCommand::RunPrebuilt(args) => {
+                cmd_ci_run_prebuilt(args, cli.dry_run)?;
             }
             CiCommand::MergeSplitRuns(args) => {
                 split_runs::cmd_ci_merge_split_runs(args, cli.dry_run)?;
@@ -2211,6 +2288,616 @@ fn root_summary_from_merged_targets(targets: &BTreeMap<String, Value>) -> Option
         .and_then(|entry| entry.get("summary").cloned())
 }
 
+fn parse_prebuilt_functions(values: &[String]) -> Result<Vec<String>> {
+    let mut functions = values.to_vec();
+    if functions.len() == 1 {
+        let value = functions[0].trim();
+        if value.starts_with('[') {
+            functions = serde_json::from_str(value).context("parsing --functions JSON array")?;
+        } else if value.contains(',') {
+            functions = value
+                .split(',')
+                .map(str::trim)
+                .map(str::to_string)
+                .collect();
+        }
+    }
+    functions.retain(|function| !function.trim().is_empty());
+    if functions.is_empty() {
+        bail!("at least one benchmark function is required");
+    }
+    if functions.len() > 64 {
+        bail!("at most 64 benchmark functions may be prepared");
+    }
+    for function in &functions {
+        if function.len() > 512 || function.chars().any(char::is_control) {
+            bail!("benchmark function names must be at most 512 printable characters");
+        }
+    }
+    Ok(functions)
+}
+
+fn validate_full_commit_sha(value: &str) -> Result<String> {
+    if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("source SHA must be a full 40-character hexadecimal commit SHA");
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn sha256_file(path: &Path) -> Result<(u64, String)> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("reading artifact metadata {}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        bail!(
+            "prebuilt artifact must be a regular file: {}",
+            path.display()
+        );
+    }
+    if metadata.len() == 0 || metadata.len() > PREBUILT_MAX_FILE_BYTES {
+        bail!(
+            "prebuilt artifact size {} is outside 1..={} bytes: {}",
+            metadata.len(),
+            PREBUILT_MAX_FILE_BYTES,
+            path.display()
+        );
+    }
+    let mut file =
+        fs::File::open(path).with_context(|| format!("opening artifact {}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok((metadata.len(), format!("{:x}", digest.finalize())))
+}
+
+fn stage_prebuilt_artifact(
+    source: &Path,
+    root: &Path,
+    relative: &str,
+    kind: PrebuiltArtifactKind,
+) -> Result<PrebuiltArtifact> {
+    let destination = root.join(relative);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source, &destination).with_context(|| {
+        format!(
+            "copying prebuilt artifact {} to {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    let (size, sha256) = sha256_file(&destination)?;
+    Ok(PrebuiltArtifact {
+        kind,
+        path: relative.to_string(),
+        size,
+        sha256,
+    })
+}
+
+fn cmd_ci_prepare(args: CiPrepareArgs, dry_run: bool) -> Result<()> {
+    let source_sha = validate_full_commit_sha(&args.source_sha)?;
+    let functions = parse_prebuilt_functions(&args.functions)?;
+    if args.iterations == 0 || args.iterations > 10_000 || args.warmup > 10_000 {
+        bail!("iterations/warmup are outside the supported range");
+    }
+    if args.manifest != args.output_dir.join("manifest.json") {
+        bail!("--manifest must be <output-dir>/manifest.json");
+    }
+    let current_sha = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .context("resolving checked-out commit for prebuilt manifest")?;
+    let checked_out_sha = String::from_utf8_lossy(&current_sha.stdout)
+        .trim()
+        .to_ascii_lowercase();
+    if !current_sha.status.success() || checked_out_sha != source_sha {
+        bail!("checked-out commit `{checked_out_sha}` does not match --source-sha `{source_sha}`");
+    }
+    if dry_run {
+        println!(
+            "Would prepare {} {} prebuilt benchmark artifact set(s) at {}",
+            functions.len(),
+            args.target.as_str(),
+            args.output_dir.display()
+        );
+        return Ok(());
+    }
+
+    if fs::symlink_metadata(&args.output_dir).is_ok() {
+        fs::remove_dir_all(&args.output_dir)
+            .with_context(|| format!("clearing {}", args.output_dir.display()))?;
+    }
+    fs::create_dir_all(&args.output_dir)?;
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: None,
+        crate_path: args.crate_path.as_deref(),
+        config_path: None,
+    })?;
+    load_dotenv_for_layout(&layout);
+
+    let mut entries = Vec::with_capacity(functions.len());
+    for (index, function) in functions.into_iter().enumerate() {
+        let spec = RunSpec {
+            target: args.target,
+            function: function.clone(),
+            iterations: args.iterations,
+            warmup: args.warmup,
+            devices: Vec::new(),
+            ios_completion_timeout_secs: layout.ios_completion_timeout_secs,
+            ios_deployment_target: Some(layout.ios_deployment_target.clone()),
+            ios_runner: layout.ios_runner.clone(),
+            android_benchmark_timeout_secs: layout.android_benchmark_timeout_secs,
+            android_heartbeat_interval_secs: layout.android_heartbeat_interval_secs,
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        persist_mobile_spec(&layout, &spec, args.release)?;
+        let prefix = format!("entries/{index:04}");
+        let artifacts = match args.target {
+            MobileTarget::Android => {
+                let ndk = env::var("ANDROID_NDK_HOME")
+                    .context("ANDROID_NDK_HOME must be set for Android prepare")?;
+                let build = run_android_build(&layout, &ndk, args.release, false)?;
+                let test_suite = build
+                    .test_suite_path
+                    .context("Android prepare did not produce a test-suite APK")?;
+                vec![
+                    stage_prebuilt_artifact(
+                        &build.app_path,
+                        &args.output_dir,
+                        &format!("{prefix}/app.apk"),
+                        PrebuiltArtifactKind::AndroidApp,
+                    )?,
+                    stage_prebuilt_artifact(
+                        &test_suite,
+                        &args.output_dir,
+                        &format!("{prefix}/test.apk"),
+                        PrebuiltArtifactKind::AndroidTestSuite,
+                    )?,
+                ]
+            }
+            MobileTarget::Ios => {
+                let packaged = package_ios_xcuitest_artifacts(
+                    &layout,
+                    args.release,
+                    layout.ios_completion_timeout_secs,
+                    Some(&layout.ios_deployment_target),
+                    layout.ios_runner.as_deref(),
+                )?;
+                vec![
+                    stage_prebuilt_artifact(
+                        &packaged.app,
+                        &args.output_dir,
+                        &format!("{prefix}/app.ipa"),
+                        PrebuiltArtifactKind::IosApp,
+                    )?,
+                    stage_prebuilt_artifact(
+                        &packaged.test_suite,
+                        &args.output_dir,
+                        &format!("{prefix}/test-suite.zip"),
+                        PrebuiltArtifactKind::IosTestSuite,
+                    )?,
+                ]
+            }
+        };
+        entries.push(PrebuiltEntry {
+            function,
+            iterations: args.iterations,
+            warmup: args.warmup,
+            completion_timeout_secs: match args.target {
+                MobileTarget::Android => layout.android_benchmark_timeout_secs,
+                MobileTarget::Ios => layout.ios_completion_timeout_secs,
+            },
+            artifacts,
+        });
+    }
+
+    let manifest = PrebuiltManifest {
+        schema: PREBUILT_SCHEMA.to_string(),
+        source_sha,
+        platform: args.target,
+        build_profile: if args.release { "release" } else { "debug" }.to_string(),
+        mobench_version: env!("CARGO_PKG_VERSION").to_string(),
+        abi: PrebuiltAbi {
+            benchmark: PREBUILT_ABI.to_string(),
+            runner: match args.target {
+                MobileTarget::Android => "browserstack-espresso-v2",
+                MobileTarget::Ios => "browserstack-xcuitest-v2",
+            }
+            .to_string(),
+        },
+        entries,
+    };
+    write_file(
+        &args.manifest,
+        serde_json::to_string_pretty(&manifest)?.as_bytes(),
+    )?;
+    println!("Prepared prebuilt manifest at {}", args.manifest.display());
+    Ok(())
+}
+
+fn validated_prebuilt_path(root: &Path, relative: &str) -> Result<PathBuf> {
+    if relative.is_empty()
+        || relative.contains('\\')
+        || relative.chars().any(char::is_control)
+        || Path::new(relative)
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("invalid prebuilt artifact path `{relative}`");
+    }
+    Ok(root.join(relative))
+}
+
+fn expected_prebuilt_path(
+    platform: MobileTarget,
+    index: usize,
+    kind: PrebuiltArtifactKind,
+) -> Option<String> {
+    let prefix = format!("entries/{index:04}");
+    match (platform, kind) {
+        (MobileTarget::Android, PrebuiltArtifactKind::AndroidApp) => {
+            Some(format!("{prefix}/app.apk"))
+        }
+        (MobileTarget::Android, PrebuiltArtifactKind::AndroidTestSuite) => {
+            Some(format!("{prefix}/test.apk"))
+        }
+        (MobileTarget::Ios, PrebuiltArtifactKind::IosApp) => Some(format!("{prefix}/app.ipa")),
+        (MobileTarget::Ios, PrebuiltArtifactKind::IosTestSuite) => {
+            Some(format!("{prefix}/test-suite.zip"))
+        }
+        _ => None,
+    }
+}
+
+fn collect_regular_files(root: &Path, current: &Path, output: &mut BTreeSet<String>) -> Result<()> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            bail!("prebuilt bundle contains symlink {}", path.display());
+        }
+        if metadata.is_dir() {
+            collect_regular_files(root, &path, output)?;
+        } else if metadata.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .context("enumerating prebuilt bundle")?
+                .to_str()
+                .context("prebuilt paths must be UTF-8")?
+                .replace('\\', "/");
+            output.insert(relative);
+        } else {
+            bail!(
+                "prebuilt bundle contains non-regular file {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn verify_prebuilt_manifest(
+    manifest_path: &Path,
+    expected_source_sha: &str,
+) -> Result<(PrebuiltManifest, Vec<VerifiedPrebuiltEntry>)> {
+    let expected_source_sha = validate_full_commit_sha(expected_source_sha)?;
+    let metadata = fs::symlink_metadata(manifest_path)
+        .with_context(|| format!("reading manifest {}", manifest_path.display()))?;
+    if !metadata.file_type().is_file() || metadata.len() > PREBUILT_MAX_MANIFEST_BYTES {
+        bail!("prebuilt manifest must be a regular file no larger than 1 MiB");
+    }
+    let bytes = fs::read(manifest_path)?;
+    let manifest: PrebuiltManifest = serde_json::from_slice(&bytes).context("parsing manifest")?;
+    if manifest.schema != PREBUILT_SCHEMA
+        || manifest.abi.benchmark != PREBUILT_ABI
+        || manifest.source_sha != expected_source_sha
+        || manifest.mobench_version != env!("CARGO_PKG_VERSION")
+        || !matches!(manifest.build_profile.as_str(), "debug" | "release")
+    {
+        bail!("prebuilt manifest schema, ABI, producer version, profile, or source SHA mismatch");
+    }
+    let expected_runner = match manifest.platform {
+        MobileTarget::Android => "browserstack-espresso-v2",
+        MobileTarget::Ios => "browserstack-xcuitest-v2",
+    };
+    if manifest.abi.runner != expected_runner
+        || manifest.entries.is_empty()
+        || manifest.entries.len() > 64
+    {
+        bail!("prebuilt manifest runner or entry count is invalid");
+    }
+    let root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let root_metadata = fs::symlink_metadata(root)?;
+    if !root_metadata.file_type().is_dir() {
+        bail!("prebuilt bundle root must be a real directory");
+    }
+    let manifest_name = manifest_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("manifest filename must be UTF-8")?;
+    if manifest_name != "manifest.json" {
+        bail!("prebuilt manifest must be named manifest.json");
+    }
+    let mut expected_files = BTreeSet::from([manifest_name.to_string()]);
+    let mut verified = Vec::with_capacity(manifest.entries.len());
+    let mut functions = BTreeSet::new();
+    let mut total_size = 0_u64;
+    for (index, entry) in manifest.entries.iter().enumerate() {
+        if entry.function.is_empty()
+            || entry.function.len() > 512
+            || entry.function.chars().any(char::is_control)
+            || entry.iterations == 0
+            || entry.iterations > 10_000
+            || entry.warmup > 10_000
+            || entry
+                .completion_timeout_secs
+                .is_some_and(|timeout| timeout == 0 || timeout > PREBUILT_MAX_TIMEOUT_SECS)
+            || !functions.insert(entry.function.clone())
+            || entry.artifacts.len() != 2
+        {
+            bail!("invalid or duplicate prebuilt entry at index {index}");
+        }
+        let mut app = None;
+        let mut test_suite = None;
+        let mut kinds = BTreeSet::new();
+        for artifact in &entry.artifacts {
+            let kind_key = artifact.kind as u8;
+            if !kinds.insert(kind_key) {
+                bail!("duplicate artifact kind in entry {index}");
+            }
+            let expected_path = expected_prebuilt_path(manifest.platform, index, artifact.kind)
+                .ok_or_else(|| anyhow!("artifact kind does not match platform"))?;
+            if artifact.path != expected_path
+                || artifact.sha256.len() != 64
+                || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || artifact.size == 0
+                || artifact.size > PREBUILT_MAX_FILE_BYTES
+            {
+                bail!("invalid artifact metadata for entry {index}");
+            }
+            total_size = total_size
+                .checked_add(artifact.size)
+                .context("prebuilt bundle total size overflow")?;
+            if total_size > PREBUILT_MAX_TOTAL_BYTES {
+                bail!("prebuilt bundle exceeds total size limit");
+            }
+            let path = validated_prebuilt_path(root, &artifact.path)?;
+            let (actual_size, actual_hash) = sha256_file(&path)?;
+            if actual_size != artifact.size || actual_hash != artifact.sha256.to_ascii_lowercase() {
+                bail!("artifact size or SHA-256 mismatch for `{}`", artifact.path);
+            }
+            let mut magic = [0_u8; 4];
+            fs::File::open(&path)?.read_exact(&mut magic)?;
+            if !matches!(&magic, b"PK\x03\x04" | b"PK\x05\x06" | b"PK\x07\x08") {
+                bail!(
+                    "artifact `{}` is not a ZIP-based mobile package",
+                    artifact.path
+                );
+            }
+            expected_files.insert(artifact.path.clone());
+            match artifact.kind {
+                PrebuiltArtifactKind::AndroidApp | PrebuiltArtifactKind::IosApp => app = Some(path),
+                PrebuiltArtifactKind::AndroidTestSuite | PrebuiltArtifactKind::IosTestSuite => {
+                    test_suite = Some(path)
+                }
+            }
+        }
+        verified.push(VerifiedPrebuiltEntry {
+            function: entry.function.clone(),
+            iterations: entry.iterations,
+            warmup: entry.warmup,
+            completion_timeout_secs: entry.completion_timeout_secs,
+            app: app.context("prebuilt entry missing app")?,
+            test_suite: test_suite.context("prebuilt entry missing test suite")?,
+        });
+    }
+    let mut actual_files = BTreeSet::new();
+    collect_regular_files(root, root, &mut actual_files)?;
+    if actual_files != expected_files {
+        bail!("prebuilt bundle contains missing or unexpected files");
+    }
+    Ok((manifest, verified))
+}
+
+fn validate_prebuilt_results(function: &str, results: &HashMap<String, Vec<Value>>) -> Result<()> {
+    for entries in results.values() {
+        for entry in entries {
+            let observed = entry
+                .get("function")
+                .and_then(Value::as_str)
+                .context("BrowserStack result omitted benchmark function")?;
+            if observed != function {
+                bail!("BrowserStack result function did not match prepared manifest");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn trusted_prebuilt_timeout(
+    completion_timeout_secs: Option<u64>,
+    fetch_timeout_secs: u64,
+    max_completion_timeout_secs: u64,
+) -> u64 {
+    completion_timeout_secs
+        .map(|timeout| timeout.saturating_add(60))
+        .unwrap_or(0)
+        .max(fetch_timeout_secs)
+        .min(max_completion_timeout_secs)
+}
+
+fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
+    let (manifest, entries) = verify_prebuilt_manifest(&args.manifest, &args.expected_source_sha)?;
+    let expected_functions = parse_prebuilt_functions(&args.expected_functions)?;
+    let manifest_functions = manifest
+        .entries
+        .iter()
+        .map(|entry| entry.function.clone())
+        .collect::<Vec<_>>();
+    if manifest.platform != args.expected_platform
+        || manifest_functions != expected_functions
+        || args.expected_iterations == 0
+        || args.expected_iterations > 10_000
+        || args.expected_warmup > 10_000
+        || manifest.entries.iter().any(|entry| {
+            entry.iterations != args.expected_iterations || entry.warmup != args.expected_warmup
+        })
+    {
+        bail!("prebuilt manifest does not match the trusted requested benchmark configuration");
+    }
+    if args.devices.is_empty()
+        || args.devices.iter().any(|device| {
+            device.is_empty() || device.len() > 256 || device.chars().any(char::is_control)
+        })
+    {
+        bail!("at least one printable BrowserStack device is required");
+    }
+    if args.fetch_timeout_secs == 0 || args.fetch_timeout_secs > PREBUILT_MAX_TIMEOUT_SECS {
+        bail!("fetch timeout is outside the supported range");
+    }
+    if args.max_completion_timeout_secs == 0
+        || args.max_completion_timeout_secs > PREBUILT_MAX_TIMEOUT_SECS
+        || args.fetch_timeout_secs > args.max_completion_timeout_secs
+    {
+        bail!("maximum completion timeout is outside the supported range");
+    }
+    if dry_run {
+        println!("Verified {} prebuilt entry or entries", entries.len());
+        return Ok(());
+    }
+
+    fs::create_dir_all(&args.output_dir)?;
+    let creds = resolve_browserstack_credentials(None)?;
+    let client = BrowserStackClient::new(
+        BrowserStackAuth {
+            username: creds.username,
+            access_key: creds.access_key,
+        },
+        creds.project,
+    )?;
+    let mut summaries = Vec::new();
+    let mut function_values = BTreeMap::new();
+    for entry in entries {
+        let spec = RunSpec {
+            target: manifest.platform,
+            function: entry.function.clone(),
+            iterations: entry.iterations,
+            warmup: entry.warmup,
+            devices: args.devices.clone(),
+            ios_completion_timeout_secs: None,
+            ios_deployment_target: None,
+            ios_runner: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let remote = match manifest.platform {
+            MobileTarget::Android => {
+                trigger_browserstack_espresso(&spec, &entry.app, &entry.test_suite)?
+            }
+            MobileTarget::Ios => trigger_browserstack_xcuitest(
+                &spec,
+                &IosXcuitestArtifacts {
+                    app: entry.app,
+                    test_suite: entry.test_suite,
+                },
+            )?,
+        };
+        let build_id = match &remote {
+            RemoteRun::Android { build_id, .. } | RemoteRun::Ios { build_id, .. } => build_id,
+        };
+        validate_remote_path_segment("build id", build_id)?;
+        let platform = match manifest.platform {
+            MobileTarget::Android => "espresso",
+            MobileTarget::Ios => "xcuitest",
+        };
+        let timeout_secs = trusted_prebuilt_timeout(
+            entry.completion_timeout_secs,
+            args.fetch_timeout_secs,
+            args.max_completion_timeout_secs,
+        );
+        let (results, metrics) = client.wait_and_fetch_all_results_with_poll(
+            build_id,
+            platform,
+            Some(timeout_secs),
+            Some(args.fetch_poll_interval_secs),
+        )?;
+        validate_prebuilt_results(&entry.function, &results)?;
+        if args.fetch {
+            fetch_browserstack_artifacts(
+                &client,
+                manifest.platform,
+                build_id,
+                &args.fetch_output_dir.join(build_id),
+                false,
+                args.fetch_poll_interval_secs,
+                args.fetch_timeout_secs,
+            )?;
+        }
+        let mut run_summary = RunSummary {
+            spec,
+            artifacts: None,
+            local_report: json!({"skipped": true, "reason": "prebuilt BrowserStack run"}),
+            remote_run: Some(remote),
+            summary: SummaryReport {
+                generated_at: String::new(),
+                generated_at_unix: 0,
+                target: manifest.platform,
+                function: entry.function.clone(),
+                iterations: entry.iterations,
+                warmup: entry.warmup,
+                devices: args.devices.clone(),
+                device_summaries: Vec::new(),
+            },
+            benchmark_results: Some(results.into_iter().collect()),
+            benchmark_failures: None,
+            performance_metrics: Some(metrics.into_iter().collect()),
+        };
+        run_summary.summary = build_summary(&run_summary)?;
+        summaries.push(run_summary.summary.clone());
+        function_values.insert(entry.function, serde_json::to_value(&run_summary)?);
+    }
+    let merged = merge_summary_reports(manifest.platform, &summaries)?;
+    let root_value = json!({
+        "summary": merged,
+        "functions": function_values,
+        "ci": {
+            "metadata": {
+                "request_command": "cargo mobench ci run-prebuilt",
+                "source_sha": manifest.source_sha,
+                "mobench_version": env!("CARGO_PKG_VERSION")
+            },
+            "outputs": {
+                "summary_json": "summary.json",
+                "summary_md": "summary.md",
+                "results_csv": "results.csv"
+            }
+        }
+    });
+    let summary_json = args.output_dir.join("summary.json");
+    let summary_md = args.output_dir.join("summary.md");
+    let results_csv = args.output_dir.join("results.csv");
+    write_file(
+        &summary_json,
+        serde_json::to_string_pretty(&root_value)?.as_bytes(),
+    )?;
+    write_file(&summary_md, render_markdown_summary(&merged).as_bytes())?;
+    write_file(&results_csv, render_csv_summary(&merged).as_bytes())?;
+    println!("Prebuilt CI outputs ready at {}", args.output_dir.display());
+    Ok(())
+}
+
 fn cmd_ci_run(args: CiRunArgs) -> Result<()> {
     let all_functions = resolve_ci_functions(&args)?;
 
@@ -2750,6 +3437,7 @@ fn fetch_browserstack_artifacts(
     poll_interval_secs: u64,
     timeout_secs: u64,
 ) -> Result<()> {
+    validate_remote_path_segment("build id", build_id)?;
     fs::create_dir_all(output_root)
         .with_context(|| format!("creating output dir {:?}", output_root))?;
 
@@ -2784,6 +3472,7 @@ fn fetch_browserstack_artifacts(
     }
 
     for session_id in session_ids {
+        validate_remote_path_segment("session id", &session_id)?;
         let session_path = format!("{base}/builds/{build_id}/sessions/{session_id}");
         let session_json = client.get_json(&session_path)?;
         let session_dir = output_root.join(format!("session-{}", session_id));
@@ -2805,7 +3494,7 @@ fn fetch_browserstack_artifacts(
             let file_name = filename_for_url(&key, &url);
             let dest = session_dir.join(file_name);
             if let Err(err) = client.download_url(&url, &dest) {
-                println!("Skipping download for {key}: {err}");
+                println!("Skipping unavailable BrowserStack diagnostic: {err}");
                 continue;
             }
             if let Ok(contents) = fs::read_to_string(&dest) {
@@ -2864,6 +3553,18 @@ fn fetch_browserstack_artifacts(
     }
 
     println!("Fetched BrowserStack artifacts to {:?}", output_root);
+    Ok(())
+}
+
+fn validate_remote_path_segment(label: &str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        bail!("invalid {label} returned by BrowserStack");
+    }
     Ok(())
 }
 
@@ -3056,14 +3757,22 @@ fn filename_for_url(key: &str, url: &str) -> String {
     let ext = Path::new(stripped)
         .extension()
         .and_then(|val| val.to_str())
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 10
+                && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
         .unwrap_or("log");
-    let mut safe = String::with_capacity(key.len());
-    for ch in key.chars() {
+    let mut safe = String::with_capacity(key.len().min(96));
+    for ch in key.chars().take(96) {
         if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
             safe.push(ch);
         } else {
             safe.push('_');
         }
+    }
+    if safe.is_empty() {
+        safe.push_str("artifact");
     }
     format!("{}.{}", safe, ext)
 }
@@ -5445,14 +6154,27 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
     let devices = if summary.devices.is_empty() {
         "none".to_string()
     } else {
-        summary.devices.join(", ")
+        summary
+            .devices
+            .iter()
+            .map(|device| escape_markdown_text(device))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
 
     let _ = writeln!(output, "### Benchmark Summary");
     let _ = writeln!(output);
-    let _ = writeln!(output, "- Generated: {}", summary.generated_at);
+    let _ = writeln!(
+        output,
+        "- Generated: {}",
+        escape_markdown_text(&summary.generated_at)
+    );
     let _ = writeln!(output, "- Target: {}", summary.target.display_name());
-    let _ = writeln!(output, "- Function: {}", summary.function);
+    let _ = writeln!(
+        output,
+        "- Function: {}",
+        escape_markdown_text(&summary.function)
+    );
     let _ = writeln!(
         output,
         "- Iterations/Warmup: {} / {}",
@@ -5497,9 +6219,9 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
                 let _ = writeln!(
                     output,
                     "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                    device.device,
-                    bench.function,
-                    format_benchmark_status(bench),
+                    escape_markdown_text(&device.device),
+                    escape_markdown_text(&bench.function),
+                    escape_markdown_text(&format_benchmark_status(bench)),
                     bench.samples,
                     summary.warmup,
                     format_ms(bench.mean_ns),
@@ -5528,14 +6250,15 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
                         .failure
                         .as_ref()
                         .and_then(|failure| failure.exit_reason.as_deref())
-                        .unwrap_or("-"),
+                        .map(escape_markdown_text)
+                        .unwrap_or_else(|| "-".to_string()),
                 );
             } else {
                 let _ = writeln!(
                     output,
                     "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
-                    device.device,
-                    bench.function,
+                    escape_markdown_text(&device.device),
+                    escape_markdown_text(&bench.function),
                     bench.samples,
                     summary.warmup,
                     format_ms(bench.mean_ns),
@@ -5572,6 +6295,55 @@ fn render_markdown_summary(summary: &SummaryReport) -> String {
     output
 }
 
+fn escape_markdown_text(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    for character in input.chars().take(1024) {
+        match character {
+            '\\' => output.push_str("\\\\"),
+            '|' => output.push_str("\\|"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '&' => output.push_str("&amp;"),
+            '`' => output.push_str("\\`"),
+            '*' | '[' | ']' => {
+                output.push('\\');
+                output.push(character);
+            }
+            '\r' | '\n' => output.push(' '),
+            character if character.is_control() => output.push('\u{fffd}'),
+            character => output.push(character),
+        }
+    }
+    output
+}
+
+fn csv_text_field(input: &str) -> String {
+    let mut value = input
+        .chars()
+        .take(4096)
+        .map(|character| {
+            if character == '\r' || character == '\n' || character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if value
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|character| matches!(character, '=' | '+' | '-' | '@'))
+    {
+        value.insert(0, '\'');
+    }
+    if value.contains(',') || value.contains('\"') {
+        format!("\"{}\"", value.replace('\"', "\"\""))
+    } else {
+        value
+    }
+}
+
 fn format_benchmark_status(bench: &BenchmarkStats) -> String {
     if let Some(failure) = &bench.failure {
         format!("failed ({})", failure.kind)
@@ -5598,8 +6370,8 @@ fn render_csv_summary(summary: &SummaryReport) -> String {
             let _ = writeln!(
                 output,
                 "{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                device.device,
-                bench.function,
+                csv_text_field(&device.device),
+                csv_text_field(&bench.function),
                 bench.samples,
                 bench.mean_ns.map_or(String::from(""), |v| v.to_string()),
                 bench.median_ns.map_or(String::from(""), |v| v.to_string()),
@@ -11102,5 +11874,281 @@ mod resource_usage_tests {
         assert!(json_str.contains("peak_memory_growth_kb"));
         assert!(json_str.contains("process_peak_memory_kb"));
         assert!(!json_str.contains("absolute_peak_memory_kb"));
+    }
+
+    fn write_test_prebuilt_bundle(
+        root: &Path,
+        mutate: impl FnOnce(&mut PrebuiltManifest),
+    ) -> PathBuf {
+        let app_path = root.join("entries/0000/app.apk");
+        let test_path = root.join("entries/0000/test.apk");
+        fs::create_dir_all(app_path.parent().unwrap()).unwrap();
+        fs::write(&app_path, b"PK\x03\x04app").unwrap();
+        fs::write(&test_path, b"PK\x03\x04test").unwrap();
+        let artifact = |kind, path: &Path, relative: &str| {
+            let (size, sha256) = sha256_file(path).unwrap();
+            PrebuiltArtifact {
+                kind,
+                path: relative.to_string(),
+                size,
+                sha256,
+            }
+        };
+        let mut manifest = PrebuiltManifest {
+            schema: PREBUILT_SCHEMA.to_string(),
+            source_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            platform: MobileTarget::Android,
+            build_profile: "release".to_string(),
+            mobench_version: env!("CARGO_PKG_VERSION").to_string(),
+            abi: PrebuiltAbi {
+                benchmark: PREBUILT_ABI.to_string(),
+                runner: "browserstack-espresso-v2".to_string(),
+            },
+            entries: vec![PrebuiltEntry {
+                function: "crate::bench".to_string(),
+                iterations: 10,
+                warmup: 1,
+                completion_timeout_secs: Some(300),
+                artifacts: vec![
+                    artifact(
+                        PrebuiltArtifactKind::AndroidApp,
+                        &app_path,
+                        "entries/0000/app.apk",
+                    ),
+                    artifact(
+                        PrebuiltArtifactKind::AndroidTestSuite,
+                        &test_path,
+                        "entries/0000/test.apk",
+                    ),
+                ],
+            }],
+        };
+        mutate(&mut manifest);
+        let manifest_path = root.join("manifest.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        manifest_path
+    }
+
+    #[test]
+    fn prebuilt_manifest_accepts_exact_hashed_pair() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |_| {});
+        let (_, entries) =
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn prebuilt_completion_timeout_is_bounded_by_trusted_configuration() {
+        assert_eq!(trusted_prebuilt_timeout(Some(300), 300, 1800), 360);
+        assert_eq!(trusted_prebuilt_timeout(Some(21_600), 300, 1800), 1800);
+        assert_eq!(trusted_prebuilt_timeout(None, 300, 1800), 300);
+    }
+
+    #[test]
+    fn browserstack_artifact_filenames_are_fixed_length_and_safe() {
+        let name = filename_for_url(
+            &format!("bad\n::warning::{}", "x".repeat(500)),
+            "https://example.test/artifact.json?token=ignored",
+        );
+        assert!(name.len() <= 101);
+        assert!(name.ends_with(".json"));
+        assert!(!name.contains('\n'));
+        assert!(!name.contains("::"));
+    }
+
+    #[test]
+    fn prepare_cli_preserves_json_function_array() {
+        let cli = Cli::try_parse_from([
+            "mobench",
+            "ci",
+            "prepare",
+            "--target",
+            "android",
+            "--functions",
+            "[\"crate::a\",\"crate::b\"]",
+            "--source-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+        ])
+        .unwrap();
+        let Command::Ci {
+            command: CiCommand::Prepare(args),
+        } = cli.command
+        else {
+            panic!("expected ci prepare");
+        };
+        assert_eq!(
+            parse_prebuilt_functions(&args.functions).unwrap(),
+            vec!["crate::a", "crate::b"]
+        );
+    }
+
+    #[test]
+    fn prebuilt_commit_sha_requires_full_hex_and_normalizes_case() {
+        assert_eq!(
+            validate_full_commit_sha("ABCDEF0123456789ABCDEF0123456789ABCDEF01").unwrap(),
+            "abcdef0123456789abcdef0123456789abcdef01"
+        );
+        assert!(validate_full_commit_sha("abc").is_err());
+        assert!(validate_full_commit_sha("z123456789abcdef0123456789abcdef01234567").is_err());
+    }
+
+    #[test]
+    fn prebuilt_manifest_rejects_traversal_and_wrong_kind() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |manifest| {
+            manifest.entries[0].artifacts[0].path = "../app.apk".to_string();
+        });
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |manifest| {
+            manifest.entries[0].artifacts[0].kind = PrebuiltArtifactKind::IosApp;
+        });
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn prebuilt_manifest_rejects_hash_size_and_unexpected_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |manifest| {
+            manifest.entries[0].artifacts[0].sha256 = "0".repeat(64);
+        });
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |manifest| {
+            manifest.entries[0].artifacts[0].size = PREBUILT_MAX_FILE_BYTES + 1;
+        });
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |_| {});
+        let app = temp.path().join("entries/0000/app.apk");
+        fs::write(&app, b"not-a-zip").unwrap();
+        let mut payload: PrebuiltManifest =
+            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        let (size, sha256) = sha256_file(&app).unwrap();
+        payload.entries[0].artifacts[0].size = size;
+        payload.entries[0].artifacts[0].sha256 = sha256;
+        fs::write(&manifest, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |_| {});
+        fs::write(temp.path().join("extra"), b"surprise").unwrap();
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn prebuilt_manifest_rejects_duplicate_kind_and_function_controls() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |manifest| {
+            manifest.entries[0].artifacts[1].kind = PrebuiltArtifactKind::AndroidApp;
+        });
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |manifest| {
+            manifest.entries[0].function = "bad\n::warning::name".to_string();
+        });
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prebuilt_manifest_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = write_test_prebuilt_bundle(temp.path(), |_| {});
+        fs::remove_file(temp.path().join("entries/0000/app.apk")).unwrap();
+        symlink(
+            temp.path().join("entries/0000/test.apk"),
+            temp.path().join("entries/0000/app.apk"),
+        )
+        .unwrap();
+        assert!(
+            verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn run_prebuilt_has_no_build_or_project_resolution_calls() {
+        let source = include_str!("lib.rs");
+        let start = source.find("fn cmd_ci_run_prebuilt(").unwrap();
+        let end = source[start..].find("\nfn cmd_ci_run(").unwrap() + start;
+        let fetch_start = source.find("fn fetch_browserstack_artifacts(").unwrap();
+        let fetch_end = source[fetch_start..]
+            .find("\nfn validate_remote_path_segment(")
+            .unwrap()
+            + fetch_start;
+        let trigger_start = source.find("fn trigger_browserstack_espresso(").unwrap();
+        let trigger_end = source[trigger_start..]
+            .find("\nfn resolve_browserstack_credentials(")
+            .unwrap()
+            + trigger_start;
+        let surfaces = [
+            &source[start..end],
+            &source[fetch_start..fetch_end],
+            &source[trigger_start..trigger_end],
+            include_str!("browserstack.rs"),
+        ];
+        for forbidden in [
+            "run_request(",
+            "resolve_project_layout(",
+            "run_android_build(",
+            "run_ios_build(",
+            "package_ios_xcuitest_artifacts(",
+            "std::process::Command",
+            "Command::new(",
+        ] {
+            assert!(
+                surfaces.iter().all(|surface| !surface.contains(forbidden)),
+                "forbidden credentialed-path call: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn untrusted_report_fields_are_escaped_for_markdown_and_csv() {
+        let escaped = escape_markdown_text("name|<script>\n::warning::oops");
+        assert_eq!(escaped, "name\\|&lt;script&gt; ::warning::oops".to_string());
+        assert_eq!(
+            csv_text_field("=HYPERLINK(\"bad\")"),
+            "\"'=HYPERLINK(\"\"bad\"\")\""
+        );
+        assert_eq!(csv_text_field("a,b\nnext"), "\"a,b next\"");
+        assert_eq!(csv_text_field("  =1+1"), "'  =1+1");
+        assert_eq!(csv_text_field("normal"), "normal");
     }
 }
