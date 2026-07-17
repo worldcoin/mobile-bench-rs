@@ -167,7 +167,7 @@ permissions:
 
 jobs:
   mobench:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@dbbe96c2af693abee8507f6b5875d861d7b1b83b
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@6bb8ae6a0e93c26370cc0d18d36eac8a984e2265
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
