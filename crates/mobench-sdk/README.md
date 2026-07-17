@@ -5,7 +5,7 @@ harness, `#[benchmark]` registry integration, generated runner support, Android
 and iOS builders, UniFFI compatibility, native JSON C ABI exports, and semantic
 profiling helpers used by the `mobench` CLI.
 
-Current release candidate: **0.1.45**.
+Current release: **0.1.45**.
 
 ## Features
 

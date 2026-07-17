@@ -8,7 +8,7 @@ longer integration-oriented release notes and support status.
 
 No user-facing unreleased changes yet.
 
-## v0.1.45 - Unreleased
+## v0.1.45 - 2026-07-17
 
 ### Added
 

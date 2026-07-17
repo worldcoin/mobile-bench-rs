@@ -2,7 +2,7 @@
 
 Status: current source-of-truth product/API specification.
 
-Current release candidate: `0.1.45`.
+Current release: `0.1.45`.
 
 Last updated: 2026-07-17.
 

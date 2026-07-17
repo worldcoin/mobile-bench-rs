@@ -8,7 +8,7 @@ annotated Rust function, validates the benchmark signature at compile time, and
 registers it through `inventory` so `mobench-sdk` and the `cargo mobench` CLI
 can discover and run it.
 
-Current release candidate: **0.1.45**.
+Current release: **0.1.45**.
 
 ## Install
 

@@ -1,6 +1,6 @@
 # Release Guide
 
-Current release candidate: **0.1.45**.
+Current release: **0.1.45**.
 
 Use this checklist when cutting a mobench workspace release.
 

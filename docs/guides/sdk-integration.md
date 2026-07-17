@@ -1,6 +1,6 @@
 # mobench-sdk Integration Guide
 
-Current release candidate: **0.1.45**.
+Current release: **0.1.45**.
 
 This guide shows how to add `mobench-sdk` to a Rust crate, register
 benchmarks, configure the generated mobile runner backend, and run through the
