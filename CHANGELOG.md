@@ -43,6 +43,18 @@ No user-facing unreleased changes yet.
   trust, and PR callers must supply both the PR number and full head SHA.
 - Third-party workflow actions are pinned to immutable commit SHAs and
   BrowserStack secrets must be passed explicitly.
+- Bounded credentialed BrowserStack API, device-log, and diagnostic downloads,
+  neutralized provider response bodies before runner logging, and capped
+  PR-provided completion timeouts against a trusted control-plane maximum.
+
+### Fixed
+
+- Prevented Android `ResultReceiver` success codes from colliding with
+  `Activity.RESULT_OK` across the UniFFI and native C ABI runners, and kept the
+  BoltFFI runner's result markers aligned with the collector contract.
+- Hardened BrowserStack Android result collection for per-test-case Espresso
+  logs and chunked benchmark JSON while bounding downloaded text and report
+  sizes.
 
 ## v0.1.43 - 2026-07-05
 

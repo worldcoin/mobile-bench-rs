@@ -8,7 +8,7 @@ type BrowserStackResults = (
     std::collections::HashMap<String, Vec<Value>>,
     std::collections::HashMap<String, PerformanceMetrics>,
 );
-use std::io::Read;
+use std::io::{Read, copy};
 use std::path::Path;
 use std::time::Instant;
 
@@ -74,6 +74,7 @@ const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
 const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
 const MAX_TEXT_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BINARY_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_BENCH_REPORT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BENCH_REPORT_CHUNKS: usize = 8192;
 
@@ -333,20 +334,36 @@ impl BrowserStackClient {
         let resp = self
             .asset_request(url)
             .send()
-            .with_context(|| format!("downloading BrowserStack asset {}", url))?;
+            .context("downloading BrowserStack asset")?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .with_context(|| format!("reading BrowserStack asset body {}", url))?;
         if !status.is_success() {
             return Err(anyhow!(
-                "BrowserStack asset download failed (status {}): {}",
-                status,
-                String::from_utf8_lossy(&bytes)
+                "BrowserStack asset download failed (status {})",
+                status
             ));
         }
-        std::fs::write(dest, bytes)
-            .with_context(|| format!("writing BrowserStack asset to {:?}", dest))?;
+        if resp
+            .content_length()
+            .is_some_and(|length| length > MAX_BINARY_ARTIFACT_BYTES)
+        {
+            return Err(anyhow!(
+                "BrowserStack asset exceeds {} bytes",
+                MAX_BINARY_ARTIFACT_BYTES
+            ));
+        }
+
+        let mut output = std::fs::File::create(dest)
+            .with_context(|| format!("creating BrowserStack asset file {:?}", dest))?;
+        let written = copy(&mut resp.take(MAX_BINARY_ARTIFACT_BYTES + 1), &mut output)
+            .context("streaming BrowserStack asset")?;
+        if written > MAX_BINARY_ARTIFACT_BYTES {
+            drop(output);
+            let _ = std::fs::remove_file(dest);
+            return Err(anyhow!(
+                "BrowserStack asset exceeds {} bytes",
+                MAX_BINARY_ARTIFACT_BYTES
+            ));
+        }
         Ok(())
     }
 
@@ -511,21 +528,8 @@ impl BrowserStackClient {
             _ => return Err(anyhow!("unsupported platform: {}", platform)),
         };
 
-        let resp = self
-            .http
-            .get(self.api(&path))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .send()
-            .with_context(|| format!("fetching device logs for session {}", session_id))?;
-
-        let status = resp.status();
-        let text = resp.text().context("reading device logs response")?;
-
-        if !status.is_success() {
-            return Err(anyhow!("Failed to fetch device logs (status {})", status));
-        }
-
-        Ok(text)
+        self.download_text_url(&self.api(&path))
+            .with_context(|| format!("fetching device logs for session {}", session_id))
     }
 
     fn get_session_json(&self, build_id: &str, session_id: &str, platform: &str) -> Result<Value> {
@@ -1820,20 +1824,37 @@ struct BuildResponse {
 
 fn parse_response<T: DeserializeOwned>(resp: Response, context: &str) -> Result<T> {
     let status = resp.status();
-    let text = resp
-        .text()
-        .with_context(|| format!("reading BrowserStack API response body for {}", context))?;
-
     if !status.is_success() {
         return Err(anyhow!(
-            "BrowserStack API {} failed (status {}): {}",
+            "BrowserStack API {} failed (status {})",
             context,
-            status,
-            text
+            status
         ));
     }
 
-    serde_json::from_str(&text)
+    if resp
+        .content_length()
+        .is_some_and(|length| length > MAX_TEXT_ARTIFACT_BYTES as u64)
+    {
+        return Err(anyhow!(
+            "BrowserStack API {} response exceeds {} bytes",
+            context,
+            MAX_TEXT_ARTIFACT_BYTES
+        ));
+    }
+    let mut bytes = Vec::new();
+    resp.take(MAX_TEXT_ARTIFACT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("reading BrowserStack API response body for {}", context))?;
+    if bytes.len() > MAX_TEXT_ARTIFACT_BYTES {
+        return Err(anyhow!(
+            "BrowserStack API {} response exceeds {} bytes",
+            context,
+            MAX_TEXT_ARTIFACT_BYTES
+        ));
+    }
+
+    serde_json::from_slice(&bytes)
         .with_context(|| format!("parsing BrowserStack API response for {}", context))
 }
 
@@ -2238,6 +2259,29 @@ mod tests {
         (format!("http://{addr}"), handle)
     }
 
+    fn spawn_http_response(
+        status: &'static str,
+        body: &'static [u8],
+        content_length: u64,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().expect("read test server address");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buf = [0_u8; 4096];
+            let bytes_read = stream.read(&mut buf).expect("read request");
+            assert!(bytes_read > 0, "request must not be empty");
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response headers");
+            stream.write_all(body).expect("write response body");
+        });
+        (format!("http://{addr}"), handle)
+    }
+
     #[test]
     fn rejects_missing_artifact() {
         let client = BrowserStackClient::new(
@@ -2282,6 +2326,33 @@ mod tests {
         assert!(!should_authenticate_asset_url(
             "https://evil.example.com/browserstack/logs"
         ));
+    }
+
+    #[test]
+    fn api_errors_do_not_expose_untrusted_response_bodies() {
+        let (base_url, handle) = spawn_http_response(
+            "500 Internal Server Error",
+            b"provider failure\n::warning::injected",
+            38,
+        );
+        let client = test_client_with_base_url(base_url);
+        let error = client.get_json("failure").unwrap_err().to_string();
+        handle.join().unwrap();
+        assert!(error.contains("status 500"));
+        assert!(!error.contains("provider failure"));
+        assert!(!error.contains("::warning::"));
+    }
+
+    #[test]
+    fn binary_asset_download_rejects_oversized_content_length() {
+        let (url, handle) = spawn_http_response("200 OK", b"", MAX_BINARY_ARTIFACT_BYTES + 1);
+        let client = test_client_with_base_url("https://unused.example");
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("diagnostic.bin");
+        let error = client.download_url(&url, &destination).unwrap_err();
+        handle.join().unwrap();
+        assert!(error.to_string().contains("exceeds"));
+        assert!(!destination.exists());
     }
 
     #[test]

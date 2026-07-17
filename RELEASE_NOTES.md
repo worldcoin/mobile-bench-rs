@@ -19,8 +19,10 @@ No user-facing unreleased changes yet.
 
 Status: release candidate for the next supported release.
 
-Target release date: 2026-07-17. Crates.io publication and live BrowserStack
-release validation remain pending.
+Target release date: 2026-07-17. Crates.io publication remains pending. The
+prebuilt path is green on Android at the final release-candidate head and on
+iOS at an earlier release-candidate head; a final-head iOS rerun remains a
+release gate.
 
 ### BrowserStack Pull-Request Trust Boundary
 
@@ -28,13 +30,13 @@ The reusable workflow now assumes that an authorized `/mobench` request can
 target a malicious fork revision. Authorization to request a benchmark is not
 treated as trust in the requested commit.
 
-- `validate-pr-head` accepts only a full commit SHA and verifies that it is the
+- `validate-request` accepts only a full commit SHA and verifies that it is the
   current head of the requested pull request.
 - `prepare-android` and `prepare-ios` check out that exact revision, run fixture
   hooks and builds without BrowserStack secrets or protected environments, and
   have read-only repository permissions. Their only handoff is an explicitly
   enumerated mobile artifact set plus a machine-readable manifest.
-- `browserstack-android` and `browserstack-ios` do not check out the caller and
+- `run-android` and `run-ios` do not check out the caller and
   do not invoke caller scripts, Cargo, Gradle, Xcode, dependencies, fixture
   generators, or mobile binaries on the GitHub runner. A trusted, immutable
   mobench revision verifies the manifest and uploads only the prebuilt
@@ -55,6 +57,9 @@ unexpected files, invalid metadata, size mismatches, and digest mismatches
 before credentials are used.
 Downloaded report fields and filenames remain untrusted and are escaped or
 rejected before shell, workflow-command, path, Markdown, or HTML use.
+BrowserStack API bodies, device logs, and downloaded diagnostics are bounded;
+provider error bodies are not echoed into the Actions command stream, and
+manifest-provided completion timeouts cannot exceed the trusted runner cap.
 
 ### New Two-Stage CLI Interface
 
@@ -63,10 +68,20 @@ rejected before shell, workflow-command, path, Markdown, or HTML use.
 artifact manifest.
 
 `cargo mobench ci run-prebuilt --manifest <path> --expected-source-sha
-<full-sha> --devices <selection> --output-dir <path>` verifies that handoff and
-performs only trusted BrowserStack upload, run, fetch, and report normalization.
+<full-sha> --expected-platform <android|ios> --expected-functions <functions>
+--expected-iterations <count> --expected-warmup <count> --devices <selection>
+--output-dir <path>` verifies that handoff and performs only trusted BrowserStack
+upload, run, fetch, and report normalization.
 `run-prebuilt` never invokes build tools, caller hooks, or files from a caller
 checkout.
+
+### Android Result Handoff And Collection Fixes
+
+Android runner result codes now use a qualified mobench namespace instead of an
+unqualified `RESULT_OK` that can collide with `Activity.RESULT_OK`. BrowserStack
+Espresso collection now reads per-test-case logs, reconstructs bounded chunked
+benchmark JSON, and rejects oversized text/report payloads. The fix covers the
+UniFFI, native C ABI, and BoltFFI runner paths.
 
 ### Migration For Reusable Workflow Callers
 
@@ -218,7 +233,7 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.44` | Pending | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Release candidate; publication and live device validation pending |
+| `v0.1.44` | Pending | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Release candidate; publication and final-head iOS validation pending |
 | `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Current supported release |
 | `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Superseded by `v0.1.43` |
 | `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Superseded by `v0.1.42` |

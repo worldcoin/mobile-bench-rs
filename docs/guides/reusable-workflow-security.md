@@ -1,6 +1,6 @@
 # Reusable Workflow Security
 
-Current release: **0.1.44**.
+Current release candidate: **0.1.44**. The published release remains 0.1.43.
 
 The reusable BrowserStack workflow is secure by default for pull requests,
 including fork pull requests. Its core invariant is:
@@ -33,7 +33,7 @@ The workflow separates code construction from provider access:
 ```mermaid
 flowchart LR
     request["PR number + exact head SHA"]
-    validate["validate-pr-head\nread only"]
+    validate["validate-request\nread only"]
     prepare["prepare Android/iOS\nuntrusted code, no secrets"]
     handoff["enumerated artifacts\n+ manifest"]
     provider["BrowserStack jobs\nsecrets, no caller checkout"]
@@ -123,8 +123,12 @@ may run only that trusted mobench binary and fixed workflow commands:
 
 ```bash
 cargo mobench ci run-prebuilt \
-  --manifest prebuilt/android-manifest.json \
+  --manifest prebuilt/android/manifest.json \
   --expected-source-sha "$PR_HEAD_SHA" \
+  --expected-platform android \
+  --expected-functions '["benchmarks::critical_path"]' \
+  --expected-iterations 30 \
+  --expected-warmup 5 \
   --devices "Google Pixel 7-13.0" \
   --output-dir target/mobench/ci/android
 ```
@@ -202,4 +206,6 @@ Release validation includes:
   BrowserStack run through the prebuilt path.
 
 The live Android and iOS BrowserStack runs are service-gated release checks and
-must be reported separately from host-side or static validation.
+must be reported separately from host-side or static validation. For this
+release candidate, Android is green at the final candidate head and iOS is green
+at an earlier candidate head; rerun iOS at the final head before publication.

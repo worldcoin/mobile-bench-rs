@@ -2724,6 +2724,18 @@ fn validate_prebuilt_results(function: &str, results: &HashMap<String, Vec<Value
     Ok(())
 }
 
+fn trusted_prebuilt_timeout(
+    completion_timeout_secs: Option<u64>,
+    fetch_timeout_secs: u64,
+    max_completion_timeout_secs: u64,
+) -> u64 {
+    completion_timeout_secs
+        .map(|timeout| timeout.saturating_add(60))
+        .unwrap_or(0)
+        .max(fetch_timeout_secs)
+        .min(max_completion_timeout_secs)
+}
+
 fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
     let (manifest, entries) = verify_prebuilt_manifest(&args.manifest, &args.expected_source_sha)?;
     let expected_functions = parse_prebuilt_functions(&args.expected_functions)?;
@@ -2752,6 +2764,12 @@ fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
     }
     if args.fetch_timeout_secs == 0 || args.fetch_timeout_secs > PREBUILT_MAX_TIMEOUT_SECS {
         bail!("fetch timeout is outside the supported range");
+    }
+    if args.max_completion_timeout_secs == 0
+        || args.max_completion_timeout_secs > PREBUILT_MAX_TIMEOUT_SECS
+        || args.fetch_timeout_secs > args.max_completion_timeout_secs
+    {
+        bail!("maximum completion timeout is outside the supported range");
     }
     if dry_run {
         println!("Verified {} prebuilt entry or entries", entries.len());
@@ -2804,11 +2822,11 @@ fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
             MobileTarget::Android => "espresso",
             MobileTarget::Ios => "xcuitest",
         };
-        let timeout_secs = entry
-            .completion_timeout_secs
-            .map(|timeout| timeout.saturating_add(60).min(PREBUILT_MAX_TIMEOUT_SECS))
-            .unwrap_or(0)
-            .max(args.fetch_timeout_secs);
+        let timeout_secs = trusted_prebuilt_timeout(
+            entry.completion_timeout_secs,
+            args.fetch_timeout_secs,
+            args.max_completion_timeout_secs,
+        );
         let (results, metrics) = client.wait_and_fetch_all_results_with_poll(
             build_id,
             platform,
@@ -3476,7 +3494,7 @@ fn fetch_browserstack_artifacts(
             let file_name = filename_for_url(&key, &url);
             let dest = session_dir.join(file_name);
             if let Err(err) = client.download_url(&url, &dest) {
-                println!("Skipping download for {key}: {err}");
+                println!("Skipping unavailable BrowserStack diagnostic: {err}");
                 continue;
             }
             if let Ok(contents) = fs::read_to_string(&dest) {
@@ -3745,13 +3763,16 @@ fn filename_for_url(key: &str, url: &str) -> String {
                 && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
         })
         .unwrap_or("log");
-    let mut safe = String::with_capacity(key.len());
-    for ch in key.chars() {
+    let mut safe = String::with_capacity(key.len().min(96));
+    for ch in key.chars().take(96) {
         if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
             safe.push(ch);
         } else {
             safe.push('_');
         }
+    }
+    if safe.is_empty() {
+        safe.push_str("artifact");
     }
     format!("{}.{}", safe, ext)
 }
@@ -11920,6 +11941,25 @@ mod resource_usage_tests {
             verify_prebuilt_manifest(&manifest, "0123456789abcdef0123456789abcdef01234567")
                 .unwrap();
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn prebuilt_completion_timeout_is_bounded_by_trusted_configuration() {
+        assert_eq!(trusted_prebuilt_timeout(Some(300), 300, 1800), 360);
+        assert_eq!(trusted_prebuilt_timeout(Some(21_600), 300, 1800), 1800);
+        assert_eq!(trusted_prebuilt_timeout(None, 300, 1800), 300);
+    }
+
+    #[test]
+    fn browserstack_artifact_filenames_are_fixed_length_and_safe() {
+        let name = filename_for_url(
+            &format!("bad\n::warning::{}", "x".repeat(500)),
+            "https://example.test/artifact.json?token=ignored",
+        );
+        assert!(name.len() <= 101);
+        assert!(name.ends_with(".json"));
+        assert!(!name.contains('\n'));
+        assert!(!name.contains("::"));
     }
 
     #[test]

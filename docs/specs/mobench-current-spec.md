@@ -513,8 +513,10 @@ containing normalized relative paths, artifact roles, file sizes, SHA-256
 digests, platform, and benchmark ABI metadata.
 
 `mobench ci run-prebuilt --manifest <path> --expected-source-sha <full-sha>
---devices <selection> --output-dir <path>` validates the manifest and exact
-downloaded file set before using BrowserStack. It rejects source-SHA mismatch,
+--expected-platform <android|ios> --expected-functions <functions>
+--expected-iterations <count> --expected-warmup <count> --devices <selection>
+--output-dir <path>` validates the manifest and exact downloaded file set before
+using BrowserStack. It rejects source-SHA mismatch,
 absolute/traversing/duplicate paths, symlinks, missing or unexpected files,
 invalid roles, invalid sizes or digests, platform mismatches, and incompatible
 manifest/benchmark ABI versions.

@@ -31,6 +31,7 @@ def test_global_and_job_permissions() -> None:
     ):
         text = job(name, following)
         assert "permissions:\n      contents: read" in text
+        assert "pull-requests: read" in text
         assert "contents: write" not in text
         assert "pull-requests: write" not in text
         assert "checks: write" not in text
@@ -135,7 +136,7 @@ def test_downloaded_reports_are_treated_as_untrusted() -> None:
     assert "unsafe SVG" in PLOT_WORKFLOW
 
 
-def test_all_external_actions_are_immutable() -> None:
+def test_security_boundary_external_actions_are_immutable() -> None:
     refs = re.findall(
         r"^\s*uses:\s*([^\s#]+)", WORKFLOW + "\n" + PLOT_WORKFLOW, re.MULTILINE
     )
@@ -157,6 +158,9 @@ def test_malicious_fixture_covers_required_attack_surfaces() -> None:
         "git push",
     ):
         assert needle in texts
+    dependency_build = (fixture / "dependency/build.rs").read_text()
+    assert "BROWSERSTACK_USERNAME" in dependency_build
+    assert "git push origin HEAD:refs/heads/malicious-dependency-build" in dependency_build
 
 
 def test_malicious_fixture_executes_without_secrets_or_repository_write() -> None:
@@ -227,7 +231,7 @@ def test_malicious_fixture_executes_without_secrets_or_repository_write() -> Non
         assert (log_dir / "fixture-hook-secrets.txt").read_text() == "fixture-hook:::\n"
         assert (log_dir / "benchmark-secrets.txt").read_text() == "::"
         attempts = (log_dir / "git-push-attempts.txt").read_text().splitlines()
-        assert len(attempts) == 3
+        assert len(attempts) == 4
         assert all(line.startswith("push origin HEAD:refs/heads/malicious-") for line in attempts)
 
 

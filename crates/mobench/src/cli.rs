@@ -508,6 +508,12 @@ pub(crate) struct CiRunPrebuiltArgs {
     pub(crate) fetch_poll_interval_secs: u64,
     #[arg(long, default_value_t = 300)]
     pub(crate) fetch_timeout_secs: u64,
+    #[arg(
+        long,
+        default_value_t = 1800,
+        help = "Trusted upper bound for a prebuilt entry's completion timeout"
+    )]
+    pub(crate) max_completion_timeout_secs: u64,
 }
 
 #[derive(Subcommand, Debug)]
