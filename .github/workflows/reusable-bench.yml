@@ -128,7 +128,7 @@ env:
   CARGO_TERM_COLOR: always
   # Replace this with the immutable commit containing the final 0.1.44
   # prepare/run-prebuilt implementation before enabling the workflow.
-  MOBENCH_TRUSTED_SHA: 7b22c31e7e1704a9e73e4e9848e86c928cdc2d1c
+  MOBENCH_TRUSTED_SHA: 5aec7bfac78fe87dca6932264d5d6500e2c4149d
 
 jobs:
   validate-request:
