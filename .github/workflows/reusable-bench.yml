@@ -224,7 +224,8 @@ jobs:
         run: |
           set -euo pipefail
           current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          test "${current,,}" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
+          current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
+          test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
       - name: Checkout exact untrusted PR revision
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -350,7 +351,8 @@ jobs:
         run: |
           set -euo pipefail
           current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          test "${current,,}" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
+          current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
+          test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
       - name: Checkout exact untrusted PR revision
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -497,7 +499,8 @@ jobs:
         run: |
           set -euo pipefail
           current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          test "${current,,}" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
+          current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
+          test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
       - name: Resolve and validate iOS device
         id: device
         shell: bash
@@ -586,7 +589,8 @@ jobs:
         run: |
           set -euo pipefail
           current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          test "${current,,}" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
+          current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
+          test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
       - name: Resolve and validate Android device
         id: device
         shell: bash
