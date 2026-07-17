@@ -1,6 +1,6 @@
 # Architecture
 
-Updated: 2026-07-17. Current release: `0.1.44`.
+Updated: 2026-07-17. Current release candidate: `0.1.45`.
 
 mobench has two product surfaces:
 
@@ -111,6 +111,9 @@ Fork-PR BrowserStack CI has separate privilege domains:
 - `ci run-prebuilt` runs from a trusted immutable mobench release, verifies the
   handoff, and performs provider operations without checking out or executing
   the caller on the credentialed runner.
+- Platform-specific function/device selections are normalized as data. Each
+  function is packaged once, and trusted result handling rejects incomplete or
+  duplicate function/device shards before writing canonical summaries.
 - summarization is read-only, while PR/check publishing is isolated in a job
   with only its narrow write permission.
 

@@ -2,7 +2,7 @@
 
 Status: current source-of-truth product/API specification.
 
-Current release: `0.1.44`.
+Current release candidate: `0.1.45`.
 
 Last updated: 2026-07-17.
 
@@ -43,7 +43,7 @@ Workspace package defaults:
 - Edition: Rust 2024.
 - MSRV: Rust 1.85.
 - License: MIT.
-- Current workspace version: `0.1.44`.
+- Current workspace version: `0.1.45`.
 
 ## Benchmark Authoring
 
@@ -532,6 +532,24 @@ The stable output and selection behavior remains aligned with `ci run`,
 including functions, iterations, warmup, devices, artifact collection,
 `summary.json`, `summary.md`, `results.csv`, optional plots, and regression
 metadata.
+
+The reusable workflow may run a caller-provided `prepare_script` only in the
+secretless prepare jobs. The path is normalized relative to the exact checkout;
+absolute, traversing, control-containing, missing, non-file, and escaping
+symlink targets are invalid. The hook and packaging receive
+`MOBENCH_CI_PREPARE=1`, and a hook failure prevents manifest upload.
+
+Platform function resolution is `functions_ios` or `functions_android` when
+non-empty, otherwise the shared `functions` input. Structured platform device
+inputs are JSON arrays whose objects contain exactly string `device` and
+`os_version` fields. They take precedence over single-device and profile
+selection.
+
+For every prepared function, `run-prebuilt` submits all requested devices. A
+complete platform result contains exactly one shard for each requested
+function/device pair. Missing, unexpected, and duplicate shards are errors;
+canonical outputs are not written from a partial matrix. Diagnostics already
+fetched from BrowserStack may be retained for failure analysis.
 
 ## `ci merge-split-runs` Behavior
 

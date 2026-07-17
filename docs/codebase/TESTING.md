@@ -1,6 +1,6 @@
 # Testing
 
-Updated: 2026-07-17. Current release: `0.1.44`.
+Updated: 2026-07-17. Current release candidate: `0.1.45`.
 
 ## Host-Side Rust Tests
 
@@ -185,6 +185,11 @@ the commenter's authorization:
   no BrowserStack variables and cannot use the job token for repository writes;
 - credentialed jobs have no caller checkout and invoke no caller-controlled
   process on the GitHub runner;
+- caller preparation hooks are path-confined, secretless, read-only, and fail
+  before manifest upload; platform function fallback and structured device
+  arrays remain data rather than shell programs;
+- complete-matrix tests cover multiple functions and devices and reject
+  missing, unexpected, and duplicate result shards;
 - manifest verification rejects traversal, absolute/duplicate/unexpected paths,
   missing/extra files, size mismatches, hash mismatches, platform mismatches,
   and incompatible benchmark ABI metadata;

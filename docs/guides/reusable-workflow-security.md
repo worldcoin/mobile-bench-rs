@@ -1,6 +1,6 @@
 # Reusable Workflow Security
 
-Current release: **0.1.44**.
+Next release: **0.1.45** (`0.1.44` remains immutable).
 
 The reusable BrowserStack workflow is secure by default for pull requests,
 including fork pull requests. Its core invariant is:
@@ -92,6 +92,48 @@ Caches used by pull-request preparation are either disabled or scoped so they
 cannot become a trusted build input. Trusted jobs do not restore build outputs
 created by untrusted revisions.
 
+### Generic preparation hook
+
+Projects that need code generation or toolchain setup before packaging may pass
+`prepare_script`, for example `.github/scripts/prepare-mobench.sh`. Mobench does
+not embed project-specific Noir, ProveKit, circuit, or fixture commands.
+
+The hook path must be a normalized repository-relative POSIX path. Absolute
+paths, `.` or `..` components, repeated separators, backslashes, controls,
+missing targets, directories, and symlinks resolving outside the exact caller
+checkout are rejected. The resolved file is invoked through `bash` after
+checkout and before `cargo-mobench ci prepare`.
+
+The hook receives `MOBENCH_CI_PREPARE=1` and `MOBENCH_PLATFORM=ios` or
+`android`; packaging also receives `MOBENCH_CI_PREPARE=1`. These commands run
+only in the matching secretless prepare job. Any failure stops the job before a
+manifest or mobile package can be uploaded.
+
+### Platform functions and devices
+
+`functions_ios` and `functions_android` use the same JSON-array or
+comma-separated syntax as `functions`. An empty platform-specific input falls
+back to the shared list. The normalized effective list is passed to both
+preparation and `run-prebuilt`, binding the verified manifest to the trusted
+request.
+
+`ios_devices` and `android_devices` accept strict JSON arrays:
+
+```json
+[
+  {"device": "iPhone 15", "os_version": "17"},
+  {"device": "iPhone 14", "os_version": "16"}
+]
+```
+
+The structured input takes precedence over the existing single-device fields
+and `device_profile` fallback. Values remain quoted data and are never evaluated
+as commands. Each function is built once per platform; `run-prebuilt` schedules
+all selected devices and requires exactly one result for every function/device
+combination. Missing, unexpected, or duplicate shards fail before canonical
+outputs are written. BrowserStack diagnostics are fetched first so a partial
+provider failure remains diagnosable without being presented as complete.
+
 ## Artifact Manifest Boundary
 
 The machine-readable manifest identifies every allowed file with:
@@ -155,7 +197,7 @@ the pull request or executes a file from those artifacts.
 
 ## Caller Migration
 
-Update the reusable workflow reference to the immutable commit for the `v0.1.44`
+Update the reusable workflow reference to the immutable commit for the `v0.1.45`
 release and pass secrets explicitly:
 
 ```yaml
@@ -167,12 +209,15 @@ permissions:
 
 jobs:
   mobench:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@6bb8ae6a0e93c26370cc0d18d36eac8a984e2265
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@REPLACE_WITH_V0_1_45_COMMIT_SHA
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
       crate_path: crates/benchmarks
       functions: '["benchmarks::critical_path"]'
+      functions_ios: '["benchmarks::ios_critical_path"]'
+      prepare_script: .github/scripts/prepare-mobench.sh
+      android_devices: '[{"device":"Google Pixel 7","os_version":"13.0"}]'
       platform: both
     secrets:
       BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}

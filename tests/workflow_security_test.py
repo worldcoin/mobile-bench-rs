@@ -7,13 +7,17 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/reusable-bench.yml").read_text()
 PLOT_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-publish-plots.yml").read_text()
 PR_COMMAND = (ROOT / ".github/workflows/reusable-pr-command.yml").read_text()
+PR_AUTO = (ROOT / ".github/workflows/reusable-pr-auto.yml").read_text()
 SELFTEST_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-selftest.yml").read_text()
+GENERATED_WORKFLOW = (ROOT / "crates/mobench/templates/ci/mobile-bench.yml").read_text()
+GENERATED_ACTION = (ROOT / "crates/mobench/templates/ci/action.yml").read_text()
 
 
 def job(name: str, next_name: str | None = None) -> str:
@@ -68,6 +72,9 @@ def test_pr_command_dispatches_fork_heads() -> None:
     assert "^[0-9a-fA-F]{40}$" in PR_COMMAND
     assert '-f head_sha="$HEAD_SHA"' in PR_COMMAND
     assert '-f pr_number="$PR_NUMBER"' in PR_COMMAND
+    assert "skipping secret-bearing BrowserStack dispatch" not in PR_AUTO
+    assert '-f head_sha="$HEAD_SHA"' in PR_AUTO
+    assert '-f pr_number="$PR_NUMBER"' in PR_AUTO
 
 
 def test_trusted_control_plane_is_from_a_literal_commit() -> None:
@@ -88,6 +95,109 @@ def test_untrusted_uploads_are_enumerated() -> None:
     assert "entries/*/test.apk" in android
     assert "target/mobench/prebuilt/ios/**" not in ios
     assert "target/mobench/prebuilt/android/**" not in android
+
+
+def test_prepare_hook_is_confined_validated_and_fail_closed() -> None:
+    assert 'prepare_script:' in WORKFLOW
+    for name, following, platform, label in (
+        ("prepare-ios", "prepare-android", "ios", "iOS"),
+        ("prepare-android", "run-ios", "android", "Android"),
+    ):
+        text = job(name, following)
+        hook = text.index("Run caller preparation hook (untrusted)")
+        prepare = text.index(f"Prepare {label} packages and manifest")
+        upload = text.index(f"Upload explicitly enumerated {label} packages")
+        assert hook < prepare < upload
+        assert 'MOBENCH_CI_PREPARE: "1"' in text
+        assert f"MOBENCH_PLATFORM: {platform}" in text
+        assert "prepare_script must be a normalized repository-relative path" in text
+        assert "prepare_script is missing or escapes the caller checkout" in text
+        assert "resolved.relative_to(root)" in text
+        assert "resolved.is_file()" in text
+        assert 'bash -- "$script"' in text
+        assert "continue-on-error" not in text
+
+    credentialed = job("run-ios", "summarize")
+    assert "prepare_script" not in credentialed
+    assert "MOBENCH_CI_PREPARE" not in credentialed
+
+
+def test_prepare_hook_path_validator_rejects_unsafe_targets() -> None:
+    prepare = job("prepare-ios", "prepare-android")
+    marker = 'script="$(python3 - <<\'PY\'\n'
+    start = prepare.index(marker) + len(marker)
+    end = prepare.index("\n          PY", start)
+    validator = textwrap.dedent(prepare[start:end])
+
+    with tempfile.TemporaryDirectory(prefix="mobench-hook-path-") as temp:
+        root = Path(temp)
+        safe = root / "scripts/prepare.sh"
+        safe.parent.mkdir()
+        safe.write_text("#!/bin/sh\n")
+        outside = root.parent / f"{root.name}-outside.sh"
+        outside.write_text("#!/bin/sh\n")
+        (root / "escape.sh").symlink_to(outside)
+
+        def validate(value: str) -> subprocess.CompletedProcess[str]:
+            env = os.environ.copy()
+            env["PREPARE_SCRIPT"] = value
+            return subprocess.run(
+                ["python3", "-c", validator],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        assert validate("scripts/prepare.sh").returncode == 0
+        for unsafe in (
+            "/tmp/prepare.sh",
+            "../prepare.sh",
+            "./scripts/prepare.sh",
+            "scripts//prepare.sh",
+            "scripts\\prepare.sh",
+            "missing.sh",
+            "scripts",
+            "escape.sh",
+            "bad\nname.sh",
+        ):
+            assert validate(unsafe).returncode != 0, unsafe
+        outside.unlink()
+
+
+def test_platform_functions_and_structured_devices_are_bound_end_to_end() -> None:
+    validation = job("validate-request", "trusted-mobench")
+    assert "FUNCTIONS_IOS" in validation and "FUNCTIONS_ANDROID" in validation
+    assert "ios_functions = os.environ['FUNCTIONS_IOS'].strip() or shared" in validation
+    assert "android_functions = os.environ['FUNCTIONS_ANDROID'].strip() or shared" in validation
+    assert "functions_ios: ${{ steps.validate.outputs.functions_ios }}" in validation
+    assert "functions_android: ${{ steps.validate.outputs.functions_android }}" in validation
+    assert "set(item) != {'device', 'os_version'}" in validation
+    assert "normalize_devices(os.environ['IOS_DEVICES'], 'ios_devices')" in validation
+    assert "normalize_devices(os.environ['ANDROID_DEVICES'], 'android_devices')" in validation
+
+    ios_prepare = job("prepare-ios", "prepare-android")
+    android_prepare = job("prepare-android", "run-ios")
+    ios_run = job("run-ios", "run-android")
+    android_run = job("run-android", "summarize")
+    assert "needs.validate-request.outputs.functions_ios" in ios_prepare + ios_run
+    assert "needs.validate-request.outputs.functions_android" in android_prepare + android_run
+    assert "needs.validate-request.outputs.ios_devices" in ios_run
+    assert "needs.validate-request.outputs.android_devices" in android_run
+    for text in (ios_run, android_run):
+        assert 'device_args+=(--devices "$spec")' in text
+        assert '"${device_args[@]}"' in text
+        assert "unique | length" in text
+        assert "DEVICE_OVERRIDE" in text and "DEVICE_PROFILE" in text
+
+
+def test_reporting_uses_one_fixed_complete_result_set_per_platform() -> None:
+    summarize = job("summarize", "report")
+    assert 'summary="results/$platform/summary.json"' in summarize
+    assert 'csv="results/$platform/results.csv"' in summarize
+    assert "find " not in summarize
+    assert "-print -quit" not in summarize
 
 
 def test_credentialed_jobs_never_checkout_or_build_caller_code() -> None:
@@ -145,6 +255,22 @@ def test_security_boundary_external_actions_are_immutable() -> None:
         assert re.search(r"@[0-9a-f]{40}$", ref), ref
 
 
+def test_generated_workflow_uses_secure_reusable_boundary() -> None:
+    assert "actions/checkout" not in GENERATED_WORKFLOW
+    assert "runs-on:" not in GENERATED_WORKFLOW
+    assert "worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@" in GENERATED_WORKFLOW
+    assert "prepare_script:" in GENERATED_WORKFLOW
+    assert "functions_ios:" in GENERATED_WORKFLOW
+    assert "functions_android:" in GENERATED_WORKFLOW
+    assert "ios_devices:" in GENERATED_WORKFLOW
+    assert "android_devices:" in GENERATED_WORKFLOW
+    assert "secrets: inherit" not in GENERATED_WORKFLOW
+    assert "BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}" in GENERATED_WORKFLOW
+    assert "BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}" in GENERATED_WORKFLOW
+    for ref in re.findall(r"^\s*uses:\s*([^\s#]+)", GENERATED_ACTION, re.MULTILINE):
+        assert ref.startswith("./") or re.search(r"@[0-9a-f]{40}$", ref), ref
+
+
 def test_malicious_fixture_covers_required_attack_surfaces() -> None:
     fixture = ROOT / "tests/fixtures/malicious-pr"
     texts = "\n".join(p.read_text() for p in fixture.rglob("*") if p.is_file())
@@ -190,6 +316,7 @@ def test_malicious_fixture_executes_without_secrets_or_repository_write() -> Non
         ):
             env.pop(name, None)
         env["MOBENCH_ATTACK_LOG_DIR"] = str(log_dir)
+        env["MOBENCH_CI_PREPARE"] = "1"
         env["CARGO_TARGET_DIR"] = str(temp_root / "target")
         env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
 
@@ -228,7 +355,7 @@ def test_malicious_fixture_executes_without_secrets_or_repository_write() -> Non
         ):
             assert (log_dir / name).read_text() == ""
         assert (log_dir / "dependency-build-secrets.txt").read_text() == "dependency-build:::"
-        assert (log_dir / "fixture-hook-secrets.txt").read_text() == "fixture-hook:::\n"
+        assert (log_dir / "fixture-hook-secrets.txt").read_text() == "fixture-hook::::prepare=1\n"
         assert (log_dir / "benchmark-secrets.txt").read_text() == "::"
         attempts = (log_dir / "git-push-attempts.txt").read_text().splitlines()
         assert len(attempts) == 4

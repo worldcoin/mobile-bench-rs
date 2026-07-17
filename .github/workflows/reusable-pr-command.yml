@@ -18,6 +18,31 @@ on:
         description: "JSON array of benchmark function names"
         required: true
         type: string
+      functions_ios:
+        description: "Optional iOS function list; defaults to functions"
+        required: false
+        type: string
+        default: ""
+      functions_android:
+        description: "Optional Android function list; defaults to functions"
+        required: false
+        type: string
+        default: ""
+      prepare_script:
+        description: "Optional repository-relative preparation script"
+        required: false
+        type: string
+        default: ""
+      ios_devices:
+        description: "Optional JSON array of iOS device objects"
+        required: false
+        type: string
+        default: ""
+      android_devices:
+        description: "Optional JSON array of Android device objects"
+        required: false
+        type: string
+        default: ""
       trusted_associations:
         description: "Comma-separated author associations allowed to trigger (default: OWNER,MEMBER,COLLABORATOR)"
         required: false
@@ -139,10 +164,20 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
           REQUESTED_BY: ${{ github.event.comment.user.login }}
           FUNCTIONS: ${{ inputs.functions }}
+          FUNCTIONS_IOS: ${{ inputs.functions_ios }}
+          FUNCTIONS_ANDROID: ${{ inputs.functions_android }}
+          PREPARE_SCRIPT: ${{ inputs.prepare_script }}
+          IOS_DEVICES: ${{ inputs.ios_devices }}
+          ANDROID_DEVICES: ${{ inputs.android_devices }}
           CRATE_PATH: ${{ inputs.crate_path }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          gh workflow run "$WORKFLOW" \
+          compatibility="$(jq -cn \
+            --arg functions_ios "$FUNCTIONS_IOS" --arg functions_android "$FUNCTIONS_ANDROID" \
+            --arg prepare_script "$PREPARE_SCRIPT" --arg ios_devices "$IOS_DEVICES" \
+            --arg android_devices "$ANDROID_DEVICES" \
+            '{functions_ios:$functions_ios,functions_android:$functions_android,prepare_script:$prepare_script,ios_devices:$ios_devices,android_devices:$android_devices} | with_entries(select(.value != ""))')"
+          dispatch=(gh workflow run "$WORKFLOW" \
             --ref "$DEFAULT_BRANCH" \
             -f head_sha="$HEAD_SHA" \
             -f crate_path="$CRATE_PATH" \
@@ -152,5 +187,7 @@ jobs:
             -f iterations="$ITERATIONS" \
             -f warmup="$WARMUP" \
             -f pr_number="$PR_NUMBER" \
-            -f requested_by="$REQUESTED_BY"
+            -f requested_by="$REQUESTED_BY")
+          [ "$compatibility" = '{}' ] || dispatch+=(-f compatibility_json="$compatibility")
+          "${dispatch[@]}"
           echo "Dispatched benchmark for PR #${PR_NUMBER} at ${HEAD_SHA}"

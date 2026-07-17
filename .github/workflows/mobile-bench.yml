@@ -17,26 +17,6 @@ on:
         required: false
         type: string
         default: "low-spec"
-      ios_device:
-        description: "Custom iOS device name"
-        required: false
-        type: string
-        default: ""
-      ios_os_version:
-        description: "Custom iOS OS version"
-        required: false
-        type: string
-        default: ""
-      android_device:
-        description: "Custom Android device name"
-        required: false
-        type: string
-        default: ""
-      android_os_version:
-        description: "Custom Android OS version"
-        required: false
-        type: string
-        default: ""
       crate_path:
         description: "Benchmark crate fixture path"
         required: false
@@ -47,6 +27,11 @@ on:
         required: false
         type: string
         default: "ffi_benchmark::bench_fibonacci,ffi_benchmark::bench_checksum"
+      compatibility_json:
+        description: "Optional JSON object with functions_ios, functions_android, prepare_script, ios_devices, and android_devices"
+        required: false
+        type: string
+        default: "{}"
       iterations:
         description: "Number of benchmark iterations"
         required: false
@@ -57,21 +42,6 @@ on:
         required: false
         type: string
         default: "5"
-      mobench_version:
-        description: "Mobench version to install from crates.io when mobench_ref is unset"
-        required: false
-        type: string
-        default: ""
-      mobench_ref:
-        description: "Git ref for mobile-bench-rs to install instead of the caller path or crates.io version"
-        required: false
-        type: string
-        default: ""
-      ffi_backend:
-        description: "mobench FFI backend to configure for the fixture (uniffi | native-c-abi | boltffi)"
-        required: false
-        type: string
-        default: ""
       pr_number:
         description: "PR number for sticky comment publishing"
         required: true
@@ -106,17 +76,15 @@ jobs:
     with:
       crate_path: ${{ inputs.crate_path }}
       functions: ${{ inputs.functions }}
+      functions_ios: ${{ fromJSON(inputs.compatibility_json).functions_ios || '' }}
+      functions_android: ${{ fromJSON(inputs.compatibility_json).functions_android || '' }}
+      prepare_script: ${{ fromJSON(inputs.compatibility_json).prepare_script || '' }}
+      ios_devices: ${{ fromJSON(inputs.compatibility_json).ios_devices || '' }}
+      android_devices: ${{ fromJSON(inputs.compatibility_json).android_devices || '' }}
       platform: ${{ inputs.platform }}
       device_profile: ${{ inputs.device_profile }}
-      ios_device: ${{ inputs.ios_device }}
-      ios_os_version: ${{ inputs.ios_os_version }}
-      android_device: ${{ inputs.android_device }}
-      android_os_version: ${{ inputs.android_os_version }}
       iterations: ${{ inputs.iterations }}
       warmup: ${{ inputs.warmup }}
-      mobench_version: ${{ inputs.mobench_version }}
-      mobench_ref: ${{ inputs.mobench_ref }}
-      ffi_backend: ${{ inputs.ffi_backend }}
       build_release: true
       pr_number: ${{ inputs.pr_number }}
       requested_by: ${{ inputs.requested_by }}

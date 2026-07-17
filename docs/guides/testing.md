@@ -1,6 +1,6 @@
 # Testing Guide
 
-Current release: **0.1.44**.
+Current release candidate: **0.1.45**.
 
 This guide covers host tests, CLI validation, generated mobile artifacts,
 BrowserStack smoke tests, and local native profiling checks.
@@ -206,6 +206,12 @@ hook, dependency, and benchmark code receive neither BrowserStack variables nor
 a write-capable GitHub token. Static workflow tests must also prove that
 credentialed jobs have no caller checkout or caller-controlled process
 execution.
+
+Compatibility coverage must also execute the embedded `prepare_script` path
+validator against absolute, traversing, malformed, missing, directory, and
+escaping-symlink targets; prove hook failure precedes manifest upload; exercise
+platform function fallback and structured device parsing; and reject missing or
+duplicate function/device result shards.
 
 Manifest tests cover path traversal, absolute/duplicate/unexpected paths,
 missing/extra files, size and SHA-256 mismatches, platform mismatches, and

@@ -8,6 +8,35 @@ longer integration-oriented release notes and support status.
 
 No user-facing unreleased changes yet.
 
+## v0.1.45 - Unreleased
+
+### Added
+
+- Added the optional `prepare_script` reusable-workflow input for caller-specific
+  code generation and toolchain setup. The normalized repository-relative hook
+  runs only in secretless, read-only prepare jobs with
+  `MOBENCH_CI_PREPARE=1`; invalid, escaping, missing, or failing hooks stop the
+  handoff before any manifest is uploaded.
+- Added `functions_ios` and `functions_android`, each falling back to the shared
+  `functions` input, plus structured `ios_devices` and `android_devices` JSON
+  arrays for platform-specific multi-device runs.
+
+### Changed
+
+- Reusable BrowserStack runs now require the complete function/device matrix.
+  Missing, unexpected, or duplicate result shards fail the run instead of
+  producing a successful partial summary.
+- Generated CI workflows use the secure two-stage reusable workflow by default;
+  the local composite action remains appropriate only for trusted revisions or
+  secretless execution.
+
+### Security
+
+- Preserved the `0.1.44` credential boundary: caller hooks, dependencies, and
+  builds remain confined to untrusted prepare jobs, while credentialed jobs use
+  only verified prebuilt mobile packages and the SHA-pinned trusted mobench
+  control plane.
+
 ## v0.1.44 - 2026-07-17
 
 ### Security

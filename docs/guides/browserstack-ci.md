@@ -1,6 +1,6 @@
 # BrowserStack CI Guide
 
-Current release: **0.1.44**.
+Current release candidate: **0.1.45**.
 
 This guide covers BrowserStack benchmark execution, deterministic device
 resolution, CI contract outputs, artifact fetching, PR reporting, and baseline
@@ -209,9 +209,15 @@ cargo mobench ci run \
 The local action example below is suitable for trusted revisions or host-only
 runs. Do not adapt it into a credentialed fork-PR job that checks out and builds
 the pull request. Fork-PR BrowserStack callers should use
-`.github/workflows/reusable-bench.yml` at an immutable `v0.1.44` commit and pass
+`.github/workflows/reusable-bench.yml` at the immutable `v0.1.45` commit and pass
 BrowserStack secrets explicitly; the reusable workflow performs the untrusted
 prepare and trusted prebuilt stages automatically.
+
+Use `prepare_script` for repository-specific code generation, and
+`functions_ios`/`functions_android` or `ios_devices`/`android_devices` when the
+platforms need different selections. The hook still runs only in the
+secretless prepare stage. Existing shared function, single-device, and profile
+inputs remain valid fallbacks.
 
 Minimal workflow:
 
