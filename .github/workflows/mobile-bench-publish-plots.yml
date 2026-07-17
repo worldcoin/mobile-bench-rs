@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: worldcoin/mobile-bench-rs
-          ref: 6540650cdf10cdf1dde598233ebb90fcf9eaec9a
+          ref: 3685fefccd7bce6b30d33fbcaf758dc06ae85ba5
           persist-credentials: false
           path: trusted-mobench-src
 
