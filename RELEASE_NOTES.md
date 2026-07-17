@@ -55,6 +55,9 @@ needs caller-specific preparation, and use the platform function/device inputs
 only when the shared selections are insufficient. Continue passing
 BrowserStack secrets explicitly; do not use `secrets: inherit`.
 
+The CLI package again declares `mobench` as its default binary, and SDK rustdoc
+examples consistently reference `0.1.45`.
+
 ## v0.1.44
 
 Status: current supported release.

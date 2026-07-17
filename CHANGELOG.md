@@ -30,6 +30,12 @@ No user-facing unreleased changes yet.
   the local composite action remains appropriate only for trusted revisions or
   secretless execution.
 
+### Fixed
+
+- Restored `cargo run -p mobench -- ...` binary selection by placing
+  `default-run` in the package manifest, and updated SDK rustdoc dependency
+  examples to the `0.1.45` release line.
+
 ### Security
 
 - Preserved the `0.1.44` credential boundary: caller hooks, dependencies, and
