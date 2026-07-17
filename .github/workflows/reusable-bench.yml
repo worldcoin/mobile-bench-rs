@@ -514,7 +514,9 @@ jobs:
             json="$(trusted-bin/cargo-mobench devices resolve --platform ios --profile "$DEVICE_PROFILE" --format json)"
             device="$(jq -r '.device // .name' <<<"$json")"; os="$(jq -r '.os_version' <<<"$json")"
           fi
-          [[ "$device" =~ ^[A-Za-z0-9._+()/ -]{1,100}$ && "$os" =~ ^[A-Za-z0-9._+-]{1,32}$ ]] || exit 2
+          device_pattern='^[A-Za-z0-9._+()/ -]{1,100}$'
+          os_pattern='^[A-Za-z0-9._+-]{1,32}$'
+          [[ "$device" =~ $device_pattern && "$os" =~ $os_pattern ]] || exit 2
           printf 'spec=%s-%s\n' "$device" "$os" >> "$GITHUB_OUTPUT"
       - name: Upload, run, and fetch iOS benchmark
         shell: bash
@@ -601,7 +603,9 @@ jobs:
             json="$(trusted-bin/cargo-mobench devices resolve --platform android --profile "$DEVICE_PROFILE" --format json)"
             device="$(jq -r '.device // .name' <<<"$json")"; os="$(jq -r '.os_version' <<<"$json")"
           fi
-          [[ "$device" =~ ^[A-Za-z0-9._+()/ -]{1,100}$ && "$os" =~ ^[A-Za-z0-9._+-]{1,32}$ ]] || exit 2
+          device_pattern='^[A-Za-z0-9._+()/ -]{1,100}$'
+          os_pattern='^[A-Za-z0-9._+-]{1,32}$'
+          [[ "$device" =~ $device_pattern && "$os" =~ $os_pattern ]] || exit 2
           printf 'spec=%s-%s\n' "$device" "$os" >> "$GITHUB_OUTPUT"
       - name: Upload, run, and fetch Android benchmark
         shell: bash
