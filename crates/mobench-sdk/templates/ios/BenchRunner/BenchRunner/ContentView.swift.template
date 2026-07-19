@@ -84,6 +84,7 @@ struct ContentView: View {
                 // JSON report element - stores the full benchmark JSON in its label
                 Text(reportJSON)
                     .accessibilityIdentifier("benchmarkReportJSON")
+                    .accessibilityLabel(reportJSON)
                     .frame(width: 0, height: 0)
                     .opacity(0)
             }

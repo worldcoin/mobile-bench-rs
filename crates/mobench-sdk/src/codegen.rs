@@ -3008,6 +3008,11 @@ pub fn public_bench() {
             "refreshed ContentView.swift should apply UI updates on the main actor, got:\n{}",
             refreshed
         );
+        assert!(
+            refreshed.contains(".accessibilityLabel(reportJSON)"),
+            "refreshed ContentView.swift should expose report JSON to XCUITest, got:\n{}",
+            refreshed
+        );
 
         fs::remove_dir_all(&temp_dir).ok();
     }
