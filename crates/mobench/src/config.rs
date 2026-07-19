@@ -79,6 +79,11 @@ pub struct ProjectConfig {
     /// If not specified, it's derived from the crate name.
     pub library_name: Option<String>,
 
+    /// FFI backend used by generated Android and iOS runners.
+    ///
+    /// Defaults to UniFFI for backwards compatibility.
+    pub ffi_backend: mobench_sdk::FfiBackend,
+
     /// Output directory for build artifacts.
     ///
     /// Defaults to `target/mobench/` if not specified.
@@ -309,6 +314,7 @@ impl MobenchConfig {
             project: ProjectConfig {
                 crate_name: Some(crate_name.to_string()),
                 library_name: Some(library_name.clone()),
+                ffi_backend: mobench_sdk::FfiBackend::default(),
                 output_dir: None, // Use default (target/mobench/)
             },
             android: AndroidConfig {

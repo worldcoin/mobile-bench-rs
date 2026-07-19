@@ -94,6 +94,70 @@ def test_trusted_control_plane_is_from_a_literal_commit() -> None:
     assert 'version = "0.1.45"' in cargo_toml
 
 
+def test_caller_toolchain_is_explicit_and_confined_to_prepare_jobs() -> None:
+    assert re.search(
+        r"rust_toolchain:\n(?:.*\n){3}\s+default: stable", WORKFLOW
+    )
+    assert "default: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios" in WORKFLOW
+    validation = job("validate-request", "trusted-mobench")
+    assert "rust_toolchain contains unsupported characters" in validation
+
+    trusted = job("trusted-mobench", "prepare-ios")
+    assert "toolchain: stable" in trusted
+    assert "needs.validate-request.outputs.rust_toolchain" not in trusted
+
+    for name, following, targets in (
+        ("prepare-ios", "prepare-android", "inputs.rust_targets_ios"),
+        ("prepare-android", "run-ios", "inputs.rust_targets_android"),
+    ):
+        text = job(name, following)
+        assert "toolchain: ${{ needs.validate-request.outputs.rust_toolchain }}" in text
+        assert f"targets: ${{{{ {targets} }}}}" in text
+        assert "rustup target add" not in text
+
+    credentialed = job("run-ios", "summarize")
+    assert "rust_toolchain" not in credentialed
+    assert "nightly-2026-03-04" in SELFTEST_WORKFLOW
+    assert "crate_path: examples/ffi-benchmark" in SELFTEST_WORKFLOW
+    assert "export_native_c_abi!()" in (
+        ROOT / "examples/ffi-benchmark/src/lib.rs"
+    ).read_text()
+
+
+def test_ffi_backend_is_validated_and_passed_without_config_rewrite() -> None:
+    validation = job("validate-request", "trusted-mobench")
+    assert "ffi_backend must be uniffi, native-c-abi, or boltffi" in validation
+    assert "bolt-ffi) FFI_BACKEND=boltffi" in validation
+    for name, following in (
+        ("prepare-ios", "prepare-android"),
+        ("prepare-android", "run-ios"),
+    ):
+        text = job(name, following)
+        assert 'backend_args+=(--ffi-backend "$FFI_BACKEND")' in text
+        assert '"${backend_args[@]}"' in text
+        assert "Configure requested FFI backend" not in text
+        assert "path.write_text" not in text
+    assert "ffi_backend: native-c-abi" in SELFTEST_WORKFLOW
+
+
+def test_binding_generator_uses_crate_workspace_lockfile() -> None:
+    for name, following in (
+        ("prepare-ios", "prepare-android"),
+        ("prepare-android", "run-ios"),
+    ):
+        text = job(name, following)
+        assert "find caller -name Cargo.lock" not in text
+        assert 'candidate = (root / os.environ[\'CRATE_PATH\']).resolve(strict=True)' in text
+        assert "candidate.relative_to(root)" in text
+        assert 'cargo metadata --manifest-path "$manifest"' in text
+        assert 'lockfile="$workspace_root/Cargo.lock"' in text
+        assert "native-c-abi) exit 0" in text
+        bolt = text.index("boltffi|bolt-ffi)")
+        uniffi = text.index("uniffi) ;;", bolt)
+        metadata = text.index('cargo metadata --manifest-path "$manifest"', uniffi)
+        assert bolt < uniffi < metadata
+
+
 def test_untrusted_uploads_are_enumerated() -> None:
     ios = job("prepare-ios", "prepare-android")
     android = job("prepare-android", "run-ios")

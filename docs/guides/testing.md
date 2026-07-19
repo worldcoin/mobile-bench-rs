@@ -213,6 +213,10 @@ escaping-symlink targets; prove hook failure precedes manifest upload; exercise
 platform function fallback and structured device parsing; and reject missing or
 duplicate function/device result shards.
 
+The reusable-workflow self-test pins `nightly-2026-03-04` and selects
+`native-c-abi`, proving mobile targets are installed for the caller toolchain
+without invoking UniFFI binding generation.
+
 Manifest tests cover path traversal, absolute/duplicate/unexpected paths,
 missing/extra files, size and SHA-256 mismatches, platform mismatches, and
 incompatible benchmark ABI metadata. Reporting tests cover untrusted filenames,

@@ -2208,6 +2208,15 @@ mod tests {
             !main_activity.contains("runBenchmark("),
             "native Android runner must call the JSON C ABI, not UniFFI runBenchmark"
         );
+        let package_manifest =
+            fs::read_to_string(temp_dir.join("android/app/build.gradle")).unwrap();
+        assert!(package_manifest.contains("net.java.dev.jna:jna"));
+        assert!(!package_manifest.contains("uniffi"));
+        let android_manifest =
+            fs::read_to_string(temp_dir.join("android/app/src/main/AndroidManifest.xml")).unwrap();
+        assert!(android_manifest.contains("android:name=\".MainActivity\""));
+        assert!(!android_manifest.contains("uniffi"));
+        assert!(!android_manifest.contains("{{"));
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -2841,6 +2850,11 @@ pub fn public_bench() {
         )
         .unwrap();
         assert!(bridging_header.contains("#import \"native_benchmarkFFI.h\""));
+        let package_manifest =
+            fs::read_to_string(temp_dir.join("ios/BenchRunner/project.yml")).unwrap();
+        assert!(package_manifest.contains("../native_benchmark.xcframework"));
+        assert!(package_manifest.contains("SWIFT_OBJC_BRIDGING_HEADER"));
+        assert!(!package_manifest.contains("uniffi"));
 
         fs::remove_dir_all(&temp_dir).ok();
     }

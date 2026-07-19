@@ -466,6 +466,12 @@ pub(crate) struct CiPrepareArgs {
     pub(crate) target: MobileTarget,
     #[arg(long)]
     pub(crate) crate_path: Option<PathBuf>,
+    #[arg(
+        long,
+        value_enum,
+        help = "Generated runner FFI backend (overrides mobench.toml; defaults to uniffi)"
+    )]
+    pub(crate) ffi_backend: Option<FfiBackendArg>,
     #[arg(long)]
     pub(crate) functions: Vec<String>,
     #[arg(long, default_value_t = 100)]
@@ -480,6 +486,25 @@ pub(crate) struct CiPrepareArgs {
     pub(crate) output_dir: PathBuf,
     #[arg(long, default_value = "target/mobench/prebuilt/manifest.json")]
     pub(crate) manifest: PathBuf,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub(crate) enum FfiBackendArg {
+    Uniffi,
+    NativeCAbi,
+    #[value(name = "boltffi", alias = "bolt-ffi")]
+    BoltFfi,
+}
+
+impl From<FfiBackendArg> for mobench_sdk::FfiBackend {
+    fn from(value: FfiBackendArg) -> Self {
+        match value {
+            FfiBackendArg::Uniffi => Self::Uniffi,
+            FfiBackendArg::NativeCAbi => Self::NativeCAbi,
+            FfiBackendArg::BoltFfi => Self::BoltFfi,
+        }
+    }
 }
 
 #[derive(Args, Debug, Clone)]

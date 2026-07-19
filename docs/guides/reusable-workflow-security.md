@@ -78,6 +78,7 @@ Prepare uses:
 ```bash
 cargo mobench ci prepare \
   --target android \
+  --ffi-backend native-c-abi \
   --source-sha "$PR_HEAD_SHA" \
   --output-dir target/mobench/prebuilt/android \
   --manifest target/mobench/prebuilt/android/manifest.json
@@ -91,6 +92,18 @@ arbitrary glob, build cache, or executable helper for later runner execution.
 Caches used by pull-request preparation are either disabled or scoped so they
 cannot become a trusted build input. Trusted jobs do not restore build outputs
 created by untrusted revisions.
+
+Callers may set `rust_toolchain` to the exact channel used for mobile builds,
+for example `nightly-2026-03-04`; it defaults to `stable`. The Android and iOS
+targets are installed for that toolchain only in the secretless prepare jobs.
+The trusted `cargo-mobench` control plane remains compiled separately with its
+own pinned `stable` toolchain and never reads caller toolchain files.
+
+The optional `ffi_backend` input is validated and passed directly to
+`ci prepare` as `--ffi-backend`; the workflow never rewrites `mobench.toml`.
+If omitted, project configuration and then Mobench's documented default apply.
+UniFFI generator discovery uses the Cargo workspace containing `crate_path`;
+native-C-ABI callers skip generator installation entirely.
 
 ### Generic preparation hook
 
@@ -217,6 +230,8 @@ jobs:
       functions: '["benchmarks::critical_path"]'
       functions_ios: '["benchmarks::ios_critical_path"]'
       prepare_script: .github/scripts/prepare-mobench.sh
+      rust_toolchain: nightly-2026-03-04
+      ffi_backend: native-c-abi
       android_devices: '[{"device":"Google Pixel 7","os_version":"13.0"}]'
       platform: both
     secrets:
