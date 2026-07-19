@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
@@ -17,6 +18,17 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         }
 
         return defaultBenchmarkTimeout
+    }
+
+    private func firstValidJSON(_ candidates: [String?]) -> String? {
+        for candidate in candidates.compactMap({ $0 }) where !candidate.isEmpty {
+            guard let data = candidate.data(using: .utf8),
+                  (try? JSONSerialization.jsonObject(with: data)) != nil else {
+                continue
+            }
+            return candidate
+        }
+        return nil
     }
 
     private func waitForBenchmarkCompletion(
@@ -70,9 +82,10 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         let reportElement = app.staticTexts["benchmarkReportJSON"]
         XCTAssertTrue(reportElement.exists, "Benchmark report JSON element should exist after completion")
 
-        // Prefer the accessibility value; retain the label for older generated apps.
+        // Accessibility value behavior varies across real iOS/Xcode versions.
+        // Accept the first channel that contains valid JSON.
         let reportValue = reportElement.value as? String
-        let jsonString = reportValue.flatMap { $0.isEmpty ? nil : $0 } ?? reportElement.label
+        let jsonString = firstValidJSON([reportValue, reportElement.label]) ?? ""
 
         // Log with markers that mobench fetch can parse from instrumentation logs
         // Using NSLog to ensure it goes to device logs that BrowserStack captures

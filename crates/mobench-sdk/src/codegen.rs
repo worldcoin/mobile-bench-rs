@@ -3092,8 +3092,13 @@ pub fn public_bench() {
             refreshed
         );
         assert!(
-            refreshed.contains("?? reportElement.label"),
-            "refreshed BenchRunnerUITests.swift should retain the accessibility-label fallback, got:\n{}",
+            refreshed.contains("firstValidJSON([reportValue, reportElement.label])"),
+            "refreshed BenchRunnerUITests.swift should fall back across valid accessibility JSON channels, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("JSONSerialization.jsonObject(with: data)"),
+            "refreshed BenchRunnerUITests.swift should reject corrupt accessibility values, got:\n{}",
             refreshed
         );
         assert!(
