@@ -1,6 +1,6 @@
 # Integrations
 
-Updated: 2026-07-17. Current release: `0.1.45`.
+Updated: 2026-07-19. Current release: `0.1.46`.
 
 ## BrowserStack
 
@@ -39,12 +39,13 @@ Explicitly unsupported:
 
 ```toml
 [project]
-ffi_backend = "uniffi" # or "native-c-abi"
+ffi_backend = "uniffi" # or "native-c-abi" / "boltffi"
 ```
 
 - `uniffi`: compatibility backend using generated Kotlin/Swift bindings.
 - `native-c-abi`: direct JSON C ABI backend using
   `mobench_sdk::export_native_c_abi!()`.
+- `boltffi`: generated Kotlin/Swift bindings through BoltFFI.
 
 Both backends emit benchmark JSON for CLI parsing and CI normalization.
 

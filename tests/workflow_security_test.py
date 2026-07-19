@@ -341,6 +341,8 @@ def test_generated_workflow_uses_secure_reusable_boundary() -> None:
         check=True,
     ).stdout
     assert "MOBENCH_TRUSTED_SHA: a785455efe8a43c2689cff0d06fd45480373cdd5" in pinned_workflow
+    assert "rust_toolchain:" in GENERATED_WORKFLOW
+    assert "ffi_backend:" in GENERATED_WORKFLOW
     assert "prepare_script:" in GENERATED_WORKFLOW
     assert "functions_ios:" in GENERATED_WORKFLOW
     assert "functions_android:" in GENERATED_WORKFLOW

@@ -8,6 +8,34 @@ longer integration-oriented release notes and support status.
 
 No user-facing unreleased changes yet.
 
+## v0.1.46 - 2026-07-19
+
+### Added
+
+- Added the reusable-workflow `rust_toolchain` input, defaulting to `stable`,
+  so pinned callers can install every mobile target on their exact Rust
+  toolchain while the trusted control plane remains on its own stable toolchain.
+- Added typed `cargo mobench ci prepare --ffi-backend` selection with explicit
+  CLI values taking precedence over `mobench.toml` and the UniFFI default.
+
+### Fixed
+
+- Propagated the resolved FFI backend through every Android and iOS builder
+  path, including secretless prebuilt preparation, so native C ABI projects
+  generate native runners without invoking `uniffi-bindgen`.
+- Fixed the generated Android native C ABI runner and Espresso test interface
+  so the app and test APKs compile and package together.
+- Resolved UniFFI generator versions from the Cargo workspace containing
+  `crate_path` instead of an arbitrary nested lockfile, and skipped UniFFI
+  generator installation for native C ABI and BoltFFI callers.
+
+### Security
+
+- Preserved the secretless prepare and credentialed prebuilt execution split.
+  Toolchain and lockfile decisions influenced by caller files remain confined
+  to untrusted prepare jobs; credentialed jobs still have no caller checkout or
+  caller-controlled build command.
+
 ## v0.1.45 - 2026-07-17
 
 ### Added

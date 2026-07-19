@@ -2,9 +2,9 @@
 
 Status: current source-of-truth product/API specification.
 
-Current release: `0.1.45`.
+Current release: `0.1.46`.
 
-Last updated: 2026-07-17.
+Last updated: 2026-07-19.
 
 This spec describes the behavior, CLI surface, configuration files, output
 contracts, generated runner backends, and Rust APIs currently provided by
@@ -43,7 +43,7 @@ Workspace package defaults:
 - Edition: Rust 2024.
 - MSRV: Rust 1.85.
 - License: MIT.
-- Current workspace version: `0.1.45`.
+- Current workspace version: `0.1.46`.
 
 ## Benchmark Authoring
 
@@ -507,6 +507,9 @@ These commands form the reusable workflow's privilege boundary.
 `mobench ci prepare --target <android|ios> --source-sha <full-sha> --manifest
 <path>` may resolve the caller project, run fixture generation and hooks,
 compile Rust and generated mobile projects, and package the platform artifacts.
+Its optional typed `--ffi-backend` value overrides `[project].ffi_backend`;
+when neither is present the backend defaults to `uniffi`. The resolved backend
+is applied to every Android and iOS build and packaging path.
 It must not require or consume BrowserStack credentials. Its output is limited
 to explicitly allowed mobile artifacts and a machine-readable manifest
 containing normalized relative paths, artifact roles, file sizes, SHA-256

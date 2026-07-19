@@ -2199,6 +2199,10 @@ mod tests {
         assert!(main_activity.contains("mobench_run_benchmark_json"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(main_activity.contains("bench_spec.json"));
+        assert!(main_activity.contains("logBenchJson(json.toString())"));
+        assert!(main_activity.contains("fun benchmarkTimeoutSecs(): Long"));
+        assert!(main_activity.contains("fun heartbeatIntervalSecs(): Long"));
+        assert!(main_activity.contains("fun emitTimeoutFailureFromTest(): String"));
         assert!(
             !main_activity.contains("uniffi."),
             "native Android runner must not import UniFFI bindings:\n{}",

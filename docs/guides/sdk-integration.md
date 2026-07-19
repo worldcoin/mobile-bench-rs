@@ -1,6 +1,6 @@
 # mobench-sdk Integration Guide
 
-Current release: **0.1.45**.
+Current release: **0.1.46**.
 
 This guide shows how to add `mobench-sdk` to a Rust crate, register
 benchmarks, configure the generated mobile runner backend, and run through the
@@ -12,7 +12,7 @@ Full SDK:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.45"
+mobench-sdk = "0.1.46"
 inventory = "0.3"
 
 [lib]
@@ -23,7 +23,7 @@ Runtime-only benchmark crates can use the narrower registry feature:
 
 ```toml
 [dependencies]
-mobench-sdk = { version = "0.1.45", default-features = false, features = ["registry"] }
+mobench-sdk = { version = "0.1.46", default-features = false, features = ["registry"] }
 inventory = "0.3"
 
 [lib]

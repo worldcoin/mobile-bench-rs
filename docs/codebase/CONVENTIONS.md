@@ -1,6 +1,6 @@
 # Conventions
 
-Updated: 2026-07-17. Current release: `0.1.45`.
+Updated: 2026-07-19. Current release: `0.1.46`.
 
 ## Naming
 
@@ -50,6 +50,8 @@ Device resolution should reuse the shared CLI surface:
 - `--device-tags`
 
 Generated runner backend selection belongs in `[project].ffi_backend`.
+`ci prepare --ffi-backend` is the typed explicit override; precedence is CLI,
+then project config, then the `uniffi` compatibility default.
 
 ## Documentation Conventions
 

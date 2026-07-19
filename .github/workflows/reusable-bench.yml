@@ -156,7 +156,8 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  # This must point to the immutable commit containing the 0.1.45 trusted
+  # This points to the immutable 0.1.45 control-plane implementation; caller
+  # build toolchains remain separate and are selected only in prepare jobs.
   # prepare/run-prebuilt implementation before enabling the workflow.
   MOBENCH_TRUSTED_SHA: a785455efe8a43c2689cff0d06fd45480373cdd5
 
@@ -383,7 +384,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.45 --locked
+            cargo install mobench --version 0.1.46 --locked
           fi
           brew install xcodegen
       - name: Install caller-selected binding generator
@@ -573,7 +574,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.45 --locked
+            cargo install mobench --version 0.1.46 --locked
           fi
       - name: Install caller-selected binding generator
         shell: bash
