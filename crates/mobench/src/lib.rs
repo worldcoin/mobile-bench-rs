@@ -2895,13 +2895,19 @@ fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
     let mut summaries = Vec::new();
     let mut function_values = BTreeMap::new();
     for entry in entries {
+        let timeout_secs = trusted_prebuilt_timeout(
+            entry.completion_timeout_secs,
+            args.fetch_timeout_secs,
+            args.max_completion_timeout_secs,
+        );
         let spec = RunSpec {
             target: manifest.platform,
             function: entry.function.clone(),
             iterations: entry.iterations,
             warmup: entry.warmup,
             devices: args.devices.clone(),
-            ios_completion_timeout_secs: None,
+            ios_completion_timeout_secs: (manifest.platform == MobileTarget::Ios)
+                .then_some(timeout_secs),
             ios_deployment_target: None,
             ios_runner: None,
             android_benchmark_timeout_secs: None,
@@ -2929,11 +2935,6 @@ fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Result<()> {
             MobileTarget::Android => "espresso",
             MobileTarget::Ios => "xcuitest",
         };
-        let timeout_secs = trusted_prebuilt_timeout(
-            entry.completion_timeout_secs,
-            args.fetch_timeout_secs,
-            args.max_completion_timeout_secs,
-        );
         let (results, metrics) = client.wait_and_fetch_all_results_with_poll(
             build_id,
             platform,

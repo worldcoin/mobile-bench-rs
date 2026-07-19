@@ -3046,6 +3046,21 @@ pub fn public_bench() {
             "refreshed BenchRunnerUITests.swift should honor runtime timeout overrides, got:\n{}",
             refreshed
         );
+        assert!(
+            refreshed.contains("waitForBenchmarkCompletion(completedIndicator)"),
+            "refreshed BenchRunnerUITests.swift should use heartbeat polling, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("MOBENCH_HEARTBEAT waiting for benchmark completion"),
+            "refreshed BenchRunnerUITests.swift should emit heartbeat activity, got:\n{}",
+            refreshed
+        );
+        assert!(
+            !refreshed.contains("waitForExistence(timeout: benchmarkTimeout)"),
+            "refreshed BenchRunnerUITests.swift should not use one blocking wait, got:\n{}",
+            refreshed
+        );
 
         fs::remove_dir_all(&temp_dir).ok();
     }
