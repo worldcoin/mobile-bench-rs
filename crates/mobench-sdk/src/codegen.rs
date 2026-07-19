@@ -1977,8 +1977,37 @@ pub fn ensure_ios_project_with_backend_options(
         ffi_backend,
         options,
     )?;
+    sync_ios_mobile_spec(output_dir)?;
     println!("  Generated iOS project at {:?}", output_dir.join("ios"));
     println!("  Default benchmark function: {}", default_function);
+    Ok(())
+}
+
+fn sync_ios_mobile_spec(output_dir: &Path) -> Result<(), BenchError> {
+    let source = output_dir.join("target/mobile-spec/ios/bench_spec.json");
+    if !source.is_file() {
+        return Ok(());
+    }
+    let destination = output_dir.join("ios/BenchRunner/BenchRunner/Resources/bench_spec.json");
+    let parent = destination.parent().ok_or_else(|| {
+        BenchError::Build(format!(
+            "Invalid iOS benchmark spec destination: {}",
+            destination.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        BenchError::Build(format!(
+            "Failed to create iOS benchmark resource directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    fs::copy(&source, &destination).map_err(|error| {
+        BenchError::Build(format!(
+            "Failed to copy iOS benchmark spec from {} to {}: {error}",
+            source.display(),
+            destination.display()
+        ))
+    })?;
     Ok(())
 }
 
@@ -2808,6 +2837,36 @@ pub fn public_bench() {
         assert_eq!(
             fs::read_to_string(resources_dir.join("nested/custom.txt")).unwrap(),
             "keep me"
+        );
+
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_ensure_ios_project_copies_persisted_mobile_spec_into_resources() {
+        let temp_dir = env::temp_dir().join("mobench-sdk-ios-persisted-spec-test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        let source = temp_dir.join("target/mobile-spec/ios/bench_spec.json");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        let expected = r#"{"function":"bench_mobile::bench_prove","iterations":1,"warmup":0}"#;
+        fs::write(&source, expected).unwrap();
+
+        ensure_ios_project_with_backend_options(
+            &temp_dir,
+            "bench-mobile",
+            None,
+            None,
+            crate::FfiBackend::NativeCAbi,
+            IosProjectOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(
+                temp_dir.join("ios/BenchRunner/BenchRunner/Resources/bench_spec.json")
+            )
+            .unwrap(),
+            expected
         );
 
         fs::remove_dir_all(&temp_dir).ok();
