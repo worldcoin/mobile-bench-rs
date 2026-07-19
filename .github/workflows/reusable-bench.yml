@@ -156,10 +156,9 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  # This points to the immutable 0.1.45 control-plane implementation; caller
+  # This points to the immutable 0.1.46 control-plane implementation; caller
   # build toolchains remain separate and are selected only in prepare jobs.
-  # prepare/run-prebuilt implementation before enabling the workflow.
-  MOBENCH_TRUSTED_SHA: a785455efe8a43c2689cff0d06fd45480373cdd5
+  MOBENCH_TRUSTED_SHA: b7e7203c5ea50f1b109c94b5c04f2a43b6111977
 
 jobs:
   validate-request:
