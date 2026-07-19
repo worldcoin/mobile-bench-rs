@@ -5,6 +5,7 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
     /// Maximum time to wait for benchmark completion.
     private let defaultBenchmarkTimeout: TimeInterval = {{IOS_BENCHMARK_TIMEOUT_SECS}}.0
     private let heartbeatInterval: TimeInterval = 30.0
+    private let remoteInteractionInterval: TimeInterval = 300.0
 
     private var benchmarkTimeout: TimeInterval {
         if let configuredTimeout =
@@ -19,9 +20,11 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
     }
 
     private func waitForBenchmarkCompletion(
-        _ completedIndicator: XCUIElement
+        _ completedIndicator: XCUIElement,
+        app: XCUIApplication
     ) -> Bool {
         let deadline = Date().addingTimeInterval(benchmarkTimeout)
+        var nextRemoteInteraction = Date().addingTimeInterval(remoteInteractionInterval)
 
         while true {
             let remaining = deadline.timeIntervalSinceNow
@@ -36,6 +39,16 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
 
             // Keep the remote XCUITest session active during long benchmarks.
             NSLog("MOBENCH_HEARTBEAT waiting for benchmark completion")
+            if Date() >= nextRemoteInteraction {
+                let heartbeatControl = app.buttons["benchmarkHeartbeat"]
+                if heartbeatControl.waitForExistence(timeout: 5.0) && heartbeatControl.isHittable {
+                    heartbeatControl.tap()
+                } else {
+                    app.activate()
+                }
+                NSLog("MOBENCH_HEARTBEAT sent app interaction")
+                nextRemoteInteraction = Date().addingTimeInterval(remoteInteractionInterval)
+            }
         }
     }
 
@@ -46,7 +59,7 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         // Wait for the benchmark to actually COMPLETE, not just start
         // The app sets a "benchmarkCompleted" element when done
         let completedIndicator = app.staticTexts["benchmarkCompleted"]
-        let completed = waitForBenchmarkCompletion(completedIndicator)
+        let completed = waitForBenchmarkCompletion(completedIndicator, app: app)
         XCTAssertTrue(completed, "Benchmark should complete within \(benchmarkTimeout) seconds")
 
         // Wait 5 seconds so BrowserStack video captures the results

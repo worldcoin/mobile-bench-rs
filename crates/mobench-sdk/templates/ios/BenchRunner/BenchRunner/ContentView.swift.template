@@ -81,6 +81,17 @@ struct ContentView: View {
                         .opacity(0)
                 }
 
+                // BrowserStack requires an app interaction at least every 15 minutes.
+                Button(action: {
+                    NSLog("MOBENCH_HEARTBEAT app interaction")
+                }) {
+                    Text("heartbeat")
+                        .font(.system(size: 1))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityIdentifier("benchmarkHeartbeat")
+                .opacity(0.01)
+
                 // JSON report element - exposes the full payload to XCUITest
                 Text(reportJSON)
                     .accessibilityIdentifier("benchmarkReportJSON")

@@ -4683,7 +4683,6 @@ fn trigger_browserstack_xcuitest(
         &spec.devices,
         &app_upload.app_url,
         &test_upload.test_suite_url,
-        spec.ios_completion_timeout_secs,
     )?;
 
     // Print dashboard link early so users can monitor progress

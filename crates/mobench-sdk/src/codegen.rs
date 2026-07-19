@@ -3028,6 +3028,11 @@ pub fn public_bench() {
             "refreshed ContentView.swift should keep the report element nearly transparent, got:\n{}",
             refreshed
         );
+        assert!(
+            refreshed.contains(".accessibilityIdentifier(\"benchmarkHeartbeat\")"),
+            "refreshed ContentView.swift should expose a remote-session heartbeat control, got:\n{}",
+            refreshed
+        );
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -3067,13 +3072,18 @@ pub fn public_bench() {
             refreshed
         );
         assert!(
-            refreshed.contains("waitForBenchmarkCompletion(completedIndicator)"),
+            refreshed.contains("waitForBenchmarkCompletion(completedIndicator, app: app)"),
             "refreshed BenchRunnerUITests.swift should use heartbeat polling, got:\n{}",
             refreshed
         );
         assert!(
             refreshed.contains("MOBENCH_HEARTBEAT waiting for benchmark completion"),
             "refreshed BenchRunnerUITests.swift should emit heartbeat activity, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("heartbeatControl.tap()"),
+            "refreshed BenchRunnerUITests.swift should keep remote sessions active with app interaction, got:\n{}",
             refreshed
         );
         assert!(
