@@ -1,6 +1,6 @@
 # Reusable Workflow Security
 
-Current secure workflow release: **0.1.45** (`0.1.44` remains immutable).
+Current secure workflow release: **0.1.46** (older releases remain immutable).
 
 The reusable BrowserStack workflow is secure by default for pull requests,
 including fork pull requests. Its core invariant is:
@@ -78,6 +78,7 @@ Prepare uses:
 ```bash
 cargo mobench ci prepare \
   --target android \
+  --ffi-backend native-c-abi \
   --source-sha "$PR_HEAD_SHA" \
   --output-dir target/mobench/prebuilt/android \
   --manifest target/mobench/prebuilt/android/manifest.json
@@ -91,6 +92,18 @@ arbitrary glob, build cache, or executable helper for later runner execution.
 Caches used by pull-request preparation are either disabled or scoped so they
 cannot become a trusted build input. Trusted jobs do not restore build outputs
 created by untrusted revisions.
+
+Callers may set `rust_toolchain` to the exact channel used for mobile builds,
+for example `nightly-2026-03-04`; it defaults to `stable`. The Android and iOS
+targets are installed for that toolchain only in the secretless prepare jobs.
+The trusted `cargo-mobench` control plane remains compiled separately with its
+own pinned `stable` toolchain and never reads caller toolchain files.
+
+The optional `ffi_backend` input is validated and passed directly to
+`ci prepare` as `--ffi-backend`; the workflow never rewrites `mobench.toml`.
+If omitted, project configuration and then Mobench's documented default apply.
+UniFFI generator discovery uses the Cargo workspace containing `crate_path`;
+native-C-ABI callers skip generator installation entirely.
 
 ### Generic preparation hook
 
@@ -197,7 +210,8 @@ the pull request or executes a file from those artifacts.
 
 ## Caller Migration
 
-Update the reusable workflow reference to the immutable commit for the `v0.1.45`
+Update the reusable workflow reference to immutable commit
+`1ac54adaf2bd97c6ca303705e1e0471257716f48` for the `v0.1.46`
 release and pass secrets explicitly:
 
 ```yaml
@@ -209,7 +223,7 @@ permissions:
 
 jobs:
   mobench:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@3dc3d5be6add73a1b2f6c3edefb862fd485356c2
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@1ac54adaf2bd97c6ca303705e1e0471257716f48
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
@@ -217,6 +231,8 @@ jobs:
       functions: '["benchmarks::critical_path"]'
       functions_ios: '["benchmarks::ios_critical_path"]'
       prepare_script: .github/scripts/prepare-mobench.sh
+      rust_toolchain: nightly-2026-03-04
+      ffi_backend: native-c-abi
       android_devices: '[{"device":"Google Pixel 7","os_version":"13.0"}]'
       platform: both
     secrets:

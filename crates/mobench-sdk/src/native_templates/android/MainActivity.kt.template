@@ -24,9 +24,13 @@ import org.json.JSONObject
 private const val DEFAULT_FUNCTION = "{{DEFAULT_FUNCTION}}"
 private const val DEFAULT_ITERATIONS = 20u
 private const val DEFAULT_WARMUP = 3u
+private const val DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS = {{ANDROID_BENCHMARK_TIMEOUT_SECS}}L
+private const val DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS = {{ANDROID_HEARTBEAT_INTERVAL_SECS}}L
 private const val FUNCTION_EXTRA = "bench_function"
 private const val ITERATIONS_EXTRA = "bench_iterations"
 private const val WARMUP_EXTRA = "bench_warmup"
+private const val TIMEOUT_EXTRA = "bench_timeout_secs"
+private const val HEARTBEAT_EXTRA = "bench_heartbeat_interval_secs"
 private const val SPEC_ASSET = "bench_spec.json"
 private const val RUN_BENCHMARK_ACTION = "{{PACKAGE_NAME}}.RUN_BENCHMARK"
 private const val RESULT_RECEIVER_EXTRA = "bench_result_receiver"
@@ -43,6 +47,9 @@ private object MobenchResultCode {
 
 class MainActivity : AppCompatActivity() {
     @Volatile private var benchmarkComplete = false
+    @Volatile private var benchmarkFailed = false
+    @Volatile private var failureJson: String? = null
+    private lateinit var params: BenchParams
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,7 +58,7 @@ class MainActivity : AppCompatActivity() {
         val resultText = findViewById<TextView>(R.id.result_text)
         resultText?.text = "Running benchmark..."
 
-        val params = resolveBenchParams()
+        params = resolveBenchParams()
         val resultReceiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
@@ -63,6 +70,12 @@ class MainActivity : AppCompatActivity() {
                 if (resultCode == MobenchResultCode.SUCCESS) {
                     android.util.Log.i("BenchRunner", "Benchmark worker completed")
                 } else {
+                    benchmarkFailed = true
+                    failureJson = JSONObject()
+                        .put("schema_version", 1)
+                        .put("kind", "benchmark_error")
+                        .put("message", display)
+                        .toString()
                     android.util.Log.e("BenchRunner", display)
                 }
             }
@@ -74,6 +87,8 @@ class MainActivity : AppCompatActivity() {
                 putExtra(FUNCTION_EXTRA, params.function)
                 putExtra(ITERATIONS_EXTRA, params.iterations.toInt())
                 putExtra(WARMUP_EXTRA, params.warmup.toInt())
+                putExtra(TIMEOUT_EXTRA, params.timeoutSecs)
+                putExtra(HEARTBEAT_EXTRA, params.heartbeatIntervalSecs)
                 putExtra(RESULT_RECEIVER_EXTRA, resultReceiver)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -84,15 +99,51 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             android.util.Log.e("BenchRunner", "Failed to run benchmark worker", e)
             resultText?.text = "Failed to run benchmark worker: ${e.message}"
+            benchmarkFailed = true
+            failureJson = JSONObject()
+                .put("schema_version", 1)
+                .put("kind", "exception")
+                .put("message", "Failed to run benchmark worker: ${e.message}")
+                .toString()
             benchmarkComplete = true
         }
     }
 
     fun isBenchmarkComplete(): Boolean = benchmarkComplete
 
+    fun isBenchmarkFailed(): Boolean = benchmarkFailed
+
+    fun getBenchmarkFailureJson(): String? = failureJson
+
+    fun benchmarkTimeoutSecs(): Long = params.timeoutSecs
+
+    fun heartbeatIntervalSecs(): Long = params.heartbeatIntervalSecs
+
+    fun checkWorkerExit(): String? = failureJson
+
+    fun emitTimeoutFailureFromTest(): String {
+        if (failureJson == null) {
+            failureJson = JSONObject()
+                .put("schema_version", 1)
+                .put("kind", "timeout")
+                .put("message", "Timed out waiting ${params.timeoutSecs}s for benchmark completion")
+                .toString()
+            benchmarkFailed = true
+            benchmarkComplete = true
+            android.util.Log.e("BenchRunner", "BENCH_FAILURE ${failureJson}")
+        }
+        return failureJson ?: "{}"
+    }
+
     private fun resolveBenchParams(): BenchParams {
         val assetParams = loadBenchParamsFromAssets()
-        val defaults = assetParams ?: BenchParams(DEFAULT_FUNCTION, DEFAULT_ITERATIONS, DEFAULT_WARMUP)
+        val defaults = assetParams ?: BenchParams(
+            DEFAULT_FUNCTION,
+            DEFAULT_ITERATIONS,
+            DEFAULT_WARMUP,
+            DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS,
+            DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS,
+        )
 
         val intentFunction = intent?.getStringExtra(FUNCTION_EXTRA)?.takeUnless { it.isBlank() }
         val intentIterations = intent?.let {
@@ -103,12 +154,18 @@ class MainActivity : AppCompatActivity() {
             val value = it.getIntExtra(WARMUP_EXTRA, -1)
             if (value >= 0) value.toUInt() else null
         }
+        val timeoutSecs = intent?.getLongExtra(TIMEOUT_EXTRA, defaults.timeoutSecs)
+            ?: defaults.timeoutSecs
+        val heartbeatIntervalSecs = intent?.getLongExtra(
+            HEARTBEAT_EXTRA,
+            defaults.heartbeatIntervalSecs,
+        ) ?: defaults.heartbeatIntervalSecs
 
         val fn = intentFunction ?: defaults.function
         val iterations = intentIterations ?: defaults.iterations
         val warmup = intentWarmup ?: defaults.warmup
         android.util.Log.i("BenchRunner", "Resolved params: function=$fn, iterations=$iterations, warmup=$warmup")
-        return BenchParams(fn, iterations, warmup)
+        return BenchParams(fn, iterations, warmup, timeoutSecs, heartbeatIntervalSecs)
     }
 
     private fun loadBenchParamsFromAssets(): BenchParams? {
@@ -123,7 +180,13 @@ class MainActivity : AppCompatActivity() {
                 val iterations = json.optInt("iterations", DEFAULT_ITERATIONS.toInt()).toUInt()
                 val warmup = json.optInt("warmup", DEFAULT_WARMUP.toInt()).toUInt()
                 android.util.Log.i("BenchRunner", "Loaded config from bench_spec.json: function=$function, iterations=$iterations, warmup=$warmup")
-                BenchParams(function, iterations, warmup)
+                BenchParams(
+                    function,
+                    iterations,
+                    warmup,
+                    DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS,
+                    DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS,
+                )
             }
         } catch (e: java.io.FileNotFoundException) {
             android.util.Log.d("BenchRunner", "No bench_spec.json in assets, will use intent extras or defaults")
@@ -149,6 +212,11 @@ class BenchmarkWorkerService : Service() {
             function = intent.getStringExtra(FUNCTION_EXTRA)?.takeUnless { it.isBlank() } ?: DEFAULT_FUNCTION,
             iterations = intent.getIntExtra(ITERATIONS_EXTRA, DEFAULT_ITERATIONS.toInt()).toUInt(),
             warmup = intent.getIntExtra(WARMUP_EXTRA, DEFAULT_WARMUP.toInt()).toUInt(),
+            timeoutSecs = intent.getLongExtra(TIMEOUT_EXTRA, DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS),
+            heartbeatIntervalSecs = intent.getLongExtra(
+                HEARTBEAT_EXTRA,
+                DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS,
+            ),
         )
 
         startBenchmarkForeground()
@@ -228,7 +296,7 @@ class BenchmarkWorkerService : Service() {
                 runProcessPeakMemoryKb = processMemorySampler.stop()
             }
             val json = buildNativeBenchReportJson(rawReport, runProcessPeakMemoryKb)
-            logBenchJson(json)
+            logBenchJson(json.toString())
             formatNativeBenchReport(json)
         } catch (e: Exception) {
             android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
@@ -262,6 +330,8 @@ private data class BenchParams(
     val function: String,
     val iterations: UInt,
     val warmup: UInt,
+    val timeoutSecs: Long,
+    val heartbeatIntervalSecs: Long,
 )
 
 private data class WorkerBenchmarkResult(

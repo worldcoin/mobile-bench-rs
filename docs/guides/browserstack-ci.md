@@ -1,6 +1,6 @@
 # BrowserStack CI Guide
 
-Current release: **0.1.45**.
+Current release: **0.1.46**.
 
 This guide covers BrowserStack benchmark execution, deterministic device
 resolution, CI contract outputs, artifact fetching, PR reporting, and baseline
@@ -209,7 +209,8 @@ cargo mobench ci run \
 The local action example below is suitable for trusted revisions or host-only
 runs. Do not adapt it into a credentialed fork-PR job that checks out and builds
 the pull request. Fork-PR BrowserStack callers should use
-`.github/workflows/reusable-bench.yml` at the immutable `v0.1.45` commit and pass
+`.github/workflows/reusable-bench.yml` at immutable commit
+`1ac54adaf2bd97c6ca303705e1e0471257716f48` from `v0.1.46` and pass
 BrowserStack secrets explicitly; the reusable workflow performs the untrusted
 prepare and trusted prebuilt stages automatically.
 

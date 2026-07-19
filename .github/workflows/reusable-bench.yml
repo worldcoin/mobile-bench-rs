@@ -80,12 +80,17 @@ on:
         description: "Comma-separated iOS Rust targets"
         required: false
         type: string
-        default: aarch64-apple-ios,aarch64-apple-ios-sim
+        default: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
       rust_targets_android:
         description: "Comma-separated Android Rust targets"
         required: false
         type: string
         default: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      rust_toolchain:
+        description: "Rust toolchain used for caller builds (for example stable or nightly-2026-03-04)"
+        required: false
+        type: string
+        default: stable
       build_release:
         description: "Build in release mode"
         required: false
@@ -102,7 +107,7 @@ on:
         type: string
         default: ""
       ffi_backend:
-        description: "mobench FFI backend to configure in caller/mobench.toml"
+        description: "Optional ci prepare FFI backend override: uniffi, native-c-abi, or boltffi"
         required: false
         type: string
         default: ""
@@ -151,9 +156,9 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  # This must point to the immutable commit containing the 0.1.45 trusted
-  # prepare/run-prebuilt implementation before enabling the workflow.
-  MOBENCH_TRUSTED_SHA: a785455efe8a43c2689cff0d06fd45480373cdd5
+  # This points to the immutable 0.1.46 control-plane implementation; caller
+  # build toolchains remain separate and are selected only in prepare jobs.
+  MOBENCH_TRUSTED_SHA: b7e7203c5ea50f1b109c94b5c04f2a43b6111977
 
 jobs:
   validate-request:
@@ -169,6 +174,8 @@ jobs:
       functions_android: ${{ steps.validate.outputs.functions_android }}
       ios_devices: ${{ steps.validate.outputs.ios_devices }}
       android_devices: ${{ steps.validate.outputs.android_devices }}
+      ffi_backend: ${{ steps.validate.outputs.ffi_backend }}
+      rust_toolchain: ${{ steps.validate.outputs.rust_toolchain }}
     steps:
       - name: Validate full SHA and current PR head
         id: validate
@@ -184,6 +191,8 @@ jobs:
           FUNCTIONS_ANDROID: ${{ inputs.functions_android }}
           IOS_DEVICES: ${{ inputs.ios_devices }}
           ANDROID_DEVICES: ${{ inputs.android_devices }}
+          FFI_BACKEND: ${{ inputs.ffi_backend }}
+          RUST_TOOLCHAIN: ${{ inputs.rust_toolchain }}
         run: |
           set -euo pipefail
           sha="$REQUESTED_SHA"
@@ -217,7 +226,17 @@ jobs:
             echo "::error::Invalid PR head repository"
             exit 1
           fi
-          printf 'head_sha=%s\nhead_repo=%s\n' "$sha" "$head_repo" >> "$GITHUB_OUTPUT"
+          case "$FFI_BACKEND" in
+            ""|uniffi|native-c-abi|boltffi) ;;
+            bolt-ffi) FFI_BACKEND=boltffi ;;
+            *) echo "::error::ffi_backend must be uniffi, native-c-abi, or boltffi"; exit 1 ;;
+          esac
+          if [[ ! "$RUST_TOOLCHAIN" =~ ^[A-Za-z0-9._+-]{1,100}$ ]]; then
+            echo "::error::rust_toolchain contains unsupported characters"
+            exit 1
+          fi
+          printf 'head_sha=%s\nhead_repo=%s\nffi_backend=%s\nrust_toolchain=%s\n' \
+            "$sha" "$head_repo" "$FFI_BACKEND" "$RUST_TOOLCHAIN" >> "$GITHUB_OUTPUT"
           python3 - <<'PY'
           import json, os, re
 
@@ -301,6 +320,8 @@ jobs:
           path: trusted-mobench-src
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
       - name: Build trusted cargo-mobench
         working-directory: trusted-mobench-src
         shell: bash
@@ -344,10 +365,8 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
+          toolchain: ${{ needs.validate-request.outputs.rust_toolchain }}
           targets: ${{ inputs.rust_targets_ios }}
-      - name: Ensure required iOS Rust targets
-        shell: bash
-        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
       - name: Install untrusted build tooling
         shell: bash
         env:
@@ -364,55 +383,66 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.45 --locked
+            cargo install mobench --version 0.1.46 --locked
           fi
           brew install xcodegen
       - name: Install caller-selected binding generator
         shell: bash
         env:
-          FFI_BACKEND: ${{ inputs.ffi_backend }}
+          FFI_BACKEND: ${{ needs.validate-request.outputs.ffi_backend }}
+          CRATE_PATH: ${{ inputs.crate_path }}
         run: |
           set -euo pipefail
-          if [ "$FFI_BACKEND" = boltffi ] || [ "$FFI_BACKEND" = bolt-ffi ]; then
+          manifest="$(python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          root = Path('caller').resolve(strict=True)
+          candidate = (root / os.environ['CRATE_PATH']).resolve(strict=True)
+          candidate.relative_to(root)
+          manifest = candidate if candidate.name == 'Cargo.toml' else candidate / 'Cargo.toml'
+          if not manifest.is_file():
+              raise SystemExit('crate_path does not identify a Cargo manifest')
+          print(manifest)
+          PY
+          )"
+          configured_backend="$(MANIFEST="$manifest" python3 - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+
+          root = Path('caller').resolve(strict=True)
+          current = Path(os.environ['MANIFEST']).parent
+          while True:
+              config = current / 'mobench.toml'
+              if config.is_file():
+                  value = tomllib.loads(config.read_text()).get('project', {}).get('ffi_backend', '')
+                  print(value)
+                  break
+              if current == root:
+                  print('')
+                  break
+              current = current.parent
+          PY
+          )"
+          backend="${FFI_BACKEND:-${configured_backend:-uniffi}}"
+          case "$backend" in
+            native-c-abi) exit 0 ;;
+            boltffi|bolt-ffi)
             cargo install boltffi_cli --version 0.25.2 --locked
-          fi
-          lockfile="$(find caller -name Cargo.lock -print -quit)"
-          [ -n "$lockfile" ] || exit 0
+            exit 0
+            ;;
+            uniffi) ;;
+            *) echo "::error::Unsupported configured FFI backend: $backend"; exit 2 ;;
+          esac
+          workspace_root="$(cargo metadata --manifest-path "$manifest" --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["workspace_root"])')"
+          lockfile="$workspace_root/Cargo.lock"
+          [ -f "$lockfile" ] || exit 0
           version="$(awk '$0 == "[[package]]" { p=0 } $0 == "name = \"uniffi_bindgen\"" { p=1; next } p && /^version = / { gsub(/^version = \"|\"$/, "", $0); print; exit }' "$lockfile")"
           if [ -n "$version" ]; then
             cargo install --git https://github.com/mozilla/uniffi-rs --tag "v${version}" \
               uniffi-bindgen-cli --bin uniffi-bindgen
           fi
-      - name: Configure requested FFI backend
-        if: inputs.ffi_backend != ''
-        working-directory: caller
-        shell: bash
-        env:
-          FFI_BACKEND: ${{ inputs.ffi_backend }}
-        run: |
-          set -euo pipefail
-          case "$FFI_BACKEND" in uniffi|native-c-abi|boltffi|bolt-ffi) ;; *) exit 2;; esac
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          backend = os.environ['FFI_BACKEND']
-          path = Path('mobench.toml')
-          lines = path.read_text().splitlines() if path.exists() else []
-          out, in_project, saw, wrote = [], False, False, False
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith('[') and stripped.endswith(']'):
-                  if in_project and not wrote: out.append(f'ffi_backend = "{backend}"'); wrote = True
-                  in_project = stripped == '[project]'; saw = saw or in_project
-              if in_project and stripped.startswith('ffi_backend'):
-                  out.append(f'ffi_backend = "{backend}"'); wrote = True
-              else: out.append(line)
-          if saw and in_project and not wrote: out.append(f'ffi_backend = "{backend}"')
-          if not saw:
-              if out and out[-1] != '': out.append('')
-              out.extend(['[project]', f'ffi_backend = "{backend}"'])
-          path.write_text('\n'.join(out) + '\n')
-          PY
       - name: Run caller preparation hook (untrusted)
         if: inputs.prepare_script != ''
         working-directory: caller
@@ -457,13 +487,16 @@ jobs:
           CRATE_PATH: ${{ inputs.crate_path }}
           HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
           BUILD_RELEASE: ${{ inputs.build_release }}
+          FFI_BACKEND: ${{ needs.validate-request.outputs.ffi_backend }}
         run: |
           set -euo pipefail
           release_args=()
           if [ "$BUILD_RELEASE" = true ]; then release_args+=(--release); fi
+          backend_args=()
+          if [ -n "$FFI_BACKEND" ]; then backend_args+=(--ffi-backend "$FFI_BACKEND"); fi
           cargo-mobench ci prepare --target ios \
             --functions "$FUNCTIONS_JSON" --iterations "$ITERATIONS" --warmup "$WARMUP" \
-            --crate-path "$CRATE_PATH" "${release_args[@]}" --source-sha "$HEAD_SHA" \
+            --crate-path "$CRATE_PATH" "${backend_args[@]}" "${release_args[@]}" --source-sha "$HEAD_SHA" \
             --output-dir target/mobench/prebuilt/ios \
             --manifest target/mobench/prebuilt/ios/manifest.json
       - name: Upload explicitly enumerated iOS packages
@@ -508,6 +541,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
+          toolchain: ${{ needs.validate-request.outputs.rust_toolchain }}
           targets: ${{ inputs.rust_targets_android }}
       - name: Setup Android SDK/NDK
         uses: android-actions/setup-android@651bceb6f9ca583f16b8d75b62c36ded2ae6fc9c # v4.0.0
@@ -539,54 +573,65 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.45 --locked
+            cargo install mobench --version 0.1.46 --locked
           fi
       - name: Install caller-selected binding generator
         shell: bash
         env:
-          FFI_BACKEND: ${{ inputs.ffi_backend }}
+          FFI_BACKEND: ${{ needs.validate-request.outputs.ffi_backend }}
+          CRATE_PATH: ${{ inputs.crate_path }}
         run: |
           set -euo pipefail
-          if [ "$FFI_BACKEND" = boltffi ] || [ "$FFI_BACKEND" = bolt-ffi ]; then
+          manifest="$(python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          root = Path('caller').resolve(strict=True)
+          candidate = (root / os.environ['CRATE_PATH']).resolve(strict=True)
+          candidate.relative_to(root)
+          manifest = candidate if candidate.name == 'Cargo.toml' else candidate / 'Cargo.toml'
+          if not manifest.is_file():
+              raise SystemExit('crate_path does not identify a Cargo manifest')
+          print(manifest)
+          PY
+          )"
+          configured_backend="$(MANIFEST="$manifest" python3 - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+
+          root = Path('caller').resolve(strict=True)
+          current = Path(os.environ['MANIFEST']).parent
+          while True:
+              config = current / 'mobench.toml'
+              if config.is_file():
+                  value = tomllib.loads(config.read_text()).get('project', {}).get('ffi_backend', '')
+                  print(value)
+                  break
+              if current == root:
+                  print('')
+                  break
+              current = current.parent
+          PY
+          )"
+          backend="${FFI_BACKEND:-${configured_backend:-uniffi}}"
+          case "$backend" in
+            native-c-abi) exit 0 ;;
+            boltffi|bolt-ffi)
             cargo install boltffi_cli --version 0.25.2 --locked
-          fi
-          lockfile="$(find caller -name Cargo.lock -print -quit)"
-          [ -n "$lockfile" ] || exit 0
+            exit 0
+            ;;
+            uniffi) ;;
+            *) echo "::error::Unsupported configured FFI backend: $backend"; exit 2 ;;
+          esac
+          workspace_root="$(cargo metadata --manifest-path "$manifest" --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["workspace_root"])')"
+          lockfile="$workspace_root/Cargo.lock"
+          [ -f "$lockfile" ] || exit 0
           version="$(awk '$0 == "[[package]]" { p=0 } $0 == "name = \"uniffi_bindgen\"" { p=1; next } p && /^version = / { gsub(/^version = \"|\"$/, "", $0); print; exit }' "$lockfile")"
           if [ -n "$version" ]; then
             cargo install --git https://github.com/mozilla/uniffi-rs --tag "v${version}" \
               uniffi-bindgen-cli --bin uniffi-bindgen
           fi
-      - name: Configure requested FFI backend
-        if: inputs.ffi_backend != ''
-        working-directory: caller
-        shell: bash
-        env:
-          FFI_BACKEND: ${{ inputs.ffi_backend }}
-        run: |
-          set -euo pipefail
-          case "$FFI_BACKEND" in uniffi|native-c-abi|boltffi|bolt-ffi) ;; *) exit 2;; esac
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          backend = os.environ['FFI_BACKEND']
-          path = Path('mobench.toml')
-          lines = path.read_text().splitlines() if path.exists() else []
-          out, in_project, saw, wrote = [], False, False, False
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith('[') and stripped.endswith(']'):
-                  if in_project and not wrote: out.append(f'ffi_backend = "{backend}"'); wrote = True
-                  in_project = stripped == '[project]'; saw = saw or in_project
-              if in_project and stripped.startswith('ffi_backend'):
-                  out.append(f'ffi_backend = "{backend}"'); wrote = True
-              else: out.append(line)
-          if saw and in_project and not wrote: out.append(f'ffi_backend = "{backend}"')
-          if not saw:
-              if out and out[-1] != '': out.append('')
-              out.extend(['[project]', f'ffi_backend = "{backend}"'])
-          path.write_text('\n'.join(out) + '\n')
-          PY
       - name: Run caller preparation hook (untrusted)
         if: inputs.prepare_script != ''
         working-directory: caller
@@ -631,13 +676,16 @@ jobs:
           CRATE_PATH: ${{ inputs.crate_path }}
           HEAD_SHA: ${{ needs.validate-request.outputs.head_sha }}
           BUILD_RELEASE: ${{ inputs.build_release }}
+          FFI_BACKEND: ${{ needs.validate-request.outputs.ffi_backend }}
         run: |
           set -euo pipefail
           release_args=()
           if [ "$BUILD_RELEASE" = true ]; then release_args+=(--release); fi
+          backend_args=()
+          if [ -n "$FFI_BACKEND" ]; then backend_args+=(--ffi-backend "$FFI_BACKEND"); fi
           cargo-mobench ci prepare --target android \
             --functions "$FUNCTIONS_JSON" --iterations "$ITERATIONS" --warmup "$WARMUP" \
-            --crate-path "$CRATE_PATH" "${release_args[@]}" --source-sha "$HEAD_SHA" \
+            --crate-path "$CRATE_PATH" "${backend_args[@]}" "${release_args[@]}" --source-sha "$HEAD_SHA" \
             --output-dir target/mobench/prebuilt/android \
             --manifest target/mobench/prebuilt/android/manifest.json
       - name: Upload explicitly enumerated Android packages

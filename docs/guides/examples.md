@@ -1,6 +1,6 @@
 # Examples
 
-Current release: **0.1.45**.
+Current release: **0.1.46**.
 
 Use these examples as copy-paste starting points for benchmark crates and CI
 invocations.

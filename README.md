@@ -9,9 +9,8 @@ benchmarks on Android and iOS, locally or on BrowserStack, with a
 library-first SDK, a `cargo mobench` CLI, config-first project resolution,
 stable CI output contracts, and local native profiling artifacts.
 
-Current release: **v0.1.45**. It adds secure caller preparation,
-platform-specific functions, structured multi-device BrowserStack runs, and
-complete-matrix enforcement without weakening the credential boundary
+Current release: **v0.1.46**. It fixes pinned-toolchain mobile target setup and
+native-C-ABI prebuilt preparation without weakening the credential boundary
 introduced in v0.1.44.
 
 ## What It Provides

@@ -146,8 +146,8 @@ pub(crate) use cli::PlotFixture;
 pub(crate) use cli::{
     CheckOutputFormat, CiCheckRunArgs, CiCommand, CiMergeSplitRunsArgs, CiPrepareArgs, CiRunArgs,
     CiRunPrebuiltArgs, CiSummarizeArgs, Cli, Command, ConfigCommand, ContractErrorCategory,
-    DevicePlatform, DevicesCommand, FixtureCommand, IosRunnerArg, IosSigningMethodArg,
-    ProfileCommand, ReportCommand, SdkTarget, SummarizeFormat, SummaryFormat,
+    DevicePlatform, DevicesCommand, FfiBackendArg, FixtureCommand, IosRunnerArg,
+    IosSigningMethodArg, ProfileCommand, ReportCommand, SdkTarget, SummarizeFormat, SummaryFormat,
 };
 #[cfg(test)]
 pub(crate) use doctor::{
@@ -347,6 +347,7 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) crate_dir: PathBuf,
     pub(crate) crate_name: String,
     pub(crate) library_name: String,
+    pub(crate) ffi_backend: mobench_sdk::FfiBackend,
     pub(crate) android_abis: Option<Vec<String>>,
     pub(crate) ios_completion_timeout_secs: Option<u64>,
     pub(crate) ios_deployment_target: String,
@@ -1480,6 +1481,23 @@ fn toml_u64(value: &toml::Value, path: &[&str]) -> Option<u64> {
         .and_then(|value| u64::try_from(value).ok())
 }
 
+fn configured_ffi_backend(value: Option<&toml::Value>) -> Result<mobench_sdk::FfiBackend> {
+    let Some(value) = value else {
+        return Ok(mobench_sdk::FfiBackend::default());
+    };
+    let Some(value) = value.as_str() else {
+        bail!("[project].ffi_backend must be a string");
+    };
+    match value {
+        "uniffi" => Ok(mobench_sdk::FfiBackend::Uniffi),
+        "native-c-abi" => Ok(mobench_sdk::FfiBackend::NativeCAbi),
+        "boltffi" | "bolt-ffi" => Ok(mobench_sdk::FfiBackend::BoltFfi),
+        _ => bail!(
+            "unsupported [project].ffi_backend '{value}'; expected uniffi, native-c-abi, or boltffi"
+        ),
+    }
+}
+
 fn resolve_project_root_for_layout(
     start_dir: &Path,
     explicit_project_root: Option<PathBuf>,
@@ -1639,6 +1657,11 @@ pub(crate) fn resolve_project_layout(
         .as_ref()
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
+    let ffi_backend = configured_ffi_backend(
+        raw_config
+            .as_ref()
+            .and_then(|cfg| toml_path(cfg, &["project", "ffi_backend"])),
+    )?;
     let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
     let ios_completion_timeout_secs = config
         .as_ref()
@@ -1676,6 +1699,7 @@ pub(crate) fn resolve_project_layout(
         crate_dir,
         crate_name,
         library_name,
+        ffi_backend,
         android_abis,
         ios_completion_timeout_secs,
         ios_deployment_target,
@@ -2421,12 +2445,13 @@ fn cmd_ci_prepare(args: CiPrepareArgs, dry_run: bool) -> Result<()> {
             .with_context(|| format!("clearing {}", args.output_dir.display()))?;
     }
     fs::create_dir_all(&args.output_dir)?;
-    let layout = resolve_project_layout(ProjectLayoutOptions {
+    let mut layout = resolve_project_layout(ProjectLayoutOptions {
         start_dir: None,
         project_root: None,
         crate_path: args.crate_path.as_deref(),
         config_path: None,
     })?;
+    layout.ffi_backend = effective_ci_prepare_ffi_backend(layout.ffi_backend, args.ffi_backend);
     load_dotenv_for_layout(&layout);
 
     let mut entries = Vec::with_capacity(functions.len());
@@ -2528,6 +2553,13 @@ fn cmd_ci_prepare(args: CiPrepareArgs, dry_run: bool) -> Result<()> {
     )?;
     println!("Prepared prebuilt manifest at {}", args.manifest.display());
     Ok(())
+}
+
+fn effective_ci_prepare_ffi_backend(
+    configured: mobench_sdk::FfiBackend,
+    explicit: Option<FfiBackendArg>,
+) -> mobench_sdk::FfiBackend {
+    explicit.map(Into::into).unwrap_or(configured)
 }
 
 fn validated_prebuilt_path(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -4294,6 +4326,7 @@ pub(crate) fn run_ios_build(
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
             .dry_run(dry_run)
+            .ffi_backend(layout.ffi_backend)
             .deployment_target(ios_deployment_target)
             .runner(Some(ios_runner))
             .crate_dir(&layout.crate_dir)
@@ -4332,6 +4365,7 @@ fn package_ios_xcuitest_artifacts(
     let builder =
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
+            .ffi_backend(layout.ffi_backend)
             .deployment_target(ios_deployment_target)
             .runner(Some(ios_runner))
             .crate_dir(&layout.crate_dir)
@@ -6627,6 +6661,7 @@ pub(crate) fn run_android_build(
         mobench_sdk::builders::AndroidBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
             .dry_run(dry_run)
+            .ffi_backend(layout.ffi_backend)
             .crate_dir(&layout.crate_dir)
             .output_dir(&layout.output_dir);
     let result = builder.build(&cfg)?;
@@ -6832,6 +6867,7 @@ fn cmd_build(
                 )
                 .verbose(false)
                 .dry_run(dry_run)
+                .ffi_backend(layout.ffi_backend)
                 .output_dir(&effective_output_dir)
                 .crate_dir(&layout.crate_dir);
                 println!("[2/3] Building Android APK...");
@@ -6849,6 +6885,7 @@ fn cmd_build(
                 )
                 .verbose(false)
                 .dry_run(dry_run)
+                .ffi_backend(layout.ffi_backend)
                 .output_dir(&effective_output_dir)
                 .crate_dir(&layout.crate_dir);
                 println!("[2/3] Building iOS xcframework...");
@@ -6868,6 +6905,7 @@ fn cmd_build(
                 )
                 .verbose(false)
                 .dry_run(dry_run)
+                .ffi_backend(layout.ffi_backend)
                 .output_dir(&effective_output_dir)
                 .crate_dir(&layout.crate_dir);
                 println!("[2/5] Building Android APK...");
@@ -6880,6 +6918,7 @@ fn cmd_build(
                 )
                 .verbose(false)
                 .dry_run(dry_run)
+                .ffi_backend(layout.ffi_backend)
                 .deployment_target(ios_deployment_target.clone())
                 .runner(Some(ios_runner))
                 .output_dir(&effective_output_dir)
@@ -6940,6 +6979,7 @@ fn cmd_build(
             )
             .verbose(verbose)
             .dry_run(dry_run)
+            .ffi_backend(layout.ffi_backend)
             .output_dir(&effective_output_dir)
             .crate_dir(&layout.crate_dir);
             let result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
@@ -6960,6 +7000,7 @@ fn cmd_build(
             )
             .verbose(verbose)
             .dry_run(dry_run)
+            .ffi_backend(layout.ffi_backend)
             .deployment_target(ios_deployment_target.clone())
             .runner(Some(ios_runner))
             .output_dir(&effective_output_dir)
@@ -6983,6 +7024,7 @@ fn cmd_build(
             )
             .verbose(verbose)
             .dry_run(dry_run)
+            .ffi_backend(layout.ffi_backend)
             .output_dir(&effective_output_dir)
             .crate_dir(&layout.crate_dir);
             let android_result = android_builder.build(&build_config)?;
@@ -7001,6 +7043,7 @@ fn cmd_build(
             )
             .verbose(verbose)
             .dry_run(dry_run)
+            .ffi_backend(layout.ffi_backend)
             .output_dir(&effective_output_dir)
             .crate_dir(&layout.crate_dir);
             let ios_result = with_ios_benchmark_timeout_env(ios_completion_timeout_secs, || {
@@ -7102,6 +7145,7 @@ fn cmd_package_ipa(
     let builder =
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
+            .ffi_backend(layout.ffi_backend)
             .deployment_target(ios_deployment_target)
             .runner(Some(ios_runner))
             .crate_dir(&layout.crate_dir)
@@ -7150,6 +7194,7 @@ fn cmd_package_xcuitest(
     let builder =
         mobench_sdk::builders::IosBuilder::new(&layout.project_root, layout.crate_name.clone())
             .verbose(true)
+            .ffi_backend(layout.ffi_backend)
             .deployment_target(ios_deployment_target)
             .runner(Some(ios_runner))
             .crate_dir(&layout.crate_dir)
@@ -8728,6 +8773,7 @@ resolver = "2"
             br#"[project]
 crate = "zk-mobile-bench"
 library_name = "zk_mobile_bench"
+ffi_backend = "native-c-abi"
 
 [android]
 abis = ["arm64-v8a", "x86_64"]
@@ -9070,6 +9116,7 @@ project = "proj"
         assert_eq!(layout.crate_dir, crate_dir);
         assert_eq!(layout.crate_name, "zk-mobile-bench");
         assert_eq!(layout.library_name, "zk_mobile_bench");
+        assert_eq!(layout.ffi_backend, mobench_sdk::FfiBackend::NativeCAbi);
         assert_eq!(
             layout.android_abis,
             Some(vec!["arm64-v8a".to_string(), "x86_64".to_string()])
@@ -9081,6 +9128,63 @@ project = "proj"
             layout.default_function.as_deref(),
             Some("zk_mobile_bench::bench_query_proof_generation")
         );
+    }
+
+    #[test]
+    fn resolver_rejects_invalid_configured_ffi_backend() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+        let config_path = project_root.join("mobench.toml");
+        let config = fs::read_to_string(&config_path).expect("read mobench.toml");
+        write_file(
+            &config_path,
+            config
+                .replace(
+                    "ffi_backend = \"native-c-abi\"",
+                    "ffi_backend = \"invalid\"",
+                )
+                .as_bytes(),
+        )
+        .expect("write invalid FFI backend config");
+
+        let error = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect_err("invalid FFI backend must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported [project].ffi_backend 'invalid'")
+        );
+    }
+
+    #[test]
+    fn resolver_defaults_to_uniffi_without_configured_ffi_backend() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+        let config_path = project_root.join("mobench.toml");
+        let config = fs::read_to_string(&config_path).expect("read mobench.toml");
+        write_file(
+            &config_path,
+            config
+                .replace("ffi_backend = \"native-c-abi\"\n", "")
+                .as_bytes(),
+        )
+        .expect("write default FFI backend config");
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve project layout");
+
+        assert_eq!(layout.ffi_backend, mobench_sdk::FfiBackend::Uniffi);
     }
 
     #[test]
@@ -12161,6 +12265,80 @@ mod resource_usage_tests {
             parse_prebuilt_functions(&args.functions).unwrap(),
             vec!["crate::a", "crate::b"]
         );
+        assert_eq!(args.ffi_backend, None);
+    }
+
+    #[test]
+    fn prepare_cli_ffi_backend_is_typed_and_overrides_config() {
+        let cli = Cli::try_parse_from([
+            "mobench",
+            "ci",
+            "prepare",
+            "--target",
+            "ios",
+            "--ffi-backend",
+            "native-c-abi",
+            "--functions",
+            "crate::bench",
+            "--source-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+        ])
+        .unwrap();
+        let Command::Ci {
+            command: CiCommand::Prepare(args),
+        } = cli.command
+        else {
+            panic!("expected ci prepare");
+        };
+        assert_eq!(args.ffi_backend, Some(FfiBackendArg::NativeCAbi));
+        assert_eq!(
+            effective_ci_prepare_ffi_backend(mobench_sdk::FfiBackend::Uniffi, args.ffi_backend,),
+            mobench_sdk::FfiBackend::NativeCAbi
+        );
+        assert_eq!(
+            effective_ci_prepare_ffi_backend(mobench_sdk::FfiBackend::BoltFfi, None),
+            mobench_sdk::FfiBackend::BoltFfi
+        );
+        assert!(
+            Cli::try_parse_from([
+                "mobench",
+                "ci",
+                "prepare",
+                "--target",
+                "android",
+                "--ffi-backend",
+                "not-a-backend",
+                "--functions",
+                "crate::bench",
+                "--source-sha",
+                "0123456789abcdef0123456789abcdef01234567",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn every_cli_mobile_builder_uses_the_resolved_ffi_backend() {
+        let source = include_str!("lib.rs");
+        let mut builders = 0;
+        for builder in ["Android", "Ios"] {
+            let constructor = format!("builders::{builder}Builder::new(");
+            let mut remainder = source;
+            while let Some(start) = remainder.find(&constructor) {
+                let statement = &remainder[start..];
+                let end = statement
+                    .find(';')
+                    .expect("builder construction should end in a statement");
+                let statement = &statement[..end];
+                assert!(
+                    statement.contains(".ffi_backend(layout.ffi_backend)"),
+                    "builder path does not propagate the resolved FFI backend:\n{statement}"
+                );
+                builders += 1;
+                remainder = &remainder[start + constructor.len()..];
+            }
+        }
+        assert_eq!(builders, 13, "unexpected number of CLI mobile build paths");
     }
 
     #[test]

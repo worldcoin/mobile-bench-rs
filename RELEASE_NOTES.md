@@ -15,9 +15,62 @@ Crates.io release pages:
 
 No user-facing unreleased changes yet.
 
-## v0.1.45
+## v0.1.46
 
 Status: current supported release.
+
+Publication date: 2026-07-19.
+
+### Pinned Toolchains And Native Prebuilt Preparation
+
+Reusable BrowserStack callers can now pass `rust_toolchain` with an exact
+channel such as `nightly-2026-03-04`. The input defaults to `stable`. Every
+requested Android or iOS target is installed for that exact caller build
+toolchain in the secretless prepare job. The trusted `cargo-mobench` control
+plane remains pinned independently and builds with its own stable toolchain.
+
+`cargo mobench ci prepare` now accepts typed `--ffi-backend` values. Selection
+precedence is the explicit CLI or reusable-workflow value, then
+`[project].ffi_backend` in `mobench.toml`, then the compatibility default
+`uniffi`. Android and iOS builders receive the resolved backend in every build
+and packaging path. `native-c-abi` preparation therefore emits native runners
+and never invokes `uniffi-bindgen`. The Android native runner now also matches
+the generated Espresso timeout/failure interface, allowing both APKs to compile
+and package as one verified prebuilt handoff.
+
+For actual UniFFI projects, the reusable workflow resolves the lockfile through
+the Cargo workspace containing `crate_path`. It no longer selects the first
+nested `Cargo.lock` found in a monorepo. Native C ABI and BoltFFI projects skip
+UniFFI generator installation entirely.
+
+### Migration From v0.1.45
+
+Pin the reusable workflow to immutable commit
+`1ac54adaf2bd97c6ca303705e1e0471257716f48` and install `mobench 0.1.46`.
+Pinned-toolchain callers should pass their exact toolchain explicitly:
+
+```yaml
+jobs:
+  mobench:
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@1ac54adaf2bd97c6ca303705e1e0471257716f48
+    with:
+      rust_toolchain: nightly-2026-03-04
+      ffi_backend: native-c-abi
+```
+
+Omit `ffi_backend` to use `mobench.toml`, or omit both sources to retain the
+UniFFI default. Continue passing BrowserStack secrets explicitly; do not use
+`secrets: inherit`.
+
+The two-stage authorization boundary is unchanged. Caller checkout, toolchain
+selection, generator discovery, hooks, dependencies, and mobile builds remain
+secretless. Credentialed jobs verify and execute only the fixed trusted
+control-plane command against enumerated prebuilt artifacts; they never check
+out the caller or run Cargo, Gradle, Xcode, or caller scripts.
+
+## v0.1.45
+
+Status: superseded by `v0.1.46`.
 
 Publication date: 2026-07-17. The prebuilt BrowserStack path passed on Android
 and iOS, including exact-head validation, secretless packaging, credentialed
@@ -279,7 +332,8 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.45` | 2026-07-17 | `mobench 0.1.45`, `mobench-sdk 0.1.45`, `mobench-macros 0.1.45` | Current supported release |
+| `v0.1.46` | 2026-07-19 | `mobench 0.1.46`, `mobench-sdk 0.1.46`, `mobench-macros 0.1.46` | Current supported release |
+| `v0.1.45` | 2026-07-17 | `mobench 0.1.45`, `mobench-sdk 0.1.45`, `mobench-macros 0.1.45` | Superseded by `v0.1.46` |
 | `v0.1.44` | 2026-07-17 | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Superseded by `v0.1.45` |
 | `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Superseded by `v0.1.44` |
 | `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Superseded by `v0.1.43` |
