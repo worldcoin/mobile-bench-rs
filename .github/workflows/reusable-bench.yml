@@ -707,6 +707,7 @@ jobs:
   run-ios:
     name: Run prebuilt iOS packages on BrowserStack
     needs: [validate-request, trusted-mobench, prepare-ios]
+    if: inputs.platform == 'ios' || inputs.platform == 'both'
     runs-on: ubuntu-latest
     environment: browserstack
     permissions:
@@ -813,7 +814,16 @@ jobs:
 
   run-android:
     name: Run prebuilt Android packages on BrowserStack
-    needs: [validate-request, trusted-mobench, prepare-android]
+    needs: [validate-request, trusted-mobench, prepare-android, run-ios]
+    if: >-
+      always() &&
+      (inputs.platform == 'android' || inputs.platform == 'both') &&
+      needs.validate-request.result == 'success' &&
+      needs.trusted-mobench.result == 'success' &&
+      needs.prepare-android.result == 'success' &&
+      (inputs.platform == 'android' ||
+       needs.run-ios.result == 'success' ||
+       needs.run-ios.result == 'failure')
     runs-on: ubuntu-latest
     environment: browserstack
     permissions:

@@ -302,6 +302,15 @@ def test_completion_timeout_has_a_bounded_trusted_default() -> None:
     assert WORKFLOW.count('--max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS"') == 2
 
 
+def test_browserstack_platform_jobs_are_serialized() -> None:
+    ios = job("run-ios", "run-android")
+    android = job("run-android", "summarize")
+    assert "if: inputs.platform == 'ios' || inputs.platform == 'both'" in ios
+    assert "needs: [validate-request, trusted-mobench, prepare-android, run-ios]" in android
+    assert "needs.run-ios.result == 'success'" in android
+    assert "needs.run-ios.result == 'failure'" in android
+
+
 def test_reporting_is_separate_and_has_no_checkout() -> None:
     summarize = job("summarize", "report")
     report = job("report")
