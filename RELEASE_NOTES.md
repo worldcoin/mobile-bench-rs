@@ -46,13 +46,13 @@ UniFFI generator installation entirely.
 ### Migration From v0.1.45
 
 Pin the reusable workflow to immutable commit
-`6b6b9b4a601cca6e138a7014bc6c3dbc34663b98` and install `mobench 0.1.46`.
+`1ac54adaf2bd97c6ca303705e1e0471257716f48` and install `mobench 0.1.46`.
 Pinned-toolchain callers should pass their exact toolchain explicitly:
 
 ```yaml
 jobs:
   mobench:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@6b6b9b4a601cca6e138a7014bc6c3dbc34663b98
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@1ac54adaf2bd97c6ca303705e1e0471257716f48
     with:
       rust_toolchain: nightly-2026-03-04
       ffi_backend: native-c-abi

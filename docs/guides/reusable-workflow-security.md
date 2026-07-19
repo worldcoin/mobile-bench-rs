@@ -211,7 +211,7 @@ the pull request or executes a file from those artifacts.
 ## Caller Migration
 
 Update the reusable workflow reference to immutable commit
-`6b6b9b4a601cca6e138a7014bc6c3dbc34663b98` for the `v0.1.46`
+`1ac54adaf2bd97c6ca303705e1e0471257716f48` for the `v0.1.46`
 release and pass secrets explicitly:
 
 ```yaml
@@ -223,7 +223,7 @@ permissions:
 
 jobs:
   mobench:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@6b6b9b4a601cca6e138a7014bc6c3dbc34663b98
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@1ac54adaf2bd97c6ca303705e1e0471257716f48
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
