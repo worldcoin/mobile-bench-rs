@@ -3013,6 +3013,21 @@ pub fn public_bench() {
             "refreshed ContentView.swift should expose report JSON to XCUITest, got:\n{}",
             refreshed
         );
+        assert!(
+            refreshed.contains(".accessibilityValue(reportJSON)"),
+            "refreshed ContentView.swift should expose report JSON as an accessibility value, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains(".frame(width: 1, height: 1)"),
+            "refreshed ContentView.swift should keep the report element in the accessibility tree, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains(".opacity(0.01)"),
+            "refreshed ContentView.swift should keep the report element nearly transparent, got:\n{}",
+            refreshed
+        );
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -3059,6 +3074,16 @@ pub fn public_bench() {
         assert!(
             refreshed.contains("MOBENCH_HEARTBEAT waiting for benchmark completion"),
             "refreshed BenchRunnerUITests.swift should emit heartbeat activity, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("reportElement.value as? String"),
+            "refreshed BenchRunnerUITests.swift should read report JSON from the accessibility value, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("?? reportElement.label"),
+            "refreshed BenchRunnerUITests.swift should retain the accessibility-label fallback, got:\n{}",
             refreshed
         );
         assert!(

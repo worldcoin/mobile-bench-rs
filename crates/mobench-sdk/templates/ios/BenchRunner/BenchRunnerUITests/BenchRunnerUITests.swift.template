@@ -57,8 +57,9 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         let reportElement = app.staticTexts["benchmarkReportJSON"]
         XCTAssertTrue(reportElement.exists, "Benchmark report JSON element should exist after completion")
 
-        // The JSON is stored in the element's label property
-        let jsonString = reportElement.label
+        // Prefer the accessibility value; retain the label for older generated apps.
+        let reportValue = reportElement.value as? String
+        let jsonString = reportValue.flatMap { $0.isEmpty ? nil : $0 } ?? reportElement.label
 
         // Log with markers that mobench fetch can parse from instrumentation logs
         // Using NSLog to ensure it goes to device logs that BrowserStack captures
