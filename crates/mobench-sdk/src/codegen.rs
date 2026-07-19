@@ -2878,13 +2878,17 @@ pub fn public_bench() {
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
-        generate_ios_project_with_backend(
+        generate_ios_project_with_backend_options(
             &temp_dir,
             "native_benchmark",
             "BenchRunner",
             "dev.world.nativebenchmark",
             "native_benchmark::bench_prove",
             crate::FfiBackend::NativeCAbi,
+            IosProjectOptions {
+                runner: IosRunner::UikitLegacy,
+                ..IosProjectOptions::default()
+            },
         )
         .unwrap();
 
@@ -2918,6 +2922,13 @@ pub fn public_bench() {
         assert!(package_manifest.contains("../native_benchmark.xcframework"));
         assert!(package_manifest.contains("SWIFT_OBJC_BRIDGING_HEADER"));
         assert!(!package_manifest.contains("uniffi"));
+
+        let runner = fs::read_to_string(
+            temp_dir.join("ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift"),
+        )
+        .unwrap();
+        assert!(runner.contains("jsonLabel.accessibilityValue = result.jsonReport"));
+        assert!(runner.contains("completionLabel.accessibilityLabel = \"completed\""));
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -3077,6 +3088,17 @@ pub fn public_bench() {
             refreshed
         );
         assert!(
+            refreshed.contains("NSPredicate(format: \"label == %@\", \"completed\")"),
+            "refreshed BenchRunnerUITests.swift should wait for the completed state, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed
+                .contains("XCTWaiter.wait(for: [completedExpectation], timeout: waitInterval)"),
+            "refreshed BenchRunnerUITests.swift should predicate-wait without busy polling, got:\n{}",
+            refreshed
+        );
+        assert!(
             refreshed.contains("MOBENCH_HEARTBEAT waiting for benchmark completion"),
             "refreshed BenchRunnerUITests.swift should emit heartbeat activity, got:\n{}",
             refreshed
@@ -3102,8 +3124,8 @@ pub fn public_bench() {
             refreshed
         );
         assert!(
-            !refreshed.contains("waitForExistence(timeout: benchmarkTimeout)"),
-            "refreshed BenchRunnerUITests.swift should not use one blocking wait, got:\n{}",
+            !refreshed.contains("completedIndicator.waitForExistence"),
+            "refreshed BenchRunnerUITests.swift should not treat marker existence as completion, got:\n{}",
             refreshed
         );
 

@@ -37,15 +37,20 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
     ) -> Bool {
         let deadline = Date().addingTimeInterval(benchmarkTimeout)
         var nextRemoteInteraction = Date().addingTimeInterval(remoteInteractionInterval)
+        let completedPredicate = NSPredicate(format: "label == %@", "completed")
 
         while true {
             let remaining = deadline.timeIntervalSinceNow
             if remaining <= 0 {
-                return completedIndicator.exists
+                return completedIndicator.exists && completedIndicator.label == "completed"
             }
 
             let waitInterval = min(heartbeatInterval, remaining)
-            if completedIndicator.waitForExistence(timeout: waitInterval) {
+            let completedExpectation = XCTNSPredicateExpectation(
+                predicate: completedPredicate,
+                object: completedIndicator
+            )
+            if XCTWaiter.wait(for: [completedExpectation], timeout: waitInterval) == .completed {
                 return true
             }
 

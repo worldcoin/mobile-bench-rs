@@ -139,7 +139,9 @@ final class BenchmarkViewController: UIViewController {
                 self.reportView.text = result.displayText
                 self.jsonLabel.text = result.jsonReport
                 self.jsonLabel.accessibilityLabel = result.jsonReport
+                self.jsonLabel.accessibilityValue = result.jsonReport
                 self.completionLabel.text = "completed"
+                self.completionLabel.accessibilityLabel = "completed"
                 self.completionLabel.isAccessibilityElement = true
             }
 
