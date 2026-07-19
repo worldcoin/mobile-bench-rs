@@ -1481,6 +1481,23 @@ fn toml_u64(value: &toml::Value, path: &[&str]) -> Option<u64> {
         .and_then(|value| u64::try_from(value).ok())
 }
 
+fn configured_ffi_backend(value: Option<&toml::Value>) -> Result<mobench_sdk::FfiBackend> {
+    let Some(value) = value else {
+        return Ok(mobench_sdk::FfiBackend::default());
+    };
+    let Some(value) = value.as_str() else {
+        bail!("[project].ffi_backend must be a string");
+    };
+    match value {
+        "uniffi" => Ok(mobench_sdk::FfiBackend::Uniffi),
+        "native-c-abi" => Ok(mobench_sdk::FfiBackend::NativeCAbi),
+        "boltffi" | "bolt-ffi" => Ok(mobench_sdk::FfiBackend::BoltFfi),
+        _ => bail!(
+            "unsupported [project].ffi_backend '{value}'; expected uniffi, native-c-abi, or boltffi"
+        ),
+    }
+}
+
 fn resolve_project_root_for_layout(
     start_dir: &Path,
     explicit_project_root: Option<PathBuf>,
@@ -1640,10 +1657,11 @@ pub(crate) fn resolve_project_layout(
         .as_ref()
         .and_then(|cfg| cfg.library_name())
         .unwrap_or_else(|| crate_name.replace('-', "_"));
-    let ffi_backend = config
-        .as_ref()
-        .map(|cfg| cfg.project.ffi_backend)
-        .unwrap_or_default();
+    let ffi_backend = configured_ffi_backend(
+        raw_config
+            .as_ref()
+            .and_then(|cfg| toml_path(cfg, &["project", "ffi_backend"])),
+    )?;
     let android_abis = config.as_ref().and_then(|cfg| cfg.android.abis.clone());
     let ios_completion_timeout_secs = config
         .as_ref()
@@ -9110,6 +9128,63 @@ project = "proj"
             layout.default_function.as_deref(),
             Some("zk_mobile_bench::bench_query_proof_generation")
         );
+    }
+
+    #[test]
+    fn resolver_rejects_invalid_configured_ffi_backend() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+        let config_path = project_root.join("mobench.toml");
+        let config = fs::read_to_string(&config_path).expect("read mobench.toml");
+        write_file(
+            &config_path,
+            config
+                .replace(
+                    "ffi_backend = \"native-c-abi\"",
+                    "ffi_backend = \"invalid\"",
+                )
+                .as_bytes(),
+        )
+        .expect("write invalid FFI backend config");
+
+        let error = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect_err("invalid FFI backend must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported [project].ffi_backend 'invalid'")
+        );
+    }
+
+    #[test]
+    fn resolver_defaults_to_uniffi_without_configured_ffi_backend() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+        let config_path = project_root.join("mobench.toml");
+        let config = fs::read_to_string(&config_path).expect("read mobench.toml");
+        write_file(
+            &config_path,
+            config
+                .replace("ffi_backend = \"native-c-abi\"\n", "")
+                .as_bytes(),
+        )
+        .expect("write default FFI backend config");
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve project layout");
+
+        assert_eq!(layout.ffi_backend, mobench_sdk::FfiBackend::Uniffi);
     }
 
     #[test]
