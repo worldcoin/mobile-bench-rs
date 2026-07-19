@@ -285,12 +285,21 @@ def test_credentialed_jobs_never_checkout_or_build_caller_code() -> None:
         assert "--expected-functions" in text
         assert "--expected-iterations" in text
         assert "--expected-warmup" in text
+        assert "--max-completion-timeout-secs" in text
+        assert "MAX_COMPLETION_TIMEOUT_SECS: ${{ inputs.max_completion_timeout_secs }}" in text
         secret_step = text.index("BROWSERSTACK_USERNAME")
         run_step = text.index("ci run-prebuilt")
         assert secret_step < run_step
         # One env binding (the key plus its secret expression) and nowhere else.
         assert text.count("BROWSERSTACK_USERNAME") == 2
         assert text.count("BROWSERSTACK_ACCESS_KEY") == 2
+
+
+def test_completion_timeout_has_a_bounded_trusted_default() -> None:
+    assert "max_completion_timeout_secs:" in WORKFLOW
+    assert 'description: "Trusted upper bound for BrowserStack completion waits (maximum 21600)"' in WORKFLOW
+    assert "type: number\n        default: 1800" in WORKFLOW
+    assert WORKFLOW.count('--max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS"') == 2
 
 
 def test_reporting_is_separate_and_has_no_checkout() -> None:

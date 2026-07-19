@@ -106,6 +106,11 @@ on:
         required: false
         type: string
         default: ""
+      max_completion_timeout_secs:
+        description: "Trusted upper bound for BrowserStack completion waits (maximum 21600)"
+        required: false
+        type: number
+        default: 1800
       ffi_backend:
         description: "Optional ci prepare FFI backend override: uniffi, native-c-abi, or boltffi"
         required: false
@@ -156,9 +161,9 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  # This points to the immutable 0.1.46 control-plane implementation; caller
-  # build toolchains remain separate and are selected only in prepare jobs.
-  MOBENCH_TRUSTED_SHA: b7e7203c5ea50f1b109c94b5c04f2a43b6111977
+  # The integration workflow may move while it is being tested, but the
+  # credentialed control plane always builds from this reviewed immutable SHA.
+  MOBENCH_TRUSTED_SHA: b7d65fe39bb8a0e958de62de2f82cebe792e31d7
 
 jobs:
   validate-request:
@@ -773,6 +778,7 @@ jobs:
           FUNCTIONS_JSON: ${{ needs.validate-request.outputs.functions_ios }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
+          MAX_COMPLETION_TIMEOUT_SECS: ${{ inputs.max_completion_timeout_secs }}
         run: |
           set -euo pipefail
           device_args=()
@@ -781,6 +787,7 @@ jobs:
             --manifest prebuilt/ios/manifest.json --expected-source-sha "$HEAD_SHA" \
             --expected-platform ios --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
+            --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/ios
       - name: Upload iOS results
@@ -878,6 +885,7 @@ jobs:
           FUNCTIONS_JSON: ${{ needs.validate-request.outputs.functions_android }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
+          MAX_COMPLETION_TIMEOUT_SECS: ${{ inputs.max_completion_timeout_secs }}
         run: |
           set -euo pipefail
           device_args=()
@@ -886,6 +894,7 @@ jobs:
             --manifest prebuilt/android/manifest.json --expected-source-sha "$HEAD_SHA" \
             --expected-platform android --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
+            --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/android
       - name: Upload Android results
