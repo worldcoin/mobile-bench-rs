@@ -68,9 +68,15 @@ passed explicitly, and normal benchmark paths do not receive `contents: write`.
 ### Migration From v0.1.46
 
 Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.47` as applicable.
-Pin reusable workflow callers to the immutable v0.1.47 workflow commit recorded
-in the release and migration guides. Remove temporary branch-based
-`mobench_ref` values once the crates.io packages are available.
+Pin reusable workflow callers to immutable commit
+`4213d3d0e6fee40fe7434befbdd84fecf0273779`. Remove temporary branch-based
+`mobench_ref` values once the crates.io packages are available:
+
+```yaml
+uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@4213d3d0e6fee40fe7434befbdd84fecf0273779
+with:
+  mobench_version: "0.1.47"
+```
 
 Existing inputs remain compatible. Set `max_completion_timeout_secs` only when
 a benchmark needs more than the 30-minute trusted default. Continue passing
