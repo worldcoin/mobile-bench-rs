@@ -218,7 +218,16 @@ jobs:
               echo "::error::pr_number must be a positive integer"
               exit 1
             fi
-            pr_json="$(gh api "repos/${CALLER_REPO}/pulls/${PR_NUMBER}")"
+            for attempt in 1 2 3 4 5; do
+              if pr_json="$(gh api "repos/${CALLER_REPO}/pulls/${PR_NUMBER}")"; then
+                break
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                echo "::error::Unable to validate the current PR head after 5 attempts"
+                exit 1
+              fi
+              sleep "$((attempt * 5))"
+            done
             current_sha="$(jq -r '.head.sha' <<<"$pr_json")"
             head_repo="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
             if [ "$sha" != "${current_sha,,}" ]; then
@@ -357,7 +366,16 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          for attempt in 1 2 3 4 5; do
+            if current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Unable to revalidate the current PR head after 5 attempts"
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
       - name: Checkout exact untrusted PR revision
@@ -533,7 +551,16 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          for attempt in 1 2 3 4 5; do
+            if current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Unable to revalidate the current PR head after 5 attempts"
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
       - name: Checkout exact untrusted PR revision
@@ -733,7 +760,16 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          for attempt in 1 2 3 4 5; do
+            if current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Unable to revalidate the current PR head after 5 attempts"
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
       - name: Resolve and validate iOS devices
@@ -849,7 +885,16 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          for attempt in 1 2 3 4 5; do
+            if current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Unable to revalidate the current PR head after 5 attempts"
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
       - name: Resolve and validate Android devices

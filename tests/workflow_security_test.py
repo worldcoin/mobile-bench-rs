@@ -50,16 +50,24 @@ def test_pr_revision_is_current_and_exact() -> None:
     assert "^[0-9a-fA-F]{40}$" in validation
     assert "pulls/${PR_NUMBER}" in validation
     assert "Requested SHA is not the current head" in validation
+    assert "for attempt in 1 2 3 4 5" in validation
+    assert "Unable to validate the current PR head after 5 attempts" in validation
     for name, following in (
         ("prepare-ios", "prepare-android"),
         ("prepare-android", "run-ios"),
     ):
         text = job(name, following)
         assert "Revalidate current PR head" in text
+        assert "for attempt in 1 2 3 4 5" in text
+        assert "Unable to revalidate the current PR head after 5 attempts" in text
         assert "persist-credentials: false" in text
         assert "ref: ${{ needs.validate-request.outputs.head_sha }}" in text
     for name, following in (("run-ios", "run-android"), ("run-android", "summarize")):
-        assert "Revalidate current PR head before credential use" in job(name, following)
+        text = job(name, following)
+        assert "Revalidate current PR head before credential use" in text
+        assert "for attempt in 1 2 3 4 5" in text
+        assert "Unable to revalidate the current PR head after 5 attempts" in text
+    assert WORKFLOW.count("for attempt in 1 2 3 4 5") == 5
     assert "pr_number is required unless allow_non_pr is explicitly enabled" in validation
     assert "${current,,}" not in WORKFLOW
     assert "tr '[:upper:]' '[:lower:]'" in WORKFLOW
