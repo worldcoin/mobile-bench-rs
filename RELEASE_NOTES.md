@@ -69,11 +69,11 @@ passed explicitly, and normal benchmark paths do not receive `contents: write`.
 
 Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.47` as applicable.
 Pin reusable workflow callers to immutable commit
-`4213d3d0e6fee40fe7434befbdd84fecf0273779`. Remove temporary branch-based
+`f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f`. Remove temporary branch-based
 `mobench_ref` values once the crates.io packages are available:
 
 ```yaml
-uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@4213d3d0e6fee40fe7434befbdd84fecf0273779
+uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f
 with:
   mobench_version: "0.1.47"
 ```

@@ -163,7 +163,7 @@ env:
   CARGO_TERM_COLOR: always
   # The credentialed control plane always builds from this reviewed immutable
   # 0.1.47 implementation, independently of the caller's selected build tool.
-  MOBENCH_TRUSTED_SHA: a88d4dcac8ad397be63d255da696b96115d201e0
+  MOBENCH_TRUSTED_SHA: f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f
 
 jobs:
   validate-request:

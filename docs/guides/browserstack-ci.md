@@ -210,7 +210,7 @@ The local action example below is suitable for trusted revisions or host-only
 runs. Do not adapt it into a credentialed fork-PR job that checks out and builds
 the pull request. Fork-PR BrowserStack callers should use
 `.github/workflows/reusable-bench.yml` at immutable commit
-`4213d3d0e6fee40fe7434befbdd84fecf0273779` from `v0.1.47` and pass
+`f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f` from `v0.1.47` and pass
 BrowserStack secrets explicitly; the reusable workflow performs the untrusted
 prepare and trusted prebuilt stages automatically.
 
