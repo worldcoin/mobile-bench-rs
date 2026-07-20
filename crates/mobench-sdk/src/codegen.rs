@@ -2551,6 +2551,15 @@ mod tests {
         }
         assert!(generated_runner.contains("MobenchResultCode.HEARTBEAT ->"));
         assert!(generated_runner.contains("receiver?.send(MobenchResultCode.HEARTBEAT"));
+        assert!(native_runner.contains("MobenchResultCode.HEARTBEAT"));
+        assert!(native_runner.contains("fun checkWorkerExit()"));
+        assert!(
+            native_runner.contains("Benchmark worker process exited before BENCH_JSON was emitted")
+        );
+        assert!(native_runner.contains("catch (e: Throwable)"));
+        assert!(native_runner.contains("RESULT_FAILURE_JSON_EXTRA"));
+        assert!(native_runner.contains("BENCH_FAILURE_JSON $payload"));
+        assert!(native_runner.contains("result.failureJson?.let"));
     }
 
     #[test]
@@ -2878,13 +2887,17 @@ pub fn public_bench() {
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
-        generate_ios_project_with_backend(
+        generate_ios_project_with_backend_options(
             &temp_dir,
             "native_benchmark",
             "BenchRunner",
             "dev.world.nativebenchmark",
             "native_benchmark::bench_prove",
             crate::FfiBackend::NativeCAbi,
+            IosProjectOptions {
+                runner: IosRunner::UikitLegacy,
+                ..IosProjectOptions::default()
+            },
         )
         .unwrap();
 
@@ -2918,6 +2931,17 @@ pub fn public_bench() {
         assert!(package_manifest.contains("../native_benchmark.xcframework"));
         assert!(package_manifest.contains("SWIFT_OBJC_BRIDGING_HEADER"));
         assert!(!package_manifest.contains("uniffi"));
+
+        let runner = fs::read_to_string(
+            temp_dir.join("ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift"),
+        )
+        .unwrap();
+        assert!(runner.contains("jsonLabel.accessibilityValue = result.jsonReport"));
+        assert!(runner.contains("completionLabel.accessibilityLabel = \"completed\""));
+        assert!(
+            runner.contains("heartbeatButton.accessibilityIdentifier = \"benchmarkHeartbeat\"")
+        );
+        assert!(runner.contains("@objc private func heartbeatTapped()"));
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -3008,6 +3032,31 @@ pub fn public_bench() {
             "refreshed ContentView.swift should apply UI updates on the main actor, got:\n{}",
             refreshed
         );
+        assert!(
+            refreshed.contains(".accessibilityLabel(reportJSON)"),
+            "refreshed ContentView.swift should expose report JSON to XCUITest, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains(".accessibilityValue(reportJSON)"),
+            "refreshed ContentView.swift should expose report JSON as an accessibility value, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains(".frame(width: 1, height: 1)"),
+            "refreshed ContentView.swift should keep the report element in the accessibility tree, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains(".opacity(0.01)"),
+            "refreshed ContentView.swift should keep the report element nearly transparent, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains(".accessibilityIdentifier(\"benchmarkHeartbeat\")"),
+            "refreshed ContentView.swift should expose a remote-session heartbeat control, got:\n{}",
+            refreshed
+        );
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -3044,6 +3093,52 @@ pub fn public_bench() {
                 "ProcessInfo.processInfo.environment[\"MOBENCH_IOS_BENCHMARK_TIMEOUT_SECS\"]"
             ),
             "refreshed BenchRunnerUITests.swift should honor runtime timeout overrides, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("waitForBenchmarkCompletion(completedIndicator, app: app)"),
+            "refreshed BenchRunnerUITests.swift should use heartbeat polling, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("NSPredicate(format: \"label == %@\", \"completed\")"),
+            "refreshed BenchRunnerUITests.swift should wait for the completed state, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed
+                .contains("XCTWaiter.wait(for: [completedExpectation], timeout: waitInterval)"),
+            "refreshed BenchRunnerUITests.swift should predicate-wait without busy polling, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("MOBENCH_HEARTBEAT waiting for benchmark completion"),
+            "refreshed BenchRunnerUITests.swift should emit heartbeat activity, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("heartbeatControl.tap()"),
+            "refreshed BenchRunnerUITests.swift should keep remote sessions active with app interaction, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("reportElement.value as? String"),
+            "refreshed BenchRunnerUITests.swift should read report JSON from the accessibility value, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("firstValidJSON([reportValue, reportElement.label])"),
+            "refreshed BenchRunnerUITests.swift should fall back across valid accessibility JSON channels, got:\n{}",
+            refreshed
+        );
+        assert!(
+            refreshed.contains("JSONSerialization.jsonObject(with: data)"),
+            "refreshed BenchRunnerUITests.swift should reject corrupt accessibility values, got:\n{}",
+            refreshed
+        );
+        assert!(
+            !refreshed.contains("completedIndicator.waitForExistence"),
+            "refreshed BenchRunnerUITests.swift should not treat marker existence as completion, got:\n{}",
             refreshed
         );
 

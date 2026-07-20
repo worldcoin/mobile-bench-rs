@@ -1,6 +1,6 @@
 # Reusable Workflow Security
 
-Current secure workflow release: **0.1.46** (older releases remain immutable).
+Current secure workflow release: **0.1.47** (older releases remain immutable).
 
 The reusable BrowserStack workflow is secure by default for pull requests,
 including fork pull requests. Its core invariant is:
@@ -17,7 +17,9 @@ benchmark binaries trusted.
 The workflow separates code construction from provider access:
 
 1. `validate-request` accepts only a 40-character commit SHA and confirms it is
-   still the current head SHA of the requested pull request.
+   still the current head SHA of the requested pull request. Transient GitHub
+   API failures receive five bounded retries; exhausted requests and SHA
+   mismatches fail closed.
 2. `prepare-android` and `prepare-ios` check out that exact SHA, generate
    fixtures, compile/package the mobile runners, and upload a run-scoped handoff.
 3. `run-android` and `run-ios` download and verify the handoff,
@@ -147,6 +149,10 @@ combination. Missing, unexpected, or duplicate shards fail before canonical
 outputs are written. BrowserStack diagnostics are fetched first so a partial
 provider failure remains diagnosable without being presented as complete.
 
+When both platforms are selected, the credentialed iOS and Android jobs run
+serially. This limits BrowserStack concurrency without moving caller checkout,
+build commands, or mobile execution into credentialed GitHub runner jobs.
+
 ## Artifact Manifest Boundary
 
 The machine-readable manifest identifies every allowed file with:
@@ -184,6 +190,7 @@ cargo mobench ci run-prebuilt \
   --expected-functions '["benchmarks::critical_path"]' \
   --expected-iterations 30 \
   --expected-warmup 5 \
+  --max-completion-timeout-secs 1800 \
   --devices "Google Pixel 7-13.0" \
   --output-dir target/mobench/ci/android
 ```
@@ -192,6 +199,14 @@ cargo mobench ci run-prebuilt \
 creation, polling, fetch, and output normalization. It never invokes Cargo,
 Gradle, Xcode, caller hooks, dependencies, fixture generators, benchmark
 binaries, or other files from a caller checkout on the GitHub runner.
+
+`max_completion_timeout_secs` is a trusted workflow input with a 1,800-second
+default and a 21,600-second hard maximum. The trusted binary bounds every
+manifest-provided completion timeout to this value. Generated iOS runners use
+heartbeat interactions and validated accessibility report channels for long
+sessions; native Android runners emit structured worker-exit and linkage-error
+diagnostics. These controls affect mobile/provider reliability only and do not
+expand the caller-controlled execution surface of credentialed jobs.
 
 ## Reporting Boundary
 
@@ -211,7 +226,7 @@ the pull request or executes a file from those artifacts.
 ## Caller Migration
 
 Update the reusable workflow reference to immutable commit
-`1ac54adaf2bd97c6ca303705e1e0471257716f48` for the `v0.1.46`
+`4213d3d0e6fee40fe7434befbdd84fecf0273779` for the `v0.1.47`
 release and pass secrets explicitly:
 
 ```yaml
@@ -223,7 +238,7 @@ permissions:
 
 jobs:
   mobench:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@1ac54adaf2bd97c6ca303705e1e0471257716f48
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@4213d3d0e6fee40fe7434befbdd84fecf0273779
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
@@ -234,6 +249,7 @@ jobs:
       rust_toolchain: nightly-2026-03-04
       ffi_backend: native-c-abi
       android_devices: '[{"device":"Google Pixel 7","os_version":"13.0"}]'
+      max_completion_timeout_secs: 7200
       platform: both
     secrets:
       BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
@@ -261,12 +277,13 @@ Release validation includes:
   intercepts each denied repository push;
 - static workflow tests proving credentialed jobs have no caller checkout or
   caller-controlled process execution;
+- fail-closed tests covering all five exact-head API retry sites;
 - manifest path/hash/size/platform/ABI rejection tests;
 - report-field escaping and workflow-command injection tests;
 - `actionlint`, workspace workflow/self-tests, and one Android plus one iOS
   BrowserStack run through the prebuilt path.
 
 The live Android and iOS BrowserStack runs are service-gated release checks and
-must be reported separately from host-side or static validation. Release
-validation completed on both platforms through the prebuilt path, including a
-final-head iOS run.
+must be reported separately from host-side or static validation. The 0.1.47
+candidate passed the complete ProveKit age-check, fragmented age-check, and OPRF
+matrix on both platforms with two measured samples and one warmup per device.

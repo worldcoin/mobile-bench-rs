@@ -15,9 +15,76 @@ Crates.io release pages:
 
 No user-facing unreleased changes yet.
 
-## v0.1.46
+## v0.1.47
 
 Status: current supported release.
+
+Publication date: 2026-07-20.
+
+### Reliable Long-Running BrowserStack Sessions
+
+The reusable workflow now accepts `max_completion_timeout_secs`, defaulting to
+1,800 seconds and capped by the trusted control plane at 21,600 seconds. The
+caller-provided manifest may request a shorter completion timeout, but it cannot
+extend execution beyond this trusted ceiling. iOS uses the resolved bounded
+timeout consistently for the application launch configuration, XCUITest wait,
+and BrowserStack polling.
+
+Generated SwiftUI runners expose a low-impact heartbeat control that XCUITest
+interacts with every five minutes during long benchmarks. The XCUITest suite
+predicate-waits in 30-second intervals, emits heartbeat diagnostics, and reads
+the finished report from the first accessibility channel containing valid JSON.
+The BrowserStack XCUITest request also uses a 15-minute idle timeout. Completion
+is based on the marker's completed state, not merely the marker's existence.
+
+Generated native-C-ABI Android runners now identify the isolated worker by PID
+and process name. The instrumentation watchdog detects a dead worker after a
+bounded grace period and emits structured `worker_exit` diagnostics instead of
+waiting for the full benchmark timeout. Native linkage failures, including JNA
+`UnsatisfiedLinkError`, are returned as benchmark failures when the process can
+still report them.
+
+Credentialed iOS and Android jobs run serially so repositories using both
+platforms do not exceed constrained BrowserStack account concurrency. Android
+can still proceed when the iOS run fails or is skipped, preserving the second
+platform's diagnostics instead of suppressing it. Successful result summaries
+still require every requested function, device, measured iteration, and warmup
+for each included platform.
+
+### Exact-Head Validation And Credential Boundary
+
+All five PR-head API checks now retry transient GitHub API failures up to five
+times with bounded backoff. The checks remain fail-closed: exhausted requests or
+any SHA mismatch stop the workflow, and the credentialed jobs revalidate the
+exact current PR head immediately before BrowserStack use.
+
+The security architecture is otherwise unchanged. Pull-request code, hooks,
+dependencies, Cargo, Gradle, and Xcode execute only in secretless read-only
+prepare jobs. Credentialed jobs do not check out caller code or execute caller
+commands; they verify the enumerated manifest and upload opaque mobile packages
+for execution on BrowserStack devices. Reporting remains isolated, secrets are
+passed explicitly, and normal benchmark paths do not receive `contents: write`.
+
+### Migration From v0.1.46
+
+Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.47` as applicable.
+Pin reusable workflow callers to immutable commit
+`4213d3d0e6fee40fe7434befbdd84fecf0273779`. Remove temporary branch-based
+`mobench_ref` values once the crates.io packages are available:
+
+```yaml
+uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@4213d3d0e6fee40fe7434befbdd84fecf0273779
+with:
+  mobench_version: "0.1.47"
+```
+
+Existing inputs remain compatible. Set `max_completion_timeout_secs` only when
+a benchmark needs more than the 30-minute trusted default. Continue passing
+BrowserStack secrets explicitly and never use `secrets: inherit`.
+
+## v0.1.46
+
+Status: superseded by `v0.1.47`.
 
 Publication date: 2026-07-19.
 
@@ -332,7 +399,8 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.46` | 2026-07-19 | `mobench 0.1.46`, `mobench-sdk 0.1.46`, `mobench-macros 0.1.46` | Current supported release |
+| `v0.1.47` | 2026-07-20 | `mobench 0.1.47`, `mobench-sdk 0.1.47`, `mobench-macros 0.1.47` | Current supported release |
+| `v0.1.46` | 2026-07-19 | `mobench 0.1.46`, `mobench-sdk 0.1.46`, `mobench-macros 0.1.46` | Superseded by `v0.1.47` |
 | `v0.1.45` | 2026-07-17 | `mobench 0.1.45`, `mobench-sdk 0.1.45`, `mobench-macros 0.1.45` | Superseded by `v0.1.46` |
 | `v0.1.44` | 2026-07-17 | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Superseded by `v0.1.45` |
 | `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Superseded by `v0.1.44` |

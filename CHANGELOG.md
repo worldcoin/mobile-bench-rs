@@ -8,6 +8,43 @@ longer integration-oriented release notes and support status.
 
 No user-facing unreleased changes yet.
 
+## v0.1.47 - 2026-07-20
+
+### Added
+
+- Added a reusable-workflow `max_completion_timeout_secs` input with a trusted
+  30-minute default and a hard six-hour control-plane maximum for long-running
+  prebuilt BrowserStack benchmarks.
+- Added XCUITest heartbeat interactions and accessibility-backed report
+  transport so long iOS benchmarks stay active and return validated JSON across
+  supported iOS/Xcode combinations.
+- Added native Android worker PID/process reporting and early worker-death
+  detection, including structured failures for native linkage errors.
+
+### Changed
+
+- Serialized credentialed iOS and Android jobs to respect constrained
+  BrowserStack account concurrency while allowing Android to proceed when the
+  iOS lane fails or is skipped.
+- Reused the trusted completion timeout for iOS app launch, XCUITest, and
+  BrowserStack polling so every layer observes the same bounded run window.
+
+### Fixed
+
+- Fixed iOS completion detection so the XCUITest waits for the completed state
+  instead of treating the existence of a hidden marker as completion.
+- Fixed native Android failures such as JNA `UnsatisfiedLinkError` being hidden
+  behind the full benchmark timeout.
+- Added five bounded retries to every GitHub PR-head lookup. Transient API
+  failures retry, while an exhausted lookup or mismatched SHA still fails
+  closed before build or credential use.
+
+### Security
+
+- Preserved the secretless prepare and credentialed prebuilt execution split.
+  Retry, timeout, heartbeat, and result-transport changes do not introduce a
+  caller checkout or caller-controlled command in credentialed jobs.
+
 ## v0.1.46 - 2026-07-19
 
 ### Added

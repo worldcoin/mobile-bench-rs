@@ -1,9 +1,12 @@
+import Foundation
 import XCTest
 
 final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
 
-    /// Maximum time to wait for benchmark completion (5 minutes for long benchmarks)
+    /// Maximum time to wait for benchmark completion.
     private let defaultBenchmarkTimeout: TimeInterval = {{IOS_BENCHMARK_TIMEOUT_SECS}}.0
+    private let heartbeatInterval: TimeInterval = 30.0
+    private let remoteInteractionInterval: TimeInterval = 300.0
 
     private var benchmarkTimeout: TimeInterval {
         if let configuredTimeout =
@@ -17,6 +20,55 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         return defaultBenchmarkTimeout
     }
 
+    private func firstValidJSON(_ candidates: [String?]) -> String? {
+        for candidate in candidates.compactMap({ $0 }) where !candidate.isEmpty {
+            guard let data = candidate.data(using: .utf8),
+                  (try? JSONSerialization.jsonObject(with: data)) != nil else {
+                continue
+            }
+            return candidate
+        }
+        return nil
+    }
+
+    private func waitForBenchmarkCompletion(
+        _ completedIndicator: XCUIElement,
+        app: XCUIApplication
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(benchmarkTimeout)
+        var nextRemoteInteraction = Date().addingTimeInterval(remoteInteractionInterval)
+        let completedPredicate = NSPredicate(format: "label == %@", "completed")
+
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 {
+                return completedIndicator.exists && completedIndicator.label == "completed"
+            }
+
+            let waitInterval = min(heartbeatInterval, remaining)
+            let completedExpectation = XCTNSPredicateExpectation(
+                predicate: completedPredicate,
+                object: completedIndicator
+            )
+            if XCTWaiter.wait(for: [completedExpectation], timeout: waitInterval) == .completed {
+                return true
+            }
+
+            // Keep the remote XCUITest session active during long benchmarks.
+            NSLog("MOBENCH_HEARTBEAT waiting for benchmark completion")
+            if Date() >= nextRemoteInteraction {
+                let heartbeatControl = app.buttons["benchmarkHeartbeat"]
+                if heartbeatControl.waitForExistence(timeout: 5.0) && heartbeatControl.isHittable {
+                    heartbeatControl.tap()
+                } else {
+                    app.activate()
+                }
+                NSLog("MOBENCH_HEARTBEAT sent app interaction")
+                nextRemoteInteraction = Date().addingTimeInterval(remoteInteractionInterval)
+            }
+        }
+    }
+
     func testLaunchAndCaptureBenchmarkReport() {
         let app = XCUIApplication()
         app.launch()
@@ -24,7 +76,7 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         // Wait for the benchmark to actually COMPLETE, not just start
         // The app sets a "benchmarkCompleted" element when done
         let completedIndicator = app.staticTexts["benchmarkCompleted"]
-        let completed = completedIndicator.waitForExistence(timeout: benchmarkTimeout)
+        let completed = waitForBenchmarkCompletion(completedIndicator, app: app)
         XCTAssertTrue(completed, "Benchmark should complete within \(benchmarkTimeout) seconds")
 
         // Wait 5 seconds so BrowserStack video captures the results
@@ -35,8 +87,10 @@ final class {{PROJECT_NAME_PASCAL}}UITests: XCTestCase {
         let reportElement = app.staticTexts["benchmarkReportJSON"]
         XCTAssertTrue(reportElement.exists, "Benchmark report JSON element should exist after completion")
 
-        // The JSON is stored in the element's label property
-        let jsonString = reportElement.label
+        // Accessibility value behavior varies across real iOS/Xcode versions.
+        // Accept the first channel that contains valid JSON.
+        let reportValue = reportElement.value as? String
+        let jsonString = firstValidJSON([reportValue, reportElement.label]) ?? ""
 
         // Log with markers that mobench fetch can parse from instrumentation logs
         // Using NSLog to ensure it goes to device logs that BrowserStack captures

@@ -106,6 +106,11 @@ on:
         required: false
         type: string
         default: ""
+      max_completion_timeout_secs:
+        description: "Trusted upper bound for BrowserStack completion waits (maximum 21600)"
+        required: false
+        type: number
+        default: 1800
       ffi_backend:
         description: "Optional ci prepare FFI backend override: uniffi, native-c-abi, or boltffi"
         required: false
@@ -156,9 +161,9 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  # This points to the immutable 0.1.46 control-plane implementation; caller
-  # build toolchains remain separate and are selected only in prepare jobs.
-  MOBENCH_TRUSTED_SHA: b7e7203c5ea50f1b109c94b5c04f2a43b6111977
+  # The credentialed control plane always builds from this reviewed immutable
+  # 0.1.47 implementation, independently of the caller's selected build tool.
+  MOBENCH_TRUSTED_SHA: a88d4dcac8ad397be63d255da696b96115d201e0
 
 jobs:
   validate-request:
@@ -213,7 +218,16 @@ jobs:
               echo "::error::pr_number must be a positive integer"
               exit 1
             fi
-            pr_json="$(gh api "repos/${CALLER_REPO}/pulls/${PR_NUMBER}")"
+            for attempt in 1 2 3 4 5; do
+              if pr_json="$(gh api "repos/${CALLER_REPO}/pulls/${PR_NUMBER}")"; then
+                break
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                echo "::error::Unable to validate the current PR head after 5 attempts"
+                exit 1
+              fi
+              sleep "$((attempt * 5))"
+            done
             current_sha="$(jq -r '.head.sha' <<<"$pr_json")"
             head_repo="$(jq -r '.head.repo.full_name' <<<"$pr_json")"
             if [ "$sha" != "${current_sha,,}" ]; then
@@ -352,7 +366,16 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          for attempt in 1 2 3 4 5; do
+            if current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Unable to revalidate the current PR head after 5 attempts"
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
       - name: Checkout exact untrusted PR revision
@@ -383,7 +406,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.46 --locked
+            cargo install mobench --version 0.1.47 --locked
           fi
           brew install xcodegen
       - name: Install caller-selected binding generator
@@ -528,7 +551,16 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          for attempt in 1 2 3 4 5; do
+            if current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Unable to revalidate the current PR head after 5 attempts"
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before build"; exit 1; }
       - name: Checkout exact untrusted PR revision
@@ -573,7 +605,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.46 --locked
+            cargo install mobench --version 0.1.47 --locked
           fi
       - name: Install caller-selected binding generator
         shell: bash
@@ -702,6 +734,7 @@ jobs:
   run-ios:
     name: Run prebuilt iOS packages on BrowserStack
     needs: [validate-request, trusted-mobench, prepare-ios]
+    if: inputs.platform == 'ios' || inputs.platform == 'both'
     runs-on: ubuntu-latest
     environment: browserstack
     permissions:
@@ -727,7 +760,16 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          for attempt in 1 2 3 4 5; do
+            if current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Unable to revalidate the current PR head after 5 attempts"
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
       - name: Resolve and validate iOS devices
@@ -773,6 +815,7 @@ jobs:
           FUNCTIONS_JSON: ${{ needs.validate-request.outputs.functions_ios }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
+          MAX_COMPLETION_TIMEOUT_SECS: ${{ inputs.max_completion_timeout_secs }}
         run: |
           set -euo pipefail
           device_args=()
@@ -781,6 +824,7 @@ jobs:
             --manifest prebuilt/ios/manifest.json --expected-source-sha "$HEAD_SHA" \
             --expected-platform ios --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
+            --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/ios
       - name: Upload iOS results
@@ -806,7 +850,17 @@ jobs:
 
   run-android:
     name: Run prebuilt Android packages on BrowserStack
-    needs: [validate-request, trusted-mobench, prepare-android]
+    needs: [validate-request, trusted-mobench, prepare-android, run-ios]
+    if: >-
+      always() &&
+      (inputs.platform == 'android' || inputs.platform == 'both') &&
+      needs.validate-request.result == 'success' &&
+      needs.trusted-mobench.result == 'success' &&
+      needs.prepare-android.result == 'success' &&
+      (inputs.platform == 'android' ||
+       needs.run-ios.result == 'success' ||
+       needs.run-ios.result == 'failure' ||
+       needs.run-ios.result == 'skipped')
     runs-on: ubuntu-latest
     environment: browserstack
     permissions:
@@ -832,7 +886,16 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-request.outputs.head_sha }}
         run: |
           set -euo pipefail
-          current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          for attempt in 1 2 3 4 5; do
+            if current="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Unable to revalidate the current PR head after 5 attempts"
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]')"
           test "$current" = "$EXPECTED_SHA" || { echo "::error::PR head changed before BrowserStack run"; exit 1; }
       - name: Resolve and validate Android devices
@@ -878,6 +941,7 @@ jobs:
           FUNCTIONS_JSON: ${{ needs.validate-request.outputs.functions_android }}
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
+          MAX_COMPLETION_TIMEOUT_SECS: ${{ inputs.max_completion_timeout_secs }}
         run: |
           set -euo pipefail
           device_args=()
@@ -886,6 +950,7 @@ jobs:
             --manifest prebuilt/android/manifest.json --expected-source-sha "$HEAD_SHA" \
             --expected-platform android --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
+            --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/android
       - name: Upload Android results

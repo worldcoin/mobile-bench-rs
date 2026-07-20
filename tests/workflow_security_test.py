@@ -50,16 +50,24 @@ def test_pr_revision_is_current_and_exact() -> None:
     assert "^[0-9a-fA-F]{40}$" in validation
     assert "pulls/${PR_NUMBER}" in validation
     assert "Requested SHA is not the current head" in validation
+    assert "for attempt in 1 2 3 4 5" in validation
+    assert "Unable to validate the current PR head after 5 attempts" in validation
     for name, following in (
         ("prepare-ios", "prepare-android"),
         ("prepare-android", "run-ios"),
     ):
         text = job(name, following)
         assert "Revalidate current PR head" in text
+        assert "for attempt in 1 2 3 4 5" in text
+        assert "Unable to revalidate the current PR head after 5 attempts" in text
         assert "persist-credentials: false" in text
         assert "ref: ${{ needs.validate-request.outputs.head_sha }}" in text
     for name, following in (("run-ios", "run-android"), ("run-android", "summarize")):
-        assert "Revalidate current PR head before credential use" in job(name, following)
+        text = job(name, following)
+        assert "Revalidate current PR head before credential use" in text
+        assert "for attempt in 1 2 3 4 5" in text
+        assert "Unable to revalidate the current PR head after 5 attempts" in text
+    assert WORKFLOW.count("for attempt in 1 2 3 4 5") == 5
     assert "pr_number is required unless allow_non_pr is explicitly enabled" in validation
     assert "${current,,}" not in WORKFLOW
     assert "tr '[:upper:]' '[:lower:]'" in WORKFLOW
@@ -91,7 +99,7 @@ def test_trusted_control_plane_is_from_a_literal_commit() -> None:
         capture_output=True,
         check=True,
     ).stdout
-    assert 'version = "0.1.46"' in cargo_toml
+    assert 'version = "0.1.47"' in cargo_toml
 
 
 def test_caller_toolchain_is_explicit_and_confined_to_prepare_jobs() -> None:
@@ -285,12 +293,31 @@ def test_credentialed_jobs_never_checkout_or_build_caller_code() -> None:
         assert "--expected-functions" in text
         assert "--expected-iterations" in text
         assert "--expected-warmup" in text
+        assert "--max-completion-timeout-secs" in text
+        assert "MAX_COMPLETION_TIMEOUT_SECS: ${{ inputs.max_completion_timeout_secs }}" in text
         secret_step = text.index("BROWSERSTACK_USERNAME")
         run_step = text.index("ci run-prebuilt")
         assert secret_step < run_step
         # One env binding (the key plus its secret expression) and nowhere else.
         assert text.count("BROWSERSTACK_USERNAME") == 2
         assert text.count("BROWSERSTACK_ACCESS_KEY") == 2
+
+
+def test_completion_timeout_has_a_bounded_trusted_default() -> None:
+    assert "max_completion_timeout_secs:" in WORKFLOW
+    assert 'description: "Trusted upper bound for BrowserStack completion waits (maximum 21600)"' in WORKFLOW
+    assert "type: number\n        default: 1800" in WORKFLOW
+    assert WORKFLOW.count('--max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS"') == 2
+
+
+def test_browserstack_platform_jobs_are_serialized() -> None:
+    ios = job("run-ios", "run-android")
+    android = job("run-android", "summarize")
+    assert "if: inputs.platform == 'ios' || inputs.platform == 'both'" in ios
+    assert "needs: [validate-request, trusted-mobench, prepare-android, run-ios]" in android
+    assert "needs.run-ios.result == 'success'" in android
+    assert "needs.run-ios.result == 'failure'" in android
+    assert "needs.run-ios.result == 'skipped'" in android
 
 
 def test_reporting_is_separate_and_has_no_checkout() -> None:
@@ -340,7 +367,7 @@ def test_generated_workflow_uses_secure_reusable_boundary() -> None:
         capture_output=True,
         check=True,
     ).stdout
-    assert "MOBENCH_TRUSTED_SHA: b7e7203c5ea50f1b109c94b5c04f2a43b6111977" in pinned_workflow
+    assert "MOBENCH_TRUSTED_SHA: a88d4dcac8ad397be63d255da696b96115d201e0" in pinned_workflow
     assert "rust_toolchain:" in GENERATED_WORKFLOW
     assert "ffi_backend:" in GENERATED_WORKFLOW
     assert "prepare_script:" in GENERATED_WORKFLOW
