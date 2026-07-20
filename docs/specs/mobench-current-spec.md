@@ -2,7 +2,7 @@
 
 Status: current source-of-truth product/API specification.
 
-Current release: `0.1.46`.
+Current release: `0.1.47`.
 
 Last updated: 2026-07-19.
 
@@ -43,7 +43,7 @@ Workspace package defaults:
 - Edition: Rust 2024.
 - MSRV: Rust 1.85.
 - License: MIT.
-- Current workspace version: `0.1.46`.
+- Current workspace version: `0.1.47`.
 
 ## Benchmark Authoring
 
@@ -518,8 +518,10 @@ digests, platform, and benchmark ABI metadata.
 `mobench ci run-prebuilt --manifest <path> --expected-source-sha <full-sha>
 --expected-platform <android|ios> --expected-functions <functions>
 --expected-iterations <count> --expected-warmup <count> --devices <selection>
---output-dir <path>` validates the manifest and exact downloaded file set before
-using BrowserStack. It rejects source-SHA mismatch,
+--max-completion-timeout-secs <seconds> --output-dir <path>` validates the
+manifest and exact downloaded file set before using BrowserStack. The timeout
+ceiling defaults to 1,800 seconds and cannot exceed the trusted 21,600-second
+maximum. It rejects source-SHA mismatch,
 absolute/traversing/duplicate paths, symlinks, missing or unexpected files,
 invalid roles, invalid sizes or digests, platform mismatches, and incompatible
 manifest/benchmark ABI versions.
@@ -553,6 +555,18 @@ complete platform result contains exactly one shard for each requested
 function/device pair. Missing, unexpected, and duplicate shards are errors;
 canonical outputs are not written from a partial matrix. Diagnostics already
 fetched from BrowserStack may be retained for failure analysis.
+
+The reusable workflow retries transient PR-head API failures five times with
+bounded backoff at initial validation, before each prepare job, and immediately
+before each credentialed platform run. Exhausted requests and SHA mismatches
+fail closed. Credentialed iOS and Android jobs run serially when both platforms
+are selected.
+
+Generated iOS XCUITest runners predicate-wait for an explicit completed state,
+perform periodic heartbeat interactions, and accept only accessibility values
+that parse as JSON. Generated native Android runners report PID/process
+identity, detect a dead isolated worker after a bounded grace period, and emit
+structured failure markers for worker exits and native runtime/linkage errors.
 
 ## `ci merge-split-runs` Behavior
 

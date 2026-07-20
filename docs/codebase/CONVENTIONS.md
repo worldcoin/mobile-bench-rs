@@ -1,6 +1,6 @@
 # Conventions
 
-Updated: 2026-07-19. Current release: `0.1.46`.
+Updated: 2026-07-20. Current release: `0.1.47`.
 
 ## Naming
 

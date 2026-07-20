@@ -1,6 +1,6 @@
 # Build Guide
 
-Current release: **0.1.46**.
+Current release: **0.1.47**.
 
 Use `cargo mobench build --target <android|ios|both>` for repository
 development and CI. The CLI resolves the benchmark crate, builds native Rust

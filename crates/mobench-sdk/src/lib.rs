@@ -8,7 +8,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1.46"
+//! mobench-sdk = "0.1.47"
 //! inventory = "0.3"
 //!
 //! [lib]
@@ -24,7 +24,7 @@
 //! <https://github.com/worldcoin/mobile-bench-rs/blob/main/docs/guides/sdk-integration.md>.
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1.46"
+//! mobench-sdk = "0.1.47"
 //! inventory = "0.3"  # Required for benchmark registration
 //! ```
 //!
@@ -109,7 +109,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = { version = "0.1.46", default-features = false, features = ["runner-only"] }
+//! mobench-sdk = { version = "0.1.47", default-features = false, features = ["runner-only"] }
 //! ```
 //!
 //! ## Programmatic Usage

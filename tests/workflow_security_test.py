@@ -317,6 +317,7 @@ def test_browserstack_platform_jobs_are_serialized() -> None:
     assert "needs: [validate-request, trusted-mobench, prepare-android, run-ios]" in android
     assert "needs.run-ios.result == 'success'" in android
     assert "needs.run-ios.result == 'failure'" in android
+    assert "needs.run-ios.result == 'skipped'" in android
 
 
 def test_reporting_is_separate_and_has_no_checkout() -> None:

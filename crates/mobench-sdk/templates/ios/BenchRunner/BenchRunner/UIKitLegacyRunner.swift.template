@@ -74,6 +74,7 @@ final class BenchmarkViewController: UIViewController {
     private let reportView = UITextView()
     private let completionLabel = UILabel()
     private let jsonLabel = UILabel()
+    private let heartbeatButton = UIButton(type: .system)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -100,6 +101,13 @@ final class BenchmarkViewController: UIViewController {
         jsonLabel.textColor = .clear
         view.addSubview(jsonLabel)
 
+        heartbeatButton.setTitle("heartbeat", for: .normal)
+        heartbeatButton.accessibilityIdentifier = "benchmarkHeartbeat"
+        heartbeatButton.alpha = 0.01
+        heartbeatButton.translatesAutoresizingMaskIntoConstraints = false
+        heartbeatButton.addTarget(self, action: #selector(heartbeatTapped), for: .touchUpInside)
+        view.addSubview(heartbeatButton)
+
         NSLayoutConstraint.activate([
             reportView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             reportView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
@@ -113,9 +121,17 @@ final class BenchmarkViewController: UIViewController {
             jsonLabel.topAnchor.constraint(equalTo: completionLabel.bottomAnchor),
             jsonLabel.widthAnchor.constraint(equalToConstant: 1),
             jsonLabel.heightAnchor.constraint(equalToConstant: 1),
+            heartbeatButton.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            heartbeatButton.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            heartbeatButton.widthAnchor.constraint(equalToConstant: 44),
+            heartbeatButton.heightAnchor.constraint(equalToConstant: 44),
         ])
 
         runBenchmark()
+    }
+
+    @objc private func heartbeatTapped() {
+        NSLog("MOBENCH_HEARTBEAT app interaction")
     }
 
     private func runBenchmark() {

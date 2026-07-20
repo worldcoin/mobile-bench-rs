@@ -13,7 +13,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
-version = "0.1.46"
+version = "0.1.47"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -35,5 +35,5 @@ proc-macro2 = "1"
 
 # Phase 1: Template embedding
 include_dir = "0.7"
-mobench-macros = { version = "0.1.46", path = "crates/mobench-macros" }
-mobench-sdk = { version = "0.1.46", path = "crates/mobench-sdk", default-features = false }
+mobench-macros = { version = "0.1.47", path = "crates/mobench-macros" }
+mobench-sdk = { version = "0.1.47", path = "crates/mobench-sdk", default-features = false }

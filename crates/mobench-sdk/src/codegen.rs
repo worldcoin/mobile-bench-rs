@@ -2557,6 +2557,9 @@ mod tests {
             native_runner.contains("Benchmark worker process exited before BENCH_JSON was emitted")
         );
         assert!(native_runner.contains("catch (e: Throwable)"));
+        assert!(native_runner.contains("RESULT_FAILURE_JSON_EXTRA"));
+        assert!(native_runner.contains("BENCH_FAILURE_JSON $payload"));
+        assert!(native_runner.contains("result.failureJson?.let"));
     }
 
     #[test]
@@ -2935,6 +2938,10 @@ pub fn public_bench() {
         .unwrap();
         assert!(runner.contains("jsonLabel.accessibilityValue = result.jsonReport"));
         assert!(runner.contains("completionLabel.accessibilityLabel = \"completed\""));
+        assert!(
+            runner.contains("heartbeatButton.accessibilityIdentifier = \"benchmarkHeartbeat\"")
+        );
+        assert!(runner.contains("@objc private func heartbeatTapped()"));
 
         fs::remove_dir_all(&temp_dir).ok();
     }

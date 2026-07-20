@@ -38,6 +38,7 @@ private const val RUN_BENCHMARK_ACTION = "{{PACKAGE_NAME}}.RUN_BENCHMARK"
 private const val RESULT_RECEIVER_EXTRA = "bench_result_receiver"
 private const val RESULT_DISPLAY_EXTRA = "bench_display"
 private const val RESULT_ERROR_EXTRA = "bench_error"
+private const val RESULT_FAILURE_JSON_EXTRA = "bench_failure_json"
 private const val RESULT_PID_EXTRA = "bench_pid"
 private const val RESULT_PROCESS_NAME_EXTRA = "bench_process_name"
 private const val FOREGROUND_NOTIFICATION_ID = 1001
@@ -79,21 +80,24 @@ class MainActivity : AppCompatActivity() {
                     lastProgressAtMs = android.os.SystemClock.elapsedRealtime()
                     return
                 }
-                val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
-                    ?: resultData?.getString(RESULT_ERROR_EXTRA)
-                    ?: "Benchmark worker returned no result"
-                resultText?.text = display
-                benchmarkComplete = true
-
                 if (resultCode == MobenchResultCode.SUCCESS) {
+                    val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
+                        ?: "Benchmark worker completed"
+                    resultText?.text = display
+                    benchmarkComplete = true
                     android.util.Log.i("BenchRunner", "Benchmark worker completed")
                 } else {
+                    val payload = resultData?.getString(RESULT_FAILURE_JSON_EXTRA)
+                    val display = resultData?.getString(RESULT_DISPLAY_EXTRA)
+                        ?: resultData?.getString(RESULT_ERROR_EXTRA)
+                        ?: "Benchmark worker returned no result"
+                    resultText?.text = display
                     benchmarkFailed = true
-                    failureJson = JSONObject()
-                        .put("schema_version", 1)
-                        .put("kind", "benchmark_error")
-                        .put("message", display)
-                        .toString()
+                    benchmarkComplete = true
+                    failureJson = payload
+                    if (payload == null) {
+                        emitFailure("benchmark_error", display)
+                    }
                     android.util.Log.e("BenchRunner", display)
                 }
             }
@@ -117,13 +121,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             android.util.Log.e("BenchRunner", "Failed to run benchmark worker", e)
             resultText?.text = "Failed to run benchmark worker: ${e.message}"
-            benchmarkFailed = true
-            failureJson = JSONObject()
-                .put("schema_version", 1)
-                .put("kind", "exception")
-                .put("message", "Failed to run benchmark worker: ${e.message}")
-                .toString()
-            benchmarkComplete = true
+            emitFailure("exception", "Failed to run benchmark worker: ${e.message}")
         }
     }
 
@@ -274,6 +272,7 @@ class BenchmarkWorkerService : Service() {
                 val bundle = Bundle().apply {
                     putString(RESULT_DISPLAY_EXTRA, result.displayText)
                     result.errorMessage?.let { putString(RESULT_ERROR_EXTRA, it) }
+                    result.failureJson?.let { putString(RESULT_FAILURE_JSON_EXTRA, it) }
                 }
                 resultReceiver?.send(
                     if (result.errorMessage == null) MobenchResultCode.SUCCESS else MobenchResultCode.ERROR,
@@ -348,13 +347,20 @@ class BenchmarkWorkerService : Service() {
             formatNativeBenchReport(json)
         } catch (e: Throwable) {
             android.util.Log.e("BenchRunner", "Benchmark error: ${e.message}", e)
+            val payload = JSONObject()
+                .put("schema_version", 1)
+                .put("kind", "benchmark_error")
+                .put("message", "Benchmark error: ${e.message}")
+                .toString()
+            android.util.Log.e("BenchRunner", "BENCH_FAILURE_JSON $payload")
             return WorkerBenchmarkResult(
                 displayText = "Benchmark error: ${e.message}",
-                errorMessage = "Benchmark error: ${e.message}"
+                errorMessage = "Benchmark error: ${e.message}",
+                failureJson = payload,
             )
         }
 
-        return WorkerBenchmarkResult(displayText = display, errorMessage = null)
+        return WorkerBenchmarkResult(displayText = display, errorMessage = null, failureJson = null)
     }
 }
 
@@ -385,6 +391,7 @@ private data class BenchParams(
 private data class WorkerBenchmarkResult(
     val displayText: String,
     val errorMessage: String?,
+    val failureJson: String?,
 )
 
 private object NativeBenchRunner {

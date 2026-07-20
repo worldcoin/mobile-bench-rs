@@ -1,6 +1,6 @@
 # BrowserStack CI Guide
 
-Current release: **0.1.46**.
+Current release: **0.1.47**.
 
 This guide covers BrowserStack benchmark execution, deterministic device
 resolution, CI contract outputs, artifact fetching, PR reporting, and baseline
@@ -210,7 +210,7 @@ The local action example below is suitable for trusted revisions or host-only
 runs. Do not adapt it into a credentialed fork-PR job that checks out and builds
 the pull request. Fork-PR BrowserStack callers should use
 `.github/workflows/reusable-bench.yml` at immutable commit
-`1ac54adaf2bd97c6ca303705e1e0471257716f48` from `v0.1.46` and pass
+`1ac54adaf2bd97c6ca303705e1e0471257716f48` from `v0.1.47` and pass
 BrowserStack secrets explicitly; the reusable workflow performs the untrusted
 prepare and trusted prebuilt stages automatically.
 
@@ -219,6 +219,20 @@ Use `prepare_script` for repository-specific code generation, and
 platforms need different selections. The hook still runs only in the
 secretless prepare stage. Existing shared function, single-device, and profile
 inputs remain valid fallbacks.
+
+Long-running reusable-workflow calls may set `max_completion_timeout_secs`.
+The default trusted ceiling is 1,800 seconds and the control plane rejects
+values above 21,600 seconds. The mobile manifest may request a shorter timeout,
+but cannot expand the credentialed run beyond the caller's trusted ceiling.
+When `platform: both`, the credentialed iOS and Android jobs run serially to
+avoid exceeding constrained BrowserStack account concurrency; both result sets
+are still summarized together.
+
+Generated iOS runners keep long XCUITest sessions active with bounded heartbeat
+interactions and expose the completed report through validated accessibility
+channels. Native-C-ABI Android runners report worker process death and native
+linkage failures as structured benchmark failures instead of waiting for the
+entire benchmark timeout.
 
 Minimal workflow:
 

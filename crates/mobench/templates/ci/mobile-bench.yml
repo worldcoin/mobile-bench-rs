@@ -78,7 +78,7 @@ jobs:
       device_profile: low-spec
       rust_toolchain: stable
       ffi_backend: ""
-      mobench_version: "0.1.46"
+      mobench_version: "0.1.47"
     secrets:
       BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
       BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
