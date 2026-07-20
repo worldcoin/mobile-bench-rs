@@ -2551,6 +2551,12 @@ mod tests {
         }
         assert!(generated_runner.contains("MobenchResultCode.HEARTBEAT ->"));
         assert!(generated_runner.contains("receiver?.send(MobenchResultCode.HEARTBEAT"));
+        assert!(native_runner.contains("MobenchResultCode.HEARTBEAT"));
+        assert!(native_runner.contains("fun checkWorkerExit()"));
+        assert!(
+            native_runner.contains("Benchmark worker process exited before BENCH_JSON was emitted")
+        );
+        assert!(native_runner.contains("catch (e: Throwable)"));
     }
 
     #[test]
