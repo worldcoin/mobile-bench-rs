@@ -161,9 +161,9 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  # The integration workflow may move while it is being tested, but the
-  # credentialed control plane always builds from this reviewed immutable SHA.
-  MOBENCH_TRUSTED_SHA: 08a9e1b9b2dc533655489fc7b0e0a6eabbf2f645
+  # The credentialed control plane always builds from this reviewed immutable
+  # 0.1.47 implementation, independently of the caller's selected build tool.
+  MOBENCH_TRUSTED_SHA: a88d4dcac8ad397be63d255da696b96115d201e0
 
 jobs:
   validate-request:
