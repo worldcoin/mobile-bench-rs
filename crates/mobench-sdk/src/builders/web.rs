@@ -117,7 +117,7 @@ impl WebBuilder {
 
         if self.verbose || self.dry_run {
             println!(
-                "{} cargo build --manifest-path {} --target {WASM_TARGET}{}",
+                "{} cargo build --manifest-path {} --lib --target {WASM_TARGET}{}",
                 if self.dry_run { "[dry-run]" } else { "[web]" },
                 crate_dir.join("Cargo.toml").display(),
                 if config.profile == BuildProfile::Release {
@@ -143,6 +143,7 @@ impl WebBuilder {
             .arg("build")
             .arg("--manifest-path")
             .arg(crate_dir.join("Cargo.toml"))
+            .arg("--lib")
             .arg("--target")
             .arg(WASM_TARGET);
         if config.profile == BuildProfile::Release {

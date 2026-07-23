@@ -13,7 +13,22 @@ Crates.io release pages:
 
 ## Unreleased
 
-No user-facing unreleased changes yet.
+### Browser-hosted WASM benchmarks
+
+`mobench-sdk` now uses browser `performance.now()` timing and exports the
+benchmark registry through a `wasm-bindgen` JSON bridge. `cargo mobench build
+--target web` produces a static bundle, while `cargo mobench run-web` drives
+that bundle through BrowserStack Automate's W3C WebDriver endpoint on desktop
+and real-mobile browsers.
+
+### Real downstream release gate
+
+The manual release self-test now pins real ProveKit and world-id-protocol
+fixtures. A release candidate must pass ProveKit passport age-check proving and
+World ID nullifier proving on two Android devices, two iOS devices, and browser
+WASM on macOS Safari, Windows Chrome, iOS Safari, and Android Chrome. The
+secretless build jobs patch the pinned consumers to the candidate SDK; native
+credentialed jobs still consume only prebuilt packages.
 
 ## v0.1.47
 

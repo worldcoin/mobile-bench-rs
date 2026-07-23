@@ -16,6 +16,9 @@ PLOT_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-publish-plots.yml").read
 PR_COMMAND = (ROOT / ".github/workflows/reusable-pr-command.yml").read_text()
 PR_AUTO = (ROOT / ".github/workflows/reusable-pr-auto.yml").read_text()
 SELFTEST_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-selftest.yml").read_text()
+RELEASE_WEB_WORKFLOW = (
+    ROOT / ".github/workflows/reusable-release-web.yml"
+).read_text()
 GENERATED_WORKFLOW = (ROOT / "crates/mobench/templates/ci/mobile-bench.yml").read_text()
 GENERATED_ACTION = (ROOT / "crates/mobench/templates/ci/action.yml").read_text()
 
@@ -347,11 +350,79 @@ def test_downloaded_reports_are_treated_as_untrusted() -> None:
 
 def test_security_boundary_external_actions_are_immutable() -> None:
     refs = re.findall(
-        r"^\s*uses:\s*([^\s#]+)", WORKFLOW + "\n" + PLOT_WORKFLOW, re.MULTILINE
+        r"^\s*uses:\s*([^\s#]+)",
+        WORKFLOW + "\n" + PLOT_WORKFLOW + "\n" + RELEASE_WEB_WORKFLOW,
+        re.MULTILINE,
     )
     assert refs
     for ref in refs:
         assert re.search(r"@[0-9a-f]{40}$", ref), ref
+
+
+def test_release_gate_pins_real_downstreams_and_complete_target_matrix() -> None:
+    provekit_sha = "9b2a6f37c67691eab4b0cec6c35e35c520e93285"
+    world_id_sha = "c2b1a15f28113013dc0600fdf6adeaccf6f397ef"
+    for sha in (provekit_sha, world_id_sha):
+        assert sha in SELFTEST_WORKFLOW
+
+    assert "source_repository: worldfnd/provekit" in SELFTEST_WORKFLOW
+    assert "source_repository: worldcoin/world-id-protocol" in SELFTEST_WORKFLOW
+    assert "bench_mobile::bench_passport_complete_age_check_prove" in SELFTEST_WORKFLOW
+    assert "zk_mobile_bench::bench_nullifier_proving_only" in SELFTEST_WORKFLOW
+    assert SELFTEST_WORKFLOW.count(
+        'ios_devices: \'[{"device":"iPhone 14","os_version":"16"},'
+    ) == 2
+    assert SELFTEST_WORKFLOW.count(
+        '{"device":"iPhone 16 Pro Max","os_version":"18"}]\''
+    ) == 2
+    assert SELFTEST_WORKFLOW.count(
+        'android_devices: \'[{"device":"Google Pixel 7","os_version":"13.0"},'
+    ) == 2
+    assert SELFTEST_WORKFLOW.count(
+        '{"device":"Samsung Galaxy S24","os_version":"14.0"}]\''
+    ) == 2
+
+    assert "project: [provekit, world-id-protocol]" in RELEASE_WEB_WORKFLOW
+    assert (
+        "environment: [macOS Safari, Windows Chrome, iOS Safari, Android Chrome]"
+        in RELEASE_WEB_WORKFLOW
+    )
+    for environment in (
+        "macOS Safari",
+        "Windows Chrome",
+        "iOS Safari",
+        "Android Chrome",
+    ):
+        assert f"- environment: {environment}" in RELEASE_WEB_WORKFLOW
+    assert RELEASE_WEB_WORKFLOW.count(
+        "browserstack/github-actions/setup-local@"
+        "93aebce225b754566349151c0676b26b005e591b"
+    ) == 2
+    assert "name: Full mobench release gate" in SELFTEST_WORKFLOW
+
+
+def test_external_release_source_is_restricted_to_non_pr_prepare_jobs() -> None:
+    validation = job("validate-request", "trusted-mobench")
+    assert (
+        "source_repository requires allow_non_pr and cannot be combined with pr_number"
+        in validation
+    )
+    assert "mobench_sdk_ref must be a full 40-character commit SHA" in validation
+    assert "artifact_prefix contains unsupported characters" in validation
+
+    for name, following in (
+        ("prepare-ios", "prepare-android"),
+        ("prepare-android", "run-ios"),
+    ):
+        text = job(name, following)
+        assert "Checkout mobench SDK under test" in text
+        assert "Patch caller to mobench SDK under test" in text
+        assert "[patch.crates-io]" in text
+
+    credentialed = job("run-ios", "summarize")
+    assert "Checkout mobench SDK under test" not in credentialed
+    assert "Patch caller to mobench SDK under test" not in credentialed
+    assert "[patch.crates-io]" not in credentialed
 
 
 def test_generated_workflow_uses_secure_reusable_boundary() -> None:

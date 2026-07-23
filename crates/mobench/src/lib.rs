@@ -1733,9 +1733,10 @@ pub(crate) fn resolve_project_layout(
     let android_heartbeat_interval_secs = raw_config
         .as_ref()
         .and_then(|cfg| toml_u64(cfg, &["browserstack", "android_heartbeat_interval_secs"]));
-    let web_wasm_bindgen = config
+    let web_wasm_bindgen = raw_config
         .as_ref()
-        .and_then(|cfg| cfg.web.wasm_bindgen.clone())
+        .and_then(|cfg| toml_string(cfg, &["web", "wasm_bindgen"]))
+        .map(PathBuf::from)
         .map(|path| {
             if path.is_absolute() {
                 path
@@ -8972,6 +8973,9 @@ ffi_backend = "native-c-abi"
 [android]
 abis = ["arm64-v8a", "x86_64"]
 
+[web]
+wasm_bindgen = "tools/wasm-bindgen"
+
 [benchmarks]
 default_function = "zk_mobile_bench::bench_query_proof_generation"
 
@@ -9318,6 +9322,10 @@ project = "proj"
         assert_eq!(layout.ios_completion_timeout_secs, Some(900));
         assert_eq!(layout.ios_deployment_target, "15.0");
         assert_eq!(layout.ios_runner, None);
+        assert_eq!(
+            layout.web_wasm_bindgen,
+            Some(project_root.join("tools/wasm-bindgen"))
+        );
         assert_eq!(
             layout.default_function.as_deref(),
             Some("zk_mobile_bench::bench_query_proof_generation")

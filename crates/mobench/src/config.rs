@@ -55,9 +55,6 @@ pub struct MobenchConfig {
     /// iOS-specific configuration.
     pub ios: IosConfig,
 
-    /// Browser-hosted WebAssembly build configuration.
-    pub web: WebConfig,
-
     /// Benchmark execution defaults.
     pub benchmarks: BenchmarksConfig,
 
@@ -152,14 +149,6 @@ impl Default for IosConfig {
             team_id: None,
         }
     }
-}
-
-/// Browser-hosted WebAssembly build configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct WebConfig {
-    /// Optional path to the `wasm-bindgen` CLI.
-    pub wasm_bindgen: Option<PathBuf>,
 }
 
 /// Benchmark execution defaults.
@@ -333,7 +322,6 @@ impl MobenchConfig {
                 deployment_target: "15.0".to_string(),
                 team_id: None,
             },
-            web: WebConfig::default(),
             benchmarks: BenchmarksConfig {
                 default_function: Some(format!("{}::my_benchmark", library_name)),
                 default_iterations: 100,
@@ -552,7 +540,6 @@ mod tests {
         assert_eq!(config.android.min_sdk, 24);
         assert_eq!(config.android.target_sdk, 34);
         assert_eq!(config.ios.deployment_target, "15.0");
-        assert_eq!(config.web.wasm_bindgen, None);
         assert_eq!(config.benchmarks.default_iterations, 100);
         assert_eq!(config.benchmarks.default_warmup, 10);
         assert_eq!(config.browserstack.ios_completion_timeout_secs, None);
@@ -587,9 +574,6 @@ target_sdk = 33
 bundle_id = "com.test.bench"
 deployment_target = "14.0"
 
-[web]
-wasm_bindgen = "/opt/mobench/bin/wasm-bindgen"
-
 [benchmarks]
 default_function = "test_bench::test_fn"
 default_iterations = 50
@@ -611,10 +595,6 @@ ios_completion_timeout_secs = 1200
         assert_eq!(config.android.target_sdk, 33);
         assert_eq!(config.ios.bundle_id, "com.test.bench");
         assert_eq!(config.ios.deployment_target, "14.0");
-        assert_eq!(
-            config.web.wasm_bindgen,
-            Some(PathBuf::from("/opt/mobench/bin/wasm-bindgen"))
-        );
         assert_eq!(
             config.benchmarks.default_function,
             Some("test_bench::test_fn".to_string())

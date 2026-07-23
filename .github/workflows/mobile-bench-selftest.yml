@@ -27,6 +27,10 @@ on:
         description: "Git ref for mobile-bench-rs to install instead of the in-repo path"
         type: string
         default: ""
+      downstream_release_gate:
+        description: "Run pinned ProveKit and world-id-protocol native/WASM release gates"
+        type: boolean
+        default: true
 
 permissions:
   actions: read
@@ -58,3 +62,99 @@ jobs:
     secrets:
       BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
       BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+  provekit-native-release:
+    if: inputs.downstream_release_gate
+    uses: ./.github/workflows/reusable-bench.yml
+    with:
+      source_repository: worldfnd/provekit
+      crate_path: bench-mobile
+      functions: '["bench_mobile::bench_passport_complete_age_check_prove"]'
+      platform: both
+      prepare_script: bench-mobile/scripts/generate-fixtures.sh
+      iterations: ${{ inputs.iterations }}
+      warmup: ${{ inputs.warmup }}
+      device_profile: custom
+      ios_devices: '[{"device":"iPhone 14","os_version":"16"},{"device":"iPhone 16 Pro Max","os_version":"18"}]'
+      android_devices: '[{"device":"Google Pixel 7","os_version":"13.0"},{"device":"Samsung Galaxy S24","os_version":"14.0"}]'
+      build_release: true
+      rust_toolchain: nightly-2026-03-04
+      ffi_backend: native-c-abi
+      mobench_ref: ${{ github.sha }}
+      mobench_sdk_ref: ${{ github.sha }}
+      artifact_prefix: release-provekit-
+      max_completion_timeout_secs: 7200
+      head_sha: 9b2a6f37c67691eab4b0cec6c35e35c520e93285
+      allow_non_pr: true
+      requested_by: ${{ github.actor }}
+      check_run_name: Mobench ProveKit Release Gate
+    secrets:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+  world-id-native-release:
+    if: inputs.downstream_release_gate
+    uses: ./.github/workflows/reusable-bench.yml
+    with:
+      source_repository: worldcoin/world-id-protocol
+      crate_path: crates/zk-mobile-bench
+      functions: '["zk_mobile_bench::bench_nullifier_proving_only"]'
+      platform: both
+      iterations: ${{ inputs.iterations }}
+      warmup: ${{ inputs.warmup }}
+      device_profile: custom
+      ios_devices: '[{"device":"iPhone 14","os_version":"16"},{"device":"iPhone 16 Pro Max","os_version":"18"}]'
+      android_devices: '[{"device":"Google Pixel 7","os_version":"13.0"},{"device":"Samsung Galaxy S24","os_version":"14.0"}]'
+      build_release: true
+      rust_toolchain: stable
+      ffi_backend: uniffi
+      mobench_ref: ${{ github.sha }}
+      mobench_sdk_ref: ${{ github.sha }}
+      artifact_prefix: release-world-id-
+      max_completion_timeout_secs: 7200
+      head_sha: c2b1a15f28113013dc0600fdf6adeaccf6f397ef
+      allow_non_pr: true
+      requested_by: ${{ github.actor }}
+      check_run_name: Mobench World ID Release Gate
+    secrets:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+  downstream-wasm-release:
+    if: inputs.downstream_release_gate
+    uses: ./.github/workflows/reusable-release-web.yml
+    with:
+      mobench_sha: ${{ github.sha }}
+      provekit_sha: 9b2a6f37c67691eab4b0cec6c35e35c520e93285
+      world_id_sha: c2b1a15f28113013dc0600fdf6adeaccf6f397ef
+      iterations: ${{ inputs.iterations }}
+      warmup: ${{ inputs.warmup }}
+    secrets:
+      BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+      BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+  release-gate:
+    name: Full mobench release gate
+    if: always()
+    needs:
+      - selftest
+      - provekit-native-release
+      - world-id-native-release
+      - downstream-wasm-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require selected release lanes
+        env:
+          INTERNAL_RESULT: ${{ needs.selftest.result }}
+          PROVEKIT_NATIVE_RESULT: ${{ needs.provekit-native-release.result }}
+          WORLD_ID_NATIVE_RESULT: ${{ needs.world-id-native-release.result }}
+          WASM_RESULT: ${{ needs.downstream-wasm-release.result }}
+          DOWNSTREAM_RELEASE_GATE: ${{ inputs.downstream_release_gate }}
+        run: |
+          set -euo pipefail
+          test "$INTERNAL_RESULT" = success
+          if [ "$DOWNSTREAM_RELEASE_GATE" = true ]; then
+            test "$PROVEKIT_NATIVE_RESULT" = success
+            test "$WORLD_ID_NATIVE_RESULT" = success
+            test "$WASM_RESULT" = success
+          fi

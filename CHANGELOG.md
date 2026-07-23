@@ -6,7 +6,22 @@ longer integration-oriented release notes and support status.
 
 ## Unreleased
 
-No user-facing unreleased changes yet.
+### Added
+
+- Added browser-hosted WASM bundles, browser-safe timing, and direct
+  BrowserStack Automate execution through `cargo mobench build --target web`
+  and `cargo mobench run-web`.
+- Added a required downstream release gate covering ProveKit passport
+  age-check proving and World ID nullifier proving on two native Android
+  devices, two native iOS devices, and WASM browsers on macOS, Windows, iOS,
+  and Android.
+
+### Fixed
+
+- Kept `[web].wasm_bindgen` configuration semver-compatible by resolving it
+  from raw TOML instead of adding a field to the public `MobenchConfig`.
+- Limited WASM builds to the selected library target so benchmark packages may
+  retain native-only helper binaries.
 
 ## v0.1.47 - 2026-07-20
 
