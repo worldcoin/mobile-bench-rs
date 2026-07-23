@@ -532,7 +532,7 @@ jobs:
           version="$(awk '$0 == "[[package]]" { p=0 } $0 == "name = \"uniffi_bindgen\"" { p=1; next } p && /^version = / { gsub(/^version = \"|\"$/, "", $0); print; exit }' "$lockfile")"
           if [ -n "$version" ]; then
             cargo install --git https://github.com/mozilla/uniffi-rs --tag "v${version}" \
-              uniffi-bindgen-cli --bin uniffi-bindgen
+              uniffi --features cli --bin uniffi-bindgen
           fi
       - name: Run caller preparation hook (untrusted)
         if: inputs.prepare_script != ''
@@ -763,7 +763,7 @@ jobs:
           version="$(awk '$0 == "[[package]]" { p=0 } $0 == "name = \"uniffi_bindgen\"" { p=1; next } p && /^version = / { gsub(/^version = \"|\"$/, "", $0); print; exit }' "$lockfile")"
           if [ -n "$version" ]; then
             cargo install --git https://github.com/mozilla/uniffi-rs --tag "v${version}" \
-              uniffi-bindgen-cli --bin uniffi-bindgen
+              uniffi --features cli --bin uniffi-bindgen
           fi
       - name: Run caller preparation hook (untrusted)
         if: inputs.prepare_script != ''

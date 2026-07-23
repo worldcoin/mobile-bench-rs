@@ -167,6 +167,8 @@ def test_binding_generator_uses_crate_workspace_lockfile() -> None:
         uniffi = text.index("uniffi) ;;", bolt)
         metadata = text.index('cargo metadata --manifest-path "$manifest"', uniffi)
         assert bolt < uniffi < metadata
+        assert "uniffi --features cli --bin uniffi-bindgen" in text
+        assert "uniffi-bindgen-cli --bin uniffi-bindgen" not in text
 
 
 def test_untrusted_uploads_are_enumerated() -> None:
