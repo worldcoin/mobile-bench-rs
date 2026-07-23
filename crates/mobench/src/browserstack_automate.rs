@@ -157,6 +157,12 @@ impl BrowserStackAutomateClient {
     pub fn new(auth: BrowserStackAuth) -> Result<Self> {
         let http = Client::builder()
             .user_agent(USER_AGENT)
+            // BrowserStack session allocation and benchmark scripts can both
+            // legitimately take longer than reqwest's blocking-client
+            // 30-second default. WebDriver and workflow timeouts remain the
+            // explicit bounds; connection establishment stays separately
+            // bounded below.
+            .timeout(None)
             .connect_timeout(Duration::from_secs(15))
             .build()
             .context("building BrowserStack Automate HTTP client")?;
