@@ -6,6 +6,10 @@ longer integration-oriented release notes and support status.
 
 ## Unreleased
 
+No user-facing unreleased changes yet.
+
+## v0.1.48 - 2026-07-23
+
 ### Added
 
 - Added browser-hosted WASM bundles, browser-safe timing, and direct
