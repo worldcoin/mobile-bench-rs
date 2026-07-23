@@ -17,6 +17,8 @@ const DEFAULT_WEBDRIVER_URL: &str = "https://hub.browserstack.com/wd/hub";
 const USER_AGENT: &str = "mobench/0.1";
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_READY_POLL: Duration = Duration::from_millis(250);
+const DEFAULT_BENCHMARK_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_BENCHMARK_POLL: Duration = Duration::from_secs(1);
 const MAX_WEBDRIVER_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Browser and operating-system capabilities for one Automate session.
@@ -332,33 +334,86 @@ impl BrowserStackAutomateClient {
 
     /// Invokes `window.mobench.run(spec)` and returns its structured JSON value.
     pub fn run_benchmark(&self, session_id: &str, spec: &Value) -> Result<Value> {
-        let value = self.execute_async_script(
+        self.run_benchmark_with_timeout(
+            session_id,
+            spec,
+            DEFAULT_BENCHMARK_TIMEOUT,
+            DEFAULT_BENCHMARK_POLL,
+        )
+    }
+
+    fn run_benchmark_with_timeout(
+        &self,
+        session_id: &str,
+        spec: &Value,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<Value> {
+        self.execute_script(
             session_id,
             r#"
 const spec = arguments[0];
-const done = arguments[arguments.length - 1];
-Promise.resolve()
-  .then(() => window.mobench.run(spec))
-  .then((result) => done({ ok: true, result }))
-  .catch((error) => done({
-    ok: false,
-    error: error && error.message ? String(error.message) : String(error)
-  }));
+window.__mobenchRunState = { status: "running" };
+setTimeout(() => {
+  Promise.resolve()
+    .then(() => window.mobench.run(spec))
+    .then((result) => {
+      window.__mobenchRunState = { status: "ok", result };
+    })
+    .catch((error) => {
+      window.__mobenchRunState = {
+        status: "error",
+        error: error && error.message ? String(error.message) : String(error)
+      };
+    });
+}, 0);
+return true;
 "#,
             std::slice::from_ref(spec),
         )?;
 
-        if value.get("ok").and_then(Value::as_bool) != Some(true) {
-            let message = value
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("web benchmark failed without an error message");
-            bail!("BrowserStack web benchmark failed: {message}");
+        let started = Instant::now();
+        loop {
+            let state = match self.execute_script(
+                session_id,
+                "return window.__mobenchRunState || { status: 'missing' };",
+                &[],
+            ) {
+                Ok(state) => state,
+                Err(error) if is_browser_busy_error(&error) && started.elapsed() < timeout => {
+                    std::thread::sleep(poll_interval);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            match state.get("status").and_then(Value::as_str) {
+                Some("ok") => {
+                    return state
+                        .get("result")
+                        .cloned()
+                        .ok_or_else(|| anyhow!("BrowserStack web benchmark returned no result"));
+                }
+                Some("error") => {
+                    let message = state
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("web benchmark failed without an error message");
+                    bail!("BrowserStack web benchmark failed: {message}");
+                }
+                Some("running") => {}
+                Some(status) => {
+                    bail!("BrowserStack web benchmark returned invalid status {status}")
+                }
+                None => bail!("BrowserStack web benchmark returned no status"),
+            }
+            if started.elapsed() >= timeout {
+                bail!(
+                    "timed out after {} ms waiting for the BrowserStack web benchmark",
+                    timeout.as_millis()
+                );
+            }
+            std::thread::sleep(poll_interval);
         }
-        value
-            .get("result")
-            .cloned()
-            .ok_or_else(|| anyhow!("BrowserStack web benchmark returned no result"))
     }
 
     /// Runs a complete mobench browser session and always attempts cleanup.
@@ -378,7 +433,12 @@ Promise.resolve()
             self.wait_until_ready(&session.session_id)?;
             let spec =
                 serde_json::to_value(&request.spec).context("serializing browser BenchSpec")?;
-            let value = self.run_benchmark(&session.session_id, &spec)?;
+            let value = self.run_benchmark_with_timeout(
+                &session.session_id,
+                &spec,
+                request.script_timeout,
+                DEFAULT_BENCHMARK_POLL,
+            )?;
             serde_json::from_value::<RunnerReport>(value).context("decoding browser RunnerReport")
         })();
 
@@ -505,6 +565,12 @@ fn parse_session_response(response: Value) -> Result<AutomateSession> {
         session_id: session_id.to_string(),
         capabilities,
     })
+}
+
+fn is_browser_busy_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("Did not get any response for atom execution")
+        || message.contains("Timed out receiving message from renderer")
 }
 
 fn parse_webdriver_response<T: DeserializeOwned>(
@@ -789,7 +855,8 @@ mod tests {
         let (url, recorded, handle) = spawn_webdriver_server(vec![
             json!({ "value": null }),
             json!({ "value": true }),
-            json!({ "value": { "ok": true, "result": expected } }),
+            json!({ "value": true }),
+            json!({ "value": { "status": "ok", "result": expected } }),
         ]);
         let client = client(url);
 
@@ -808,10 +875,36 @@ mod tests {
         let requests = recorded.lock().unwrap();
         assert_eq!(requests[0].path, "/wd/hub/session/session-123/url");
         assert_eq!(requests[1].path, "/wd/hub/session/session-123/execute/sync");
-        assert_eq!(
-            requests[2].path,
-            "/wd/hub/session/session-123/execute/async"
-        );
+        assert_eq!(requests[2].path, "/wd/hub/session/session-123/execute/sync");
+        assert_eq!(requests[3].path, "/wd/hub/session/session-123/execute/sync");
+    }
+
+    #[test]
+    fn benchmark_polling_tolerates_browser_busy_atom_timeouts() {
+        let expected = json!({ "function": "sample::bench", "samples": [] });
+        let (url, recorded, handle) = spawn_webdriver_server(vec![
+            json!({ "value": true }),
+            json!({
+                "value": {
+                    "error": "unknown error",
+                    "message": "Did not get any response for atom execution after 130165ms"
+                }
+            }),
+            json!({ "value": { "status": "ok", "result": expected } }),
+        ]);
+
+        let result = client(url)
+            .run_benchmark_with_timeout(
+                "session-123",
+                &json!({ "name": "sample::bench" }),
+                Duration::from_secs(1),
+                Duration::ZERO,
+            )
+            .expect("busy browser should be polled again");
+        handle.join().unwrap();
+
+        assert_eq!(result, expected);
+        assert_eq!(recorded.lock().unwrap().len(), 3);
     }
 
     #[test]
@@ -878,7 +971,8 @@ mod tests {
             json!({ "value": null }),
             json!({ "value": null }),
             json!({ "value": true }),
-            json!({ "value": { "ok": true, "result": report } }),
+            json!({ "value": true }),
+            json!({ "value": { "status": "ok", "result": report } }),
             json!({ "value": null }),
             json!({ "value": null }),
         ]);
@@ -903,9 +997,9 @@ mod tests {
         assert_eq!(result.spec.name, "sample::bench");
         assert_eq!(result.samples.len(), 1);
         let requests = recorded.lock().unwrap();
-        assert_eq!(requests.len(), 7);
-        assert_eq!(requests[6].method, "DELETE");
-        assert_eq!(requests[6].path, "/wd/hub/session/session-123");
+        assert_eq!(requests.len(), 8);
+        assert_eq!(requests[7].method, "DELETE");
+        assert_eq!(requests[7].path, "/wd/hub/session/session-123");
     }
 
     #[test]
@@ -915,7 +1009,8 @@ mod tests {
             json!({ "value": null }),
             json!({ "value": null }),
             json!({ "value": true }),
-            json!({ "value": { "ok": false, "error": "benchmark exploded" } }),
+            json!({ "value": true }),
+            json!({ "value": { "status": "error", "error": "benchmark exploded" } }),
             json!({ "value": null }),
             json!({ "value": null }),
         ]);
@@ -940,12 +1035,12 @@ mod tests {
         assert!(error.to_string().contains("benchmark exploded"));
         let requests = recorded.lock().unwrap();
         assert!(
-            requests[5].body["script"]
+            requests[6].body["script"]
                 .as_str()
                 .unwrap()
                 .contains(r#""status":"failed""#)
         );
-        assert_eq!(requests[6].method, "DELETE");
+        assert_eq!(requests[7].method, "DELETE");
     }
 
     #[test]
