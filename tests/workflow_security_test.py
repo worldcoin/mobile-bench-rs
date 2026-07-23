@@ -102,7 +102,7 @@ def test_trusted_control_plane_is_from_a_literal_commit() -> None:
         capture_output=True,
         check=True,
     ).stdout
-    assert 'version = "0.1.47"' in cargo_toml
+    assert 'version = "0.1.48"' in cargo_toml
 
 
 def test_caller_toolchain_is_explicit_and_confined_to_prepare_jobs() -> None:
@@ -449,7 +449,7 @@ def test_generated_workflow_uses_secure_reusable_boundary() -> None:
         capture_output=True,
         check=True,
     ).stdout
-    assert "MOBENCH_TRUSTED_SHA: f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f" in pinned_workflow
+    assert "MOBENCH_TRUSTED_SHA: b29b4a5334df5e8f2f9d61e6435258c83ce44eb6" in pinned_workflow
     assert "rust_toolchain:" in GENERATED_WORKFLOW
     assert "ffi_backend:" in GENERATED_WORKFLOW
     assert "prepare_script:" in GENERATED_WORKFLOW

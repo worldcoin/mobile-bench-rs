@@ -50,10 +50,10 @@ server-side atom limit imposed by some real-mobile sessions.
 
 Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.48` as
 applicable. Pin reusable workflow callers to immutable commit
-`b29b4a5334df5e8f2f9d61e6435258c83ce44eb6`:
+`9495b599d8250a5e992874aca61a6a0653b381ff`:
 
 ```yaml
-uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@b29b4a5334df5e8f2f9d61e6435258c83ce44eb6
+uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@9495b599d8250a5e992874aca61a6a0653b381ff
 with:
   mobench_version: "0.1.48"
 ```
