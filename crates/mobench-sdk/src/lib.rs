@@ -332,6 +332,9 @@ pub mod registry;
 #[cfg(feature = "registry")]
 #[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub mod runner;
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
+pub mod web;
 
 // Re-export the benchmark macro from bench-macros (only with registry feature)
 #[cfg(feature = "registry")]
@@ -353,6 +356,9 @@ pub use registry::{BenchFunction, discover_benchmarks, find_benchmark, list_benc
 #[cfg(feature = "registry")]
 #[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub use runner::{BenchmarkBuilder, run_benchmark};
+#[cfg(feature = "registry")]
+#[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
+pub use web::{BrowserRunnerError, run_benchmark_json};
 
 // Re-export types that are always available
 pub use types::{BenchError, BenchSample, BenchSpec, HarnessTimelineSpan, RunnerReport};
