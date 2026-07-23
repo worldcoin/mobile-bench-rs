@@ -103,7 +103,7 @@ jobs:
             repository: worldcoin/world-id-protocol
             ref: ${{ inputs.world_id_sha }}
             crate_path: crates/zk-mobile-bench
-            toolchain: stable
+            toolchain: 1.93.0
             adapter: tests/release-fixtures/prepare-world-id-wasm.sh
     steps:
       - name: Checkout exact mobench candidate

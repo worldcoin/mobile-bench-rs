@@ -106,7 +106,7 @@ jobs:
       ios_devices: '[{"device":"iPhone 14","os_version":"16"},{"device":"iPhone 16 Pro Max","os_version":"18"}]'
       android_devices: '[{"device":"Google Pixel 7","os_version":"13.0"},{"device":"Samsung Galaxy S24","os_version":"14.0"}]'
       build_release: true
-      rust_toolchain: stable
+      rust_toolchain: 1.93.0
       ffi_backend: uniffi
       mobench_ref: ${{ github.sha }}
       mobench_sdk_ref: ${{ github.sha }}

@@ -369,8 +369,10 @@ def test_release_gate_pins_real_downstreams_and_complete_target_matrix() -> None
 
     assert "source_repository: worldfnd/provekit" in SELFTEST_WORKFLOW
     assert "source_repository: worldcoin/world-id-protocol" in SELFTEST_WORKFLOW
+    assert "rust_toolchain: 1.93.0" in SELFTEST_WORKFLOW
     assert "bench_mobile::bench_passport_complete_age_check_prove" in SELFTEST_WORKFLOW
     assert "zk_mobile_bench::bench_nullifier_proving_only" in SELFTEST_WORKFLOW
+    assert "toolchain: 1.93.0" in RELEASE_WEB_WORKFLOW
     assert SELFTEST_WORKFLOW.count(
         'ios_devices: \'[{"device":"iPhone 14","os_version":"16"},'
     ) == 2
