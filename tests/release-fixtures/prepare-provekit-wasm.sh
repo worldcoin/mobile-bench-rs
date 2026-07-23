@@ -92,7 +92,17 @@ cp "${fixture_root}/export_witness.rs" \
 
 (
   cd "$provekit_root"
-  MOBENCH_CI_PREPARE=1 ./bench-mobile/scripts/generate-fixtures.sh
+  for attempt in 1 2 3; do
+    if MOBENCH_CI_PREPARE=1 ./bench-mobile/scripts/generate-fixtures.sh; then
+      break
+    fi
+    if [ "$attempt" -eq 3 ]; then
+      echo "ProveKit fixture generation failed after 3 attempts" >&2
+      exit 1
+    fi
+    echo "ProveKit fixture generation attempt ${attempt} failed; retrying" >&2
+    sleep "$((attempt * 5))"
+  done
   cargo run --release -p bench-mobile --example export-complete-age-check-witness -- \
     noir-examples/noir-passport-monolithic/complete_age_check/target/complete_age_check.json \
     noir-examples/noir-passport-monolithic/complete_age_check/Prover.toml \

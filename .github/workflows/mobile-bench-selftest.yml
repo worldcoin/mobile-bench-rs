@@ -72,6 +72,7 @@ jobs:
       functions: '["bench_mobile::bench_passport_complete_age_check_prove"]'
       platform: both
       prepare_script: bench-mobile/scripts/generate-fixtures.sh
+      prepare_attempts: 3
       iterations: ${{ inputs.iterations }}
       warmup: ${{ inputs.warmup }}
       device_profile: custom

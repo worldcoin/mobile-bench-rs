@@ -184,6 +184,9 @@ def test_untrusted_uploads_are_enumerated() -> None:
 
 def test_prepare_hook_is_confined_validated_and_fail_closed() -> None:
     assert 'prepare_script:' in WORKFLOW
+    assert 'prepare_attempts:' in WORKFLOW
+    validation = job("validate-request", "trusted-mobench")
+    assert "prepare_attempts must be an integer from 1 through 3" in validation
     for name, following, platform, label in (
         ("prepare-ios", "prepare-android", "ios", "iOS"),
         ("prepare-android", "run-ios", "android", "Android"),
@@ -195,15 +198,18 @@ def test_prepare_hook_is_confined_validated_and_fail_closed() -> None:
         assert hook < prepare < upload
         assert 'MOBENCH_CI_PREPARE: "1"' in text
         assert f"MOBENCH_PLATFORM: {platform}" in text
+        assert "PREPARE_ATTEMPTS: ${{ inputs.prepare_attempts }}" in text
         assert "prepare_script must be a normalized repository-relative path" in text
         assert "prepare_script is missing or escapes the caller checkout" in text
         assert "resolved.relative_to(root)" in text
         assert "resolved.is_file()" in text
-        assert 'bash -- "$script"' in text
+        assert 'if bash -- "$script"; then' in text
+        assert "prepare_script failed after ${PREPARE_ATTEMPTS} attempt(s)" in text
         assert "continue-on-error" not in text
 
     credentialed = job("run-ios", "summarize")
     assert "prepare_script" not in credentialed
+    assert "PREPARE_ATTEMPTS" not in credentialed
     assert "MOBENCH_CI_PREPARE" not in credentialed
 
 
@@ -370,6 +376,7 @@ def test_release_gate_pins_real_downstreams_and_complete_target_matrix() -> None
     assert "source_repository: worldfnd/provekit" in SELFTEST_WORKFLOW
     assert "source_repository: worldcoin/world-id-protocol" in SELFTEST_WORKFLOW
     assert "rust_toolchain: 1.93.0" in SELFTEST_WORKFLOW
+    assert "prepare_attempts: 3" in SELFTEST_WORKFLOW
     assert "bench_mobile::bench_passport_complete_age_check_prove" in SELFTEST_WORKFLOW
     assert "zk_mobile_bench::bench_nullifier_proving_only" in SELFTEST_WORKFLOW
     assert "toolchain: 1.93.0" in RELEASE_WEB_WORKFLOW

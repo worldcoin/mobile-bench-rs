@@ -30,6 +30,11 @@ WASM on macOS Safari, Windows Chrome, iOS Safari, and Android Chrome. The
 secretless build jobs patch the pinned consumers to the candidate SDK; native
 credentialed jobs still consume only prebuilt packages.
 
+The gate pins each downstream Rust toolchain exactly, permits up to three
+explicitly requested attempts for transient failures in secretless fixture
+preparation, and leaves long WebDriver HTTP requests bounded by the configured
+script/page and outer workflow timeouts instead of reqwest's 30-second default.
+
 ## v0.1.47
 
 Status: current supported release.

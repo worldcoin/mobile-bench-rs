@@ -22,6 +22,12 @@ longer integration-oriented release notes and support status.
   from raw TOML instead of adding a field to the public `MobenchConfig`.
 - Limited WASM builds to the selected library target so benchmark packages may
   retain native-only helper binaries.
+- Removed reqwest's implicit 30-second total deadline from BrowserStack
+  WebDriver requests so session allocation and long proving scripts honor the
+  explicit WebDriver/workflow timeouts.
+- Installed the caller-matched UniFFI generator from the correct `uniffi`
+  package with its `cli` feature, and added opt-in bounded retries for
+  secretless prepare hooks that download pinned fixture tooling.
 
 ## v0.1.47 - 2026-07-20
 
