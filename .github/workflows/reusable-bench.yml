@@ -182,8 +182,8 @@ permissions: {}
 env:
   CARGO_TERM_COLOR: always
   # The credentialed control plane always builds from this reviewed immutable
-  # 0.1.47 implementation, independently of the caller's selected build tool.
-  MOBENCH_TRUSTED_SHA: f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f
+  # 0.1.48 implementation, independently of the caller's selected build tool.
+  MOBENCH_TRUSTED_SHA: b29b4a5334df5e8f2f9d61e6435258c83ce44eb6
 
 jobs:
   validate-request:
@@ -484,7 +484,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.47 --locked
+            cargo install mobench --version 0.1.48 --locked
           fi
           brew install xcodegen
       - name: Install caller-selected binding generator
@@ -727,7 +727,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.47 --locked
+            cargo install mobench --version 0.1.48 --locked
           fi
       - name: Install caller-selected binding generator
         shell: bash

@@ -130,9 +130,11 @@ jobs:
             exit 0
           fi
 
-          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
-          echo "should_dispatch=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "pr_number=${PR_NUMBER}"
+            echo "head_sha=${HEAD_SHA}"
+            echo "should_dispatch=true"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Dispatch benchmark workflow
         if: steps.pr.outputs.should_dispatch == 'true'

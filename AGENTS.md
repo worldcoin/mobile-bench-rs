@@ -10,7 +10,7 @@ toolkit. It lets benchmark authors define Rust benchmarks once, build generated
 Android/iOS runners, run host-only/local/BrowserStack benchmark jobs, produce
 stable CI artifacts, and run local native profiling sessions.
 
-Current workspace and crates.io release: **v0.1.47**.
+Current workspace and crates.io release: **v0.1.48**.
 
 Published crates:
 

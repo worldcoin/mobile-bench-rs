@@ -13,6 +13,14 @@ Crates.io release pages:
 
 ## Unreleased
 
+No user-facing unreleased changes yet.
+
+## v0.1.48
+
+Status: current supported release.
+
+Publication date: 2026-07-23.
+
 ### Browser-hosted WASM benchmarks
 
 `mobench-sdk` now uses browser `performance.now()` timing and exports the
@@ -38,9 +46,24 @@ Browser proofs run in a dedicated module worker and return through page-owned
 polling, keeping the WebDriver page responsive and avoiding the shorter
 server-side atom limit imposed by some real-mobile sessions.
 
+### Migration From v0.1.47
+
+Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.48` as
+applicable. Pin reusable workflow callers to immutable commit
+`b29b4a5334df5e8f2f9d61e6435258c83ce44eb6`:
+
+```yaml
+uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@b29b4a5334df5e8f2f9d61e6435258c83ce44eb6
+with:
+  mobench_version: "0.1.48"
+```
+
+Existing native configurations remain compatible; browser benchmarks can opt
+into `build --target web` and `run-web`.
+
 ## v0.1.47
 
-Status: current supported release.
+Status: superseded by `v0.1.48`.
 
 Publication date: 2026-07-20.
 
@@ -422,7 +445,8 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.47` | 2026-07-20 | `mobench 0.1.47`, `mobench-sdk 0.1.47`, `mobench-macros 0.1.47` | Current supported release |
+| `v0.1.48` | 2026-07-23 | `mobench 0.1.48`, `mobench-sdk 0.1.48`, `mobench-macros 0.1.48` | Current supported release |
+| `v0.1.47` | 2026-07-20 | `mobench 0.1.47`, `mobench-sdk 0.1.47`, `mobench-macros 0.1.47` | Superseded by `v0.1.48` |
 | `v0.1.46` | 2026-07-19 | `mobench 0.1.46`, `mobench-sdk 0.1.46`, `mobench-macros 0.1.46` | Superseded by `v0.1.47` |
 | `v0.1.45` | 2026-07-17 | `mobench 0.1.45`, `mobench-sdk 0.1.45`, `mobench-macros 0.1.45` | Superseded by `v0.1.46` |
 | `v0.1.44` | 2026-07-17 | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Superseded by `v0.1.45` |

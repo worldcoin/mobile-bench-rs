@@ -60,7 +60,7 @@ permissions:
 
 jobs:
   benchmark:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@b29b4a5334df5e8f2f9d61e6435258c83ce44eb6
     with:
       head_sha: ${{ inputs.head_sha }}
       pr_number: ${{ inputs.pr_number }}
@@ -78,7 +78,7 @@ jobs:
       device_profile: low-spec
       rust_toolchain: stable
       ffi_backend: ""
-      mobench_version: "0.1.47"
+      mobench_version: "0.1.48"
     secrets:
       BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
       BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}

@@ -9,10 +9,10 @@ benchmarks on Android and iOS, locally or on BrowserStack, with a
 library-first SDK, a `cargo mobench` CLI, config-first project resolution,
 stable CI output contracts, and local native profiling artifacts.
 
-Current release: **v0.1.47**. It makes long-running BrowserStack benchmarks
-reliable, reports native Android worker failures promptly, and keeps exact-head
-validation fail-closed through bounded API retries without weakening the
-credential boundary introduced in v0.1.44.
+Current release: **v0.1.48**. It adds browser-hosted WASM benchmarks through
+BrowserStack Automate and makes real ProveKit and World ID native/browser
+matrices mandatory release gates while preserving the credential boundary
+introduced in v0.1.44.
 
 ## What It Provides
 
