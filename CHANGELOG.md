@@ -25,8 +25,9 @@ longer integration-oriented release notes and support status.
 - Removed reqwest's implicit 30-second total deadline from BrowserStack
   WebDriver requests so session allocation and long proving scripts honor the
   explicit WebDriver/workflow timeouts.
-- Run browser proofs in page-owned state and poll their result so real-mobile
-  BrowserStack sessions do not depend on one long-lived WebDriver atom.
+- Run browser proofs in a dedicated module worker and poll page-owned result
+  state so real-mobile BrowserStack sessions stay responsive and do not depend
+  on one long-lived WebDriver atom.
 - Installed the caller-matched UniFFI generator from the correct `uniffi`
   package with its `cli` feature, and added opt-in bounded retries for
   secretless prepare hooks that download pinned fixture tooling.

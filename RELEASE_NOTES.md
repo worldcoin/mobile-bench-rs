@@ -34,8 +34,9 @@ The gate pins each downstream Rust toolchain exactly, permits up to three
 explicitly requested attempts for transient failures in secretless fixture
 preparation, and leaves long WebDriver HTTP requests bounded by the configured
 script/page and outer workflow timeouts instead of reqwest's 30-second default.
-Browser proofs run in page-owned state and return through polling, avoiding the
-shorter server-side atom limit imposed by some real-mobile WebDriver sessions.
+Browser proofs run in a dedicated module worker and return through page-owned
+polling, keeping the WebDriver page responsive and avoiding the shorter
+server-side atom limit imposed by some real-mobile sessions.
 
 ## v0.1.47
 

@@ -11,6 +11,7 @@ const WASM_TARGET: &str = "wasm32-unknown-unknown";
 const WEB_GLUE_NAME: &str = "mobench_web";
 const INDEX_HTML: &str = include_str!("../../templates/web/index.html");
 const RUNNER_JS: &str = include_str!("../../templates/web/runner.js");
+const WORKER_JS: &str = include_str!("../../templates/web/worker.js");
 
 /// Configuration for a generated web benchmark bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +100,7 @@ impl WebBuilder {
         validate_project_root(&self.project_root, &self.crate_name)?;
         let crate_dir = self.resolve_crate_dir()?;
         let bundle_dir = self.output_dir.join("web");
+        let worker_js = bundle_dir.join("worker.js");
         let result = WebBuildResult {
             index_html: bundle_dir.join("index.html"),
             runner_js: bundle_dir.join("runner.js"),
@@ -180,6 +182,7 @@ impl WebBuilder {
 
         write_bundle_file(&result.index_html, INDEX_HTML)?;
         write_bundle_file(&result.runner_js, RUNNER_JS)?;
+        write_bundle_file(&worker_js, WORKER_JS)?;
         let manifest = WebBundleManifest {
             schema: "mobench.web-bundle.v1",
             crate_name: &self.crate_name,
@@ -188,6 +191,7 @@ impl WebBuilder {
             target: WASM_TARGET,
             entrypoint: "index.html",
             runner: "runner.js",
+            worker: "worker.js",
             javascript: "mobench_web.js",
             wasm: "mobench_web_bg.wasm",
         };
@@ -199,6 +203,7 @@ impl WebBuilder {
         for required in [
             &result.index_html,
             &result.runner_js,
+            &worker_js,
             &result.bindgen_js,
             &result.wasm,
             &result.manifest,
@@ -252,6 +257,7 @@ struct WebBundleManifest<'a> {
     target: &'static str,
     entrypoint: &'static str,
     runner: &'static str,
+    worker: &'static str,
     javascript: &'static str,
     wasm: &'static str,
 }
@@ -294,7 +300,8 @@ mod tests {
     fn templates_expose_stable_window_contract() {
         assert!(INDEX_HTML.contains("runner.js"));
         assert!(RUNNER_JS.contains("window.mobench"));
-        assert!(RUNNER_JS.contains("runBenchmarkJson"));
-        assert!(RUNNER_JS.contains("JSON.parse"));
+        assert!(RUNNER_JS.contains("new Worker"));
+        assert!(WORKER_JS.contains("runBenchmarkJson"));
+        assert!(WORKER_JS.contains("JSON.parse"));
     }
 }
