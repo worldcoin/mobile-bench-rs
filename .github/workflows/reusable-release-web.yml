@@ -273,7 +273,9 @@ jobs:
           TARGET_OS: ${{ matrix.os }}
           OS_VERSION: ${{ matrix.os_version }}
           DEVICE: ${{ matrix.device }}
+          ENVIRONMENT: ${{ matrix.environment }}
           ITERATIONS: ${{ inputs.iterations }}
+          MOBENCH_SHA: ${{ inputs.mobench_sha }}
           WARMUP: ${{ inputs.warmup }}
           PROVEKIT_FUNCTION: bench_mobile::bench_passport_complete_age_check_prove
           WORLD_ID_FUNCTION: zk_mobile_bench::bench_nullifier_proving_only
@@ -293,8 +295,8 @@ jobs:
             --local-identifier "$BROWSERSTACK_LOCAL_IDENTIFIER"
             --script-timeout-secs 3600
             --page-load-timeout-secs 300
-            --build-name "mobench release gate ${{ inputs.mobench_sha }}"
-            --session-name "$PROJECT ${{ matrix.environment }}"
+            --build-name "mobench release gate $MOBENCH_SHA"
+            --session-name "$PROJECT $ENVIRONMENT"
             --output "results/${PROJECT}.json"
           )
           [ -z "$BROWSER_VERSION" ] || args+=(--browser-version "$BROWSER_VERSION")
