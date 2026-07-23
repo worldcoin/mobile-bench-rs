@@ -40,10 +40,34 @@ git diff --check
 ```
 
 For a reusable-workflow security release, also run `actionlint`, the workflow
-trust-boundary/self-tests, and manifest/report injection tests. Before
-publication, record one Android and one iOS BrowserStack benchmark through
-`ci run-prebuilt`; do not substitute static workflow checks for these
-service-gated runs.
+trust-boundary/self-tests, and manifest/report injection tests.
+
+Before publication, dispatch the full release self-test from the exact
+candidate branch:
+
+```bash
+gh workflow run mobile-bench-selftest.yml \
+  --ref <release-candidate-branch> \
+  -f platform=both \
+  -f iterations=2 \
+  -f warmup=1 \
+  -f downstream_release_gate=true
+```
+
+The `Full mobench release gate` job must pass. It requires:
+
+- the repository's own native fixture;
+- ProveKit complete passport age-check proving on two Android and two iOS
+  devices;
+- World ID nullifier proving on the same native matrix;
+- both downstream benchmarks as WASM on macOS Safari, Windows Chrome, iOS
+  Safari, and Android Chrome.
+
+The downstream source revisions are immutable SHAs in
+`.github/workflows/mobile-bench-selftest.yml`. Review and advance those pins
+deliberately when their benchmark contracts change. Do not substitute static
+workflow checks, local compilation, or an older BrowserStack run for this
+service-gated release result.
 
 Also search the docs for unfinished markers, unknown code fences, removed docs,
 and old support filenames. Those searches should return no matches unless an

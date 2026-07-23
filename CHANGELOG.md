@@ -6,7 +6,31 @@ longer integration-oriented release notes and support status.
 
 ## Unreleased
 
-No user-facing unreleased changes yet.
+### Added
+
+- Added browser-hosted WASM bundles, browser-safe timing, and direct
+  BrowserStack Automate execution through `cargo mobench build --target web`
+  and `cargo mobench run-web`.
+- Added a required downstream release gate covering ProveKit passport
+  age-check proving and World ID nullifier proving on two native Android
+  devices, two native iOS devices, and WASM browsers on macOS, Windows, iOS,
+  and Android.
+
+### Fixed
+
+- Kept `[web].wasm_bindgen` configuration semver-compatible by resolving it
+  from raw TOML instead of adding a field to the public `MobenchConfig`.
+- Limited WASM builds to the selected library target so benchmark packages may
+  retain native-only helper binaries.
+- Removed reqwest's implicit 30-second total deadline from BrowserStack
+  WebDriver requests so session allocation and long proving scripts honor the
+  explicit WebDriver/workflow timeouts.
+- Run browser proofs in a dedicated module worker and poll page-owned result
+  state so real-mobile BrowserStack sessions stay responsive and do not depend
+  on one long-lived WebDriver atom.
+- Installed the caller-matched UniFFI generator from the correct `uniffi`
+  package with its `cli` feature, and added opt-in bounded retries for
+  secretless prepare hooks that download pinned fixture tooling.
 
 ## v0.1.47 - 2026-07-20
 

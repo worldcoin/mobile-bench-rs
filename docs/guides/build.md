@@ -2,9 +2,9 @@
 
 Current release: **0.1.47**.
 
-Use `cargo mobench build --target <android|ios|both>` for repository
-development and CI. The CLI resolves the benchmark crate, builds native Rust
-artifacts, generates or updates mobile runner projects, and writes outputs to
+Use `cargo mobench build --target <android|ios|both|web>` for repository
+development and CI. The CLI resolves the benchmark crate, builds native mobile
+artifacts or a browser-hosted WebAssembly bundle, and writes outputs to
 `target/mobench/` by default.
 
 ## Prerequisite Checks
@@ -56,6 +56,23 @@ Install targets:
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 ```
 
+## WebAssembly Prerequisites
+
+- Rust target `wasm32-unknown-unknown`
+- `wasm-bindgen-cli` with the same schema version as the resolved Rust
+  `wasm-bindgen` dependency
+- A benchmark crate producing a `cdylib`
+
+Install the target and CLI:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.113
+```
+
+If the CLI and crate schema versions differ, `wasm-bindgen` reports both
+versions and the matching `cargo update` or `cargo install` command.
+
 ## Build Commands
 
 Android:
@@ -74,6 +91,16 @@ Both:
 
 ```bash
 cargo mobench build --target both --progress
+```
+
+WebAssembly:
+
+```bash
+cargo mobench build \
+  --target web \
+  --crate-path examples/basic-benchmark \
+  --release \
+  --progress
 ```
 
 Release builds:
@@ -183,6 +210,60 @@ cargo mobench package-ipa --method adhoc
 cargo mobench package-xcuitest
 ```
 
+## Web Outputs
+
+Web bundles are written below `target/mobench/web/`:
+
+```text
+target/mobench/web/
+├── index.html
+├── runner.js
+├── mobench_web.js
+├── mobench_web_bg.wasm
+└── mobench-web.json
+```
+
+`runner.js` initializes the generated bindings and exposes:
+
+```js
+await window.mobench.run({
+  function: "my_crate::my_benchmark",
+  iterations: 20,
+  warmup: 5,
+});
+```
+
+The result is the existing `RunnerReport` JSON shape. CPU and memory resource
+fields remain absent for browser WASM because the native resource samplers are
+not comparable across browser engines.
+
+Configure a non-default CLI path in `mobench.toml` when needed:
+
+```toml
+[web]
+wasm_bindgen = "/trusted/path/to/wasm-bindgen"
+```
+
+The initial web slice builds and locally serves as a static bundle.
+BrowserStack web execution uses the separate Automate WebDriver transport, not
+the existing App Automate Espresso/XCUITest endpoints. Programmatic callers can
+use `mobench::browserstack_automate::BrowserStackAutomateClient` and
+`AutomateRunRequest`; the complete-session operation always attempts to mark
+and close a created session. The same flow is available from the CLI:
+
+```bash
+cargo mobench run-web \
+  --url https://bench.example.test/ \
+  --function my_crate::my_benchmark \
+  --browser chrome \
+  --os "OS X" \
+  --os-version Sequoia
+```
+
+For a private URL, start BrowserStack Local separately and pass its identifier
+with `--local-identifier`. Automatic Local binary lifecycle management is not
+yet wired.
+
 ## Verify Artifacts
 
 ```bash
@@ -205,6 +286,9 @@ cargo mobench verify \
 
 - BrowserStack upload timeout: build with `--release`.
 - Missing Android target: run `rustup target add <target>`.
+- Missing WASM target: run `rustup target add wasm32-unknown-unknown`.
+- `wasm-bindgen` schema mismatch: install the CLI version named in the error or
+  update the locked Rust dependency to the installed CLI version.
 - Missing NDK tools: set `ANDROID_NDK_HOME` or install the NDK through Android
   Studio.
 - Unsigned iOS framework: rerun `cargo mobench build --target ios` or sign the

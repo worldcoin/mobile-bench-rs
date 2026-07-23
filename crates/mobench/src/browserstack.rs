@@ -79,10 +79,20 @@ const MAX_BINARY_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_BENCH_REPORT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BENCH_REPORT_CHUNKS: usize = 8192;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BrowserStackAuth {
     pub username: String,
     pub access_key: String,
+}
+
+impl std::fmt::Debug for BrowserStackAuth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrowserStackAuth")
+            .field("username", &self.username)
+            .field("access_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// BrowserStack App Automate (Espresso) client.

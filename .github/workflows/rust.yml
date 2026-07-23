@@ -71,6 +71,7 @@ jobs:
           .github/workflows/mobile-bench-publish-plots.yml
           .github/workflows/mobile-bench.yml
           .github/workflows/mobile-bench-selftest.yml
+          .github/workflows/reusable-release-web.yml
           .github/workflows/reusable-pr-command.yml
           .github/workflows/rust.yml
 

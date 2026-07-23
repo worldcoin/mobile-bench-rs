@@ -138,16 +138,18 @@ use time::format_description::well_known::Rfc3339;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
-use browserstack::{BrowserStackAuth, BrowserStackClient};
+pub use browserstack::BrowserStackAuth;
+use browserstack::BrowserStackClient;
 #[cfg(test)]
 pub(crate) use cli::CiTarget;
 pub use cli::MobileTarget;
 pub(crate) use cli::PlotFixture;
 pub(crate) use cli::{
-    CheckOutputFormat, CiCheckRunArgs, CiCommand, CiMergeSplitRunsArgs, CiPrepareArgs, CiRunArgs,
-    CiRunPrebuiltArgs, CiSummarizeArgs, Cli, Command, ConfigCommand, ContractErrorCategory,
-    DevicePlatform, DevicesCommand, FfiBackendArg, FixtureCommand, IosRunnerArg,
-    IosSigningMethodArg, ProfileCommand, ReportCommand, SdkTarget, SummarizeFormat, SummaryFormat,
+    BuildTarget, CheckOutputFormat, CiCheckRunArgs, CiCommand, CiMergeSplitRunsArgs, CiPrepareArgs,
+    CiRunArgs, CiRunPrebuiltArgs, CiSummarizeArgs, Cli, Command, ConfigCommand,
+    ContractErrorCategory, DevicePlatform, DevicesCommand, FfiBackendArg, FixtureCommand,
+    IosRunnerArg, IosSigningMethodArg, ProfileCommand, ReportCommand, SdkTarget, SummarizeFormat,
+    SummaryFormat,
 };
 #[cfg(test)]
 pub(crate) use doctor::{
@@ -160,6 +162,7 @@ pub(crate) use doctor::{
 };
 
 mod browserstack;
+pub mod browserstack_automate;
 mod cli;
 pub mod config;
 mod doctor;
@@ -354,6 +357,7 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) ios_runner: Option<String>,
     pub(crate) android_benchmark_timeout_secs: Option<u64>,
     pub(crate) android_heartbeat_interval_secs: Option<u64>,
+    pub(crate) web_wasm_bindgen: Option<PathBuf>,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) output_dir: PathBuf,
     pub(crate) default_function: Option<String>,
@@ -1219,18 +1223,68 @@ pub fn run() -> Result<()> {
             crate_path,
             progress,
         } => {
-            cmd_build(
-                target,
-                release,
-                ios_completion_timeout_secs,
-                ios_deployment_target,
-                ios_runner,
-                project_root,
-                output_dir,
-                crate_path,
+            if target == BuildTarget::Web {
+                cmd_build_web(
+                    release,
+                    project_root,
+                    output_dir,
+                    crate_path,
+                    cli.dry_run,
+                    cli.verbose,
+                    progress,
+                )?;
+            } else {
+                cmd_build(
+                    target
+                        .mobile()
+                        .expect("non-web build target must map to a mobile target"),
+                    release,
+                    ios_completion_timeout_secs,
+                    ios_deployment_target,
+                    ios_runner,
+                    project_root,
+                    output_dir,
+                    crate_path,
+                    cli.dry_run,
+                    cli.verbose,
+                    progress,
+                )?;
+            }
+        }
+        Command::RunWeb {
+            url,
+            function,
+            iterations,
+            warmup,
+            browser,
+            browser_version,
+            os,
+            os_version,
+            device,
+            build_name,
+            session_name,
+            local_identifier,
+            script_timeout_secs,
+            page_load_timeout_secs,
+            output,
+        } => {
+            cmd_run_web(
+                url,
+                function,
+                iterations,
+                warmup,
+                browser,
+                browser_version,
+                os,
+                os_version,
+                device,
+                build_name,
+                session_name,
+                local_identifier,
+                script_timeout_secs,
+                page_load_timeout_secs,
+                output,
                 cli.dry_run,
-                cli.verbose,
-                progress,
             )?;
         }
         Command::PackageIpa {
@@ -1679,6 +1733,17 @@ pub(crate) fn resolve_project_layout(
     let android_heartbeat_interval_secs = raw_config
         .as_ref()
         .and_then(|cfg| toml_u64(cfg, &["browserstack", "android_heartbeat_interval_secs"]));
+    let web_wasm_bindgen = raw_config
+        .as_ref()
+        .and_then(|cfg| toml_string(cfg, &["web", "wasm_bindgen"]))
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                project_root.join(path)
+            }
+        });
     let output_dir = config
         .as_ref()
         .and_then(|cfg| cfg.project.output_dir.clone())
@@ -1706,6 +1771,7 @@ pub(crate) fn resolve_project_layout(
         ios_runner,
         android_benchmark_timeout_secs,
         android_heartbeat_interval_secs,
+        web_wasm_bindgen,
         config_path,
         output_dir,
         default_function,
@@ -6808,6 +6874,134 @@ fn cmd_init_sdk(
     Ok(())
 }
 
+/// Build a browser-hosted WebAssembly benchmark bundle.
+#[allow(clippy::too_many_arguments)]
+fn cmd_build_web(
+    release: bool,
+    project_root: Option<PathBuf>,
+    output_dir: Option<PathBuf>,
+    crate_path: Option<PathBuf>,
+    dry_run: bool,
+    verbose: bool,
+    progress: bool,
+) -> Result<()> {
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: project_root.as_deref(),
+        crate_path: crate_path.as_deref(),
+        config_path: None,
+    })?;
+    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
+    let profile = if release {
+        mobench_sdk::BuildProfile::Release
+    } else {
+        mobench_sdk::BuildProfile::Debug
+    };
+    let mut builder =
+        mobench_sdk::builders::WebBuilder::new(&layout.project_root, layout.crate_name.clone())
+            .library_name(layout.library_name.clone())
+            .crate_dir(&layout.crate_dir)
+            .output_dir(&effective_output_dir)
+            .dry_run(dry_run)
+            .verbose(verbose);
+    if let Some(wasm_bindgen) = &layout.web_wasm_bindgen {
+        builder = builder.wasm_bindgen(wasm_bindgen);
+    }
+
+    if progress {
+        println!("[1/3] Compiling Rust benchmark to WebAssembly...");
+        println!("[2/3] Generating browser bindings and harness...");
+    } else {
+        println!("Building web benchmark bundle...");
+        println!("  Target: wasm32-unknown-unknown");
+        println!("  Profile: {}", profile.as_str());
+        println!("  Output: {}", effective_output_dir.join("web").display());
+        if dry_run {
+            println!("  Mode: dry-run (no changes will be made)");
+        }
+    }
+
+    let result = builder.build(&mobench_sdk::builders::WebBuildConfig { profile })?;
+    if progress {
+        println!("[3/3] Done!");
+    }
+    if dry_run {
+        println!("\n[dry-run] Web build simulation completed. No changes were made.");
+    } else {
+        println!("\n\u{2713} Web bundle: {}", result.bundle_dir.display());
+        println!("  Entrypoint: {}", result.index_html.display());
+        println!("  WebAssembly: {}", result.wasm.display());
+        println!("  Manifest: {}", result.manifest.display());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_run_web(
+    url: String,
+    function: String,
+    iterations: u32,
+    warmup: u32,
+    browser: String,
+    browser_version: Option<String>,
+    os: String,
+    os_version: String,
+    device: Option<String>,
+    build_name: Option<String>,
+    session_name: Option<String>,
+    local_identifier: Option<String>,
+    script_timeout_secs: u64,
+    page_load_timeout_secs: u64,
+    output: PathBuf,
+    dry_run: bool,
+) -> Result<()> {
+    let environment = if let Some(device) = device {
+        browserstack_automate::BrowserEnvironment::mobile(browser, device, os_version)
+    } else {
+        browserstack_automate::BrowserEnvironment::desktop(browser, browser_version, os, os_version)
+    };
+    let local = local_identifier.is_some();
+    let spec = mobench_sdk::BenchSpec {
+        name: function,
+        iterations,
+        warmup,
+    };
+    if dry_run {
+        println!("Would run web benchmark at {url}");
+        println!("  Environment: {environment:?}");
+        println!("  Spec: {spec:?}");
+        println!("  BrowserStack Local: {local}");
+        println!("  Output: {}", output.display());
+        return Ok(());
+    }
+
+    let credentials = resolve_browserstack_credentials(None)?;
+    let client = browserstack_automate::BrowserStackAutomateClient::new(BrowserStackAuth {
+        username: credentials.username,
+        access_key: credentials.access_key,
+    })?;
+    let mut request = browserstack_automate::AutomateRunRequest::new(environment, url, spec);
+    request.options = browserstack_automate::AutomateSessionOptions {
+        project_name: credentials.project,
+        build_name,
+        session_name,
+        local,
+        local_identifier,
+    };
+    request.script_timeout = Duration::from_secs(script_timeout_secs);
+    request.page_load_timeout = Duration::from_secs(page_load_timeout_secs);
+
+    let report = client.run_mobench_session(&request)?;
+    let contents = serde_json::to_vec_pretty(&report).context("serializing web RunnerReport")?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating web result directory {}", parent.display()))?;
+    }
+    write_file(&output, &contents)?;
+    println!("Web benchmark completed: {}", output.display());
+    Ok(())
+}
+
 /// Build mobile artifacts using `mobench-sdk`.
 #[allow(clippy::too_many_arguments)]
 fn cmd_build(
@@ -8779,6 +8973,9 @@ ffi_backend = "native-c-abi"
 [android]
 abis = ["arm64-v8a", "x86_64"]
 
+[web]
+wasm_bindgen = "tools/wasm-bindgen"
+
 [benchmarks]
 default_function = "zk_mobile_bench::bench_query_proof_generation"
 
@@ -9125,6 +9322,10 @@ project = "proj"
         assert_eq!(layout.ios_completion_timeout_secs, Some(900));
         assert_eq!(layout.ios_deployment_target, "15.0");
         assert_eq!(layout.ios_runner, None);
+        assert_eq!(
+            layout.web_wasm_bindgen,
+            Some(project_root.join("tools/wasm-bindgen"))
+        );
         assert_eq!(
             layout.default_function.as_deref(),
             Some("zk_mobile_bench::bench_query_proof_generation")
@@ -9727,6 +9928,69 @@ runner = "swiftui"
                 assert_eq!(ios_runner, Some(IosRunnerArg::UikitLegacy));
             }
             _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn build_parses_web_target() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "build",
+            "--target",
+            "web",
+            "--release",
+            "--output-dir",
+            "target/web-test",
+        ]);
+
+        match cli.command {
+            Command::Build {
+                target,
+                release,
+                output_dir,
+                ..
+            } => {
+                assert_eq!(target, BuildTarget::Web);
+                assert!(release);
+                assert_eq!(output_dir, Some(PathBuf::from("target/web-test")));
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn run_web_parses_browserstack_automate_options() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "run-web",
+            "--url",
+            "https://bench.example.test/",
+            "--function",
+            "sample::bench",
+            "--device",
+            "iPhone 16",
+            "--os-version",
+            "18",
+            "--local-identifier",
+            "mobench-run-1",
+        ]);
+
+        match cli.command {
+            Command::RunWeb {
+                url,
+                function,
+                device,
+                os_version,
+                local_identifier,
+                ..
+            } => {
+                assert_eq!(url, "https://bench.example.test/");
+                assert_eq!(function, "sample::bench");
+                assert_eq!(device.as_deref(), Some("iPhone 16"));
+                assert_eq!(os_version, "18");
+                assert_eq!(local_identifier.as_deref(), Some("mobench-run-1"));
+            }
+            _ => panic!("expected run-web command"),
         }
     }
 

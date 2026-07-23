@@ -7,7 +7,7 @@
 //! [`crate::RunnerReport`] JSON payload without using UniFFI-generated bindings.
 
 use crate::BenchSpec;
-use libc::c_char;
+use core::ffi::c_char;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::panic::{AssertUnwindSafe, catch_unwind};

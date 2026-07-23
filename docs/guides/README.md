@@ -12,7 +12,7 @@ profiling.
   benchmarks, choose `uniffi` or `native-c-abi`, and run benchmarks.
 - [examples.md](examples.md): minimal benchmark, setup/teardown,
   native C ABI export, CI output, and programmatic integration patterns.
-- [build.md](build.md): Android and iOS prerequisites, build outputs,
+- [build.md](build.md): Android, iOS, and browser WASM prerequisites and outputs,
   project resolution, generated runner backends, and troubleshooting.
 - [testing.md](testing.md): host tests, CLI checks, local smoke tests,
   Android/iOS validation, BrowserStack smoke tests, and profiling checks.

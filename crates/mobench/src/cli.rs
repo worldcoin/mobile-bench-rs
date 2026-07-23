@@ -229,7 +229,7 @@ pub(crate) enum Command {
     /// Build mobile artifacts from the resolved benchmark crate.
     Build {
         #[arg(long, value_enum)]
-        target: SdkTarget,
+        target: BuildTarget,
         #[arg(long, help = "Build in release mode")]
         release: bool,
         #[arg(
@@ -266,6 +266,42 @@ pub(crate) enum Command {
         crate_path: Option<PathBuf>,
         #[arg(long, help = "Show simplified step-by-step progress output")]
         progress: bool,
+    },
+    /// Run a hosted WASM benchmark through BrowserStack Automate WebDriver.
+    RunWeb {
+        #[arg(long, help = "HTTP(S) URL of the generated mobench web runner")]
+        url: String,
+        #[arg(long, help = "Fully-qualified Rust function to benchmark")]
+        function: String,
+        #[arg(long, default_value_t = 20)]
+        iterations: u32,
+        #[arg(long, default_value_t = 5)]
+        warmup: u32,
+        #[arg(long, default_value = "chrome")]
+        browser: String,
+        #[arg(long)]
+        browser_version: Option<String>,
+        #[arg(long, default_value = "OS X")]
+        os: String,
+        #[arg(long, default_value = "Sequoia")]
+        os_version: String,
+        #[arg(long, help = "Real mobile device name; omit for desktop")]
+        device: Option<String>,
+        #[arg(long)]
+        build_name: Option<String>,
+        #[arg(long)]
+        session_name: Option<String>,
+        #[arg(
+            long,
+            help = "Identifier of an already-running BrowserStack Local tunnel"
+        )]
+        local_identifier: Option<String>,
+        #[arg(long, default_value_t = 300)]
+        script_timeout_secs: u64,
+        #[arg(long, default_value_t = 60)]
+        page_load_timeout_secs: u64,
+        #[arg(long, default_value = "target/mobench/web-results.json")]
+        output: PathBuf,
     },
     /// Package iOS app as IPA for distribution or testing.
     PackageIpa {
@@ -975,6 +1011,26 @@ pub(crate) enum SdkTarget {
     Android,
     Ios,
     Both,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub(crate) enum BuildTarget {
+    Android,
+    Ios,
+    Both,
+    Web,
+}
+
+impl BuildTarget {
+    pub(crate) fn mobile(self) -> Option<SdkTarget> {
+        match self {
+            Self::Android => Some(SdkTarget::Android),
+            Self::Ios => Some(SdkTarget::Ios),
+            Self::Both => Some(SdkTarget::Both),
+            Self::Web => None,
+        }
+    }
 }
 
 impl From<SdkTarget> for mobench_sdk::Target {

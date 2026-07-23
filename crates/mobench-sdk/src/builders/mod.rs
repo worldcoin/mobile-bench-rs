@@ -64,6 +64,7 @@
 pub mod android;
 pub mod common;
 pub mod ios;
+pub mod web;
 
 // Re-export builders
 pub use android::AndroidBuilder;
@@ -71,3 +72,4 @@ pub use common::{
     BenchMeta, EmbeddedBenchSpec, create_bench_meta, embed_bench_meta, embed_bench_spec,
 };
 pub use ios::{IosBuilder, SigningMethod};
+pub use web::{WebBuildConfig, WebBuildResult, WebBuilder};

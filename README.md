@@ -262,6 +262,17 @@ cargo mobench build --target android
 cargo mobench build --target ios
 cargo mobench build --target android --progress
 
+# Build a browser-hosted WebAssembly bundle
+cargo mobench build \
+  --target web \
+  --crate-path examples/basic-benchmark \
+  --release
+
+# Run a hosted WASM bundle through BrowserStack Automate
+cargo mobench run-web \
+  --url https://bench.example.test/ \
+  --function my_crate::my_benchmark
+
 # Run a host-only CI-compatible smoke run
 cargo mobench run --target android --function sample_fns::fibonacci --local-only
 
@@ -470,6 +481,14 @@ Resolution precedence is:
 
 CLI flags override config file values. In `cargo mobench run --config <FILE>`
 mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
+
+The web build writes a static runner under `target/mobench/web/` with a
+`window.mobench.run(spec)` JSON contract. The `mobench::browserstack_automate`
+module exposes a typed BrowserStack Automate/WebDriver client, including a
+complete session operation that configures timeouts, navigates, runs the
+benchmark, reports session status, and closes the session. BrowserStack Local
+lifecycle remains follow-up work; `cargo mobench run-web` accepts the identifier
+of an already-running Local tunnel when the benchmark URL is private.
 
 ## Project Docs
 
