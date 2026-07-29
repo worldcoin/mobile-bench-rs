@@ -16,9 +16,9 @@ import android.os.Looper
 import android.os.ResultReceiver
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import com.sun.jna.IntegerType
 import com.sun.jna.Library
 import com.sun.jna.Native
+import com.sun.jna.NativeLong
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
 import org.json.JSONArray
@@ -405,7 +405,7 @@ private object NativeBenchRunner {
         val out = MobenchBuf()
         val status = MobenchNativeLibrary.api.mobench_run_benchmark_json(
             specBytes,
-            SizeT(specBytes.size.toLong()),
+            NativeLong(specBytes.size.toLong()),
             out
         )
         out.read()
@@ -427,18 +427,16 @@ private object NativeBenchRunner {
 }
 
 private interface MobenchNativeAbi : Library {
-    fun mobench_run_benchmark_json(specPtr: ByteArray, specLen: SizeT, out: MobenchBuf): Int
+    fun mobench_run_benchmark_json(specPtr: ByteArray, specLen: NativeLong, out: MobenchBuf): Int
     fun mobench_free_buf(buf: MobenchBuf)
     fun mobench_last_error_message(): Pointer?
 }
 
-private class SizeT(value: Long = 0) : IntegerType(Native.SIZE_T_SIZE, value, true)
-
 @Suppress("unused")
 private class MobenchBuf : Structure() {
     @JvmField var ptr: Pointer? = null
-    @JvmField var len: SizeT = SizeT()
-    @JvmField var cap: SizeT = SizeT()
+    @JvmField var len: NativeLong = NativeLong(0)
+    @JvmField var cap: NativeLong = NativeLong(0)
 
     override fun getFieldOrder(): List<String> = listOf("ptr", "len", "cap")
 }

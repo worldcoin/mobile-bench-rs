@@ -2225,14 +2225,11 @@ mod tests {
         )
         .unwrap();
         assert!(main_activity.contains("com.sun.jna.Native"));
-        assert!(main_activity.contains("com.sun.jna.IntegerType"));
+        assert!(main_activity.contains("com.sun.jna.NativeLong"));
         assert!(main_activity.contains("mobench_run_benchmark_json"));
-        assert!(main_activity.contains(
-            "private class SizeT(value: Long = 0) : IntegerType(Native.SIZE_T_SIZE, value, true)"
-        ));
-        assert!(main_activity.contains("specLen: SizeT"));
-        assert!(main_activity.contains("@JvmField var len: SizeT = SizeT()"));
-        assert!(main_activity.contains("@JvmField var cap: SizeT = SizeT()"));
+        assert!(main_activity.contains("specLen: NativeLong"));
+        assert!(main_activity.contains("@JvmField var len: NativeLong = NativeLong(0)"));
+        assert!(main_activity.contains("@JvmField var cap: NativeLong = NativeLong(0)"));
         assert!(!main_activity.contains("specLen: Long"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(main_activity.contains("bench_spec.json"));
