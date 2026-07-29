@@ -8,6 +8,7 @@
 
 use crate::BenchSpec;
 use core::ffi::c_char;
+use std::any::Any;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -108,11 +109,22 @@ pub unsafe fn mobench_run_benchmark_json_impl(
             set_last_error(error);
             1
         }
-        Err(_) => {
-            set_last_error("benchmark panicked across native C ABI boundary");
+        Err(payload) => {
+            set_last_error(format!(
+                "benchmark panicked across native C ABI boundary: {}",
+                panic_payload_message(payload.as_ref())
+            ));
             2
         }
     }
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
 }
 
 /// Frees a buffer returned by [`mobench_run_benchmark_json_impl`].
@@ -225,10 +237,23 @@ mod tests {
         })
     }
 
+    fn native_abi_panicking_runner(
+        _spec: crate::BenchSpec,
+    ) -> Result<crate::RunnerReport, TimingError> {
+        panic!("diagnostic panic payload")
+    }
+
     inventory::submit! {
         BenchFunction {
             name: "native_abi_test_benchmark",
             runner: native_abi_test_runner,
+        }
+    }
+
+    inventory::submit! {
+        BenchFunction {
+            name: "native_abi_panicking_benchmark",
+            runner: native_abi_panicking_runner,
         }
     }
 
@@ -285,6 +310,25 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert!(error.contains("unknown benchmark function"));
+    }
+
+    #[test]
+    fn panic_error_includes_the_string_payload() {
+        let spec = br#"{"name":"native_abi_panicking_benchmark","iterations":1,"warmup":0}"#;
+        let mut out = MobenchBuf::default();
+
+        let status =
+            unsafe { mobench_run_benchmark_json_impl(spec.as_ptr(), spec.len(), &mut out) };
+
+        assert_eq!(status, 2);
+        assert!(out.ptr.is_null());
+        let error = unsafe { CStr::from_ptr(mobench_last_error_message_impl()) }
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            error,
+            "benchmark panicked across native C ABI boundary: diagnostic panic payload"
+        );
     }
 
     #[test]
