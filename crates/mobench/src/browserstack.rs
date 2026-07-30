@@ -113,6 +113,11 @@ impl BrowserStackClient {
             // its own bounded deadlines; artifact transfer must not.
             .timeout(None)
             .connect_timeout(Duration::from_secs(15))
+            // BrowserStack's upload edge has repeatedly closed large HTTP/2
+            // multipart request bodies while the identical artifact succeeds
+            // over HTTP/1.1. Use one transport consistently for upload,
+            // scheduling, polling, and artifact fetch requests.
+            .http1_only()
             .build()
             .context("building HTTP client")?;
 
