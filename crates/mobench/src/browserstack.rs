@@ -10,7 +10,7 @@ type BrowserStackResults = (
 );
 use std::io::{Read, copy};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Format a file size in human-readable format (MB or KB).
 fn format_file_size(bytes: u64) -> String {
@@ -108,6 +108,11 @@ impl BrowserStackClient {
     pub fn new(auth: BrowserStackAuth, project: Option<String>) -> Result<Self> {
         let http = Client::builder()
             .user_agent(USER_AGENT)
+            // IPA/AAB uploads can exceed Reqwest's default 30-second request
+            // timeout even on healthy connections. Session polling enforces
+            // its own bounded deadlines; artifact transfer must not.
+            .timeout(None)
+            .connect_timeout(Duration::from_secs(15))
             .build()
             .context("building HTTP client")?;
 
