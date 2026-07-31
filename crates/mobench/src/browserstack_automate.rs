@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_WEBDRIVER_URL: &str = "https://hub.browserstack.com/wd/hub";
 const USER_AGENT: &str = "mobench/0.2";
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+// BrowserStack may take longer than a normal API request to allocate a session,
+// especially while a release matrix is starting several browsers at once.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_OPERATION_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_READY_POLL: Duration = Duration::from_millis(250);
