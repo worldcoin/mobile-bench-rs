@@ -226,7 +226,7 @@ the pull request or executes a file from those artifacts.
 ## Caller Migration
 
 Update the reusable workflow reference to immutable commit
-`13d716e3187bf4f0576276b738fd6d67a307e3c5` for the `v0.1.49`
+`b869932669c164273656ffe785a43c245f4a720e` for the `v0.2.0`
 release and pass secrets explicitly:
 
 ```yaml

@@ -96,7 +96,7 @@ def test_trusted_control_plane_is_from_a_literal_commit() -> None:
         capture_output=True,
         check=True,
     ).stdout
-    assert 'version = "0.1.49"' in cargo_toml
+    assert 'version = "0.2.0"' in cargo_toml
 
 
 def test_caller_toolchain_is_explicit_and_confined_to_prepare_jobs() -> None:
