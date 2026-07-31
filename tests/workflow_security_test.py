@@ -456,7 +456,7 @@ def test_generated_workflow_uses_secure_reusable_boundary() -> None:
         capture_output=True,
         check=True,
     ).stdout
-    assert "MOBENCH_TRUSTED_SHA: b29b4a5334df5e8f2f9d61e6435258c83ce44eb6" in pinned_workflow
+    assert "MOBENCH_TRUSTED_SHA: 13d716e3187bf4f0576276b738fd6d67a307e3c5" in pinned_workflow
     assert "rust_toolchain:" in GENERATED_WORKFLOW
     assert "ffi_backend:" in GENERATED_WORKFLOW
     assert "prepare_script:" in GENERATED_WORKFLOW

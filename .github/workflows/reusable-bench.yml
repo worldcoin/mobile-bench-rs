@@ -484,7 +484,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.48 --locked
+            cargo install mobench --version 0.1.49 --locked
           fi
           brew install xcodegen
       - name: Install caller-selected binding generator
@@ -727,7 +727,7 @@ jobs:
           elif [ -n "$MOBENCH_VERSION" ]; then
             cargo install mobench --version "$MOBENCH_VERSION" --locked
           else
-            cargo install mobench --version 0.1.48 --locked
+            cargo install mobench --version 0.1.49 --locked
           fi
       - name: Install caller-selected binding generator
         shell: bash
