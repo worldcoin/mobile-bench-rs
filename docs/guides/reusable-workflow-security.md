@@ -1,6 +1,6 @@
 # Reusable Workflow Security
 
-Current secure workflow release: **0.1.48** (older releases remain immutable).
+Current secure workflow release: **0.1.49** (older releases remain immutable).
 
 The reusable BrowserStack workflow is secure by default for pull requests,
 including fork pull requests. Its core invariant is:
@@ -226,7 +226,7 @@ the pull request or executes a file from those artifacts.
 ## Caller Migration
 
 Update the reusable workflow reference to immutable commit
-`9495b599d8250a5e992874aca61a6a0653b381ff` for the `v0.1.48`
+`9495b599d8250a5e992874aca61a6a0653b381ff` for the `v0.1.49`
 release and pass secrets explicitly:
 
 ```yaml

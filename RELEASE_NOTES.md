@@ -15,9 +15,39 @@ Crates.io release pages:
 
 No user-facing unreleased changes yet.
 
-## v0.1.48
+## v0.1.49
 
 Status: current supported release.
+
+Publication date: 2026-07-31.
+
+### Native Android ABI and diagnostics
+
+The native C ABI Android runner now maps Rust `usize` arguments and
+`MobenchBuf` lengths/capacities with JNA `NativeLong`. This preserves the
+correct LP32/LP64 layout on supported Android ABIs, including `armeabi-v7a`,
+and prevents the pre-execution `SIGBUS`/`BUS_ADRALN` failure caused by fixed
+width Kotlin `Long` fields.
+
+Native reports can now include application-defined scalar metrics through
+`mobench_sdk::record_sample_u64` and `record_run_u64`. Sample values and
+run-wide values are serialized under `custom_metrics`; timing remains owned by
+the harness. Native ABI panic errors retain string panic payloads, and Android
+runners report a dead worker promptly instead of waiting for the full timeout.
+
+BrowserStack artifact uploads use HTTP/1.1 with no implicit total request
+deadline, while retaining a bounded connection timeout, for reliable large
+IPA/AAB transfers.
+
+### Migration From v0.1.48
+
+Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.49` as
+applicable. Existing benchmark configurations remain compatible. Native C ABI
+users should regenerate Android runners to receive the 32-bit ABI correction.
+
+## v0.1.48
+
+Status: superseded by `v0.1.49`.
 
 Publication date: 2026-07-23.
 
@@ -445,7 +475,8 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.48` | 2026-07-23 | `mobench 0.1.48`, `mobench-sdk 0.1.48`, `mobench-macros 0.1.48` | Current supported release |
+| `v0.1.49` | 2026-07-31 | `mobench 0.1.49`, `mobench-sdk 0.1.49`, `mobench-macros 0.1.49` | Current supported release |
+| `v0.1.48` | 2026-07-23 | `mobench 0.1.48`, `mobench-sdk 0.1.48`, `mobench-macros 0.1.48` | Superseded by `v0.1.49` |
 | `v0.1.47` | 2026-07-20 | `mobench 0.1.47`, `mobench-sdk 0.1.47`, `mobench-macros 0.1.47` | Superseded by `v0.1.48` |
 | `v0.1.46` | 2026-07-19 | `mobench 0.1.46`, `mobench-sdk 0.1.46`, `mobench-macros 0.1.46` | Superseded by `v0.1.47` |
 | `v0.1.45` | 2026-07-17 | `mobench 0.1.45`, `mobench-sdk 0.1.45`, `mobench-macros 0.1.45` | Superseded by `v0.1.46` |

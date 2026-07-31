@@ -5,7 +5,7 @@ harness, `#[benchmark]` registry integration, generated runner support, Android
 and iOS builders, UniFFI compatibility, native JSON C ABI exports, and semantic
 profiling helpers used by the `mobench` CLI.
 
-Current release: **0.1.48**.
+Current release: **0.1.49**.
 
 ## Features
 
@@ -26,7 +26,7 @@ Full SDK, including builders and code generation:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.48"
+mobench-sdk = "0.1.49"
 inventory = "0.3"
 ```
 
@@ -35,7 +35,7 @@ narrower registry feature:
 
 ```toml
 [dependencies]
-mobench-sdk = { version = "0.1.48", default-features = false, features = ["registry"] }
+mobench-sdk = { version = "0.1.49", default-features = false, features = ["registry"] }
 inventory = "0.3"
 ```
 

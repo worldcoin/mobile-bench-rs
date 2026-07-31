@@ -8,6 +8,20 @@ longer integration-oriented release notes and support status.
 
 No user-facing unreleased changes yet.
 
+## v0.1.49 - 2026-07-31
+
+### Added
+
+- Added `record_sample_u64` and `record_run_u64` for native benchmark reports;
+  the JSON ABI emits their values under `custom_metrics`.
+
+### Fixed
+
+- Fixed the native Android C ABI runner on 32-bit Android by mapping Rust
+  `usize` values to JNA `NativeLong`, preventing misaligned buffer layouts.
+- Surface native Android worker exits promptly, preserve panic payloads in ABI
+  diagnostics, and make large BrowserStack artifact uploads use HTTP/1.1.
+
 ## v0.1.48 - 2026-07-23
 
 ### Added

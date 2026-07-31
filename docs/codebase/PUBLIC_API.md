@@ -1,6 +1,6 @@
 # Public API And Stability
 
-Updated: 2026-07-23. Current release: `0.1.48`.
+Updated: 2026-07-23. Current release: `0.1.49`.
 
 This document defines compatibility-sensitive API boundaries for the published
 mobench crates. Use it during semver reviews, docs.rs cleanup, feature-flag
