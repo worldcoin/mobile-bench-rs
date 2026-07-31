@@ -1,6 +1,6 @@
 # Codebase Reference
 
-Updated: 2026-07-23. Current release: `0.1.49`.
+Updated: 2026-07-31. Release line: `0.2.0`.
 
 These notes describe the current repository structure, implementation
 boundaries, integration points, and release-sensitive public surface. For user
@@ -9,6 +9,9 @@ behavior contract, see [../specs/mobench-current-spec.md](../specs/mobench-curre
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the CLI, SDK, generated runners,
   BrowserStack flow, reporting, and profiling fit together.
+- [../0.2-rewrite-architecture.md](../0.2-rewrite-architecture.md): audit-driven
+  0.2 foundation changes, diagrams, residual risks, BrowserStack matrix, and
+  remaining rewrite phases.
 - [PUBLIC_API.md](PUBLIC_API.md): public Rust APIs, CLI/API contracts,
   feature flags, MSRV, semver boundaries, and release checks.
 - [STRUCTURE.md](STRUCTURE.md): important crates, templates, docs, workflows,
@@ -17,8 +20,6 @@ behavior contract, see [../specs/mobench-current-spec.md](../specs/mobench-curre
   and artifact types.
 - [INTEGRATIONS.md](INTEGRATIONS.md): BrowserStack, GitHub Actions, Android,
   iOS, generated runner backends, and local native profiling.
-- [../guides/reusable-workflow-security.md](../guides/reusable-workflow-security.md):
-  reusable workflow threat model, trust boundary, permissions, and migration.
 - [CONVENTIONS.md](CONVENTIONS.md): naming, output, config, docs, template,
   and error-handling conventions.
 - [TESTING.md](TESTING.md): host tests, tool-gated checks, service-gated checks,

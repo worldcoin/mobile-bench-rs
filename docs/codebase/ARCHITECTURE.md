@@ -1,6 +1,9 @@
 # Architecture
 
-Updated: 2026-07-23. Current release: `0.1.49`.
+Updated: 2026-07-31. Release line: `0.2.0`.
+
+The in-progress 0.2 rewrite foundations and their verification status are
+documented in [../0.2-rewrite-architecture.md](../0.2-rewrite-architecture.md).
 
 mobench has two product surfaces:
 
@@ -19,6 +22,22 @@ mobench has two product surfaces:
   native C ABI exports.
 - `mobench-macros`: `#[benchmark]` proc macro registration with setup,
   teardown, per-iteration setup, and compile-time signature validation.
+
+## Rewrite Foundation Crates
+
+- `mobench-runtime`: bounded counts, released distribution policies, and
+  overflow-safe resource aggregation.
+- `mobench-domain`: bounded mobile framing and the strict versioned report
+  envelope.
+- `mobench-report`: context-specific Markdown, link, inline-code, and CSV
+  encoders.
+- `mobench-process`: executable provenance, subprocess policy, bounded capture,
+  cancellation, cleanup, and reaping.
+- `mobench-artifacts`: validated roots, isolated workspaces, immutable
+  publications, manifests, latest snapshots, recovery, leases, and retention.
+
+These crates are independently published at 0.2.0 so downstream integrations
+can depend on the stable boundaries without importing the CLI implementation.
 
 ## Runtime Layers
 
@@ -103,23 +122,6 @@ Responsibilities:
   and optional `plots/*.svg`.
 - Compare against baselines and write optional JUnit output.
 - Publish sticky PR comments and GitHub Check Run summaries.
-
-Fork-PR BrowserStack CI has separate privilege domains:
-
-- `ci prepare` runs build-time caller code without secrets or write permission
-  and emits only enumerated mobile packages plus a cryptographic manifest.
-- `ci run-prebuilt` runs from a trusted immutable mobench release, verifies the
-  handoff, and performs provider operations without checking out or executing
-  the caller on the credentialed runner.
-- Platform-specific function/device selections are normalized as data. Each
-  function is packaged once, and trusted result handling rejects incomplete or
-  duplicate function/device shards before writing canonical summaries.
-- summarization is read-only, while PR/check publishing is isolated in a job
-  with only its narrow write permission.
-
-This split is an execution boundary, not merely a workflow organization
-convention. See
-[Reusable Workflow Security](../guides/reusable-workflow-security.md).
 
 BrowserStack benchmark timing/resource metrics are supported. BrowserStack
 native stack/flamegraph profiling is explicitly unsupported in this release.

@@ -3,7 +3,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::env;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use crate::process_adapter::ToolCommand;
 use crate::{
     BenchConfig, CheckOutputFormat, ContractErrorCategory, SdkTarget, command_version_line,
     filter_devices_by_tags, load_config, load_device_matrix, resolve_browserstack_credentials,
@@ -452,9 +454,7 @@ pub(crate) fn category_slug(category: ContractErrorCategory) -> &'static str {
 }
 
 fn check_cargo() -> PrereqCheck {
-    let result = std::process::Command::new("cargo")
-        .arg("--version")
-        .output();
+    let result = probe_command("cargo").arg("--version").output();
 
     match result {
         Ok(output) if output.status.success() => {
@@ -476,9 +476,7 @@ fn check_cargo() -> PrereqCheck {
 }
 
 fn check_rustup() -> PrereqCheck {
-    let result = std::process::Command::new("rustup")
-        .arg("--version")
-        .output();
+    let result = probe_command("rustup").arg("--version").output();
 
     match result {
         Ok(output) if output.status.success() => {
@@ -588,9 +586,7 @@ fn check_android_ndk_home() -> PrereqCheck {
 }
 
 fn check_cargo_ndk() -> PrereqCheck {
-    let result = std::process::Command::new("cargo")
-        .args(["ndk", "--version"])
-        .output();
+    let result = probe_command("cargo").args(["ndk", "--version"]).output();
 
     match result {
         Ok(output) if output.status.success() => {
@@ -612,7 +608,7 @@ fn check_cargo_ndk() -> PrereqCheck {
 }
 
 fn check_rust_target(target: &str) -> PrereqCheck {
-    let result = std::process::Command::new("rustup")
+    let result = probe_command("rustup")
         .args(["target", "list", "--installed"])
         .output();
 
@@ -647,7 +643,7 @@ fn check_rust_target(target: &str) -> PrereqCheck {
 
 fn check_jdk() -> PrereqCheck {
     // Try java -version
-    let result = std::process::Command::new("java").arg("-version").output();
+    let result = probe_command("java").arg("-version").output();
 
     match result {
         Ok(output) => {
@@ -681,9 +677,7 @@ fn check_jdk() -> PrereqCheck {
 }
 
 fn check_xcode() -> PrereqCheck {
-    let result = std::process::Command::new("xcodebuild")
-        .arg("-version")
-        .output();
+    let result = probe_command("xcodebuild").arg("-version").output();
 
     match result {
         Ok(output) if output.status.success() => {
@@ -712,9 +706,7 @@ fn check_xcode() -> PrereqCheck {
 }
 
 fn check_xcodegen() -> PrereqCheck {
-    let result = std::process::Command::new("xcodegen")
-        .arg("--version")
-        .output();
+    let result = probe_command("xcodegen").arg("--version").output();
 
     match result {
         Ok(output) if output.status.success() => {
@@ -733,4 +725,10 @@ fn check_xcodegen() -> PrereqCheck {
             fix_hint: Some("Install xcodegen: brew install xcodegen".to_string()),
         },
     }
+}
+
+fn probe_command(name: &'static str) -> ToolCommand {
+    let mut command = ToolCommand::path_search(name);
+    command.timeout(Duration::from_secs(30));
+    command
 }

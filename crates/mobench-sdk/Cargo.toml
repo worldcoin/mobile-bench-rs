@@ -31,11 +31,13 @@ full = ["registry", "builders", "codegen"]
 # Benchmark macro, inventory registry, and runtime execution without build tooling
 registry = ["dep:mobench-macros", "dep:inventory"]
 # Mobile build automation; depends on codegen because builders refresh app templates
-builders = ["codegen", "dep:toml"]
+builders = ["codegen", "dep:toml", "dep:mobench-process"]
 # Project and mobile template generation
 codegen = ["dep:include_dir", "dep:toml"]
 # Minimal timing-only mode for mobile binaries (small footprint)
 runner-only = []
+# Opt-in criterion receipts for runtime statistics performance.
+bench-support = []
 
 [dependencies]
 # Proc macros (only with full feature)
@@ -47,6 +49,8 @@ inventory = { workspace = true, optional = true }
 # Serialization (always needed for BenchSpec/BenchReport)
 serde.workspace = true
 serde_json.workspace = true
+mobench-runtime.workspace = true
+mobench-process = { workspace = true, optional = true }
 libc = "0.2"
 
 # Error handling
@@ -62,4 +66,14 @@ toml = { workspace = true, optional = true }
 wasm-bindgen = "0.2"
 
 [dev-dependencies]
+criterion = "0.5"
 tempfile = "3"
+
+[[bench]]
+name = "statistics"
+harness = false
+required-features = ["bench-support"]
+
+[[test]]
+name = "public_api_contract"
+required-features = ["full"]

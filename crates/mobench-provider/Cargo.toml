@@ -1,0 +1,21 @@
+[package]
+name = "mobench-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Provider session reconciliation and outcome contracts for mobench"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench-provider"
+keywords = ["benchmark", "mobile", "provider", "state-machine"]
+categories = ["development-tools::profiling", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+mobench-process.workspace = true
+thiserror.workspace = true

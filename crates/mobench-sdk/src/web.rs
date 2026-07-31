@@ -2,7 +2,7 @@
 //!
 //! The bridge deliberately accepts and returns strings so browser automation
 //! can use the same [`crate::BenchSpec`] and [`crate::RunnerReport`] JSON
-//! contract as the native runners without depending on JavaScript object
+//! contract as native runners without depending on JavaScript object
 //! conversion details.
 
 use crate::{BenchError, BenchSpec};
@@ -81,6 +81,17 @@ mod tests {
 
         assert!(matches!(error, BrowserRunnerError::InvalidSpec(_)));
         assert!(error.to_string().contains("failed to parse BenchSpec JSON"));
+    }
+
+    #[test]
+    fn rejects_out_of_bounds_spec() {
+        let error = run_benchmark_json(
+            r#"{"name":"browser_json_contract","iterations":1000001,"warmup":0}"#,
+        )
+        .expect_err("oversized iteration count should fail during deserialization");
+
+        assert!(matches!(error, BrowserRunnerError::InvalidSpec(_)));
+        assert!(error.to_string().contains("must not exceed"));
     }
 
     #[test]

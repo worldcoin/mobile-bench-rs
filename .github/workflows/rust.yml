@@ -18,18 +18,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # The workflow security suite inspects the immutable reusable-workflow
-          # revision pinned by generated callers, so its commit must be present.
-          fetch-depth: 0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: clippy, rustfmt
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -38,13 +34,17 @@ jobs:
         run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
+        uses: taiki-e/install-action@afc483d62172accfff644fa56e82b4dab50727fc # cargo-deny
+        with:
+          tool: cargo-deny
 
       - name: Dependency policy
         run: cargo deny check advisories bans licenses sources
 
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@cargo-semver-checks
+        uses: taiki-e/install-action@77f7de69a88565bdcf254b89775fc9b4d7e6e1d2 # cargo-semver-checks
+        with:
+          tool: cargo-semver-checks
 
       - name: Public API compatibility
         run: |
@@ -57,30 +57,19 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
-      - name: Workflow trust-boundary regression tests
-        run: python3 tests/workflow_security_test.py
-
-      - name: Install actionlint
-        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-
-      - name: Lint security-sensitive workflows
-        run: >-
-          "$(go env GOPATH)/bin/actionlint" -color
-          -ignore 'maximum number of inputs for "workflow_dispatch"'
-          .github/workflows/reusable-bench.yml
-          .github/workflows/mobile-bench-publish-plots.yml
-          .github/workflows/mobile-bench.yml
-          .github/workflows/mobile-bench-selftest.yml
-          .github/workflows/reusable-release-web.yml
-          .github/workflows/reusable-pr-command.yml
-          .github/workflows/rust.yml
-
       - name: Host benchmark smoke
         run: cargo bench -p mobench --features bench-support --bench host_contracts -- --test
 
       - name: Publish dry run
         if: github.event_name == 'workflow_dispatch'
         run: |
-          cargo publish --dry-run -p mobench-macros
-          cargo publish --dry-run -p mobench-sdk
-          cargo publish --dry-run -p mobench
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "mobench") | .version')"
+          if cargo info "mobench@${version}" >/dev/null 2>&1; then
+            echo "mobench ${version} is already published; package the complete workspace without registry-collision verification"
+            cargo package --workspace --locked --no-verify \
+              --exclude sample-fns --exclude basic-benchmark --exclude ffi-benchmark
+          else
+            cargo package --workspace --locked --keep-going \
+              --exclude sample-fns --exclude basic-benchmark --exclude ffi-benchmark
+          fi

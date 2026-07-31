@@ -4,9 +4,39 @@ All notable user-facing changes to `mobench`, `mobench-sdk`, and
 `mobench-macros` are tracked here by release. See `RELEASE_NOTES.md` for the
 longer integration-oriented release notes and support status.
 
-## Unreleased
+## v0.2.0 - 2026-07-31
 
-No user-facing unreleased changes yet.
+### Added
+
+- Added a browser-compatible SDK timing path, browser-callable JSON benchmark
+  boundary, worker-backed web harness, and WebAssembly builder.
+- Added `cargo mobench build --target web` and `cargo mobench run-web` with a
+  direct W3C BrowserStack Automate transport.
+- Added hashed `ci prepare` / `ci run-prebuilt` bundles for separating
+  untrusted downstream builds from credentialed BrowserStack execution.
+- Added pinned ProveKit and world-id-protocol native/WASM release-gate
+  workflows and fixture adapters.
+- Added the published `@worldcoin/provekit` browser SDK lane, including public
+  prove/verify and tamper-rejection checks through BrowserStack Automate.
+
+### Changed
+
+- Ported the v0.1.47 secure reusable-workflow boundary, configurable
+  toolchains/targets/backends/functions/device matrices, and bounded completion
+  timeout into the 0.2 architecture.
+- Hardened Android worker-death handling and iOS heartbeat/accessibility result
+  transport while retaining strict 0.2 report identity.
+- Kept BrowserStack native stack/flamegraph profiling explicitly unsupported.
+- Published the runtime, domain, process, artifact, provider, and report
+  foundation crates alongside `mobench`, `mobench-sdk`, and `mobench-macros`.
+
+### Validation
+
+- Local formatting, locked workspace tests, native/WASM checks, Clippy,
+  workflow security tests, and workflow linting are required.
+- The final candidate passed both pinned downstreams on two Android devices, two
+  iOS devices, and all four browser environments on the exact candidate SHA in
+  workflow run 30652763040.
 
 ## v0.1.49 - 2026-07-31
 

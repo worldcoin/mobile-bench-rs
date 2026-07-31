@@ -1,0 +1,32 @@
+[package]
+name = "mobench-artifacts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Transactional artifact publication primitives for mobench"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench-artifacts"
+keywords = ["benchmark", "artifacts", "atomic", "performance"]
+categories = ["development-tools::profiling", "filesystem"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+fs2.workspace = true
+libc = "0.2"
+semver = "1"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

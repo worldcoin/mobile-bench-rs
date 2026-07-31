@@ -70,13 +70,14 @@
 //! let ipa = builder.package_ipa("BenchRunner", SigningMethod::Development)?;
 //! ```
 
-use super::common::{get_cargo_target_dir, host_lib_path, run_command, validate_project_root};
+use super::common::{
+    ToolCommand, get_cargo_target_dir, host_lib_path, run_tool_command, validate_project_root,
+};
 use crate::codegen::{IosDeploymentTarget, IosProjectOptions, IosRunner, resolve_ios_runner};
 use crate::types::{BenchError, BuildConfig, BuildProfile, BuildResult, Target};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn resolve_ios_benchmark_timeout_secs_from_env() -> u64 {
@@ -111,7 +112,7 @@ fn parse_xcode_version(output: &str) -> Option<XcodeVersion> {
 }
 
 fn selected_xcode_version() -> Result<XcodeVersion, BenchError> {
-    let output = Command::new("xcodebuild")
+    let output = ToolCommand::path_search("xcodebuild")
         .arg("-version")
         .output()
         .map_err(|err| {
@@ -240,6 +241,9 @@ pub struct IosBuilder {
     deployment_target: IosDeploymentTarget,
     /// Optional requested runner. If omitted, runner is selected from deployment target.
     runner: Option<IosRunner>,
+    /// Explicit generated-runner benchmark timeout. Environment lookup remains
+    /// only as a compatibility fallback when this is absent.
+    benchmark_timeout_secs: Option<u64>,
 }
 
 impl IosBuilder {
@@ -277,6 +281,7 @@ impl IosBuilder {
             ffi_backend: crate::FfiBackend::Uniffi,
             deployment_target: IosDeploymentTarget::default_target(),
             runner: None,
+            benchmark_timeout_secs: None,
         }
     }
 
@@ -335,6 +340,12 @@ impl IosBuilder {
     /// Sets iOS runner template explicitly.
     pub fn runner(mut self, runner: Option<IosRunner>) -> Self {
         self.runner = runner;
+        self
+    }
+
+    /// Sets the generated iOS runner benchmark completion timeout explicitly.
+    pub fn benchmark_timeout_secs(mut self, timeout_secs: Option<u64>) -> Self {
+        self.benchmark_timeout_secs = timeout_secs.filter(|seconds| *seconds > 0);
         self
     }
 
@@ -474,7 +485,9 @@ impl IosBuilder {
             IosProjectOptions {
                 deployment_target: self.deployment_target.clone(),
                 runner,
-                ios_benchmark_timeout_secs: resolve_ios_benchmark_timeout_secs_from_env(),
+                ios_benchmark_timeout_secs: self
+                    .benchmark_timeout_secs
+                    .unwrap_or_else(resolve_ios_benchmark_timeout_secs_from_env),
             },
         )?;
 
@@ -589,7 +602,7 @@ impl IosBuilder {
             .output_dir
             .join("ios")
             .join(format!("{framework_name}.xcframework"));
-        let mut cmd = Command::new("boltffi");
+        let mut cmd = ToolCommand::path_search("boltffi");
         cmd.arg("pack")
             .arg("apple")
             .arg("--layout")
@@ -599,7 +612,7 @@ impl IosBuilder {
             cmd.arg("--release");
         }
         cmd.current_dir(&crate_dir);
-        run_command(cmd, "boltffi pack apple")?;
+        run_tool_command(cmd, "boltffi pack apple")?;
         Ok(xcframework_path)
     }
 
@@ -847,7 +860,7 @@ impl IosBuilder {
                 println!("  Building for {}", target);
             }
 
-            let mut cmd = Command::new("cargo");
+            let mut cmd = ToolCommand::path_search("cargo");
             cmd.arg("build").arg("--target").arg(target).arg("--lib");
 
             // Add release flag if needed
@@ -911,7 +924,7 @@ impl IosBuilder {
     /// RUSTUP_TOOLCHAIN and toolchain overrides) instead of `rustup target list`
     /// which may query a different toolchain in CI.
     fn check_rust_targets(&self, targets: &[&str]) -> Result<(), BenchError> {
-        let sysroot = Command::new("rustc")
+        let sysroot = ToolCommand::path_search("rustc")
             .args(["--print", "sysroot"])
             .output()
             .ok()
@@ -932,7 +945,7 @@ impl IosBuilder {
                 lib_dir.exists()
             } else {
                 // Fallback: ask rustup (may query wrong toolchain in CI)
-                let output = Command::new("rustup")
+                let output = ToolCommand::path_search("rustup")
                     .args(["target", "list", "--installed"])
                     .output()
                     .ok();
@@ -982,10 +995,10 @@ impl IosBuilder {
         }
 
         // Build host library to feed uniffi-bindgen
-        let mut build_cmd = Command::new("cargo");
+        let mut build_cmd = ToolCommand::path_search("cargo");
         build_cmd.arg("build");
         build_cmd.current_dir(&crate_dir);
-        run_command(build_cmd, "cargo build (host)")?;
+        run_tool_command(build_cmd, "cargo build (host)")?;
 
         let lib_path = host_lib_path(&crate_dir, &self.crate_name)?;
         let out_dir = self
@@ -1003,7 +1016,7 @@ impl IosBuilder {
         })?;
 
         // Try cargo run first (works if crate has uniffi-bindgen binary target)
-        let cargo_run_result = Command::new("cargo")
+        let cargo_run_result = ToolCommand::path_search("cargo")
             .args([
                 "run",
                 "-p",
@@ -1033,7 +1046,7 @@ impl IosBuilder {
             }
         } else {
             // Fall back to global uniffi-bindgen
-            let uniffi_available = Command::new("uniffi-bindgen")
+            let uniffi_available = ToolCommand::path_search("uniffi-bindgen")
                 .arg("--version")
                 .output()
                 .map(|o| o.status.success())
@@ -1063,7 +1076,7 @@ impl IosBuilder {
                 ));
             }
 
-            let mut cmd = Command::new("uniffi-bindgen");
+            let mut cmd = ToolCommand::path_search("uniffi-bindgen");
             cmd.arg("generate")
                 .arg("--library")
                 .arg(&lib_path)
@@ -1071,7 +1084,7 @@ impl IosBuilder {
                 .arg("swift")
                 .arg("--out-dir")
                 .arg(&out_dir);
-            if let Err(error) = run_command(cmd, "uniffi-bindgen swift") {
+            if let Err(error) = run_tool_command(cmd, "uniffi-bindgen swift") {
                 if had_existing_bindings {
                     if self.verbose {
                         println!(
@@ -1292,7 +1305,7 @@ impl IosBuilder {
 
         // Use lipo to combine arm64 and x86_64 into a universal binary
         let dest_lib = framework_dir.join(framework_name);
-        let output = Command::new("lipo")
+        let output = ToolCommand::path_search("lipo")
             .arg("-create")
             .arg(&arm64_lib)
             .arg(&x86_64_lib)
@@ -1513,7 +1526,7 @@ impl IosBuilder {
     /// Returns an error if codesign is not available or if signing fails.
     /// The xcframework must be signed for Xcode to accept it.
     fn codesign_xcframework(&self, xcframework_path: &Path) -> Result<(), BenchError> {
-        let output = Command::new("codesign")
+        let output = ToolCommand::path_search("codesign")
             .arg("--force")
             .arg("--deep")
             .arg("--sign")
@@ -1581,7 +1594,7 @@ impl IosBuilder {
         }
 
         let project_dir = ios_dir.join("BenchRunner");
-        let output = Command::new("xcodegen")
+        let output = ToolCommand::path_search("xcodegen")
             .arg("generate")
             .current_dir(&project_dir)
             .output()
@@ -1625,6 +1638,15 @@ impl IosBuilder {
                 project_dir.display()
             )))
         }
+    }
+
+    /// Regenerates the Xcode project after generated resources have changed.
+    ///
+    /// The normal `build()` flow generates the project before run-scoped files
+    /// such as `bench_spec.json` are embedded. Packaging callers must refresh
+    /// the project so Xcode includes those resources in the app bundle.
+    pub fn regenerate_xcode_project(&self) -> Result<(), BenchError> {
+        self.generate_xcode_project()
     }
 
     /// Locate the generated UniFFI header for the crate
@@ -1676,7 +1698,7 @@ impl IosBuilder {
 
 #[allow(clippy::collapsible_if)]
 fn find_codesign_identity() -> Option<String> {
-    let output = Command::new("security")
+    let output = ToolCommand::path_search("security")
         .args(["find-identity", "-v", "-p", "codesigning"])
         .output()
         .ok()?;
@@ -1747,7 +1769,7 @@ fn embed_provisioning_profile(app_path: &Path, profile: &Path) -> Result<(), Ben
 }
 
 fn codesign_bundle(app_path: &Path, identity: &str) -> Result<(), BenchError> {
-    let output = Command::new("codesign")
+    let output = ToolCommand::path_search("codesign")
         .args(["--force", "--deep", "--sign", identity])
         .arg(app_path)
         .output()
@@ -1855,7 +1877,7 @@ impl IosBuilder {
         // `Release + iphoneos` has proven more stable in CI than the previous
         // implicit Debug destination build.
         let build_configuration = "Release";
-        let mut cmd = Command::new("xcodebuild");
+        let mut cmd = ToolCommand::path_search("xcodebuild");
         cmd.arg("-project")
             .arg(&project_path)
             .arg("-scheme")
@@ -2011,7 +2033,7 @@ impl IosBuilder {
                     }
                 }
                 _ => {
-                    let output = Command::new("codesign")
+                    let output = ToolCommand::path_search("codesign")
                         .arg("--force")
                         .arg("--deep")
                         .arg("--sign")
@@ -2075,7 +2097,7 @@ impl IosBuilder {
             })?;
         }
 
-        let mut cmd = Command::new("ditto");
+        let mut cmd = ToolCommand::path_search("ditto");
         cmd.arg("-c")
             .arg("-k")
             .arg("--sequesterRsrc")
@@ -2088,7 +2110,7 @@ impl IosBuilder {
             println!("  Running: {:?}", cmd);
         }
 
-        run_command(cmd, "create IPA archive with ditto")?;
+        run_tool_command(cmd, "create IPA archive with ditto")?;
         self.validate_ipa_archive(&ipa_path, scheme)?;
 
         // Clean up Payload directory
@@ -2132,7 +2154,7 @@ impl IosBuilder {
         let build_dir = self.output_dir.join("ios/build");
         println!("Building XCUITest runner for {}...", scheme);
 
-        let mut cmd = Command::new("xcodebuild");
+        let mut cmd = ToolCommand::path_search("xcodebuild");
         cmd.arg("build-for-testing")
             .arg("-project")
             .arg(&project_path)
@@ -2256,7 +2278,7 @@ impl IosBuilder {
             ))
         })?;
 
-        let mut zip_cmd = Command::new("zip");
+        let mut zip_cmd = ToolCommand::path_search("zip");
         zip_cmd
             .arg("-qr")
             .arg(&zip_path)
@@ -2267,21 +2289,21 @@ impl IosBuilder {
             println!("  Running: {:?}", zip_cmd);
         }
 
-        run_command(zip_cmd, "zip XCUITest runner")?;
+        run_tool_command(zip_cmd, "zip XCUITest runner")?;
         println!("✓ XCUITest runner packaged: {:?}", zip_path);
 
         Ok(zip_path)
     }
 
     fn copy_bundle_with_ditto(&self, src: &Path, dest: &Path) -> Result<(), BenchError> {
-        let mut cmd = Command::new("ditto");
+        let mut cmd = ToolCommand::path_search("ditto");
         cmd.arg(src).arg(dest);
 
         if self.verbose {
             println!("  Running: {:?}", cmd);
         }
 
-        run_command(cmd, "copy app bundle with ditto")
+        run_tool_command(cmd, "copy app bundle with ditto")
     }
 
     fn ensure_device_app_bundle_metadata(
@@ -2355,10 +2377,10 @@ impl IosBuilder {
             ))
         })?;
 
-        let mut extract = Command::new("ditto");
+        let mut extract = ToolCommand::path_search("ditto");
         extract.arg("-x").arg("-k").arg(ipa_path).arg(&extract_root);
 
-        let extract_result = run_command(extract, "extract IPA for validation");
+        let extract_result = run_tool_command(extract, "extract IPA for validation");
         if let Err(err) = extract_result {
             let _ = fs::remove_dir_all(&extract_root);
             return Err(err);
@@ -2448,7 +2470,7 @@ mod tests {
         fs::create_dir_all(&payload).expect("create payload");
         let ipa = temp_dir.join("broken.ipa");
 
-        let status = Command::new("ditto")
+        let status = ToolCommand::path_search("ditto")
             .arg("-c")
             .arg("-k")
             .arg("--sequesterRsrc")
@@ -2493,7 +2515,7 @@ mod tests {
         .expect("write plist");
         let ipa = temp_dir.join("valid.ipa");
 
-        let status = Command::new("ditto")
+        let status = ToolCommand::path_search("ditto")
             .arg("-c")
             .arg("-k")
             .arg("--sequesterRsrc")

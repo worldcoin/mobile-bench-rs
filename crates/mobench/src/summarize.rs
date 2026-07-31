@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use comfy_table::{Attribute, Cell, ContentArrangement, Table, presets::UTF8_FULL};
+use mobench_report::{markdown_inline_field_text, markdown_table_field_text};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -125,10 +126,13 @@ fn parse_summary_object(summary: &serde_json::Value) -> Result<SummarizeReport> 
 
     let iterations = summary
         .get("iterations")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
 
-    let warmup = summary.get("warmup").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let warmup = summary
+        .get("warmup")
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
 
     let device_summaries = summary
         .get("device_summaries")
@@ -502,13 +506,13 @@ fn parse_raw_bench_report(path: &Path, value: &serde_json::Value) -> Result<Summ
     let iterations = first
         .get("spec")
         .and_then(|spec| spec.get("iterations"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
     let warmup = first
         .get("spec")
         .and_then(|spec| spec.get("warmup"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(crate::json_value_to_u32)
+        .unwrap_or(0);
     let benchmarks = entries
         .iter()
         .map(parse_benchmark_entry)
@@ -1015,15 +1019,16 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
             output.push('\n');
         }
 
+        let platform_name = markdown_inline_field_text(&platform.platform.to_uppercase());
+        let device_name = markdown_inline_field_text(&platform.device.name);
+        let device_os = markdown_inline_field_text(&platform.device.os);
+        let device_os_version = markdown_inline_field_text(&platform.device.os_version);
         let mut header = format!(
             "### {} — {} ({} {})",
-            markdown_text(&platform.platform.to_uppercase()),
-            markdown_text(&platform.device.name),
-            markdown_text(&platform.device.os),
-            markdown_text(&platform.device.os_version),
+            platform_name, device_name, device_os, device_os_version,
         );
         if let Some(chipset) = &platform.device.chipset {
-            header.push_str(&format!(" · {}", markdown_text(chipset)));
+            header.push_str(&format!(" · {}", markdown_inline_field_text(chipset)));
         }
         if let Some(ram) = platform.device.ram_gb {
             header.push_str(&format!(" · {ram} GB RAM"));
@@ -1060,15 +1065,13 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
         }
 
         for bench in &platform.benchmarks {
+            let benchmark_label = markdown_table_field_text(&bench.label);
             let mut row = if bench.failure.is_some() {
-                format!(
-                    "| {} | **—** | — | — | — | — |",
-                    markdown_text(&bench.label)
-                )
+                format!("| {benchmark_label} | **—** | — | — | — | — |")
             } else {
                 format!(
                     "| {} | **{:.1}** | {:.1} | {:.1} | {:.1} | {:.1} |",
-                    markdown_text(&bench.label),
+                    benchmark_label,
                     bench.timing.avg_ms,
                     bench.timing.best_ms,
                     bench.timing.worst_ms,
@@ -1079,15 +1082,20 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
 
             if has_failures {
                 if let Some(failure) = &bench.failure {
+                    let failure_kind = markdown_table_field_text(&failure.kind);
+                    let failure_message = markdown_table_field_text(&failure.message);
+                    let exit_reason = markdown_table_field_text(
+                        failure.exit_reason.as_deref().unwrap_or("unavailable"),
+                    );
                     row.push_str(&format!(
                         " failed | {}: {} ({}) | {} |",
-                        markdown_text(&failure.kind),
-                        markdown_text(&failure.message),
+                        failure_kind,
+                        failure_message,
                         failure
                             .elapsed_ms
                             .map(|value| format!("{value}ms"))
                             .unwrap_or_else(|| "elapsed unknown".to_string()),
-                        markdown_text(failure.exit_reason.as_deref().unwrap_or("unavailable"))
+                        exit_reason,
                     ));
                 } else {
                     row.push_str(" passed | — | — |");
@@ -1120,28 +1128,6 @@ pub fn render_markdown(report: &SummarizeReport) -> String {
         }
     }
 
-    output
-}
-
-fn markdown_text(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    for character in input.chars().take(1024) {
-        match character {
-            '\\' => output.push_str("\\\\"),
-            '|' => output.push_str("\\|"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '&' => output.push_str("&amp;"),
-            '`' => output.push_str("\\`"),
-            '*' | '[' | ']' => {
-                output.push('\\');
-                output.push(character);
-            }
-            '\r' | '\n' => output.push(' '),
-            character if character.is_control() => output.push('\u{fffd}'),
-            character => output.push(character),
-        }
-    }
     output
 }
 
@@ -1633,11 +1619,68 @@ mod tests {
     }
 
     #[test]
-    fn markdown_text_escapes_untrusted_report_markup() {
-        assert_eq!(
-            markdown_text("[device](https://evil)|<script>\n::warning::x"),
-            "\\[device\\](https://evil)\\|&lt;script&gt; ::warning::x"
+    fn test_render_markdown_neutralizes_untrusted_report_text() {
+        let report = SummarizeReport {
+            platforms: vec![PlatformReport {
+                platform: "ios\n## injected heading".to_string(),
+                device: DeviceInfo {
+                    name: "Phone | [device](https://evil.invalid/device)".to_string(),
+                    os: "<b>iOS</b>".to_string(),
+                    os_version: "18\r\n| forged | row |".to_string(),
+                    chipset: Some("![chip](https://evil.invalid/image.png)".to_string()),
+                    ram_gb: None,
+                },
+                benchmarks: vec![BenchmarkResult {
+                    name: "crate::bench_attack".to_string(),
+                    label: "[benchmark](https://evil.invalid/bench)|next\n# heading".to_string(),
+                    timing: TimingStats {
+                        avg_ms: 0.0,
+                        median_ms: 0.0,
+                        best_ms: 0.0,
+                        worst_ms: 0.0,
+                        p95_ms: 0.0,
+                        std_dev_ms: None,
+                    },
+                    resource_usage: None,
+                    failure: Some(BenchmarkFailure {
+                        kind: "timeout|**forged**".to_string(),
+                        message: "<script>alert(1)</script>\n| forged |".to_string(),
+                        elapsed_ms: None,
+                        exit_reason: Some("[exit](mailto:owner@example.com)".to_string()),
+                    }),
+                }],
+                iterations: 1,
+                warmup: 0,
+            }],
+        };
+
+        let output = render_markdown(&report);
+
+        assert!(output.starts_with("### IOS &#35;&#35; INJECTED HEADING — "));
+        assert!(output.contains(
+            "Phone &#124; &#91;device&#93;&#40;https&#58;&#47;&#47;evil&#46;invalid&#47;device&#41;"
+        ));
+        assert!(output.contains("&lt;b&gt;iOS&lt;&#47;b&gt;"));
+        assert!(output.contains("18 &#124; forged &#124; row &#124;"));
+        assert!(output.contains(
+            "&#33;&#91;chip&#93;&#40;https&#58;&#47;&#47;evil&#46;invalid&#47;image&#46;png&#41;"
+        ));
+        assert!(output.contains(
+            "| &#91;benchmark&#93;&#40;https&#58;&#47;&#47;evil&#46;invalid&#47;bench&#41;&#124;next &#35; heading | **—** |"
+        ));
+        assert!(output.contains("timeout&#124;&#42;&#42;forged&#42;&#42;:"));
+        assert!(
+            output
+                .contains("&lt;script&gt;alert&#40;1&#41;&lt;&#47;script&gt; &#124; forged &#124;")
         );
+        assert!(output.contains("&#91;exit&#93;&#40;mailto&#58;owner&#64;example&#46;com&#41;"));
+
+        assert!(output.contains("| Benchmark |"));
+        assert!(output.contains("**—**"));
+        assert!(!output.contains("https://evil.invalid"));
+        assert!(!output.contains("<script>"));
+        assert!(!output.contains("\n## injected heading"));
+        assert!(!output.contains("\n# heading"));
     }
 
     #[test]

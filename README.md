@@ -4,21 +4,20 @@
 
 # mobench
 
-mobench is a Rust mobile benchmarking toolkit. It builds and runs Rust
-benchmarks on Android and iOS, locally or on BrowserStack, with a
+mobench is a Rust mobile and browser benchmarking toolkit. It builds and runs
+Rust benchmarks on Android, iOS, and WebAssembly, locally or on BrowserStack, with a
 library-first SDK, a `cargo mobench` CLI, config-first project resolution,
 stable CI output contracts, and local native profiling artifacts.
 
-Current release: **v0.1.49**. It adds browser-hosted WASM benchmarks through
-BrowserStack Automate and makes real ProveKit and World ID native/browser
-matrices mandatory release gates while preserving the credential boundary
-introduced in v0.1.44.
+Current crates.io release line: **v0.2.0**. The 0.2 release is the clean
+architecture rewrite with feature parity through v0.1.49; its acceptance
+evidence is tracked in [`docs/0.2-feature-parity-checklist.md`](docs/0.2-feature-parity-checklist.md).
 
 ## What It Provides
 
 - `#[benchmark]` for registering Rust functions through `inventory`.
-- `mobench-sdk` timing, registry, runner, mobile builders, and generated runner
-  templates.
+- `mobench-sdk` timing, registry, runner, mobile/WASM builders, and generated
+  runner templates.
 - `mobench` CLI orchestration for build, run, CI, reporting, BrowserStack,
   device resolution, and local native profiling.
 - Three generated mobile runner backends:
@@ -31,6 +30,8 @@ introduced in v0.1.44.
   flamegraph bundles.
 - Programmatic CLI integration types in the `mobench` crate:
   `RunRequest`, `RunResult`, `DeviceSelection`, and `Report`.
+- `cargo mobench build --target web` for a static worker-backed WASM harness,
+  plus `cargo mobench run-web` for direct W3C BrowserStack Automate execution.
 
 ## Why It Exists
 
@@ -46,10 +47,13 @@ that CI systems and humans can compare.
 2. The macro registers functions at compile time through `inventory`.
 3. The CLI resolves the benchmark crate from flags, `mobench.toml`, Cargo
    metadata, git root, or the legacy `bench-mobile/` layout.
-4. The SDK builders compile native libraries and generate Android/iOS runners.
+4. The SDK builders compile native libraries or WebAssembly and generate the
+   Android/iOS/browser harness.
 5. Generated runners call either the UniFFI surface or the direct native C ABI.
 6. The CLI collects local or BrowserStack results and renders reports.
-7. Optional local profile sessions capture `simpleperf` or simulator-host
+7. Browser benchmarks execute synchronous WASM work in a module worker so the
+   main page remains responsive to WebDriver polling.
+8. Optional local profile sessions capture `simpleperf` or simulator-host
    `sample` stacks and produce flamegraph artifacts.
 
 ## Workflow Diagrams
@@ -116,29 +120,25 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    request["PR number + exact current head SHA"]
-    validate["Validate PR head\nread-only"]
-    build["Untrusted prepare jobs\nno secrets, read-only"]
-    manifest["Enumerated APK/IPA/test artifacts\npath + size + SHA-256 + ABI manifest"]
-    verify["Credentialed jobs\nverify handoff, no caller checkout"]
-    upload["Upload verified opaque artifacts"]
+    workflow["GitHub Actions or CI runner"]
+    doctor["Validate config, credentials, and prerequisites"]
+    resolve["Resolve device matrix\nand tags"]
+    build["Build release mobile artifacts\nAPK or IPA + XCUITest"]
+    upload["Upload artifacts to BrowserStack"]
     schedule["Schedule benchmark sessions"]
-    device["Mobile artifacts execute\nonly on BrowserStack devices"]
     collect["Collect runner output\nand provider metadata"]
     fetch["Optional artifact fetch\nlogs, session JSON, video links"]
     normalize["Normalize timing\nCPU and memory when available"]
     outputs["CI contract outputs\nsummary.json\nsummary.md\nresults.csv\nplots/*.svg"]
     regressions["Optional baseline comparison\nJUnit regression status"]
-    pr["Isolated sticky PR/check report\nnarrow write permission"]
+    pr["Optional sticky PR comment"]
 
-    request --> validate
-    validate --> build
-    build --> manifest
-    manifest --> verify
-    verify --> upload
+    workflow --> doctor
+    doctor --> resolve
+    resolve --> build
+    build --> upload
     upload --> schedule
-    schedule --> device
-    device --> collect
+    schedule --> collect
     collect --> fetch
     collect --> normalize
     fetch --> normalize
@@ -261,17 +261,6 @@ cargo mobench check --target ios
 cargo mobench build --target android
 cargo mobench build --target ios
 cargo mobench build --target android --progress
-
-# Build a browser-hosted WebAssembly bundle
-cargo mobench build \
-  --target web \
-  --crate-path examples/basic-benchmark \
-  --release
-
-# Run a hosted WASM bundle through BrowserStack Automate
-cargo mobench run-web \
-  --url https://bench.example.test/ \
-  --function my_crate::my_benchmark
 
 # Run a host-only CI-compatible smoke run
 cargo mobench run --target android --function sample_fns::fibonacci --local-only
@@ -482,14 +471,6 @@ Resolution precedence is:
 CLI flags override config file values. In `cargo mobench run --config <FILE>`
 mode, `--device-matrix <FILE>` overrides `device_matrix` from the config file.
 
-The web build writes a static runner under `target/mobench/web/` with a
-`window.mobench.run(spec)` JSON contract. The `mobench::browserstack_automate`
-module exposes a typed BrowserStack Automate/WebDriver client, including a
-complete session operation that configures timeouts, navigates, runs the
-benchmark, reports session status, and closes the session. BrowserStack Local
-lifecycle remains follow-up work; `cargo mobench run-web` accepts the identifier
-of an already-running Local tunnel when the benchmark URL is private.
-
 ## Project Docs
 
 - `docs/guides/README.md`: guide index.
@@ -498,8 +479,6 @@ of an already-running Local tunnel when the benchmark URL is private.
 - `docs/guides/profiling.md`: local native profiling guide.
 - `docs/guides/testing.md`: host, device, and workflow testing.
 - `docs/guides/browserstack-ci.md`: BrowserStack benchmark CI.
-- `docs/guides/reusable-workflow-security.md`: secure fork-PR trust boundary,
-  prebuilt artifact handoff, job permissions, and caller migration.
 - `docs/guides/browserstack-metrics.md`: BrowserStack metric normalization.
 - `docs/guides/fetch-results.md`: fetching and summarizing remote results.
 - `docs/guides/release.md`: publish checklist.

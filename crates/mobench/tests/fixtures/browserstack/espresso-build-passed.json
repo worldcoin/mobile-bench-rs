@@ -1,0 +1,23 @@
+{
+  "id": "b8c039cefb994ab7647a9554a5507e684cf53828",
+  "status": "passed",
+  "duration": 263,
+  "framework": "espresso",
+  "devices": [
+    {
+      "device": "Google Pixel 7",
+      "os": "android",
+      "os_version": "13.0",
+      "sessions": [
+        {
+          "id": "d7cee5734ae754a811beb3aacc1baba30e810232",
+          "status": "passed",
+          "duration": 51
+        }
+      ]
+    }
+  ],
+  "input_capabilities": {
+    "devices": ["Google Pixel 7-13.0"]
+  }
+}

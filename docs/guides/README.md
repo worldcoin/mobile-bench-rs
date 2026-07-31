@@ -1,6 +1,7 @@
 # mobench Guides
 
-Current release: **0.1.49**.
+Current published release line: **0.2.0**. This release includes the WebAssembly
+and BrowserStack Automate surfaces described below.
 
 These guides cover the current mobench CLI, SDK, generated mobile runners,
 BrowserStack execution, CI outputs, artifact fetching, and local native
@@ -12,16 +13,14 @@ profiling.
   benchmarks, choose `uniffi` or `native-c-abi`, and run benchmarks.
 - [examples.md](examples.md): minimal benchmark, setup/teardown,
   native C ABI export, CI output, and programmatic integration patterns.
-- [build.md](build.md): Android, iOS, and browser WASM prerequisites and outputs,
-  project resolution, generated runner backends, and troubleshooting.
+- [build.md](build.md): Android and iOS prerequisites, build outputs,
+  WebAssembly bundles, project resolution, generated runner backends, and
+  troubleshooting.
 - [testing.md](testing.md): host tests, CLI checks, local smoke tests,
   Android/iOS validation, BrowserStack smoke tests, and profiling checks.
 - [browserstack-ci.md](browserstack-ci.md): BrowserStack credentials,
   deterministic device resolution, `ci run`, split-sample merging, PR reporting,
   baselines, and artifact fetching.
-- [reusable-workflow-security.md](reusable-workflow-security.md): secure
-  two-stage reusable workflow, artifact-manifest trust boundary, permissions,
-  report isolation, and caller migration.
 - [browserstack-metrics.md](browserstack-metrics.md): timing/resource metrics,
   CSV columns, BrowserStack log parsing, and local profiling boundaries.
 - [fetch-results.md](fetch-results.md): `--fetch`, `mobench fetch`, and
@@ -30,6 +29,8 @@ profiling.
   `ios-instruments`, `rust-tracing` trace contracts, semantic phases, and
   profile diffs.
 - [release.md](release.md): release checklist for the workspace crates and docs.
+- [reusable-workflow-security.md](reusable-workflow-security.md): the
+  secretless prepare and credentialed prebuilt-only trust boundary.
 
 For the full behavior and API contract, see
 [../specs/mobench-current-spec.md](../specs/mobench-current-spec.md).

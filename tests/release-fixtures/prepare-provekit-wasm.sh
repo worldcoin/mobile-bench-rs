@@ -10,7 +10,6 @@ provekit_root="$(cd "$1" && pwd)"
 mobench_root="$(cd "$2" && pwd)"
 fixture_root="${mobench_root}/tests/release-fixtures/provekit-wasm"
 manifest="${provekit_root}/Cargo.toml"
-bench_manifest="${provekit_root}/bench-mobile/Cargo.toml"
 
 PROVEKIT_ROOT="$provekit_root" MOBENCH_ROOT="$mobench_root" python3 - <<'PY'
 import os

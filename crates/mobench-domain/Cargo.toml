@@ -1,0 +1,23 @@
+[package]
+name = "mobench-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Validated report envelopes and identity contracts for mobench"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench-domain"
+keywords = ["benchmark", "schema", "validation", "performance"]
+categories = ["development-tools::profiling", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+mobench-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -1,8 +1,32 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use mobench_runtime::MAX_BENCHMARK_COUNT;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::{plots, profile};
+use crate::{browserstack::DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, plots, profile};
+
+fn parse_iterations(value: &str) -> Result<u32, String> {
+    let count = value
+        .parse::<u32>()
+        .map_err(|_| "iterations must be an unsigned 32-bit integer".to_string())?;
+    if count == 0 {
+        return Err("iterations must be greater than zero".to_string());
+    }
+    if count > MAX_BENCHMARK_COUNT {
+        return Err(format!("iterations must not exceed {MAX_BENCHMARK_COUNT}"));
+    }
+    Ok(count)
+}
+
+fn parse_warmup(value: &str) -> Result<u32, String> {
+    let count = value
+        .parse::<u32>()
+        .map_err(|_| "warmup must be an unsigned 32-bit integer".to_string())?;
+    if count > MAX_BENCHMARK_COUNT {
+        return Err(format!("warmup must not exceed {MAX_BENCHMARK_COUNT}"));
+    }
+    Ok(count)
+}
 
 /// CLI orchestrator for building, packaging, and executing Rust benchmarks on mobile.
 #[derive(Parser, Debug)]
@@ -56,9 +80,9 @@ pub(crate) enum Command {
             help = "Path to the benchmark crate directory containing Cargo.toml"
         )]
         crate_path: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, value_parser = parse_iterations)]
         iterations: Option<u32>,
-        #[arg(long)]
+        #[arg(long, value_parser = parse_warmup)]
         warmup: Option<u32>,
         #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
         devices: Vec<String>,
@@ -138,7 +162,7 @@ pub(crate) enum Command {
         fetch_output_dir: PathBuf,
         #[arg(long, default_value_t = 5)]
         fetch_poll_interval_secs: u64,
-        #[arg(long, default_value_t = 300)]
+        #[arg(long, default_value_t = DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS)]
         fetch_timeout_secs: u64,
         #[arg(long, help = "Show simplified step-by-step progress output")]
         progress: bool,
@@ -273,9 +297,9 @@ pub(crate) enum Command {
         url: String,
         #[arg(long, help = "Fully-qualified Rust function to benchmark")]
         function: String,
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 20, value_parser = parse_iterations)]
         iterations: u32,
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = 5, value_parser = parse_warmup)]
         warmup: u32,
         #[arg(long, default_value = "chrome")]
         browser: String,
@@ -291,10 +315,7 @@ pub(crate) enum Command {
         build_name: Option<String>,
         #[arg(long)]
         session_name: Option<String>,
-        #[arg(
-            long,
-            help = "Identifier of an already-running BrowserStack Local tunnel"
-        )]
+        #[arg(long)]
         local_identifier: Option<String>,
         #[arg(long, default_value_t = 300)]
         script_timeout_secs: u64,
@@ -484,9 +505,9 @@ pub(crate) enum CiCommand {
     },
     /// Run a full CI benchmark flow with stable output contract.
     Run(CiRunArgs),
-    /// Build and package untrusted mobile code into a verified prebuilt bundle.
+    /// Build untrusted mobile code into a hashed, enumerated prebuilt bundle.
     Prepare(CiPrepareArgs),
-    /// Upload and run a prebuilt bundle without invoking caller build tooling.
+    /// Run a verified prebuilt bundle without invoking caller build tooling.
     RunPrebuilt(CiRunPrebuiltArgs),
     /// Merge one-sample CI summaries into a normal CI output set.
     MergeSplitRuns(CiMergeSplitRunsArgs),
@@ -502,17 +523,13 @@ pub(crate) struct CiPrepareArgs {
     pub(crate) target: MobileTarget,
     #[arg(long)]
     pub(crate) crate_path: Option<PathBuf>,
-    #[arg(
-        long,
-        value_enum,
-        help = "Generated runner FFI backend (overrides mobench.toml; defaults to uniffi)"
-    )]
+    #[arg(long, value_enum)]
     pub(crate) ffi_backend: Option<FfiBackendArg>,
-    #[arg(long)]
+    #[arg(long, required = true)]
     pub(crate) functions: Vec<String>,
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 100, value_parser = parse_iterations)]
     pub(crate) iterations: u32,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 10, value_parser = parse_warmup)]
     pub(crate) warmup: u32,
     #[arg(long)]
     pub(crate) release: bool,
@@ -553,9 +570,9 @@ pub(crate) struct CiRunPrebuiltArgs {
     pub(crate) expected_platform: MobileTarget,
     #[arg(long, required = true)]
     pub(crate) expected_functions: Vec<String>,
-    #[arg(long)]
+    #[arg(long, value_parser = parse_iterations)]
     pub(crate) expected_iterations: u32,
-    #[arg(long)]
+    #[arg(long, value_parser = parse_warmup)]
     pub(crate) expected_warmup: u32,
     #[arg(long, required = true)]
     pub(crate) devices: Vec<String>,
@@ -569,11 +586,7 @@ pub(crate) struct CiRunPrebuiltArgs {
     pub(crate) fetch_poll_interval_secs: u64,
     #[arg(long, default_value_t = 300)]
     pub(crate) fetch_timeout_secs: u64,
-    #[arg(
-        long,
-        default_value_t = 1800,
-        help = "Trusted upper bound for a prebuilt entry's completion timeout"
-    )]
+    #[arg(long, default_value_t = 1800)]
     pub(crate) max_completion_timeout_secs: u64,
 }
 
@@ -737,9 +750,9 @@ pub(crate) struct CiRunArgs {
         help = "Multiple benchmark functions (comma-separated or JSON array). Runs each in sequence."
     )]
     pub(crate) functions: Vec<String>,
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 100, value_parser = parse_iterations)]
     pub(crate) iterations: u32,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 10, value_parser = parse_warmup)]
     pub(crate) warmup: u32,
     #[arg(long, help = "Device identifiers or labels (BrowserStack devices)")]
     pub(crate) devices: Vec<String>,
@@ -810,7 +823,7 @@ pub(crate) struct CiRunArgs {
     pub(crate) fetch_output_dir: PathBuf,
     #[arg(long, default_value_t = 5)]
     pub(crate) fetch_poll_interval_secs: u64,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS)]
     pub(crate) fetch_timeout_secs: u64,
     #[arg(long, help = "Show simplified step-by-step progress output")]
     pub(crate) progress: bool,
@@ -874,11 +887,11 @@ pub(crate) struct CiMergeSplitRunsArgs {
     pub(crate) device: String,
 
     /// Expected measured sample count.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_iterations)]
     pub(crate) iterations: u32,
 
     /// Warmup count reported in merged CI summaries.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, value_parser = parse_warmup)]
     pub(crate) warmup: u32,
 }
 
@@ -1002,6 +1015,12 @@ impl MobileTarget {
             Self::Android => "Android",
             Self::Ios => "iOS",
         }
+    }
+}
+
+impl std::fmt::Display for MobileTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.display_name())
     }
 }
 

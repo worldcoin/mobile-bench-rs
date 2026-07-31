@@ -1,6 +1,6 @@
 # Testing Guide
 
-Current release: **0.1.49**.
+Current release: **0.2.0**.
 
 This guide covers host tests, CLI validation, generated mobile artifacts,
 BrowserStack smoke tests, and local native profiling checks.
@@ -197,38 +197,6 @@ Expected files:
 - `target/mobench/ci/summary.md`
 - `target/mobench/ci/results.csv`
 - `target/mobench/ci/plots/*.svg` when plots are rendered
-
-## Reusable Workflow Trust-Boundary Tests
-
-Run the repository's workflow/self-tests and `actionlint` before release. The
-security regression fixture must demonstrate that hostile `build.rs`, fixture
-hook, dependency, and benchmark code receive neither BrowserStack variables nor
-a write-capable GitHub token. Static workflow tests must also prove that
-credentialed jobs have no caller checkout or caller-controlled process
-execution.
-
-Compatibility coverage must also execute the embedded `prepare_script` path
-validator against absolute, traversing, malformed, missing, directory, and
-escaping-symlink targets; prove hook failure precedes manifest upload; exercise
-platform function fallback and structured device parsing; and reject missing or
-duplicate function/device result shards.
-
-The reusable-workflow self-test pins `nightly-2026-03-04` and selects
-`native-c-abi`, proving mobile targets are installed for the caller toolchain
-without invoking UniFFI binding generation.
-
-Manifest tests cover path traversal, absolute/duplicate/unexpected paths,
-missing/extra files, size and SHA-256 mismatches, platform mismatches, and
-incompatible benchmark ABI metadata. Reporting tests cover untrusted filenames,
-benchmark names, JSON, CSV, Markdown/HTML, shell data, and GitHub workflow
-commands.
-
-Complete one Android and one iOS service-gated benchmark using
-`cargo mobench ci run-prebuilt` before publishing the release. These live runs
-are separate evidence from host tests and must not be inferred from static
-workflow validation. See
-[Reusable Workflow Security](reusable-workflow-security.md) for the job and
-permission model.
 
 ## Profiling Checks
 

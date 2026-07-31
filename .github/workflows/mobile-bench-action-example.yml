@@ -16,8 +16,8 @@ jobs:
     if: ${{ github.event.inputs.platform == 'android' || github.event.inputs.platform == '' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - uses: ./.github/actions/mobench
@@ -41,8 +41,8 @@ jobs:
     if: ${{ github.event.inputs.platform == 'ios' }}
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
       - uses: ./.github/actions/mobench

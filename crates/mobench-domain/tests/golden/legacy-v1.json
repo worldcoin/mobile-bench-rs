@@ -1,0 +1,6 @@
+{
+  "function": "sample_fns::checksum",
+  "samples_ns": [101, 99, 100],
+  "iterations": 3,
+  "warmup": 1
+}

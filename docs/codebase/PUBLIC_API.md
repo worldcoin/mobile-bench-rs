@@ -1,6 +1,6 @@
 # Public API And Stability
 
-Updated: 2026-07-23. Current release: `0.1.49`.
+Updated: 2026-07-31. Release line: `0.2.0`.
 
 This document defines compatibility-sensitive API boundaries for the published
 mobench crates. Use it during semver reviews, docs.rs cleanup, feature-flag
@@ -160,11 +160,17 @@ Run before publishing:
 cargo fmt --all --check
 cargo test --workspace --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --all-features --no-deps
-cargo publish --dry-run -p mobench-macros
-cargo publish --dry-run -p mobench-sdk
-cargo publish --dry-run -p mobench
+cargo package --workspace --locked --keep-going
 ```
 
-Publish order is `mobench-macros`, then `mobench-sdk`, then `mobench`.
-Dependent dry-runs should happen after the dependency version is available from
-the crates.io registry index.
+The workspace package command builds a temporary registry and verifies the
+complete unpublished dependency graph together. When testing an already
+published version, use `--no-verify` to avoid selecting stale registry crates
+with the same name/version; the workspace build and test gates remain the code
+verification receipt.
+
+Publish leaf crates before their dependants: `mobench-macros`,
+`mobench-process`, `mobench-runtime`, and `mobench-artifacts`; then
+`mobench-domain`; then `mobench-provider` and `mobench-report`; then
+`mobench-sdk`; finally `mobench`. Wait for each version to become visible in
+the registry index before publishing its dependants.

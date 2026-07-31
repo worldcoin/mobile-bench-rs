@@ -1,7 +1,13 @@
 [workspace]
 members = [
     "crates/mobench",
+    "crates/mobench-artifacts",
+    "crates/mobench-domain",
     "crates/mobench-macros",
+    "crates/mobench-process",
+    "crates/mobench-provider",
+    "crates/mobench-report",
+    "crates/mobench-runtime",
     "crates/mobench-sdk",
     "crates/sample-fns",
     "examples/basic-benchmark",
@@ -13,7 +19,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
-version = "0.1.49"
+version = "0.2.0"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -26,6 +32,8 @@ toml = "0.8"
 uniffi = "0.28"
 boltffi = "0.25.2"
 time = { version = "0.3", features = ["formatting"] }
+fs2 = "0.4"
+getrandom = "0.3"
 
 # Phase 1: Registry and proc macros
 inventory = "0.3"
@@ -35,5 +43,11 @@ proc-macro2 = "1"
 
 # Phase 1: Template embedding
 include_dir = "0.7"
-mobench-macros = { version = "0.1.49", path = "crates/mobench-macros" }
-mobench-sdk = { version = "0.1.49", path = "crates/mobench-sdk", default-features = false }
+mobench-macros = { version = "0.2.0", path = "crates/mobench-macros" }
+mobench-sdk = { version = "0.2.0", path = "crates/mobench-sdk", default-features = false }
+mobench-artifacts = { version = "0.2.0", path = "crates/mobench-artifacts" }
+mobench-domain = { version = "0.2.0", path = "crates/mobench-domain" }
+mobench-process = { version = "0.2.0", path = "crates/mobench-process" }
+mobench-provider = { version = "0.2.0", path = "crates/mobench-provider" }
+mobench-report = { version = "0.2.0", path = "crates/mobench-report" }
+mobench-runtime = { version = "0.2.0", path = "crates/mobench-runtime" }

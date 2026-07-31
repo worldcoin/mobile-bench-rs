@@ -8,7 +8,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1.49"
+//! mobench-sdk = "0.2.0"
 //! inventory = "0.3"
 //!
 //! [lib]
@@ -24,7 +24,7 @@
 //! <https://github.com/worldcoin/mobile-bench-rs/blob/main/docs/guides/sdk-integration.md>.
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = "0.1.49"
+//! mobench-sdk = "0.2.0"
 //! inventory = "0.3"  # Required for benchmark registration
 //! ```
 //!
@@ -87,11 +87,18 @@
 //!
 //! ## Crate Ecosystem
 //!
-//! The mobench ecosystem consists of three published crates:
+//! The mobench ecosystem consists of the CLI and SDK crates plus the published
+//! rewrite foundation crates that make the dependency boundaries explicit:
 //!
 //! - **`mobench-sdk`** (this crate) - Core SDK library with timing harness and build automation
 //! - **[`mobench`](https://crates.io/crates/mobench)** - CLI tool for building and running benchmarks
 //! - **[`mobench-macros`](https://crates.io/crates/mobench-macros)** - `#[benchmark]` proc macro
+//! - **`mobench-runtime`** - bounded execution counts, distributions, and resource aggregation
+//! - **`mobench-domain`** - strict versioned benchmark report envelopes
+//! - **`mobench-process`** - subprocess supervision and executable provenance
+//! - **`mobench-artifacts`** - isolated, immutable artifact publication
+//! - **`mobench-provider`** - provider execution and lifecycle state
+//! - **`mobench-report`** - context-safe Markdown, CSV, and GitHub report rendering
 //!
 //! Note: The `mobench-runner` crate has been consolidated into this crate as the [`timing`] module.
 //!
@@ -109,7 +116,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mobench-sdk = { version = "0.1.49", default-features = false, features = ["runner-only"] }
+//! mobench-sdk = { version = "0.2.0", default-features = false, features = ["runner-only"] }
 //! ```
 //!
 //! ## Programmatic Usage
@@ -251,7 +258,7 @@
 //! ### iOS
 //!
 //! - Xcode with command line tools
-//! - `uniffi-bindgen` (`cargo install --git https://github.com/mozilla/uniffi-rs --tag <uniffi-tag> uniffi --features cli --bin uniffi-bindgen`)
+//! - `uniffi-bindgen` (`cargo install --git https://github.com/mozilla/uniffi-rs --tag <uniffi-tag> uniffi-bindgen-cli --bin uniffi-bindgen`)
 //! - `xcodegen` (optional, `brew install xcodegen`)
 //! - Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`
 //!
@@ -372,6 +379,7 @@ pub use types::{
 };
 
 // Re-export timing types at the crate root for convenience
+pub use mobench_runtime::MAX_BENCHMARK_COUNT;
 pub use timing::{BenchSummary, SemanticPhase, TimingError, profile_phase, run_closure};
 
 /// Re-export of [`std::hint::black_box`] for preventing compiler optimizations.

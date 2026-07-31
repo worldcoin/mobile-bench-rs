@@ -1,16 +1,266 @@
 use anyhow::{Context, Result, anyhow};
+#[cfg(test)]
+use mobench_process::ProcessCancellation;
+use mobench_provider::{
+    AdapterRun, CollectedOutput, ExpectedSession as ProviderExpectedSession, ProviderRun,
+};
 use reqwest::Url;
-use reqwest::blocking::multipart::Form;
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+mod adapter;
+mod client;
+mod collection;
+mod extraction;
+mod polling;
+mod reconciliation;
+mod scheduling;
+mod uploads;
+
+pub(crate) use adapter::BrowserStackProviderAdapter;
+#[cfg(test)]
+use extraction::normalize_benchmark_value;
+use extraction::{collect_text_artifact_urls, extend_unique_results, normalize_benchmark_values};
+#[cfg(test)]
+use reconciliation::provider_device_identifier;
+use reconciliation::{
+    ReconciledDeviceSession, is_valid_device_selector, reconcile_requested_device_sessions,
+};
+
 type BrowserStackResults = (
     std::collections::HashMap<String, Vec<Value>>,
     std::collections::HashMap<String, PerformanceMetrics>,
 );
-use std::io::{Read, copy};
-use std::path::Path;
-use std::time::{Duration, Instant};
+
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserStackCollectedReport {
+    pub(crate) requested_device_id: String,
+    pub(crate) observed_device_id: String,
+    pub(crate) transport_session_id: String,
+    pub(crate) benchmark: Value,
+}
+
+#[derive(Debug)]
+pub(crate) struct BrowserStackCollection {
+    pub(crate) benchmark_results: std::collections::HashMap<String, Vec<Value>>,
+    pub(crate) performance_metrics: std::collections::HashMap<String, PerformanceMetrics>,
+    pub(crate) reports: Vec<BrowserStackCollectedReport>,
+}
+
+/// BrowserStack transport selected for one Provider Run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BrowserStackPlatform {
+    Espresso,
+    XcuiTest,
+}
+
+impl BrowserStackPlatform {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Espresso => "espresso",
+            Self::XcuiTest => "xcuitest",
+        }
+    }
+}
+
+/// Provider-specific artifacts required to start a BrowserStack run.
+#[derive(Clone, Debug)]
+pub(crate) enum BrowserStackArtifacts {
+    Espresso { app: PathBuf, test_suite: PathBuf },
+    XcuiTest { app: PathBuf, test_suite: PathBuf },
+}
+
+/// Resolved request accepted by the BrowserStack Adapter.
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserStackRunRequest {
+    pub(crate) devices: Vec<String>,
+    pub(crate) artifacts: BrowserStackArtifacts,
+}
+
+/// Durable BrowserStack build handle used by delayed collection.
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserStackRunHandle {
+    pub(crate) platform: BrowserStackPlatform,
+    pub(crate) requested_devices: Vec<String>,
+    pub(crate) app_url: String,
+    pub(crate) test_suite_url: Option<String>,
+    pub(crate) build_id: String,
+}
+
+/// One benchmark report and the telemetry attributed to its Provider Session.
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserStackReport {
+    pub(crate) benchmark: Value,
+    pub(crate) performance_metrics: PerformanceMetrics,
+    pub(crate) observed_device_id: String,
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub(crate) struct BrowserStackAdapterError(#[from] anyhow::Error);
+
+impl BrowserStackAdapterError {
+    fn from_anyhow(error: anyhow::Error) -> Self {
+        Self(error)
+    }
+}
+
+#[derive(Debug)]
+struct CollectedBrowserStackSession {
+    session_id: String,
+    benchmark_results: Vec<Value>,
+    benchmark_failures: Vec<Value>,
+    performance_metrics: PerformanceMetrics,
+}
+
+fn browserstack_failure_diagnostic(failures: &[Value]) -> Option<String> {
+    let failure = failures.first()?;
+    let function = failure
+        .get("function_name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown function");
+    let kind = failure
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown failure");
+    let message = failure
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("no message");
+    Some(format!(
+        "benchmark failure for {function}: {kind}: {message}"
+    ))
+}
+
+#[cfg(test)]
+fn classify_browserstack_result_completeness(
+    expected_sessions: &[DeviceSession],
+    collected_sessions: Vec<CollectedBrowserStackSession>,
+) -> Result<BrowserStackResults> {
+    let run = browserstack_adapter_run(expected_sessions, collected_sessions)
+        .reconcile()
+        .map_err(|error| anyhow!("BrowserStack result set is ambiguous; {error}"))?;
+    completed_browserstack_results(run)
+}
+
+#[cfg(test)]
+fn browserstack_adapter_run(
+    expected_sessions: &[DeviceSession],
+    collected_sessions: Vec<CollectedBrowserStackSession>,
+) -> AdapterRun<BrowserStackReport> {
+    let reconciled = expected_sessions
+        .iter()
+        .cloned()
+        .map(|observed| ReconciledDeviceSession {
+            requested_device_id: observed.device.clone(),
+            observed,
+        })
+        .collect::<Vec<_>>();
+    browserstack_adapter_run_with_bindings(&reconciled, collected_sessions)
+}
+
+fn browserstack_adapter_run_with_bindings(
+    expected_sessions: &[ReconciledDeviceSession],
+    collected_sessions: Vec<CollectedBrowserStackSession>,
+) -> AdapterRun<BrowserStackReport> {
+    let observed_by_session = expected_sessions
+        .iter()
+        .map(|session| {
+            (
+                session.observed.session_id.as_str(),
+                session.observed.device.as_str(),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    AdapterRun {
+        expected: expected_sessions
+            .iter()
+            .map(|session| ProviderExpectedSession {
+                session_id: session.observed.session_id.clone(),
+                device_id: session.requested_device_id.clone(),
+                status: session.observed.status.clone(),
+            })
+            .collect(),
+        collected: collected_sessions
+            .into_iter()
+            .map(|session| {
+                let observed_device_id = observed_by_session
+                    .get(session.session_id.as_str())
+                    .copied()
+                    .unwrap_or("unknown")
+                    .to_owned();
+                CollectedOutput {
+                    session_id: session.session_id,
+                    reports: session
+                        .benchmark_results
+                        .into_iter()
+                        .map(|benchmark| BrowserStackReport {
+                            benchmark,
+                            performance_metrics: session.performance_metrics.clone(),
+                            observed_device_id: observed_device_id.clone(),
+                        })
+                        .collect(),
+                    failure: browserstack_failure_diagnostic(&session.benchmark_failures),
+                }
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn completed_browserstack_results(
+    run: ProviderRun<BrowserStackReport>,
+) -> Result<BrowserStackResults> {
+    let collection = completed_browserstack_collection(run)?;
+    Ok((collection.benchmark_results, collection.performance_metrics))
+}
+
+pub(crate) fn completed_browserstack_collection(
+    run: ProviderRun<BrowserStackReport>,
+) -> Result<BrowserStackCollection> {
+    if !run.assessment().is_complete() {
+        return Err(anyhow!(
+            "BrowserStack result set is incomplete; {}",
+            run.assessment()
+        ));
+    }
+
+    let mut benchmark_results = std::collections::HashMap::new();
+    let mut performance_metrics = std::collections::HashMap::new();
+    let mut reports = Vec::new();
+    for (assessment, collected) in run
+        .assessment()
+        .sessions()
+        .iter()
+        .zip(run.sessions().iter())
+    {
+        let report = collected
+            .reports
+            .first()
+            .expect("complete Provider Session has exactly one report");
+        reports.push(BrowserStackCollectedReport {
+            requested_device_id: assessment.device_id.clone(),
+            observed_device_id: report.observed_device_id.clone(),
+            transport_session_id: assessment.session_id.clone(),
+            benchmark: report.benchmark.clone(),
+        });
+        benchmark_results.insert(assessment.device_id.clone(), vec![report.benchmark.clone()]);
+        if report.performance_metrics.sample_count > 0 {
+            performance_metrics.insert(
+                assessment.device_id.clone(),
+                report.performance_metrics.clone(),
+            );
+        }
+    }
+
+    Ok(BrowserStackCollection {
+        benchmark_results,
+        performance_metrics,
+        reports,
+    })
+}
 
 /// Format a file size in human-readable format (MB or KB).
 fn format_file_size(bytes: u64) -> String {
@@ -71,13 +321,9 @@ pub struct DeviceValidationError {
 }
 
 const DEFAULT_BASE_URL: &str = "https://api-cloud.browserstack.com";
+pub(crate) const DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS: u64 = 900;
 const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
-const XCUITEST_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
-const MAX_TEXT_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_BINARY_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_BENCH_REPORT_BYTES: usize = 4 * 1024 * 1024;
-const MAX_BENCH_REPORT_CHUNKS: usize = 8192;
 
 #[derive(Clone)]
 pub struct BrowserStackAuth {
@@ -105,290 +351,6 @@ pub struct BrowserStackClient {
 }
 
 impl BrowserStackClient {
-    pub fn new(auth: BrowserStackAuth, project: Option<String>) -> Result<Self> {
-        let http = Client::builder()
-            .user_agent(USER_AGENT)
-            // IPA/AAB uploads can exceed Reqwest's default 30-second request
-            // timeout even on healthy connections. Session polling enforces
-            // its own bounded deadlines; artifact transfer must not.
-            .timeout(None)
-            .connect_timeout(Duration::from_secs(15))
-            // BrowserStack's upload edge has repeatedly closed large HTTP/2
-            // multipart request bodies while the identical artifact succeeds
-            // over HTTP/1.1. Use one transport consistently for upload,
-            // scheduling, polling, and artifact fetch requests.
-            .http1_only()
-            .build()
-            .context("building HTTP client")?;
-
-        Ok(Self {
-            http,
-            auth,
-            base_url: DEFAULT_BASE_URL.to_string(),
-            project,
-        })
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)] // Used in tests to verify URL construction
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Upload an Espresso app-under-test APK to BrowserStack.
-    pub fn upload_espresso_app(&self, artifact: &Path) -> Result<AppUpload> {
-        if !artifact.exists() {
-            return Err(anyhow!("app artifact not found at {:?}", artifact));
-        }
-
-        let file_size = get_file_size(artifact);
-        println!("Uploading Android APK ({})...", format_file_size(file_size));
-        let start = Instant::now();
-
-        let form = Form::new().file("file", artifact)?;
-        let resp = self
-            .http
-            .post(self.api("app-automate/espresso/v2/app"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .multipart(form)
-            .send()
-            .context("uploading app to BrowserStack")?;
-
-        let result = parse_response(resp, "app upload")?;
-        let elapsed = start.elapsed().as_secs();
-        println!("  Uploaded Android APK (took {}s)", elapsed);
-
-        Ok(result)
-    }
-
-    /// Upload an Espresso test-suite APK to BrowserStack.
-    pub fn upload_espresso_test_suite(&self, artifact: &Path) -> Result<TestSuiteUpload> {
-        if !artifact.exists() {
-            return Err(anyhow!("test suite artifact not found at {:?}", artifact));
-        }
-
-        let file_size = get_file_size(artifact);
-        println!(
-            "Uploading Android test APK ({})...",
-            format_file_size(file_size)
-        );
-        let start = Instant::now();
-
-        let form = Form::new().file("file", artifact)?;
-        let resp = self
-            .http
-            .post(self.api("app-automate/espresso/v2/test-suite"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .multipart(form)
-            .send()
-            .context("uploading test suite to BrowserStack")?;
-
-        let result = parse_response(resp, "test suite upload")?;
-        let elapsed = start.elapsed().as_secs();
-        println!("  Uploaded Android test APK (took {}s)", elapsed);
-
-        Ok(result)
-    }
-
-    pub fn upload_xcuitest_app(&self, artifact: &Path) -> Result<AppUpload> {
-        if !artifact.exists() {
-            return Err(anyhow!("iOS app artifact not found at {:?}", artifact));
-        }
-
-        let file_size = get_file_size(artifact);
-        println!("Uploading iOS app IPA ({})...", format_file_size(file_size));
-        let start = Instant::now();
-
-        let form = Form::new().file("file", artifact)?;
-        let resp = self
-            .http
-            .post(self.api("app-automate/xcuitest/v2/app"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .multipart(form)
-            .send()
-            .context("uploading iOS app to BrowserStack")?;
-
-        let result = parse_response(resp, "iOS app upload")?;
-        let elapsed = start.elapsed().as_secs();
-        println!("  Uploaded iOS app IPA (took {}s)", elapsed);
-
-        Ok(result)
-    }
-
-    pub fn upload_xcuitest_test_suite(&self, artifact: &Path) -> Result<TestSuiteUpload> {
-        if !artifact.exists() {
-            return Err(anyhow!(
-                "iOS XCUITest suite artifact not found at {:?}",
-                artifact
-            ));
-        }
-
-        let file_size = get_file_size(artifact);
-        println!(
-            "Uploading iOS XCUITest runner ({})...",
-            format_file_size(file_size)
-        );
-        let start = Instant::now();
-
-        let form = Form::new().file("file", artifact)?;
-        let resp = self
-            .http
-            .post(self.api("app-automate/xcuitest/v2/test-suite"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .multipart(form)
-            .send()
-            .context("uploading iOS XCUITest suite to BrowserStack")?;
-
-        let result = parse_response(resp, "iOS XCUITest suite upload")?;
-        let elapsed = start.elapsed().as_secs();
-        println!("  Uploaded iOS XCUITest runner (took {}s)", elapsed);
-
-        Ok(result)
-    }
-
-    pub fn schedule_espresso_run(
-        &self,
-        devices: &[String],
-        app_url: &str,
-        test_suite_url: &str,
-    ) -> Result<ScheduledRun> {
-        if devices.is_empty() {
-            return Err(anyhow!("device list is empty; provide at least one target"));
-        }
-        if app_url.is_empty() {
-            return Err(anyhow!("app_url is empty"));
-        }
-        if test_suite_url.is_empty() {
-            return Err(anyhow!("test_suite_url is empty"));
-        }
-
-        let body = BuildRequest {
-            app: app_url.to_string(),
-            test_suite: test_suite_url.to_string(),
-            devices: devices.to_vec(),
-            device_logs: true,
-            disable_animations: true,
-            app_profiling: true,
-            idle_timeout: ESPRESSO_IDLE_TIMEOUT_SECS,
-            build_name: self.project.clone(),
-        };
-
-        let resp = self
-            .http
-            .post(self.api("app-automate/espresso/v2/build"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .json(&body)
-            .send()
-            .context("scheduling BrowserStack Espresso run")?;
-
-        let build: BuildResponse = parse_response(resp, "schedule run")?;
-        Ok(ScheduledRun {
-            build_id: build.build_id,
-        })
-    }
-
-    pub fn schedule_xcuitest_run(
-        &self,
-        devices: &[String],
-        app_url: &str,
-        test_suite_url: &str,
-    ) -> Result<ScheduledRun> {
-        if devices.is_empty() {
-            return Err(anyhow!("device list is empty; provide at least one target"));
-        }
-        if app_url.is_empty() {
-            return Err(anyhow!("app_url is empty"));
-        }
-        if test_suite_url.is_empty() {
-            return Err(anyhow!("test_suite_url is empty"));
-        }
-
-        let body = XcuitestBuildRequest {
-            app: app_url.to_string(),
-            test_suite: test_suite_url.to_string(),
-            devices: devices.to_vec(),
-            device_logs: true,
-            app_profiling: true,
-            build_name: self.project.clone(),
-            idle_timeout: XCUITEST_IDLE_TIMEOUT_SECS,
-            // Specify the test method to run (required by BrowserStack for XCUITest)
-            only_testing: Some(vec![
-                "BenchRunnerUITests/BenchRunnerUITests/testLaunchAndCaptureBenchmarkReport"
-                    .to_string(),
-            ]),
-        };
-
-        let resp = self
-            .http
-            .post(self.api("app-automate/xcuitest/v2/build"))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .json(&body)
-            .send()
-            .context("scheduling BrowserStack XCUITest run")?;
-
-        let build: BuildResponse = parse_response(resp, "schedule run")?;
-        Ok(ScheduledRun {
-            build_id: build.build_id,
-        })
-    }
-
-    fn api(&self, path: &str) -> String {
-        format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
-    }
-
-    pub fn get_json(&self, path: &str) -> Result<Value> {
-        let resp = self
-            .http
-            .get(self.api(path))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .send()
-            .with_context(|| format!("requesting BrowserStack API {}", path))?;
-
-        parse_response(resp, path)
-    }
-
-    pub fn download_url(&self, url: &str, dest: &Path) -> Result<()> {
-        let resp = self
-            .asset_request(url)
-            .send()
-            .context("downloading BrowserStack asset")?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "BrowserStack asset download failed (status {})",
-                status
-            ));
-        }
-        if resp
-            .content_length()
-            .is_some_and(|length| length > MAX_BINARY_ARTIFACT_BYTES)
-        {
-            return Err(anyhow!(
-                "BrowserStack asset exceeds {} bytes",
-                MAX_BINARY_ARTIFACT_BYTES
-            ));
-        }
-
-        let mut output = std::fs::File::create(dest)
-            .with_context(|| format!("creating BrowserStack asset file {:?}", dest))?;
-        let written = copy(&mut resp.take(MAX_BINARY_ARTIFACT_BYTES + 1), &mut output)
-            .context("streaming BrowserStack asset")?;
-        if written > MAX_BINARY_ARTIFACT_BYTES {
-            drop(output);
-            let _ = std::fs::remove_file(dest);
-            return Err(anyhow!(
-                "BrowserStack asset exceeds {} bytes",
-                MAX_BINARY_ARTIFACT_BYTES
-            ));
-        }
-        Ok(())
-    }
-
     fn fetch_devices_inventory(&self) -> Result<Vec<BrowserStackDevice>> {
         let json = self.get_json("app-automate/devices.json")?;
         parse_device_list(json, "devices")
@@ -458,191 +420,22 @@ impl BrowserStackClient {
         build_status_from_value(json).context("parsing build status response")
     }
 
-    /// Poll for build completion with timeout
-    ///
-    /// # Arguments
-    /// * `build_id` - The build ID to poll
-    /// * `platform` - "espresso" or "xcuitest"
-    /// * `timeout_secs` - Maximum time to wait in seconds (default: 600)
-    /// * `poll_interval_secs` - How often to check status in seconds (default: 10)
-    #[allow(dead_code)]
-    pub fn poll_build_completion(
-        &self,
-        build_id: &str,
-        platform: &str,
-        timeout_secs: u64,
-        poll_interval_secs: u64,
-    ) -> Result<BuildStatus> {
-        self.poll_build_completion_with_terminal_failures(
-            build_id,
-            platform,
-            timeout_secs,
-            poll_interval_secs,
-            false,
-        )
-    }
-
-    fn poll_build_completion_with_terminal_failures(
-        &self,
-        build_id: &str,
-        platform: &str,
-        timeout_secs: u64,
-        poll_interval_secs: u64,
-        allow_terminal_failure_status: bool,
-    ) -> Result<BuildStatus> {
-        use std::time::{Duration, Instant};
-
-        let start = Instant::now();
-        let timeout = Duration::from_secs(timeout_secs);
-        let poll_interval = Duration::from_secs(poll_interval_secs);
-
-        loop {
-            let status = match platform {
-                "espresso" => self.get_espresso_build_status(build_id)?,
-                "xcuitest" => self.get_xcuitest_build_status(build_id)?,
-                _ => return Err(anyhow!("unsupported platform: {}", platform)),
-            };
-
-            match status.status.to_lowercase().as_str() {
-                "done" | "passed" | "completed" => return Ok(status),
-                "failed" | "error" | "timeout" => {
-                    if allow_terminal_failure_status {
-                        return Ok(status);
-                    }
-                    return Err(anyhow!(
-                        "Build {} failed with status: {}",
-                        build_id,
-                        status.status
-                    ));
-                }
-                _ => {
-                    // Still running
-                    if start.elapsed() >= timeout {
-                        return Err(anyhow!(
-                            "Timeout waiting for build {} to complete (waited {} seconds)",
-                            build_id,
-                            timeout_secs
-                        ));
-                    }
-                    std::thread::sleep(poll_interval);
-                }
-            }
-        }
-    }
-
-    /// Fetch device logs for a specific session
-    pub fn get_device_logs(
-        &self,
-        build_id: &str,
-        session_id: &str,
-        platform: &str,
-    ) -> Result<String> {
-        let path = match platform {
-            "espresso" => {
-                return Err(anyhow!(
-                    "Espresso device logs are exposed per test case in session details"
-                ));
-            }
-            "xcuitest" => format!(
-                "app-automate/xcuitest/v2/builds/{}/sessions/{}/devicelogs",
-                build_id, session_id
-            ),
-            _ => return Err(anyhow!("unsupported platform: {}", platform)),
-        };
-
-        self.download_text_url(&self.api(&path))
-            .with_context(|| format!("fetching device logs for session {}", session_id))
-    }
-
-    fn get_session_json(&self, build_id: &str, session_id: &str, platform: &str) -> Result<Value> {
-        let path = match platform {
-            "espresso" => format!(
-                "app-automate/espresso/v2/builds/{}/sessions/{}",
-                build_id, session_id
-            ),
-            "xcuitest" => format!(
-                "app-automate/xcuitest/v2/builds/{}/sessions/{}",
-                build_id, session_id
-            ),
-            _ => return Err(anyhow!("unsupported platform: {}", platform)),
-        };
-
-        self.get_json(&path)
-    }
-
-    fn download_text_url(&self, url: &str) -> Result<String> {
-        let resp = self
-            .asset_request(url)
-            .send()
-            .context("downloading BrowserStack text asset")?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "BrowserStack text asset download failed (status {})",
-                status
-            ));
-        }
-        if resp
-            .content_length()
-            .is_some_and(|length| length > MAX_TEXT_ARTIFACT_BYTES as u64)
-        {
-            return Err(anyhow!(
-                "BrowserStack text artifact exceeds {} bytes",
-                MAX_TEXT_ARTIFACT_BYTES
-            ));
-        }
-
-        let mut bytes = Vec::new();
-        resp.take(MAX_TEXT_ARTIFACT_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .context("reading BrowserStack text asset body")?;
-        if bytes.len() > MAX_TEXT_ARTIFACT_BYTES {
-            return Err(anyhow!(
-                "BrowserStack text artifact exceeds {} bytes",
-                MAX_TEXT_ARTIFACT_BYTES
-            ));
-        }
-
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    }
-
-    fn asset_request(&self, url: &str) -> reqwest::blocking::RequestBuilder {
-        let request = self.http.get(url);
-        if should_authenticate_asset_url(url) {
-            request.basic_auth(&self.auth.username, Some(&self.auth.access_key))
-        } else {
-            request
-        }
-    }
-
     /// Extract benchmark results from device logs
     /// Looks for JSON output matching BenchReport format
     /// Supports both Android (BENCH_JSON) and iOS (BENCH_REPORT_JSON_START/END) formats
     pub fn extract_benchmark_results(&self, logs: &str) -> Result<Vec<Value>> {
         let mut results = Vec::new();
 
-        Self::extend_unique_results(
-            &mut results,
-            Self::extract_android_chunked_bench_json(logs)?,
-        );
-
         // First, try iOS-style markers: BENCH_REPORT_JSON_START ... BENCH_REPORT_JSON_END
         if let Some(json) = Self::extract_ios_bench_json(logs) {
-            Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
+            extend_unique_results(&mut results, normalize_benchmark_values(json));
         }
 
-        // Also look for Android-style BENCH_JSON marker
-        let bench_json_marker = "BENCH_JSON ";
-        for line in logs.lines() {
-            if let Some(idx) = line.find(bench_json_marker) {
-                let json_part = &line[idx + bench_json_marker.len()..];
-                if let Ok(json) = serde_json::from_str::<Value>(json_part) {
-                    Self::extend_unique_results(
-                        &mut results,
-                        Self::normalize_benchmark_values(json),
-                    );
-                }
-            }
+        // Decode both the generated chunk protocol and the released legacy frame.
+        let android_values = mobench_domain::decode_android_bench_frames(logs)
+            .map_err(|error| anyhow!("Malformed Android benchmark framing: {error}"))?;
+        for json in android_values {
+            extend_unique_results(&mut results, normalize_benchmark_values(json));
         }
 
         // Look for JSON objects that contain benchmark-related fields (fallback)
@@ -654,7 +447,7 @@ impl BrowserStackClient {
             if (looks_like_json || looks_like_bench)
                 && let Ok(json) = serde_json::from_str::<Value>(trimmed)
             {
-                Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
+                extend_unique_results(&mut results, normalize_benchmark_values(json));
             }
         }
 
@@ -665,50 +458,6 @@ impl BrowserStackClient {
         }
     }
 
-    fn extract_android_chunked_bench_json(logs: &str) -> Result<Vec<Value>> {
-        const START_MARKER: &str = "BENCH_JSON_START";
-        const CHUNK_MARKER: &str = "BENCH_JSON_CHUNK";
-        const END_MARKER: &str = "BENCH_JSON_END";
-
-        let mut results = Vec::new();
-        let mut report = None::<String>;
-        let mut chunk_count = 0usize;
-
-        for line in logs.lines() {
-            if let Some(index) = line.find(CHUNK_MARKER) {
-                if let Some(report) = report.as_mut() {
-                    let chunk = &line[index + CHUNK_MARKER.len()..];
-                    let chunk = chunk.strip_prefix(' ').unwrap_or(chunk);
-                    chunk_count += 1;
-                    if chunk_count > MAX_BENCH_REPORT_CHUNKS
-                        || report.len().saturating_add(chunk.len()) > MAX_BENCH_REPORT_BYTES
-                    {
-                        return Err(anyhow!(
-                            "Android benchmark report exceeds collection limits"
-                        ));
-                    }
-                    report.push_str(chunk);
-                }
-                continue;
-            }
-
-            if line.contains(START_MARKER) {
-                report = Some(String::new());
-                chunk_count = 0;
-                continue;
-            }
-
-            if line.contains(END_MARKER)
-                && let Some(report) = report.take()
-                && let Ok(json) = serde_json::from_str::<Value>(&report)
-            {
-                Self::extend_unique_results(&mut results, Self::normalize_benchmark_values(json));
-            }
-        }
-
-        Ok(results)
-    }
-
     /// Extract structured Android benchmark failures from logs.
     pub fn extract_benchmark_failures(&self, logs: &str) -> Result<Vec<Value>> {
         let mut failures = Vec::new();
@@ -717,7 +466,7 @@ impl BrowserStackClient {
             if let Some(idx) = line.find(failure_marker) {
                 let json_part = &line[idx + failure_marker.len()..];
                 if let Ok(json) = serde_json::from_str::<Value>(json_part) {
-                    Self::extend_unique_results(&mut failures, vec![json]);
+                    extend_unique_results(&mut failures, vec![json]);
                 }
             }
         }
@@ -737,7 +486,7 @@ impl BrowserStackClient {
         if !trimmed.is_empty()
             && let Ok(json) = serde_json::from_str::<Value>(trimmed)
         {
-            let results = Self::normalize_benchmark_values(json);
+            let results = normalize_benchmark_values(json);
             if !results.is_empty() {
                 return Ok(results);
             }
@@ -754,7 +503,7 @@ impl BrowserStackClient {
     where
         F: FnMut(&str) -> Result<String>,
     {
-        let artifact_urls = Self::collect_text_artifact_urls(session_json);
+        let artifact_urls = collect_text_artifact_urls(session_json);
         if artifact_urls.is_empty() {
             return Err(anyhow!("No text artifact URLs found in session response"));
         }
@@ -797,7 +546,7 @@ impl BrowserStackClient {
     where
         F: FnMut(&str) -> Result<String>,
     {
-        let artifact_urls = Self::collect_text_artifact_urls(session_json);
+        let artifact_urls = collect_text_artifact_urls(session_json);
         if artifact_urls.is_empty() {
             return Err(anyhow!("No text artifact URLs found in session response"));
         }
@@ -960,219 +709,6 @@ impl BrowserStackClient {
         Ok(snapshots)
     }
 
-    /// Wait for build completion and fetch all results including performance metrics.
-    ///
-    /// Convenience wrapper around [`Self::wait_and_fetch_all_results_with_poll`]
-    /// with default poll interval.
-    #[allow(dead_code)]
-    pub fn wait_and_fetch_all_results(
-        &self,
-        build_id: &str,
-        platform: &str,
-        timeout_secs: Option<u64>,
-    ) -> Result<BrowserStackResults> {
-        self.wait_and_fetch_all_results_with_poll(build_id, platform, timeout_secs, None)
-    }
-
-    pub fn wait_and_fetch_all_results_with_poll(
-        &self,
-        build_id: &str,
-        platform: &str,
-        timeout_secs: Option<u64>,
-        poll_interval_secs: Option<u64>,
-    ) -> Result<BrowserStackResults> {
-        let timeout = timeout_secs.unwrap_or(300);
-        let poll_interval = poll_interval_secs.unwrap_or(5);
-
-        println!(
-            "Waiting for build {} to complete (timeout: {}s, poll: {}s)...",
-            build_id, timeout, poll_interval
-        );
-        let build_status = self.poll_build_completion_with_terminal_failures(
-            build_id,
-            platform,
-            timeout,
-            poll_interval,
-            true,
-        )?;
-
-        println!("Build completed with status: {}", build_status.status);
-        println!(
-            "Fetching results from {} device(s)...",
-            build_status.devices.len()
-        );
-
-        let mut benchmark_results = std::collections::HashMap::new();
-        let mut performance_metrics = std::collections::HashMap::new();
-        let mut benchmark_failures = std::collections::HashMap::new();
-
-        for device in &build_status.devices {
-            println!(
-                "  Fetching logs for {} (session: {})...",
-                device.device, device.session_id
-            );
-
-            let mut device_benchmark_results: Option<Vec<Value>> = None;
-            let mut device_performance_metrics = PerformanceMetrics::default();
-            let mut device_failures: Option<Vec<Value>> = None;
-
-            let live_logs = if platform == "espresso" {
-                // Espresso exposes instrumentation and device logs per test case in
-                // the session-details response, not at a session-level log endpoint.
-                None
-            } else {
-                Some(self.get_device_logs(build_id, &device.session_id, platform))
-            };
-
-            match live_logs {
-                None => {}
-                Some(Ok(logs)) => {
-                    // Extract benchmark results
-                    match self.extract_benchmark_results(&logs) {
-                        Ok(results) => {
-                            println!("    Found {} benchmark result(s)", results.len());
-                            device_benchmark_results = Some(results);
-                        }
-                        Err(e) => {
-                            println!("    No benchmark results in live logs: {}", e);
-                        }
-                    }
-
-                    match self.extract_benchmark_failures(&logs) {
-                        Ok(failures) => {
-                            println!("    Found {} benchmark failure marker(s)", failures.len());
-                            device_failures = Some(failures);
-                        }
-                        Err(e) => {
-                            println!("    No benchmark failures in live logs: {}", e);
-                        }
-                    }
-
-                    // Extract performance metrics
-                    match self.extract_performance_metrics(&logs) {
-                        Ok(perf_metrics) if perf_metrics.sample_count > 0 => {
-                            println!(
-                                "    Found {} performance metric snapshot(s)",
-                                perf_metrics.sample_count
-                            );
-                            device_performance_metrics = perf_metrics;
-                        }
-                        Ok(_) => {
-                            println!("    No performance metrics found in live logs");
-                        }
-                        Err(e) => {
-                            println!("    Warning: Failed to extract performance metrics - {}", e);
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    println!("    Failed to fetch live logs: {}", e);
-                }
-            }
-
-            if device_benchmark_results.is_none() {
-                match self.get_session_json(build_id, &device.session_id, platform) {
-                    Ok(session_json) => {
-                        match self.extract_results_from_session_artifacts(&session_json, |url| {
-                            self.download_text_url(url)
-                        }) {
-                            Ok((results, perf_metrics)) => {
-                                println!(
-                                    "    Found {} benchmark result(s) from session artifacts",
-                                    results.len()
-                                );
-                                if device_performance_metrics.sample_count == 0
-                                    && perf_metrics.sample_count > 0
-                                {
-                                    println!(
-                                        "    Found {} performance metric snapshot(s) from session artifacts",
-                                        perf_metrics.sample_count
-                                    );
-                                    device_performance_metrics = perf_metrics;
-                                }
-                                device_benchmark_results = Some(results);
-                            }
-                            Err(e) => {
-                                println!(
-                                    "    Warning: Failed to fetch results from session artifacts: {e}"
-                                );
-                            }
-                        }
-
-                        if device_failures.is_none()
-                            && let Ok(failures) = self
-                                .extract_failures_from_session_artifacts(&session_json, |url| {
-                                    self.download_text_url(url)
-                                })
-                        {
-                            println!(
-                                "    Found {} benchmark failure marker(s) from session artifacts",
-                                failures.len()
-                            );
-                            device_failures = Some(failures);
-                        }
-                    }
-                    Err(e) => {
-                        println!("    Warning: Failed to fetch session artifacts metadata: {e}");
-                    }
-                }
-            }
-
-            if let Ok(app_profiling_v2) = self.get_app_profiling_v2(build_id, &device.session_id)
-                && app_profiling_v2.sample_count > 0
-            {
-                println!("    Found App Profiling v2 metrics");
-                device_performance_metrics = merge_performance_metrics(
-                    Some(device_performance_metrics),
-                    Some(app_profiling_v2),
-                )
-                .unwrap_or_default();
-            }
-
-            if let Some(results) = device_benchmark_results
-                && benchmark_results
-                    .insert(device.device.clone(), results)
-                    .is_some()
-            {
-                return Err(anyhow!(
-                    "BrowserStack returned duplicate result shards for device {}",
-                    device.device
-                ));
-            }
-            if let Some(failures) = device_failures {
-                benchmark_failures.insert(device.device.clone(), failures);
-            }
-            if device_performance_metrics.sample_count > 0 {
-                performance_metrics.insert(device.device.clone(), device_performance_metrics);
-            }
-        }
-
-        if benchmark_results.is_empty() {
-            if let Some((device, failures)) = benchmark_failures.iter().next()
-                && let Some(failure) = failures.first()
-            {
-                let function = failure
-                    .get("function_name")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("unknown");
-                let kind = failure
-                    .get("kind")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("unknown");
-                let message = failure
-                    .get("message")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("no message");
-                return Err(anyhow!(
-                    "Android benchmark failure on {device} for {function}: {kind}: {message}"
-                ));
-            }
-            Err(anyhow!("No benchmark results found from any device"))
-        } else {
-            Ok((benchmark_results, performance_metrics))
-        }
-    }
-
     /// Fetch session details from BrowserStack API.
     pub fn get_session_details(&self, build_id: &str, session_id: &str) -> Result<SessionDetails> {
         let path = format!("/app-automate/builds/{build_id}/sessions/{session_id}");
@@ -1256,203 +792,6 @@ impl BrowserStackClient {
             status: status.status,
             sessions,
         })
-    }
-
-    fn normalize_benchmark_values(value: Value) -> Vec<Value> {
-        match value {
-            Value::Array(entries) => entries
-                .into_iter()
-                .filter_map(Self::normalize_benchmark_value)
-                .collect(),
-            value => Self::normalize_benchmark_value(value).into_iter().collect(),
-        }
-    }
-
-    fn normalize_benchmark_value(mut value: Value) -> Option<Value> {
-        let samples = Self::extract_sample_durations(&value);
-        let stats = Self::compute_sample_stats(&samples);
-        let object = value.as_object_mut()?;
-
-        if !object.contains_key("function")
-            && let Some(function) = object
-                .get("spec")
-                .and_then(|spec| spec.get("name"))
-                .and_then(|name| name.as_str())
-        {
-            object.insert("function".to_string(), Value::String(function.to_string()));
-        }
-
-        if !object.contains_key("samples")
-            && let Some(samples_ns) = object
-                .get("samples_ns")
-                .and_then(|samples| samples.as_array())
-        {
-            object.insert("samples".to_string(), Value::Array(samples_ns.clone()));
-        }
-
-        let has_function = object
-            .get("function")
-            .and_then(|value| value.as_str())
-            .is_some();
-        let has_samples = object
-            .get("samples")
-            .and_then(|value| value.as_array())
-            .is_some();
-        let has_stats = ["mean_ns", "median_ns", "p95_ns", "min_ns", "max_ns"]
-            .iter()
-            .any(|key| object.get(*key).is_some());
-
-        if !has_function || (!has_samples && !has_stats) {
-            return None;
-        }
-
-        if let Some(stats) = stats {
-            if !object.contains_key("mean_ns") {
-                object.insert("mean_ns".to_string(), Value::from(stats.mean_ns));
-            }
-            if !object.contains_key("median_ns") {
-                object.insert("median_ns".to_string(), Value::from(stats.median_ns));
-            }
-            if !object.contains_key("p95_ns") {
-                object.insert("p95_ns".to_string(), Value::from(stats.p95_ns));
-            }
-            if !object.contains_key("min_ns") {
-                object.insert("min_ns".to_string(), Value::from(stats.min_ns));
-            }
-            if !object.contains_key("max_ns") {
-                object.insert("max_ns".to_string(), Value::from(stats.max_ns));
-            }
-        }
-
-        Some(value)
-    }
-
-    fn extend_unique_results(results: &mut Vec<Value>, mut new_results: Vec<Value>) {
-        for result in new_results.drain(..) {
-            if !results.iter().any(|existing| existing == &result) {
-                results.push(result);
-            }
-        }
-    }
-
-    fn collect_text_artifact_urls(value: &Value) -> Vec<(String, String)> {
-        let mut urls = Vec::new();
-        Self::collect_text_artifact_urls_recursive(value, "", &mut urls);
-        urls.sort_by_key(|(key, url)| Self::artifact_url_priority(key, url));
-        urls
-    }
-
-    fn collect_text_artifact_urls_recursive(
-        value: &Value,
-        prefix: &str,
-        out: &mut Vec<(String, String)>,
-    ) {
-        match value {
-            Value::Object(map) => {
-                for (key, value) in map {
-                    let next = if prefix.is_empty() {
-                        key.clone()
-                    } else {
-                        format!("{}.{}", prefix, key)
-                    };
-                    if let Value::String(url) = value
-                        && (url.starts_with("http") || url.starts_with("bs://"))
-                        && Self::artifact_url_priority(&next, url) < 4
-                    {
-                        out.push((next.clone(), url.clone()));
-                    }
-                    Self::collect_text_artifact_urls_recursive(value, &next, out);
-                }
-            }
-            Value::Array(items) => {
-                for (index, value) in items.iter().enumerate() {
-                    let next = format!("{}[{}]", prefix, index);
-                    Self::collect_text_artifact_urls_recursive(value, &next, out);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn artifact_url_priority(key: &str, url: &str) -> u8 {
-        let lower = format!("{} {}", key.to_ascii_lowercase(), url.to_ascii_lowercase());
-        if lower.contains("bench-report") || lower.contains("bench_report") {
-            0
-        } else if lower.contains("device_log")
-            || lower.contains("devicelog")
-            || lower.contains("instrumentation_log")
-            || lower.contains("app_log")
-        {
-            1
-        } else if lower.ends_with(".json") || lower.ends_with(".log") || lower.ends_with(".txt") {
-            2
-        } else {
-            4
-        }
-    }
-
-    fn extract_sample_durations(value: &Value) -> Vec<u64> {
-        let mut durations = Vec::new();
-
-        if let Some(samples) = value.get("samples").and_then(|samples| samples.as_array()) {
-            for sample in samples {
-                if let Some(duration_ns) = sample
-                    .get("duration_ns")
-                    .and_then(|duration| duration.as_u64())
-                {
-                    durations.push(duration_ns);
-                } else if let Some(duration_ns) = sample.as_u64() {
-                    durations.push(duration_ns);
-                }
-            }
-        }
-
-        if durations.is_empty()
-            && let Some(samples_ns) = value
-                .get("samples_ns")
-                .and_then(|samples| samples.as_array())
-        {
-            durations.extend(samples_ns.iter().filter_map(|sample| sample.as_u64()));
-        }
-
-        durations
-    }
-
-    fn compute_sample_stats(samples: &[u64]) -> Option<NormalizedSampleStats> {
-        if samples.is_empty() {
-            return None;
-        }
-
-        let mut sorted = samples.to_vec();
-        sorted.sort_unstable();
-        let len = sorted.len();
-        let mean_ns =
-            (sorted.iter().map(|value| *value as u128).sum::<u128>() / len as u128) as u64;
-        let median_ns = if len % 2 == 1 {
-            sorted[len / 2]
-        } else {
-            let lower = sorted[(len / 2) - 1];
-            let upper = sorted[len / 2];
-            (lower + upper) / 2
-        };
-        let p95_ns = sorted[Self::percentile_index(len, 0.95)];
-
-        Some(NormalizedSampleStats {
-            mean_ns,
-            median_ns,
-            p95_ns,
-            min_ns: sorted[0],
-            max_ns: sorted[len - 1],
-        })
-    }
-
-    fn percentile_index(len: usize, percentile: f64) -> usize {
-        if len == 0 {
-            return 0;
-        }
-        let rank = (percentile * len as f64).ceil() as usize;
-        let index = rank.saturating_sub(1);
-        index.min(len - 1)
     }
 }
 
@@ -1538,15 +877,6 @@ pub struct AggregateCpuMetrics {
     pub peak_percent: f64,
     pub average_percent: f64,
     pub min_percent: f64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct NormalizedSampleStats {
-    mean_ns: u64,
-    median_ns: u64,
-    p95_ns: u64,
-    min_ns: u64,
-    max_ns: u64,
 }
 
 impl PerformanceMetrics {
@@ -1655,8 +985,27 @@ fn build_status_from_value(value: Value) -> Result<BuildStatus> {
             let device_name = entry
                 .get("device")
                 .and_then(|val| val.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+                .context("BrowserStack build device entry missing device name")?;
+            let observed_device_id = if is_valid_device_selector(device_name) {
+                device_name.to_owned()
+            } else {
+                let os_version = entry
+                    .get("os_version")
+                    .or_else(|| entry.get("osVersion"))
+                    .and_then(Value::as_str)
+                    .context("BrowserStack build device entry missing OS version")?;
+                BrowserStackDevice {
+                    device: device_name.to_owned(),
+                    os: entry
+                        .get("os")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                        .to_owned(),
+                    os_version: os_version.to_owned(),
+                    available: None,
+                }
+                .identifier()
+            };
             if let Some(sessions) = entry.get("sessions").and_then(|val| val.as_array()) {
                 for session in sessions {
                     let session_id = session
@@ -1671,7 +1020,7 @@ fn build_status_from_value(value: Value) -> Result<BuildStatus> {
                             .unwrap_or("unknown")
                             .to_string();
                         devices.push(DeviceSession {
-                            device: device_name.clone(),
+                            device: observed_device_id.clone(),
                             session_id: session_id.to_string(),
                             status: session_status,
                             device_logs: None,
@@ -1841,7 +1190,6 @@ struct XcuitestBuildRequest {
     app_profiling: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     build_name: Option<String>,
-    idle_timeout: u64,
     #[serde(rename = "only-testing", skip_serializing_if = "Option::is_none")]
     only_testing: Option<Vec<String>>,
 }
@@ -1854,37 +1202,20 @@ struct BuildResponse {
 
 fn parse_response<T: DeserializeOwned>(resp: Response, context: &str) -> Result<T> {
     let status = resp.status();
+    let text = resp
+        .text()
+        .with_context(|| format!("reading BrowserStack API response body for {}", context))?;
+
     if !status.is_success() {
         return Err(anyhow!(
-            "BrowserStack API {} failed (status {})",
+            "BrowserStack API {} failed (status {}): {}",
             context,
-            status
+            status,
+            text
         ));
     }
 
-    if resp
-        .content_length()
-        .is_some_and(|length| length > MAX_TEXT_ARTIFACT_BYTES as u64)
-    {
-        return Err(anyhow!(
-            "BrowserStack API {} response exceeds {} bytes",
-            context,
-            MAX_TEXT_ARTIFACT_BYTES
-        ));
-    }
-    let mut bytes = Vec::new();
-    resp.take(MAX_TEXT_ARTIFACT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("reading BrowserStack API response body for {}", context))?;
-    if bytes.len() > MAX_TEXT_ARTIFACT_BYTES {
-        return Err(anyhow!(
-            "BrowserStack API {} response exceeds {} bytes",
-            context,
-            MAX_TEXT_ARTIFACT_BYTES
-        ));
-    }
-
-    serde_json::from_slice(&bytes)
+    serde_json::from_str(&text)
         .with_context(|| format!("parsing BrowserStack API response for {}", context))
 }
 
@@ -2289,27 +1620,350 @@ mod tests {
         (format!("http://{addr}"), handle)
     }
 
-    fn spawn_http_response(
+    struct ScriptedHttpResponse {
+        path: &'static str,
         status: &'static str,
-        body: &'static [u8],
-        content_length: u64,
-    ) -> (String, thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-        let addr = listener.local_addr().expect("read test server address");
+        content_type: &'static str,
+        body: String,
+    }
+
+    impl ScriptedHttpResponse {
+        fn json(path: &'static str, body: Value) -> Self {
+            Self {
+                path,
+                status: "200 OK",
+                content_type: "application/json",
+                body: body.to_string(),
+            }
+        }
+
+        fn text(path: &'static str, body: impl Into<String>) -> Self {
+            Self {
+                path,
+                status: "200 OK",
+                content_type: "text/plain",
+                body: body.into(),
+            }
+        }
+
+        fn not_found(path: &'static str) -> Self {
+            Self {
+                path,
+                status: "404 Not Found",
+                content_type: "application/json",
+                body: json!({"error": "not found"}).to_string(),
+            }
+        }
+    }
+
+    fn read_scripted_request(stream: &mut std::net::TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set request read timeout");
+        let mut request = Vec::new();
+        let mut header_end = None;
+        let mut content_length = 0usize;
+        loop {
+            let mut buffer = [0_u8; 4096];
+            let bytes_read = stream.read(&mut buffer).expect("read scripted request");
+            if bytes_read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..bytes_read]);
+            if header_end.is_none()
+                && let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                let end = index + 4;
+                let headers = String::from_utf8_lossy(&request[..end]);
+                content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or_default();
+                header_end = Some(end);
+            }
+            if header_end.is_some_and(|end| request.len() >= end + content_length) {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    fn spawn_browserstack_script_server(
+        responses: Vec<ScriptedHttpResponse>,
+    ) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind scripted test server");
+        let addr = listener.local_addr().expect("read scripted server address");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded_requests = Arc::clone(&requests);
         let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept request");
-            let mut buf = [0_u8; 4096];
-            let bytes_read = stream.read(&mut buf).expect("read request");
-            assert!(bytes_read > 0, "request must not be empty");
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write response headers");
-            stream.write_all(body).expect("write response body");
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept scripted request");
+                let request = read_scripted_request(&mut stream);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                assert_eq!(path, response.path, "unexpected scripted request");
+                recorded_requests.lock().unwrap().push(request);
+                let wire_response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.status,
+                    response.content_type,
+                    response.body.len(),
+                    response.body
+                );
+                stream
+                    .write_all(wire_response.as_bytes())
+                    .expect("write scripted response");
+            }
         });
-        (format!("http://{addr}"), handle)
+        (format!("http://{addr}"), requests, handle)
+    }
+
+    #[test]
+    fn browserstack_adapter_start_maps_espresso_request_into_durable_handle() {
+        let responses = vec![
+            ScriptedHttpResponse::json(
+                "/app-automate/espresso/v2/app",
+                json!({"app_url": "bs://app-1"}),
+            ),
+            ScriptedHttpResponse::json(
+                "/app-automate/espresso/v2/test-suite",
+                json!({"test_suite_url": "bs://suite-1"}),
+            ),
+            ScriptedHttpResponse::json(
+                "/app-automate/espresso/v2/build",
+                json!({"build_id": "build-1"}),
+            ),
+        ];
+        let (base_url, requests, server) = spawn_browserstack_script_server(responses);
+        let workspace = tempfile::tempdir().expect("create artifact directory");
+        let app = workspace.path().join("app.apk");
+        let test_suite = workspace.path().join("test.apk");
+        std::fs::write(&app, b"app").expect("write app fixture");
+        std::fs::write(&test_suite, b"test").expect("write test fixture");
+        let adapter = BrowserStackProviderAdapter::new(test_client_with_base_url(base_url), 1, 0);
+        let engine = mobench_provider::ProviderEngine::new(adapter);
+        let request = BrowserStackRunRequest {
+            devices: vec!["Google Pixel 7-13.0".to_owned()],
+            artifacts: BrowserStackArtifacts::Espresso { app, test_suite },
+        };
+
+        let handle = engine
+            .start(&request, &ProcessCancellation::default())
+            .expect("start BrowserStack adapter")
+            .into_handle();
+        server.join().expect("join scripted server");
+
+        assert_eq!(handle.platform, BrowserStackPlatform::Espresso);
+        assert_eq!(handle.requested_devices, request.devices);
+        assert_eq!(handle.app_url, "bs://app-1");
+        assert_eq!(handle.test_suite_url.as_deref(), Some("bs://suite-1"));
+        assert_eq!(handle.build_id, "build-1");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[2].contains("Google Pixel 7-13.0"));
+    }
+
+    #[test]
+    fn browserstack_adapter_collect_resumes_a_durable_handle() {
+        let responses = vec![
+            ScriptedHttpResponse::json(
+                "/app-automate/espresso/v2/builds/build-1",
+                json!({
+                    "build_id": "build-1",
+                    "status": "done",
+                    "devices": [{
+                        "device": "Google Pixel 7-13.0",
+                        "session_id": "session-1",
+                        "status": "passed"
+                    }]
+                }),
+            ),
+            ScriptedHttpResponse::text(
+                "/app-automate/espresso/v2/builds/build-1/sessions/session-1/devicelogs",
+                r#"{"function":"crate::bench","samples":[1,2,3]}"#,
+            ),
+            ScriptedHttpResponse::not_found(
+                "/app-automate/builds/build-1/sessions/session-1/appprofiling/v2",
+            ),
+        ];
+        let (base_url, _requests, server) = spawn_browserstack_script_server(responses);
+        let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+            test_client_with_base_url(base_url),
+            1,
+            0,
+        ));
+        let handle = BrowserStackRunHandle {
+            platform: BrowserStackPlatform::Espresso,
+            requested_devices: vec!["Google Pixel 7-13.0".to_owned()],
+            app_url: "bs://app-1".to_owned(),
+            test_suite_url: Some("bs://suite-1".to_owned()),
+            build_id: "build-1".to_owned(),
+        };
+
+        let run = engine
+            .collect(
+                mobench_provider::StartedRun::from_handle(handle),
+                &ProcessCancellation::default(),
+            )
+            .expect("collect resumed BrowserStack run");
+        server.join().expect("join scripted server");
+
+        assert!(run.assessment().is_complete());
+        assert_eq!(run.sessions().len(), 1);
+        assert_eq!(run.sessions()[0].session_id, "session-1");
+        assert_eq!(
+            run.sessions()[0].reports[0].benchmark["function"],
+            "crate::bench"
+        );
+        assert_eq!(
+            run.sessions()[0].reports[0].observed_device_id,
+            "Google Pixel 7-13.0"
+        );
+    }
+
+    #[test]
+    fn browserstack_adapter_cancels_during_poll_sleep() {
+        let responses = vec![ScriptedHttpResponse::json(
+            "/app-automate/espresso/v2/builds/build-1",
+            json!({"build_id": "build-1", "status": "running", "devices": []}),
+        )];
+        let (base_url, _requests, server) = spawn_browserstack_script_server(responses);
+        let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+            test_client_with_base_url(base_url),
+            30,
+            10,
+        ));
+        let handle = BrowserStackRunHandle {
+            platform: BrowserStackPlatform::Espresso,
+            requested_devices: vec!["Google Pixel 7-13.0".to_owned()],
+            app_url: "bs://app-1".to_owned(),
+            test_suite_url: Some("bs://suite-1".to_owned()),
+            build_id: "build-1".to_owned(),
+        };
+        let cancellation = ProcessCancellation::default();
+        let request_cancellation = cancellation.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            request_cancellation.cancel();
+        });
+        let started = Instant::now();
+
+        let error = engine
+            .collect(
+                mobench_provider::StartedRun::from_handle(handle),
+                &cancellation,
+            )
+            .expect_err("polling should be cancelled");
+        canceller.join().expect("join cancellation thread");
+        server.join().expect("join scripted server");
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn browserstack_adapter_rejects_requested_device_matrix_drift() {
+        let requested = vec!["Google Pixel 7-13.0".to_owned(), "iPhone 14-16".to_owned()];
+        let observed = vec![
+            DeviceSession {
+                device: "Google Pixel 7-13.0".to_owned(),
+                session_id: "session-1".to_owned(),
+                status: "passed".to_owned(),
+                device_logs: None,
+            },
+            DeviceSession {
+                device: "Samsung Galaxy S23-13.0".to_owned(),
+                session_id: "session-2".to_owned(),
+                status: "passed".to_owned(),
+                device_logs: None,
+            },
+        ];
+
+        let error = reconcile_requested_device_sessions(&requested, &observed)
+            .expect_err("provider must reject a drifted device matrix");
+
+        assert!(error.to_string().contains("iPhone 14-16"));
+        assert!(error.to_string().contains("Samsung Galaxy S23-13.0"));
+    }
+
+    #[test]
+    fn browserstack_major_version_selector_preserves_requested_and_observed_identity() {
+        let requested = vec!["iPhone 14-16".to_owned()];
+        let observed = vec![DeviceSession {
+            device: "iPhone 14-16.6".to_owned(),
+            session_id: "session-1".to_owned(),
+            status: "passed".to_owned(),
+            device_logs: None,
+        }];
+
+        let reconciled = reconcile_requested_device_sessions(&requested, &observed)
+            .expect("major selectors should accept a provider minor version");
+
+        assert_eq!(reconciled.len(), 1);
+        assert_eq!(reconciled[0].requested_device_id, "iPhone 14-16");
+        assert_eq!(reconciled[0].observed.device, "iPhone 14-16.6");
+    }
+
+    #[test]
+    fn browserstack_minor_version_selector_requires_an_exact_version() {
+        let requested = vec!["iPhone 14-16.0".to_owned()];
+        let observed = vec![DeviceSession {
+            device: "iPhone 14-16.6".to_owned(),
+            session_id: "session-1".to_owned(),
+            status: "passed".to_owned(),
+            device_logs: None,
+        }];
+
+        let error = reconcile_requested_device_sessions(&requested, &observed)
+            .expect_err("minor selectors must not float to another provider version");
+        assert!(error.to_string().contains("no compatible observed session"));
+    }
+
+    #[test]
+    fn browserstack_selector_reconciliation_rejects_ambiguous_observed_sessions() {
+        let requested = vec!["iPhone 14-16".to_owned()];
+        let observed = vec![
+            DeviceSession {
+                device: "iPhone 14-16.5".to_owned(),
+                session_id: "session-1".to_owned(),
+                status: "passed".to_owned(),
+                device_logs: None,
+            },
+            DeviceSession {
+                device: "iPhone 14-16.6".to_owned(),
+                session_id: "session-2".to_owned(),
+                status: "passed".to_owned(),
+                device_logs: None,
+            },
+        ];
+
+        let error = reconcile_requested_device_sessions(&requested, &observed)
+            .expect_err("floating selectors must reject ambiguous provider matches");
+        assert!(
+            error
+                .to_string()
+                .contains("matched multiple observed sessions")
+        );
+    }
+
+    #[test]
+    fn provider_session_details_bind_the_observed_device_and_os_version() {
+        let details = SessionDetails {
+            device: "Google Pixel 7".to_owned(),
+            os: "android".to_owned(),
+            os_version: "13.0".to_owned(),
+            duration: Some(201),
+        };
+
+        assert_eq!(provider_device_identifier(&details), "Google Pixel 7-13.0");
     }
 
     #[test]
@@ -2356,33 +2010,6 @@ mod tests {
         assert!(!should_authenticate_asset_url(
             "https://evil.example.com/browserstack/logs"
         ));
-    }
-
-    #[test]
-    fn api_errors_do_not_expose_untrusted_response_bodies() {
-        let (base_url, handle) = spawn_http_response(
-            "500 Internal Server Error",
-            b"provider failure\n::warning::injected",
-            38,
-        );
-        let client = test_client_with_base_url(base_url);
-        let error = client.get_json("failure").unwrap_err().to_string();
-        handle.join().unwrap();
-        assert!(error.contains("status 500"));
-        assert!(!error.contains("provider failure"));
-        assert!(!error.contains("::warning::"));
-    }
-
-    #[test]
-    fn binary_asset_download_rejects_oversized_content_length() {
-        let (url, handle) = spawn_http_response("200 OK", b"", MAX_BINARY_ARTIFACT_BYTES + 1);
-        let client = test_client_with_base_url("https://unused.example");
-        let temp = tempfile::tempdir().unwrap();
-        let destination = temp.path().join("diagnostic.bin");
-        let error = client.download_url(&url, &destination).unwrap_err();
-        handle.join().unwrap();
-        assert!(error.to_string().contains("exceeds"));
-        assert!(!destination.exists());
     }
 
     #[test]
@@ -2697,6 +2324,43 @@ Test completed
         assert_eq!(status.build_id, "test456");
         assert_eq!(status.status, "running");
         assert_eq!(status.devices.len(), 0);
+    }
+
+    #[test]
+    fn live_espresso_build_fixture_preserves_observed_device_identity() {
+        let value: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/browserstack/espresso-build-passed.json"
+        ))
+        .expect("valid captured Espresso build fixture");
+
+        let status = build_status_from_value(value).expect("parse Espresso build fixture");
+
+        assert_eq!(status.devices.len(), 1);
+        assert_eq!(status.devices[0].device, "Google Pixel 7-13.0");
+        assert_eq!(
+            status.devices[0].session_id,
+            "d7cee5734ae754a811beb3aacc1baba30e810232"
+        );
+    }
+
+    #[test]
+    fn live_xcuitest_build_fixture_reconciles_major_selector_with_observed_minor() {
+        let value: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/browserstack/xcuitest-build-passed.json"
+        ))
+        .expect("valid captured XCUITest build fixture");
+        let status = build_status_from_value(value).expect("parse XCUITest build fixture");
+
+        let reconciled =
+            reconcile_requested_device_sessions(&["iPhone 14-16".to_owned()], &status.devices)
+                .expect("reconcile captured XCUITest build fixture");
+
+        assert_eq!(reconciled[0].requested_device_id, "iPhone 14-16");
+        assert_eq!(reconciled[0].observed.device, "iPhone 14-16.6");
+        assert_eq!(
+            reconciled[0].observed.session_id,
+            "916636d2022ee39a8598ed338354af2bcd6c806f"
+        );
     }
 
     #[test]
@@ -3037,14 +2701,12 @@ Test completed
             devices: vec!["iPhone 15-17".into()],
             device_logs: true,
             build_name: Some("mobench".into()),
-            idle_timeout: XCUITEST_IDLE_TIMEOUT_SECS,
             only_testing: Some(vec!["BenchRunnerUITests/test".into()]),
             app_profiling: true,
         };
 
         let value = serde_json::to_value(&request).expect("serialize xcuitest build request");
         assert_eq!(value["appProfiling"], true);
-        assert_eq!(value["idleTimeout"], XCUITEST_IDLE_TIMEOUT_SECS);
     }
 
     #[test]
@@ -3151,6 +2813,92 @@ BENCH_REPORT_JSON_END
         assert!(results
             .iter()
             .any(|r| r.get("function").and_then(|f| f.as_str()) == Some("sample_fns::checksum")));
+    }
+
+    #[test]
+    fn extract_benchmark_results_handles_generated_android_chunk_frames() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+
+        let logs = r#"
+2026-07-15 12:34:56 I/BenchRunner: BENCH_JSON_START
+2026-07-15 12:34:56 I/BenchRunner: BENCH_JSON_CHUNK {"spec":{"name":"sample_fns::checksum"},
+2026-07-15 12:34:56 I/BenchRunner: BENCH_JSON_CHUNK "samples_ns":[1000,2000],"function":"sample_fns::checksum"}
+2026-07-15 12:34:56 I/BenchRunner: BENCH_JSON_END
+        "#;
+
+        let results = client.extract_benchmark_results(logs).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["function"], "sample_fns::checksum");
+        assert_eq!(results[0]["samples_ns"], json!([1000, 2000]));
+    }
+
+    #[test]
+    fn extract_benchmark_results_rejects_android_chunk_before_start() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let logs = r#"
+I/BenchRunner: BENCH_JSON_CHUNK {"function":"forged","samples_ns":[1]}
+{"function":"fallback-must-not-win","samples":[{"duration_ns":1}]}
+        "#;
+
+        let error = client.extract_benchmark_results(logs).unwrap_err();
+
+        assert!(error.to_string().contains("before a start marker"));
+    }
+
+    #[test]
+    fn extract_benchmark_results_rejects_truncated_android_chunk_frame() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let logs = r#"
+I/BenchRunner: BENCH_JSON_START
+I/BenchRunner: BENCH_JSON_CHUNK {"function":"truncated","samples_ns":[1]}
+{"function":"fallback-must-not-win","samples":[{"duration_ns":1}]}
+        "#;
+
+        let error = client.extract_benchmark_results(logs).unwrap_err();
+
+        assert!(error.to_string().contains("is incomplete"));
+    }
+
+    #[test]
+    fn extract_benchmark_results_rejects_oversized_android_frame() {
+        let client = BrowserStackClient::new(
+            BrowserStackAuth {
+                username: "user".into(),
+                access_key: "key".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let oversized = "x".repeat(mobench_domain::MAX_ANDROID_BENCH_PAYLOAD_BYTES + 1);
+        let logs = format!(
+            "I/BenchRunner: BENCH_JSON {{\"function\":\"oversized\",\"payload\":\"{oversized}\"}}"
+        );
+
+        let error = client.extract_benchmark_results(&logs).unwrap_err();
+
+        assert!(error.to_string().contains("size limit"));
     }
 
     #[test]
@@ -3620,6 +3368,28 @@ BENCH_REPORT_JSON_END
     }
 
     #[test]
+    fn benchmark_normalization_handles_extreme_samples_without_overflow() {
+        let normalized = normalize_benchmark_value(json!({
+            "function": "bench_extreme",
+            "samples_ns": [u64::MAX - 1, u64::MAX]
+        }))
+        .expect("normalize extreme benchmark samples");
+
+        assert_eq!(
+            normalized.get("mean_ns").and_then(Value::as_u64),
+            Some(u64::MAX - 1)
+        );
+        assert_eq!(
+            normalized.get("median_ns").and_then(Value::as_u64),
+            Some(u64::MAX - 1)
+        );
+        assert_eq!(
+            normalized.get("p95_ns").and_then(Value::as_u64),
+            Some(u64::MAX)
+        );
+    }
+
+    #[test]
     fn extract_results_from_session_artifacts_falls_back_to_ios_log_markers() {
         let client = BrowserStackClient::new(
             BrowserStackAuth {
@@ -3702,70 +3472,219 @@ BENCH_REPORT_JSON_END
     }
 
     #[test]
-    fn extract_results_from_session_artifacts_reassembles_android_chunked_logs() {
-        let client = BrowserStackClient::new(
-            BrowserStackAuth {
-                username: "user".into(),
-                access_key: "key".into(),
-            },
-            None,
-        )
-        .unwrap();
-
-        let session_json = json!({
-            "testcases": {
-                "data": [{
-                    "testcases": [{
-                        "instrumentation_log": "https://api.browserstack.com/instrumentationlogs",
-                        "device_log": "https://api.browserstack.com/devicelogs"
-                    }]
-                }]
-            }
-        });
-
-        let (results, _) = client
-            .extract_results_from_session_artifacts(&session_json, |url| match url {
-                "https://api.browserstack.com/instrumentationlogs" => {
-                    Ok("instrumentation output without benchmark results".to_string())
-                }
-                "https://api.browserstack.com/devicelogs" => Ok(
-                    r#"
-                    07-17 13:27:10.000 I/BenchRunner: BENCH_JSON_START
-                    07-17 13:27:10.001 I/BenchRunner: BENCH_JSON_CHUNK {"spec":{"name":"bench_BENCH_JSON_END_chunked","iterations":2,
-                    07-17 13:27:10.002 I/BenchRunner: BENCH_JSON_CHUNK "warmup":1},"samples_ns":[10,20]}
-                    07-17 13:27:10.003 I/BenchRunner: BENCH_JSON_END
-                    "#
-                    .to_string(),
-                ),
-                other => Err(anyhow!("unexpected artifact url: {other}")),
+    fn browserstack_completeness_rejects_one_of_ten_partial_collection() {
+        let expected = (0..10)
+            .map(|index| DeviceSession {
+                device: format!("device-{index}"),
+                session_id: format!("session-{index}"),
+                status: "passed".to_string(),
+                device_logs: None,
             })
-            .unwrap();
+            .collect::<Vec<_>>();
+        let collected = vec![CollectedBrowserStackSession {
+            session_id: "session-0".to_string(),
+            benchmark_results: vec![json!({
+                "function": "sample_fns::fibonacci",
+                "samples_ns": [10]
+            })],
+            benchmark_failures: Vec::new(),
+            performance_metrics: PerformanceMetrics::default(),
+        }];
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(
-            results[0].get("function").and_then(|value| value.as_str()),
-            Some("bench_BENCH_JSON_END_chunked")
-        );
-        assert_eq!(
-            results[0].get("mean_ns").and_then(|value| value.as_u64()),
-            Some(15)
-        );
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("one result must not make a ten-device run successful");
+
+        assert!(error.to_string().contains("missing collected sessions"));
+        assert!(error.to_string().contains("session-9"));
     }
 
     #[test]
-    fn extract_benchmark_results_rejects_oversized_android_chunked_report() {
-        let client = BrowserStackClient::new(
-            BrowserStackAuth {
-                username: "user".into(),
-                access_key: "key".into(),
+    fn browserstack_completeness_rejects_mixed_passed_and_failed_sessions() {
+        let expected = vec![
+            DeviceSession {
+                device: "passed-device".to_string(),
+                session_id: "passed-session".to_string(),
+                status: "passed".to_string(),
+                device_logs: None,
             },
-            None,
-        )
-        .unwrap();
-        let oversized = "x".repeat(MAX_BENCH_REPORT_BYTES + 1);
-        let logs = format!("BENCH_JSON_START\nBENCH_JSON_CHUNK {oversized}\nBENCH_JSON_END\n");
+            DeviceSession {
+                device: "failed-device".to_string(),
+                session_id: "failed-session".to_string(),
+                status: "failed".to_string(),
+                device_logs: None,
+            },
+        ];
+        let result = json!({"function": "sample_fns::fibonacci", "samples_ns": [10]});
+        let collected = vec![
+            CollectedBrowserStackSession {
+                session_id: "passed-session".to_string(),
+                benchmark_results: vec![result.clone()],
+                benchmark_failures: Vec::new(),
+                performance_metrics: PerformanceMetrics::default(),
+            },
+            CollectedBrowserStackSession {
+                session_id: "failed-session".to_string(),
+                benchmark_results: vec![result],
+                benchmark_failures: vec![json!({
+                    "kind": "timeout",
+                    "message": "benchmark exceeded deadline"
+                })],
+                performance_metrics: PerformanceMetrics::default(),
+            },
+        ];
 
-        let error = client.extract_benchmark_results(&logs).unwrap_err();
-        assert!(error.to_string().contains("exceeds collection limits"));
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("a failed session must make the run incomplete");
+
+        assert!(error.to_string().contains("non-passed sessions"));
+        assert!(error.to_string().contains("failed-device"));
+        assert!(error.to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_passed_session_without_result() {
+        let expected = vec![DeviceSession {
+            device: "resultless-device".to_string(),
+            session_id: "resultless-session".to_string(),
+            status: "passed".to_string(),
+            device_logs: None,
+        }];
+        let collected = vec![CollectedBrowserStackSession {
+            session_id: "resultless-session".to_string(),
+            benchmark_results: Vec::new(),
+            benchmark_failures: vec![json!({
+                "function_name": "sample_fns::fibonacci",
+                "kind": "timeout",
+                "message": "benchmark exceeded deadline"
+            })],
+            performance_metrics: PerformanceMetrics::default(),
+        }];
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("a passed session without a validated result is incomplete");
+
+        assert!(error.to_string().contains("result-less sessions"));
+        assert!(error.to_string().contains("resultless-device"));
+        assert!(error.to_string().contains("sample_fns::fibonacci"));
+        assert!(error.to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_duplicate_collected_session() {
+        let expected = vec![DeviceSession {
+            device: "duplicate-device".to_string(),
+            session_id: "duplicate-session".to_string(),
+            status: "passed".to_string(),
+            device_logs: None,
+        }];
+        let result = json!({"function": "sample_fns::fibonacci", "samples_ns": [10]});
+        let collected = (0..2)
+            .map(|_| CollectedBrowserStackSession {
+                session_id: "duplicate-session".to_string(),
+                benchmark_results: vec![result.clone()],
+                benchmark_failures: Vec::new(),
+                performance_metrics: PerformanceMetrics::default(),
+            })
+            .collect();
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("duplicate collection records are ambiguous");
+
+        assert!(error.to_string().contains("duplicate collected session"));
+        assert!(error.to_string().contains("duplicate-session"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_multiple_results_for_one_session() {
+        let expected = vec![DeviceSession {
+            device: "duplicate-result-device".to_string(),
+            session_id: "duplicate-result-session".to_string(),
+            status: "passed".to_string(),
+            device_logs: None,
+        }];
+        let collected = vec![CollectedBrowserStackSession {
+            session_id: "duplicate-result-session".to_string(),
+            benchmark_results: vec![
+                json!({"function": "first", "samples_ns": [10]}),
+                json!({"function": "second", "samples_ns": [20]}),
+            ],
+            benchmark_failures: Vec::new(),
+            performance_metrics: PerformanceMetrics::default(),
+        }];
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("one session must produce exactly one validated result");
+
+        assert!(error.to_string().contains("duplicate benchmark results"));
+        assert!(error.to_string().contains("got 2"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_duplicate_expected_device() {
+        let expected = (0..2)
+            .map(|index| DeviceSession {
+                device: "same-device".to_string(),
+                session_id: format!("session-{index}"),
+                status: "passed".to_string(),
+                device_logs: None,
+            })
+            .collect::<Vec<_>>();
+        let collected = (0..2)
+            .map(|index| CollectedBrowserStackSession {
+                session_id: format!("session-{index}"),
+                benchmark_results: vec![json!({
+                    "function": "sample_fns::fibonacci",
+                    "samples_ns": [10]
+                })],
+                benchmark_failures: Vec::new(),
+                performance_metrics: PerformanceMetrics::default(),
+            })
+            .collect();
+
+        let error = classify_browserstack_result_completeness(&expected, collected)
+            .expect_err("duplicate device labels would overwrite public results");
+
+        assert!(error.to_string().contains("duplicate expected device"));
+        assert!(error.to_string().contains("same-device"));
+    }
+
+    #[test]
+    fn browserstack_completeness_rejects_build_without_expected_sessions() {
+        let error = classify_browserstack_result_completeness(&[], Vec::new())
+            .expect_err("a terminal build without sessions is incomplete");
+
+        assert!(error.to_string().contains("reported no device sessions"));
+    }
+
+    #[test]
+    fn browserstack_completeness_accepts_ten_passed_sessions_with_one_result_each() {
+        let expected = (0..10)
+            .map(|index| DeviceSession {
+                device: format!("device-{index}"),
+                session_id: format!("session-{index}"),
+                status: "passed".to_string(),
+                device_logs: None,
+            })
+            .collect::<Vec<_>>();
+        let collected = (0..10)
+            .rev()
+            .map(|index| CollectedBrowserStackSession {
+                session_id: format!("session-{index}"),
+                benchmark_results: vec![json!({
+                    "function": "sample_fns::fibonacci",
+                    "samples_ns": [index + 1]
+                })],
+                benchmark_failures: Vec::new(),
+                performance_metrics: PerformanceMetrics::default(),
+            })
+            .collect();
+
+        let (results, performance) =
+            classify_browserstack_result_completeness(&expected, collected)
+                .expect("all expected sessions are complete");
+
+        assert_eq!(results.len(), 10);
+        assert_eq!(results["device-9"][0]["samples_ns"], json!([10]));
+        assert!(performance.is_empty());
     }
 }

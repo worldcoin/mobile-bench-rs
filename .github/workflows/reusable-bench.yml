@@ -183,7 +183,7 @@ env:
   CARGO_TERM_COLOR: always
   # The credentialed control plane always builds from this reviewed immutable
   # 0.1.49 implementation, independently of the caller's selected build tool.
-  MOBENCH_TRUSTED_SHA: 13d716e3187bf4f0576276b738fd6d67a307e3c5
+  MOBENCH_TRUSTED_SHA: b869932669c164273656ffe785a43c245f4a720e
 
 jobs:
   validate-request:
@@ -462,6 +462,22 @@ jobs:
           PY
           version="$(cargo metadata --manifest-path mobench-sdk-under-test/Cargo.toml --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "mobench-sdk") | .version')"
+          SDK_VERSION="$version" CALLER_ROOT="$CALLER_ROOT" python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path(os.environ["CALLER_ROOT"])
+          version = os.environ["SDK_VERSION"]
+          direct = re.compile(r'(mobench-sdk\s*=\s*")([^"]+)(")')
+          inline = re.compile(r'(mobench-sdk\s*=\s*\{[^}\n]*\bversion\s*=\s*")([^"]+)(")')
+          for manifest in root.rglob("Cargo.toml"):
+              text = manifest.read_text()
+              updated = inline.sub(rf'\g<1>{version}\g<3>', text)
+              updated = direct.sub(rf'\g<1>{version}\g<3>', updated)
+              if updated != text:
+                  manifest.write_text(updated)
+          PY
           cargo update --manifest-path caller/Cargo.toml -p mobench-sdk --precise "$version"
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -691,6 +707,22 @@ jobs:
           PY
           version="$(cargo metadata --manifest-path mobench-sdk-under-test/Cargo.toml --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "mobench-sdk") | .version')"
+          SDK_VERSION="$version" CALLER_ROOT="$CALLER_ROOT" python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path(os.environ["CALLER_ROOT"])
+          version = os.environ["SDK_VERSION"]
+          direct = re.compile(r'(mobench-sdk\s*=\s*")([^"]+)(")')
+          inline = re.compile(r'(mobench-sdk\s*=\s*\{[^}\n]*\bversion\s*=\s*")([^"]+)(")')
+          for manifest in root.rglob("Cargo.toml"):
+              text = manifest.read_text()
+              updated = inline.sub(rf'\g<1>{version}\g<3>', text)
+              updated = direct.sub(rf'\g<1>{version}\g<3>', updated)
+              if updated != text:
+                  manifest.write_text(updated)
+          PY
           cargo update --manifest-path caller/Cargo.toml -p mobench-sdk --precise "$version"
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -958,6 +990,7 @@ jobs:
             --expected-platform ios --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
             --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
+            --fetch-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/ios
       - name: Upload iOS results
@@ -1084,6 +1117,7 @@ jobs:
             --expected-platform android --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
             --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
+            --fetch-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/android
       - name: Upload Android results

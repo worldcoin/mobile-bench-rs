@@ -2,9 +2,9 @@
 
 Status: current source-of-truth product/API specification.
 
-Current release: `0.1.49`.
+Release line: `0.2.0`.
 
-Last updated: 2026-07-19.
+Last updated: 2026-07-15.
 
 This spec describes the behavior, CLI surface, configuration files, output
 contracts, generated runner backends, and Rust APIs currently provided by
@@ -12,13 +12,20 @@ mobench. Historical design proposals are intentionally excluded.
 
 ## Product Scope
 
-mobench is a Rust mobile benchmarking toolkit with three published crates:
+mobench is a Rust mobile and browser benchmarking toolkit with nine published
+workspace crates:
 
 - `mobench`: CLI orchestration and programmatic CLI API.
 - `mobench-sdk`: timing harness, benchmark registry, generated runner support,
   Android/iOS builders, profiling helpers, UniFFI compatibility, and native C
   ABI support.
 - `mobench-macros`: `#[benchmark]` proc macro.
+- `mobench-runtime`: bounded execution counts, distributions, and resources.
+- `mobench-domain`: strict versioned report envelopes.
+- `mobench-process`: subprocess supervision and provenance.
+- `mobench-artifacts`: isolated immutable artifact publication.
+- `mobench-provider`: provider lifecycle and execution state.
+- `mobench-report`: context-safe Markdown, CSV, and GitHub renderers.
 
 mobench supports two product surfaces:
 
@@ -43,7 +50,7 @@ Workspace package defaults:
 - Edition: Rust 2024.
 - MSRV: Rust 1.85.
 - License: MIT.
-- Current workspace version: `0.1.49`.
+- Current version: `0.2.0`.
 
 ## Benchmark Authoring
 
@@ -305,6 +312,10 @@ default_iterations = 100
 default_warmup = 10
 ```
 
+`project.output_dir` must be a relative descendant of the project root.
+Absolute paths, parent traversal, and pre-existing symlink components are
+configuration errors detected before generation or cleanup begins.
+
 Configuration resolution precedence:
 
 1. Explicit `--project-root` and `--crate-path`.
@@ -382,10 +393,6 @@ Commands:
 - `config validate`: validate run configuration and referenced files.
 - `doctor`: validate local and CI prerequisites/configuration.
 - `ci run`: run full CI benchmark flow.
-- `ci prepare`: build/package an untrusted revision and write a prebuilt
-  artifact manifest without requiring provider credentials.
-- `ci run-prebuilt`: verify a prebuilt manifest and run BrowserStack upload,
-  execution, fetch, and normalization without invoking caller build code.
 - `ci merge-split-runs`: merge one-sample CI summaries into standard CI outputs.
 - `fetch`: fetch BrowserStack build artifacts.
 - `compare`: compare two run summaries for regressions.
@@ -451,6 +458,10 @@ Key options:
 
 `--local-only` skips mobile builds and runs the host harness.
 
+BrowserStack collection waits at most 900 seconds by default. The bound covers
+observed provider queue latency while remaining overrideable through
+`--fetch-timeout-secs`.
+
 `--release` is recommended for BrowserStack to reduce upload size.
 
 For iOS BrowserStack runs, IPA and XCUITest packages are created automatically
@@ -500,74 +511,6 @@ Regression exit semantics:
 - Regression threshold failures are represented as regression failures and by
   the programmatic API as `regression_detected = true`.
 
-## `ci prepare` And `ci run-prebuilt` Behavior
-
-These commands form the reusable workflow's privilege boundary.
-
-`mobench ci prepare --target <android|ios> --source-sha <full-sha> --manifest
-<path>` may resolve the caller project, run fixture generation and hooks,
-compile Rust and generated mobile projects, and package the platform artifacts.
-Its optional typed `--ffi-backend` value overrides `[project].ffi_backend`;
-when neither is present the backend defaults to `uniffi`. The resolved backend
-is applied to every Android and iOS build and packaging path.
-It must not require or consume BrowserStack credentials. Its output is limited
-to explicitly allowed mobile artifacts and a machine-readable manifest
-containing normalized relative paths, artifact roles, file sizes, SHA-256
-digests, platform, and benchmark ABI metadata.
-
-`mobench ci run-prebuilt --manifest <path> --expected-source-sha <full-sha>
---expected-platform <android|ios> --expected-functions <functions>
---expected-iterations <count> --expected-warmup <count> --devices <selection>
---max-completion-timeout-secs <seconds> --output-dir <path>` validates the
-manifest and exact downloaded file set before using BrowserStack. The timeout
-ceiling defaults to 1,800 seconds and cannot exceed the trusted 21,600-second
-maximum. It rejects source-SHA mismatch,
-absolute/traversing/duplicate paths, symlinks, missing or unexpected files,
-invalid roles, invalid sizes or digests, platform mismatches, and incompatible
-manifest/benchmark ABI versions.
-
-`run-prebuilt` may upload verified opaque mobile packages, create and poll
-BrowserStack sessions, fetch provider results, and normalize the standard CI
-outputs. It must never invoke Cargo, Gradle, Xcode, caller hooks, dependencies,
-fixture generators, benchmark binaries, or another file from a caller checkout
-on the credentialed GitHub runner. APKs, test APKs, IPAs, and XCUITest packages
-may execute only on BrowserStack devices.
-
-The stable output and selection behavior remains aligned with `ci run`,
-including functions, iterations, warmup, devices, artifact collection,
-`summary.json`, `summary.md`, `results.csv`, optional plots, and regression
-metadata.
-
-The reusable workflow may run a caller-provided `prepare_script` only in the
-secretless prepare jobs. The path is normalized relative to the exact checkout;
-absolute, traversing, control-containing, missing, non-file, and escaping
-symlink targets are invalid. The hook and packaging receive
-`MOBENCH_CI_PREPARE=1`, and a hook failure prevents manifest upload.
-
-Platform function resolution is `functions_ios` or `functions_android` when
-non-empty, otherwise the shared `functions` input. Structured platform device
-inputs are JSON arrays whose objects contain exactly string `device` and
-`os_version` fields. They take precedence over single-device and profile
-selection.
-
-For every prepared function, `run-prebuilt` submits all requested devices. A
-complete platform result contains exactly one shard for each requested
-function/device pair. Missing, unexpected, and duplicate shards are errors;
-canonical outputs are not written from a partial matrix. Diagnostics already
-fetched from BrowserStack may be retained for failure analysis.
-
-The reusable workflow retries transient PR-head API failures five times with
-bounded backoff at initial validation, before each prepare job, and immediately
-before each credentialed platform run. Exhausted requests and SHA mismatches
-fail closed. Credentialed iOS and Android jobs run serially when both platforms
-are selected.
-
-Generated iOS XCUITest runners predicate-wait for an explicit completed state,
-perform periodic heartbeat interactions, and accept only accessibility values
-that parse as JSON. Generated native Android runners report PID/process
-identity, detect a dead isolated worker after a bounded grace period, and emit
-structured failure markers for worker exits and native runtime/linkage errors.
-
 ## `ci merge-split-runs` Behavior
 
 `mobench ci merge-split-runs` merges CI outputs from lanes that run one measured
@@ -612,30 +555,6 @@ CSV rows include benchmark-scoped resource columns:
 Missing resource metrics are emitted as blank CSV fields.
 
 ## BrowserStack Behavior
-
-### Reusable Workflow Security Invariant
-
-The reusable workflow treats every requested pull-request revision as
-untrusted, even when an authorized maintainer requests the run. It accepts only
-a full commit SHA and verifies that SHA against the current head of the requested
-pull request before preparation.
-
-Workflow-level permissions are empty. PR validation and preparation have only
-the read permissions they require and no secrets or protected environment.
-Credentialed Android/iOS jobs do not check out or execute the caller and expose
-BrowserStack credentials only to fixed upload/run/fetch steps implemented by a
-trusted, immutable mobench revision. Caches from untrusted preparation are
-disabled or isolated from later trusted builds.
-
-Result summarization is read-only. Sticky PR/check publishing runs separately
-without a caller checkout and receives only the required `pull-requests: write`
-or `checks: write` permission. `contents: write` is disabled throughout the
-benchmark workflow. Plot-branch publication is a separate manual workflow
-protected by the `mobench-plots` environment.
-
-Downloaded filenames, JSON, CSV, Markdown, benchmark names, device names, and
-provider fields are untrusted. Implementations must reject path/control/workflow
-command injection and escape Markdown/HTML before publishing reports.
 
 Credentials resolve in this order:
 

@@ -245,11 +245,15 @@ pub(crate) fn render_flamegraph_viewer_html(doc: FlamegraphViewerDoc) -> String 
         &serde_json::to_string(doc.default_mode.as_str())
             .expect("serialize default flamegraph mode"),
     );
+    // `srcdoc` remains same-origin so the parent can drive zoom/history. Treat
+    // artifact SVG as data and restore only the Mobench-owned runtime afterward.
+    let full_svg_document = sanitize_flamegraph_svg_document(&doc.full_svg_document);
+    let focused_svg_document = sanitize_flamegraph_svg_document(&doc.focused_svg_document);
     let full_svg = escape_json_for_inline_script(
-        &serde_json::to_string(&doc.full_svg_document).expect("serialize full svg"),
+        &serde_json::to_string(&full_svg_document).expect("serialize full svg"),
     );
     let focused_svg = escape_json_for_inline_script(
-        &serde_json::to_string(&doc.focused_svg_document).expect("serialize focused svg"),
+        &serde_json::to_string(&focused_svg_document).expect("serialize focused svg"),
     );
     let full_summary = escape_json_for_inline_script(
         &serde_json::to_string(&doc.full_summary).expect("serialize full mode summary"),
@@ -650,6 +654,497 @@ fn inject_svg_script(document: String, script: &str) -> String {
     output
 }
 
+const MOBENCH_SAFE_SVG_STYLE: &str = r#"
+html, body { margin: 0; min-height: 100%; background: #fff; }
+svg { display: block; width: 100vw; min-width: 100vw; max-width: 100vw; height: auto; }
+text { font-family: Verdana, sans-serif; font-size: 12px; }
+#frames > g, #frames > a { cursor: pointer; }
+#frames > g:hover > rect, #frames > a:hover > rect { stroke: #2f2118; stroke-width: 0.5; }
+.hide { display: none; }
+.parent { opacity: 0.5; }
+"#;
+
+#[derive(Debug)]
+struct ParsedSvgAttribute<'a> {
+    name: &'a str,
+    value: &'a str,
+}
+
+#[derive(Debug)]
+struct ParsedSvgStartTag<'a> {
+    name: &'a str,
+    attributes: Vec<ParsedSvgAttribute<'a>>,
+    self_closing: bool,
+    next: usize,
+}
+
+#[derive(Debug)]
+struct OpenSvgElement {
+    input_name: String,
+    output_name: Option<&'static str>,
+    root: bool,
+}
+
+fn sanitize_flamegraph_svg_document(input: &str) -> String {
+    try_sanitize_flamegraph_svg_document(input).unwrap_or_else(safe_rejected_flamegraph_svg)
+}
+
+fn try_sanitize_flamegraph_svg_document(input: &str) -> Option<String> {
+    let mut output = String::with_capacity(
+        input.len() + MOBENCH_SAFE_SVG_STYLE.len() + MOBENCH_SVG_HELPER_SCRIPT.len(),
+    );
+    let mut cursor = 0usize;
+    let mut stack = Vec::<OpenSvgElement>::new();
+    let mut root_seen = false;
+    let mut root_closed = false;
+
+    while cursor < input.len() {
+        let Some(relative_lt) = input[cursor..].find('<') else {
+            let tail = &input[cursor..];
+            if root_closed || !root_seen {
+                if !tail.trim().is_empty() {
+                    return None;
+                }
+            } else if stack
+                .last()
+                .is_some_and(|element| element.output_name.is_some())
+            {
+                output.push_str(tail);
+            }
+            break;
+        };
+        let lt = cursor + relative_lt;
+        let text = &input[cursor..lt];
+        if root_closed || !root_seen {
+            if !text.trim().is_empty() {
+                return None;
+            }
+        } else if stack
+            .last()
+            .is_some_and(|element| element.output_name.is_some())
+        {
+            output.push_str(text);
+        }
+
+        if input[lt..].starts_with("<!--") {
+            let end = input[lt + 4..].find("-->")? + lt + 7;
+            cursor = end;
+            continue;
+        }
+        if input[lt..].starts_with("<![CDATA[") {
+            let body_start = lt + "<![CDATA[".len();
+            let body_end = input[body_start..].find("]]>")? + body_start;
+            if stack
+                .last()
+                .is_some_and(|element| element.output_name.is_some())
+            {
+                output.push_str(&escape_xml_text(&input[body_start..body_end]));
+            }
+            cursor = body_end + 3;
+            continue;
+        }
+        if input[lt..].starts_with("<?") {
+            if root_seen {
+                return None;
+            }
+            cursor = input[lt + 2..].find("?>")? + lt + 4;
+            continue;
+        }
+        if starts_with_ascii_case_insensitive(&input[lt..], "<!doctype") {
+            if root_seen {
+                return None;
+            }
+            let end = input[lt..].find('>')? + lt;
+            if input[lt..=end].contains('[') {
+                return None;
+            }
+            cursor = end + 1;
+            continue;
+        }
+        if input[lt..].starts_with("</") {
+            let (name, next) = parse_svg_end_tag(input, lt)?;
+            let normalized_name = normalize_xml_name(name)?;
+            let element = stack.pop()?;
+            if element.input_name != normalized_name {
+                return None;
+            }
+            if let Some(output_name) = element.output_name {
+                if element.root {
+                    output.push_str("<script type=\"text/javascript\"><![CDATA[");
+                    output.push_str(MOBENCH_SVG_HELPER_SCRIPT);
+                    output.push_str("]]></script>");
+                    root_closed = true;
+                }
+                output.push_str("</");
+                output.push_str(output_name);
+                output.push('>');
+            }
+            cursor = next;
+            continue;
+        }
+        if input[lt..].starts_with("<!") {
+            return None;
+        }
+        if root_closed {
+            return None;
+        }
+
+        let tag = parse_svg_start_tag(input, lt)?;
+        let normalized_name = normalize_xml_name(tag.name)?;
+        let local_name = normalized_name.rsplit(':').next()?;
+        let canonical_name = canonical_svg_element(local_name);
+        let parent_is_allowed = stack
+            .last()
+            .is_none_or(|element| element.output_name.is_some());
+        let is_root = !root_seen;
+
+        if is_root {
+            if local_name != "svg" || tag.self_closing {
+                return None;
+            }
+            root_seen = true;
+        } else if stack.is_empty() {
+            return None;
+        }
+
+        let output_name = if is_root {
+            Some("svg")
+        } else if parent_is_allowed {
+            canonical_name
+        } else {
+            None
+        };
+
+        if let Some(output_name) = output_name {
+            output.push('<');
+            output.push_str(output_name);
+            write_sanitized_svg_attributes(&mut output, output_name, &tag.attributes, is_root)?;
+            if tag.self_closing {
+                output.push_str("/>");
+            } else {
+                output.push('>');
+                if is_root {
+                    output.push_str("<style type=\"text/css\"><![CDATA[");
+                    output.push_str(MOBENCH_SAFE_SVG_STYLE);
+                    output.push_str("]]></style>");
+                }
+            }
+        }
+
+        if !tag.self_closing {
+            stack.push(OpenSvgElement {
+                input_name: normalized_name,
+                output_name,
+                root: is_root,
+            });
+        }
+        cursor = tag.next;
+    }
+
+    (root_seen && root_closed && stack.is_empty()).then_some(output)
+}
+
+fn parse_svg_start_tag(input: &str, start: usize) -> Option<ParsedSvgStartTag<'_>> {
+    let bytes = input.as_bytes();
+    let mut cursor = start.checked_add(1)?;
+    let name_start = cursor;
+    while cursor < bytes.len() && is_xml_name_byte(bytes[cursor]) {
+        cursor += 1;
+    }
+    if cursor == name_start {
+        return None;
+    }
+    let name = &input[name_start..cursor];
+    let mut attributes = Vec::new();
+
+    loop {
+        skip_ascii_whitespace(bytes, &mut cursor);
+        match bytes.get(cursor).copied()? {
+            b'>' => {
+                return Some(ParsedSvgStartTag {
+                    name,
+                    attributes,
+                    self_closing: false,
+                    next: cursor + 1,
+                });
+            }
+            b'/' if bytes.get(cursor + 1) == Some(&b'>') => {
+                return Some(ParsedSvgStartTag {
+                    name,
+                    attributes,
+                    self_closing: true,
+                    next: cursor + 2,
+                });
+            }
+            _ => {}
+        }
+
+        let attribute_name_start = cursor;
+        while cursor < bytes.len() && is_xml_name_byte(bytes[cursor]) {
+            cursor += 1;
+        }
+        if cursor == attribute_name_start {
+            return None;
+        }
+        let attribute_name = &input[attribute_name_start..cursor];
+        skip_ascii_whitespace(bytes, &mut cursor);
+        if bytes.get(cursor) != Some(&b'=') {
+            return None;
+        }
+        cursor += 1;
+        skip_ascii_whitespace(bytes, &mut cursor);
+        let quote = *bytes.get(cursor)?;
+        if quote != b'\'' && quote != b'"' {
+            return None;
+        }
+        cursor += 1;
+        let value_start = cursor;
+        while cursor < bytes.len() && bytes[cursor] != quote {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() {
+            return None;
+        }
+        let value = &input[value_start..cursor];
+        cursor += 1;
+        attributes.push(ParsedSvgAttribute {
+            name: attribute_name,
+            value,
+        });
+    }
+}
+
+fn parse_svg_end_tag(input: &str, start: usize) -> Option<(&str, usize)> {
+    let bytes = input.as_bytes();
+    let mut cursor = start.checked_add(2)?;
+    let name_start = cursor;
+    while cursor < bytes.len() && is_xml_name_byte(bytes[cursor]) {
+        cursor += 1;
+    }
+    if cursor == name_start {
+        return None;
+    }
+    let name = &input[name_start..cursor];
+    skip_ascii_whitespace(bytes, &mut cursor);
+    (bytes.get(cursor) == Some(&b'>')).then_some((name, cursor + 1))
+}
+
+fn write_sanitized_svg_attributes(
+    output: &mut String,
+    element: &str,
+    attributes: &[ParsedSvgAttribute<'_>],
+    root: bool,
+) -> Option<()> {
+    let mut seen = BTreeSet::new();
+    if root {
+        output.push_str(" xmlns=\"http://www.w3.org/2000/svg\"");
+        output.push_str(" xmlns:fg=\"http://github.com/jonhoo/inferno\"");
+        output.push_str(
+            " style=\"display:block;width:100vw;min-width:100vw;max-width:100vw;height:auto\"",
+        );
+        seen.insert("xmlns".to_string());
+        seen.insert("xmlns:fg".to_string());
+        seen.insert("style".to_string());
+    }
+
+    for attribute in attributes {
+        let normalized_name = normalize_xml_name(attribute.name)?;
+        let local_name = normalized_name.rsplit(':').next()?;
+        if local_name.starts_with("on")
+            || matches!(local_name, "href" | "src" | "data")
+            || normalized_name == "xlink:href"
+            || normalized_name == "style"
+        {
+            continue;
+        }
+        let Some(canonical_name) = canonical_svg_attribute(element, &normalized_name) else {
+            continue;
+        };
+        if !seen.insert(canonical_name.to_ascii_lowercase()) {
+            return None;
+        }
+        if !safe_svg_attribute_value(canonical_name, attribute.value) {
+            continue;
+        }
+        output.push(' ');
+        output.push_str(canonical_name);
+        output.push_str("=\"");
+        output.push_str(attribute.value);
+        output.push('"');
+    }
+    Some(())
+}
+
+fn canonical_svg_element(name: &str) -> Option<&'static str> {
+    match name {
+        "svg" => Some("svg"),
+        "defs" => Some("defs"),
+        "lineargradient" => Some("linearGradient"),
+        "stop" => Some("stop"),
+        "rect" => Some("rect"),
+        "text" => Some("text"),
+        "g" => Some("g"),
+        "title" => Some("title"),
+        "a" => Some("a"),
+        _ => None,
+    }
+}
+
+fn canonical_svg_attribute(element: &str, name: &str) -> Option<&'static str> {
+    let name = match name {
+        "viewbox" => "viewBox",
+        "stop-color" => "stop-color",
+        "stroke-width" => "stroke-width",
+        "text-anchor" => "text-anchor",
+        "total_samples" => "total_samples",
+        "fg:x" => "fg:x",
+        "fg:w" => "fg:w",
+        "id" => "id",
+        "class" => "class",
+        "version" => "version",
+        "width" => "width",
+        "height" => "height",
+        "x" => "x",
+        "y" => "y",
+        "x1" => "x1",
+        "x2" => "x2",
+        "y1" => "y1",
+        "y2" => "y2",
+        "rx" => "rx",
+        "ry" => "ry",
+        "offset" => "offset",
+        "fill" => "fill",
+        "stroke" => "stroke",
+        _ => return None,
+    };
+
+    let allowed = match element {
+        "svg" => matches!(
+            name,
+            "id" | "class"
+                | "version"
+                | "width"
+                | "height"
+                | "viewBox"
+                | "x"
+                | "y"
+                | "total_samples"
+        ),
+        "defs" | "title" => false,
+        "linearGradient" => matches!(name, "id" | "x1" | "x2" | "y1" | "y2"),
+        "stop" => matches!(name, "offset" | "stop-color"),
+        "rect" => matches!(
+            name,
+            "id" | "class"
+                | "x"
+                | "y"
+                | "width"
+                | "height"
+                | "rx"
+                | "ry"
+                | "fill"
+                | "stroke"
+                | "stroke-width"
+                | "fg:x"
+                | "fg:w"
+        ),
+        "text" => matches!(name, "id" | "class" | "x" | "y" | "fill" | "text-anchor"),
+        "g" | "a" => matches!(name, "id" | "class"),
+        _ => false,
+    };
+    allowed.then_some(name)
+}
+
+fn safe_svg_attribute_value(name: &str, value: &str) -> bool {
+    if value.is_empty()
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| matches!(byte, b'&' | b'<' | b'>' | b'\'' | b'"' | b'`'))
+    {
+        return false;
+    }
+    match name {
+        "id" | "class" => value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':' | b' ')
+        }),
+        "fill" | "stroke" | "stop-color" => safe_svg_paint(value),
+        "version" => value == "1.1",
+        "text-anchor" => matches!(value, "start" | "middle" | "end"),
+        _ => value.bytes().all(|byte| {
+            byte.is_ascii_digit()
+                || byte.is_ascii_whitespace()
+                || matches!(byte, b'+' | b'-' | b'.' | b',' | b'%' | b'e' | b'E')
+        }),
+    }
+}
+
+fn safe_svg_paint(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    if let Some(fragment) = normalized
+        .strip_prefix("url(#")
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        return !fragment.is_empty()
+            && fragment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
+    }
+    if normalized.contains("url")
+        || normalized.contains("expression")
+        || normalized.contains("javascript")
+    {
+        return false;
+    }
+    normalized.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric()
+            || byte.is_ascii_whitespace()
+            || matches!(byte, b'#' | b'(' | b')' | b',' | b'.' | b'%' | b'-')
+    })
+}
+
+fn normalize_xml_name(name: &str) -> Option<String> {
+    (!name.is_empty() && name.is_ascii() && name.bytes().all(is_xml_name_byte))
+        .then(|| name.to_ascii_lowercase())
+}
+
+fn is_xml_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], cursor: &mut usize) {
+    while bytes.get(*cursor).is_some_and(u8::is_ascii_whitespace) {
+        *cursor += 1;
+    }
+}
+
+fn starts_with_ascii_case_insensitive(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+}
+
+fn escape_xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn safe_rejected_flamegraph_svg() -> String {
+    let mut output = String::from(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:fg=\"http://github.com/jonhoo/inferno\" viewBox=\"0 0 1200 80\" width=\"1200\" height=\"80\" style=\"display:block;width:100vw;min-width:100vw;max-width:100vw;height:auto\">",
+    );
+    output.push_str("<style type=\"text/css\"><![CDATA[");
+    output.push_str(MOBENCH_SAFE_SVG_STYLE);
+    output.push_str("]]></style>");
+    output.push_str("<text x=\"12\" y=\"40\" fill=\"rgb(47,33,24)\">Flamegraph SVG was rejected as unsafe.</text>");
+    output.push_str("<script type=\"text/javascript\"><![CDATA[");
+    output.push_str(MOBENCH_SVG_HELPER_SCRIPT);
+    output.push_str("]]></script></svg>");
+    output
+}
+
 fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -660,10 +1155,112 @@ fn escape_html(value: &str) -> String {
 
 const MOBENCH_SVG_HELPER_SCRIPT: &str = r#"
 (function () {
+  var frames = document.getElementById("frames");
+  var total_samples = frames
+    ? parseInt(frames.getAttribute("total_samples") || "0", 10)
+    : 0;
+  var searching = 0;
+
+  function find_child(node, name) {
+    if (!node) return null;
+    var children = node.children || [];
+    for (var i = 0; i < children.length; i++) {
+      if ((children[i].localName || children[i].tagName || "").toLowerCase() === name) {
+        return children[i];
+      }
+    }
+    return null;
+  }
+
+  function format_percent(value) {
+    return Number.isFinite(value) ? value.toFixed(4) + "%" : "0%";
+  }
+
+  function zoom_reset(node) {
+    var rect = find_child(node, "rect");
+    if (!rect) return;
+    var total = Math.max(1, total_samples || 1);
+    var x = parseFloat(rect.getAttribute("fg:x") || "0");
+    var width = parseFloat(rect.getAttribute("fg:w") || "0");
+    rect.setAttribute("x", format_percent(100 * x / total));
+    rect.setAttribute("width", format_percent(100 * width / total));
+  }
+
+  function update_text_for_elements(elements) {
+    if (!elements) return;
+    for (var i = 0; i < elements.length; i++) {
+      var rect = find_child(elements[i], "rect");
+      var text = find_child(elements[i], "text");
+      var title = find_child(elements[i], "title");
+      if (!rect || !text || !title) continue;
+      var label = (title.textContent || "").replace(/\s+\([^)]*\)$/, "");
+      var widthPercent = Math.max(0, parseFloat(rect.getAttribute("width") || "0"));
+      var maxChars = Math.floor(widthPercent * 1.4);
+      if (maxChars < 3) {
+        text.textContent = "";
+      } else if (label.length > maxChars) {
+        text.textContent = label.slice(0, Math.max(1, maxChars - 2)) + "..";
+      } else {
+        text.textContent = label;
+      }
+    }
+  }
+
+  function reset_search() {
+    if (!frames) return;
+    var elements = frames.children;
+    for (var i = 0; i < elements.length; i++) {
+      var rect = find_child(elements[i], "rect");
+      if (!rect) continue;
+      var original = rect.getAttribute("data-mobench-original-fill");
+      if (original !== null) {
+        rect.setAttribute("fill", original);
+        rect.removeAttribute("data-mobench-original-fill");
+      }
+    }
+    searching = 0;
+  }
+
+  function search(term) {
+    if (!frames) return 0;
+    var matcher;
+    try {
+      matcher = new RegExp(term);
+    } catch (_error) {
+      return 0;
+    }
+    reset_search();
+    var matches = 0;
+    var elements = frames.children;
+    for (var i = 0; i < elements.length; i++) {
+      var rect = find_child(elements[i], "rect");
+      var title = find_child(elements[i], "title");
+      if (!rect || !title || !matcher.test(title.textContent || "")) continue;
+      rect.setAttribute("data-mobench-original-fill", rect.getAttribute("fill") || "");
+      rect.setAttribute("fill", "rgb(230,64,92)");
+      matches += 1;
+    }
+    searching = matches > 0 ? 1 : 0;
+    return matches;
+  }
+
+  function mobenchInitializeFrameInteractions() {
+    if (!frames) return;
+    var elements = frames.children;
+    for (var i = 0; i < elements.length; i++) {
+      var element = elements[i];
+      if (element.getAttribute("data-mobench-click-bound") === "1") continue;
+      element.setAttribute("data-mobench-click-bound", "1");
+      element.addEventListener("click", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        window.mobenchZoomToFrame(this, true);
+      });
+    }
+  }
+
   function mobenchTotalSamples() {
-    return typeof total_samples === "number"
-      ? total_samples
-      : parseInt(frames.attributes.total_samples.value || "0", 10);
+    return Number.isFinite(total_samples) ? total_samples : 0;
   }
 
   function mobenchTitleForNode(node) {
@@ -1011,6 +1608,7 @@ const MOBENCH_SVG_HELPER_SCRIPT: &str = r#"
 
   window.addEventListener("load", function () {
     setTimeout(function () {
+      mobenchInitializeFrameInteractions();
       window.mobenchResetView();
       window.mobenchScrollToBase();
     }, 0);
@@ -1188,8 +1786,94 @@ mod tests {
         assert!(html.contains("data-mode=\"focused\""));
         assert!(html.contains("data-mode=\"full\""));
         assert!(html.contains("data-mode=\"timeline\""));
-        assert!(html.contains("<svg id=\\\"full\\\"><\\/svg>"));
-        assert!(html.contains("<svg id=\\\"focused\\\"><\\/svg>"));
+        assert!(html.contains("id=\\\"full\\\""));
+        assert!(html.contains("id=\\\"focused\\\""));
+    }
+
+    #[test]
+    fn viewer_neutralizes_active_svg_content_before_adding_trusted_zoom_runtime() {
+        let attacker_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" onload="ATTACK_EVENT()">
+  <script>ATTACK_SCRIPT()</script>
+  <style>@import url(https://attacker.invalid/style.css);</style>
+  <g id="frames" total_samples="10" onclick="ATTACK_CLICK()">
+    <g><title>safe-frame</title><rect x="0" y="0" width="100%" height="20" fg:x="0" fg:w="10" fill="rgb(255,107,116)" /></g>
+    <a href="javascript:ATTACK_JAVASCRIPT()"><text>unsafe link</text></a>
+    <image href="https://attacker.invalid/pixel.svg" />
+    <use href="//attacker.invalid/sprite.svg#payload" />
+    <foreignObject><iframe src="https://attacker.invalid/frame"></iframe></foreignObject>
+    <object data="https://attacker.invalid/object"></object>
+    <embed src="https://attacker.invalid/embed" />
+  </g>
+</svg>"#;
+        let mut doc = sample_doc();
+        doc.full_svg_document = attacker_svg.into();
+        doc.focused_svg_document = attacker_svg.into();
+
+        let html = render_flamegraph_viewer_html(doc);
+
+        for marker in [
+            "ATTACK_EVENT",
+            "ATTACK_SCRIPT",
+            "ATTACK_CLICK",
+            "ATTACK_JAVASCRIPT",
+            "attacker.invalid",
+            "foreignObject",
+        ] {
+            assert!(
+                !html.contains(marker),
+                "active SVG marker survived: {marker}"
+            );
+        }
+        assert!(html.contains("safe-frame"));
+        assert!(html.contains("window.mobenchZoomVisibleFraction"));
+    }
+
+    #[test]
+    fn sanitized_viewer_reinjects_a_self_contained_zoom_runtime() {
+        let generated = render_standalone_flamegraph_svg(
+            "root;sample_fns::fibonacci 10",
+            "Interactive Flamegraph",
+        )
+        .expect("render generated flamegraph");
+        let mut doc = sample_doc();
+        doc.full_svg_document = generated.clone();
+        doc.focused_svg_document = generated;
+
+        let html = render_flamegraph_viewer_html(doc);
+
+        for runtime_api in [
+            "function find_child",
+            "function zoom_reset",
+            "function update_text_for_elements",
+            "function reset_search",
+            "function search",
+            "function mobenchInitializeFrameInteractions",
+            "window.mobenchZoomToFrame",
+            "window.mobenchZoomVisibleFraction",
+            "window.mobenchResetView",
+        ] {
+            assert!(
+                html.contains(runtime_api),
+                "missing trusted runtime API: {runtime_api}"
+            );
+        }
+        assert!(html.contains("sample_fns::fibonacci"));
+    }
+
+    #[test]
+    fn viewer_fails_closed_when_svg_markup_is_ambiguous() {
+        let mut doc = sample_doc();
+        doc.full_svg_document =
+            "<svg><g onload=ATTACK_UNQUOTED><title>ambiguous-frame</title></g></svg>".into();
+        doc.focused_svg_document = "<svg><g><title>unterminated-frame</svg>".into();
+
+        let html = render_flamegraph_viewer_html(doc);
+
+        assert!(!html.contains("ATTACK_UNQUOTED"));
+        assert!(!html.contains("ambiguous-frame"));
+        assert!(!html.contains("unterminated-frame"));
+        assert!(html.contains("Flamegraph SVG was rejected as unsafe."));
+        assert!(html.contains("window.mobenchResetView"));
     }
 
     #[test]

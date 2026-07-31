@@ -73,12 +73,20 @@ jobs:
         with:
           toolchain: stable
       - name: Build candidate cargo-mobench
-        run: cargo build --locked --release -p mobench --bin cargo-mobench
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p mobench --bin cargo-mobench
+          (
+            cd target/release
+            sha256sum cargo-mobench > cargo-mobench.sha256
+          )
       - name: Upload candidate cargo-mobench
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: release-web-cargo-mobench
-          path: target/release/cargo-mobench
+          path: |
+            target/release/cargo-mobench
+            target/release/cargo-mobench.sha256
           if-no-files-found: error
           retention-days: 1
 
@@ -176,12 +184,60 @@ jobs:
           CRATE_PATH: ${{ matrix.crate_path }}
         run: |
           set -euo pipefail
+          (
+            cd trusted-bin
+            sha256sum --check cargo-mobench.sha256
+          )
           chmod +x trusted-bin/cargo-mobench
           trusted-bin/cargo-mobench build \
             --target web \
             --crate-path "downstream/${CRATE_PATH}" \
             --release \
             --output-dir "$PWD/release-output"
+      - name: Enumerate and hash release WASM bundle
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("release-output/web")
+          expected = {
+              "index.html",
+              "runner.js",
+              "worker.js",
+              "mobench_web.js",
+              "mobench_web_bg.wasm",
+              "mobench-web.json",
+          }
+          files = set()
+          entries = []
+          for path in root.rglob("*"):
+              if path.is_symlink():
+                  raise SystemExit(f"release bundle contains symlink: {path}")
+              if not path.is_file():
+                  continue
+              relative = path.relative_to(root).as_posix()
+              files.add(relative)
+              contents = path.read_bytes()
+              entries.append({
+                  "path": relative,
+                  "size": len(contents),
+                  "sha256": hashlib.sha256(contents).hexdigest(),
+              })
+          if files != expected:
+              raise SystemExit(
+                  f"release bundle files differ: missing={expected-files}, extra={files-expected}"
+              )
+          manifest = {
+              "schema": "mobench.release-web-artifact.v1",
+              "entries": sorted(entries, key=lambda entry: entry["path"]),
+          }
+          (root / "release-artifact-manifest.json").write_text(
+              json.dumps(manifest, indent=2) + "\n"
+          )
+          PY
       - name: Upload immutable WASM bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -215,8 +271,40 @@ jobs:
       - name: Build pinned ProveKit npm browser fixture
         working-directory: tests/release-fixtures/provekit-npm-web
         run: |
+          set -euo pipefail
           bun install --frozen-lockfile
           bun run build
+      - name: Enumerate and hash immutable npm bundle
+        working-directory: tests/release-fixtures/provekit-npm-web
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("dist")
+          if not (root / "index.html").is_file():
+              raise SystemExit("npm release bundle is missing index.html")
+          entries = []
+          for path in root.rglob("*"):
+              if path.is_symlink():
+                  raise SystemExit(f"npm release bundle contains symlink: {path}")
+              if not path.is_file():
+                  continue
+              contents = path.read_bytes()
+              entries.append({
+                  "path": path.relative_to(root).as_posix(),
+                  "size": len(contents),
+                  "sha256": hashlib.sha256(contents).hexdigest(),
+              })
+          if not entries:
+              raise SystemExit("npm release bundle has no files")
+          (root / "release-artifact-manifest.json").write_text(json.dumps({
+              "schema": "mobench.release-web-artifact.v1",
+              "entries": sorted(entries, key=lambda entry: entry["path"]),
+          }, indent=2) + "\n")
+          PY
       - name: Upload immutable ProveKit npm bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -275,6 +363,69 @@ jobs:
         with:
           name: release-web-${{ matrix.project }}
           path: bundle
+      - name: Verify immutable candidate and WASM bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd trusted-bin
+            sha256sum --check cargo-mobench.sha256
+          )
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path, PurePosixPath
+
+          root = Path("bundle")
+          manifest_path = root / "release-artifact-manifest.json"
+          if manifest_path.is_symlink() or not manifest_path.is_file():
+              raise SystemExit("release artifact manifest is missing or unsafe")
+          manifest = json.loads(manifest_path.read_text())
+          if manifest.get("schema") != "mobench.release-web-artifact.v1":
+              raise SystemExit("unexpected release artifact manifest schema")
+          entries = manifest.get("entries")
+          if not isinstance(entries, list) or not entries:
+              raise SystemExit("release artifact manifest has no entries")
+          expected = set()
+          for entry in entries:
+              if set(entry) != {"path", "size", "sha256"}:
+                  raise SystemExit("release artifact entry has unexpected fields")
+              raw_path = entry["path"]
+              relative = PurePosixPath(raw_path)
+              if (
+                  not isinstance(raw_path, str)
+                  or not raw_path
+                  or "\\" in raw_path
+                  or relative.is_absolute()
+                  or relative.as_posix() != raw_path
+                  or any(part in ("", ".", "..") for part in relative.parts)
+              ):
+                  raise SystemExit(f"unsafe release artifact path: {relative}")
+              path = root.joinpath(*relative.parts)
+              parent = path.parent
+              while parent != root:
+                  if parent.is_symlink() or not parent.is_dir():
+                      raise SystemExit(f"unsafe release artifact parent: {relative}")
+                  parent = parent.parent
+              if path.is_symlink() or not path.is_file():
+                  raise SystemExit(f"release artifact is missing or unsafe: {relative}")
+              contents = path.read_bytes()
+              if len(contents) != entry["size"]:
+                  raise SystemExit(f"release artifact size mismatch: {relative}")
+              if hashlib.sha256(contents).hexdigest() != entry["sha256"]:
+                  raise SystemExit(f"release artifact hash mismatch: {relative}")
+              expected.add(str(relative))
+          observed = {
+              path.relative_to(root).as_posix()
+              for path in root.rglob("*")
+              if path.is_file() and path != manifest_path
+          }
+          if observed != expected:
+              raise SystemExit(
+                  f"release artifact set mismatch: missing={expected-observed}, "
+                  f"extra={observed-expected}"
+              )
+          PY
       - name: Start local static server
         shell: bash
         run: |
@@ -308,9 +459,7 @@ jobs:
           TARGET_OS: ${{ matrix.os }}
           OS_VERSION: ${{ matrix.os_version }}
           DEVICE: ${{ matrix.device }}
-          ENVIRONMENT: ${{ matrix.environment }}
           ITERATIONS: ${{ inputs.iterations }}
-          MOBENCH_SHA: ${{ inputs.mobench_sha }}
           WARMUP: ${{ inputs.warmup }}
           PROVEKIT_FUNCTION: bench_mobile::bench_passport_complete_age_check_prove
           PROVEKIT_NPM_FUNCTION: provekit_npm::oprf_taceo_prove_and_verify
@@ -332,14 +481,24 @@ jobs:
             --local-identifier "$BROWSERSTACK_LOCAL_IDENTIFIER"
             --script-timeout-secs 3600
             --page-load-timeout-secs 300
-            --build-name "mobench release gate $MOBENCH_SHA"
-            --session-name "$PROJECT $ENVIRONMENT"
+            --build-name "mobench release gate ${{ inputs.mobench_sha }}"
+            --session-name "$PROJECT ${{ matrix.environment }}"
             --output "results/${PROJECT}.json"
           )
           [ -z "$BROWSER_VERSION" ] || args+=(--browser-version "$BROWSER_VERSION")
           [ -z "$TARGET_OS" ] || args+=(--os "$TARGET_OS")
           [ -z "$DEVICE" ] || args+=(--device "$DEVICE")
-          trusted-bin/cargo-mobench "${args[@]}"
+          for attempt in 1 2 3; do
+            if trusted-bin/cargo-mobench "${args[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::BrowserStack web benchmark failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "::warning::BrowserStack web benchmark attempt ${attempt} failed; retrying"
+            sleep "$((attempt * 10))"
+          done
       - name: Stop BrowserStack Local
         if: always()
         uses: browserstack/github-actions/setup-local@93aebce225b754566349151c0676b26b005e591b
@@ -371,9 +530,9 @@ jobs:
       - name: Require every WASM lane
         env:
           PREPARE_RESULT: ${{ needs.prepare.result }}
-          PROVEKIT_NPM_PREPARE_RESULT: ${{ needs.prepare-provekit-npm.result }}
+          PREPARE_NPM_RESULT: ${{ needs.prepare-provekit-npm.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
         run: |
           test "$PREPARE_RESULT" = success
-          test "$PROVEKIT_NPM_PREPARE_RESULT" = success
+          test "$PREPARE_NPM_RESULT" = success
           test "$BROWSER_RESULT" = success

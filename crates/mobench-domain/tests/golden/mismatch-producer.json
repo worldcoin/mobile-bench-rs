@@ -1,0 +1,12 @@
+{
+  "schema_version": "mobench.run/v2",
+  "run_id": "run-20260715-001",
+  "nonce": "nonce-7f31a9",
+  "function_id": "sample_fns::checksum",
+  "logical_session_id": "logical-session-123",
+  "producer": "ios-runner",
+  "requested": { "iterations": 3, "warmup": 1 },
+  "observed": { "iterations": 3, "warmup": 1 },
+  "samples_ns": [101, 99, 100],
+  "outcome": { "status": "success" }
+}

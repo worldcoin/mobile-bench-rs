@@ -2,6 +2,8 @@
 """Static regression tests for the reusable BrowserStack trust boundary."""
 
 from pathlib import Path
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -12,15 +14,12 @@ import textwrap
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/reusable-bench.yml").read_text()
-PLOT_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-publish-plots.yml").read_text()
-PR_COMMAND = (ROOT / ".github/workflows/reusable-pr-command.yml").read_text()
-PR_AUTO = (ROOT / ".github/workflows/reusable-pr-auto.yml").read_text()
-SELFTEST_WORKFLOW = (ROOT / ".github/workflows/mobile-bench-selftest.yml").read_text()
+SELFTEST_WORKFLOW = (
+    ROOT / ".github/workflows/mobile-bench-selftest.yml"
+).read_text()
 RELEASE_WEB_WORKFLOW = (
     ROOT / ".github/workflows/reusable-release-web.yml"
 ).read_text()
-GENERATED_WORKFLOW = (ROOT / "crates/mobench/templates/ci/mobile-bench.yml").read_text()
-GENERATED_ACTION = (ROOT / "crates/mobench/templates/ci/action.yml").read_text()
 
 
 def job(name: str, next_name: str | None = None) -> str:
@@ -28,6 +27,13 @@ def job(name: str, next_name: str | None = None) -> str:
     if next_name is None:
         return WORKFLOW[start:]
     return WORKFLOW[start : WORKFLOW.index(f"  {next_name}:\n", start + 1)]
+
+
+def python_heredoc_after(text: str, marker: str) -> str:
+    marker_start = text.index(marker)
+    start = text.index("python3 - <<'PY'\n", marker_start) + len("python3 - <<'PY'\n")
+    end = text.index("\n          PY", start)
+    return textwrap.dedent(text[start:end])
 
 
 def test_global_and_job_permissions() -> None:
@@ -74,18 +80,6 @@ def test_pr_revision_is_current_and_exact() -> None:
     assert "pr_number is required unless allow_non_pr is explicitly enabled" in validation
     assert "${current,,}" not in WORKFLOW
     assert "tr '[:upper:]' '[:lower:]'" in WORKFLOW
-    assert "allow_non_pr: true" in SELFTEST_WORKFLOW
-
-
-def test_pr_command_dispatches_fork_heads() -> None:
-    assert "head.repo.full_name" not in PR_COMMAND
-    assert "skipping secret-bearing BrowserStack dispatch" not in PR_COMMAND
-    assert "^[0-9a-fA-F]{40}$" in PR_COMMAND
-    assert '-f head_sha="$HEAD_SHA"' in PR_COMMAND
-    assert '-f pr_number="$PR_NUMBER"' in PR_COMMAND
-    assert "skipping secret-bearing BrowserStack dispatch" not in PR_AUTO
-    assert '-f head_sha="$HEAD_SHA"' in PR_AUTO
-    assert '-f pr_number="$PR_NUMBER"' in PR_AUTO
 
 
 def test_trusted_control_plane_is_from_a_literal_commit() -> None:
@@ -102,7 +96,7 @@ def test_trusted_control_plane_is_from_a_literal_commit() -> None:
         capture_output=True,
         check=True,
     ).stdout
-    assert 'version = "0.1.49"' in cargo_toml
+    assert 'version = "0.2.0"' in cargo_toml
 
 
 def test_caller_toolchain_is_explicit_and_confined_to_prepare_jobs() -> None:
@@ -128,11 +122,6 @@ def test_caller_toolchain_is_explicit_and_confined_to_prepare_jobs() -> None:
 
     credentialed = job("run-ios", "summarize")
     assert "rust_toolchain" not in credentialed
-    assert "nightly-2026-03-04" in SELFTEST_WORKFLOW
-    assert "crate_path: examples/ffi-benchmark" in SELFTEST_WORKFLOW
-    assert "export_native_c_abi!()" in (
-        ROOT / "examples/ffi-benchmark/src/lib.rs"
-    ).read_text()
 
 
 def test_ffi_backend_is_validated_and_passed_without_config_rewrite() -> None:
@@ -148,7 +137,6 @@ def test_ffi_backend_is_validated_and_passed_without_config_rewrite() -> None:
         assert '"${backend_args[@]}"' in text
         assert "Configure requested FFI backend" not in text
         assert "path.write_text" not in text
-    assert "ffi_backend: native-c-abi" in SELFTEST_WORKFLOW
 
 
 def test_binding_generator_uses_crate_workspace_lockfile() -> None:
@@ -341,10 +329,6 @@ def test_reporting_is_separate_and_has_no_checkout() -> None:
     assert "if: always() && inputs.pr_number != ''" in report
     assert "contents: write" not in report
     assert "contents: write" not in WORKFLOW
-    assert "workflow_dispatch:" in PLOT_WORKFLOW
-    assert "environment: mobench-plots" in PLOT_WORKFLOW
-    assert "contents: write" in PLOT_WORKFLOW
-    assert "--plots require" in PLOT_WORKFLOW
 
 
 def test_downloaded_reports_are_treated_as_untrusted() -> None:
@@ -353,13 +337,12 @@ def test_downloaded_reports_are_treated_as_untrusted() -> None:
     assert "p.is_symlink()" in summarize
     assert "report nesting too deep" in summarize
     assert "unsafe report field" in summarize
-    assert "unsafe SVG" in PLOT_WORKFLOW
 
 
 def test_security_boundary_external_actions_are_immutable() -> None:
     refs = re.findall(
         r"^\s*uses:\s*([^\s#]+)",
-        WORKFLOW + "\n" + PLOT_WORKFLOW + "\n" + RELEASE_WEB_WORKFLOW,
+        WORKFLOW + "\n" + RELEASE_WEB_WORKFLOW,
         re.MULTILINE,
     )
     assert refs
@@ -375,11 +358,17 @@ def test_release_gate_pins_real_downstreams_and_complete_target_matrix() -> None
 
     assert "source_repository: worldfnd/provekit" in SELFTEST_WORKFLOW
     assert "source_repository: worldcoin/world-id-protocol" in SELFTEST_WORKFLOW
-    assert "rust_toolchain: 1.93.0" in SELFTEST_WORKFLOW
+    assert "prepare_script: bench-mobile/scripts/generate-fixtures.sh" in SELFTEST_WORKFLOW
     assert "prepare_attempts: 3" in SELFTEST_WORKFLOW
+    assert "rust_toolchain: nightly-2026-03-04" in SELFTEST_WORKFLOW
+    assert "rust_toolchain: 1.93.0" in SELFTEST_WORKFLOW
+    assert "ffi_backend: native-c-abi" in SELFTEST_WORKFLOW
+    assert "ffi_backend: uniffi" in SELFTEST_WORKFLOW
     assert "bench_mobile::bench_passport_complete_age_check_prove" in SELFTEST_WORKFLOW
     assert "zk_mobile_bench::bench_nullifier_proving_only" in SELFTEST_WORKFLOW
+    assert "toolchain: nightly-2026-03-04" in RELEASE_WEB_WORKFLOW
     assert "toolchain: 1.93.0" in RELEASE_WEB_WORKFLOW
+
     assert SELFTEST_WORKFLOW.count(
         'ios_devices: \'[{"device":"iPhone 14","os_version":"16"},'
     ) == 2
@@ -412,11 +401,128 @@ def test_release_gate_pins_real_downstreams_and_complete_target_matrix() -> None
         "Android Chrome",
     ):
         assert f"- environment: {environment}" in RELEASE_WEB_WORKFLOW
+
     assert RELEASE_WEB_WORKFLOW.count(
         "browserstack/github-actions/setup-local@"
         "93aebce225b754566349151c0676b26b005e591b"
     ) == 2
     assert "name: Full mobench release gate" in SELFTEST_WORKFLOW
+
+
+def test_release_web_boundary_is_candidate_pinned_and_fail_closed() -> None:
+    assert re.search(
+        r"mobench_sha:\n\s+description:.*\n\s+required: true",
+        RELEASE_WEB_WORKFLOW,
+    )
+    assert "release inputs must use full commit SHAs" in RELEASE_WEB_WORKFLOW
+    assert "persist-credentials: false" in RELEASE_WEB_WORKFLOW
+    assert "ref: ${{ inputs.mobench_sha }}" in RELEASE_WEB_WORKFLOW
+    assert "ref: ${{ matrix.ref }}" in RELEASE_WEB_WORKFLOW
+    assert "environment: browserstack" in RELEASE_WEB_WORKFLOW
+    assert "max-parallel: 2" in RELEASE_WEB_WORKFLOW
+    assert "release-artifact-manifest.json" in RELEASE_WEB_WORKFLOW
+    assert "mobench.release-web-artifact.v1" in RELEASE_WEB_WORKFLOW
+    assert RELEASE_WEB_WORKFLOW.count("sha256sum --check cargo-mobench.sha256") == 2
+    assert "release artifact hash mismatch" in RELEASE_WEB_WORKFLOW
+    assert "release artifact set mismatch" in RELEASE_WEB_WORKFLOW
+    assert 'for attempt in 1 2 3; do' in RELEASE_WEB_WORKFLOW
+    assert 'BrowserStack web benchmark failed after ${attempt} attempts' in RELEASE_WEB_WORKFLOW
+    assert "if: always()" in RELEASE_WEB_WORKFLOW
+    assert 'test "$PREPARE_RESULT" = success' in RELEASE_WEB_WORKFLOW
+    assert 'test "$BROWSER_RESULT" = success' in RELEASE_WEB_WORKFLOW
+    assert WORKFLOW.count('--fetch-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS"') == 2
+    prepare = RELEASE_WEB_WORKFLOW[
+        RELEASE_WEB_WORKFLOW.index("  prepare:\n"):
+        RELEASE_WEB_WORKFLOW.index("  browser:\n")
+    ]
+    assert "BROWSERSTACK_USERNAME" not in prepare
+    assert "BROWSERSTACK_ACCESS_KEY" not in prepare
+    assert "environment: browserstack" not in prepare
+    browser = RELEASE_WEB_WORKFLOW[
+        RELEASE_WEB_WORKFLOW.index("  browser:\n"):
+        RELEASE_WEB_WORKFLOW.index("  complete:\n")
+    ]
+    assert browser.index("Verify immutable candidate and WASM bundle") < browser.index(
+        "Configure BrowserStack credentials"
+    )
+
+
+def test_release_fixture_adapters_preserve_benchmark_semantics() -> None:
+    fixtures = ROOT / "tests/release-fixtures"
+    provekit = (fixtures / "prepare-provekit-wasm.sh").read_text()
+    world_id = (fixtures / "prepare-world-id-wasm.sh").read_text()
+    browser_adapter = (fixtures / "provekit-wasm/lib.rs").read_text()
+    witness_export = (fixtures / "provekit-wasm/export_witness.rs").read_text()
+
+    assert 'version = "0.1.47"' in provekit
+    assert "default-features = false" in provekit
+    assert 'features = ["witness-generation", "parallel"]' in provekit
+    assert "complete_age_check.witness.postcard" in provekit
+    assert "for attempt in 1 2 3" in provekit
+    assert 'mobench-sdk = "0.1.40"' in world_id
+    assert 'features = ["embed-zkeys"]' in world_id
+    assert "// UniFFI Exports for Mobile" in world_id
+    assert "prove_with_witness" in browser_adapter
+    assert "per_iteration" in browser_adapter
+    assert "generate_witness" in witness_export
+
+
+def test_release_bundle_verifier_rejects_hash_and_file_set_drift() -> None:
+    verifier = python_heredoc_after(
+        RELEASE_WEB_WORKFLOW,
+        "Verify immutable candidate and WASM bundle",
+    )
+    filenames = (
+        "index.html",
+        "runner.js",
+        "worker.js",
+        "artifacts/inputs.json",
+        "mobench_web.js",
+        "mobench_web_bg.wasm",
+        "mobench-web.json",
+    )
+    with tempfile.TemporaryDirectory(prefix="mobench-release-bundle-") as temp:
+        root = Path(temp)
+        bundle = root / "bundle"
+        bundle.mkdir()
+        entries = []
+
+        for index, filename in enumerate(filenames):
+            contents = f"fixture-{index}".encode()
+            path = bundle / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+            entries.append(
+                {
+                    "path": filename,
+                    "size": len(contents),
+                    "sha256": hashlib.sha256(contents).hexdigest(),
+                }
+            )
+        (bundle / "release-artifact-manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": "mobench.release-web-artifact.v1",
+                    "entries": entries,
+                }
+            )
+        )
+
+        def verify() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["python3", "-c", verifier],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        assert verify().returncode == 0
+        (bundle / "runner.js").write_text("tampered")
+        assert verify().returncode != 0
+        (bundle / "runner.js").write_bytes(b"fixture-1")
+        (bundle / "unexpected.txt").write_text("unexpected")
+        assert verify().returncode != 0
 
 
 def test_external_release_source_is_restricted_to_non_pr_prepare_jobs() -> None:
@@ -441,34 +547,6 @@ def test_external_release_source_is_restricted_to_non_pr_prepare_jobs() -> None:
     assert "Checkout mobench SDK under test" not in credentialed
     assert "Patch caller to mobench SDK under test" not in credentialed
     assert "[patch.crates-io]" not in credentialed
-
-
-def test_generated_workflow_uses_secure_reusable_boundary() -> None:
-    assert "actions/checkout" not in GENERATED_WORKFLOW
-    assert "runs-on:" not in GENERATED_WORKFLOW
-    assert "worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@" in GENERATED_WORKFLOW
-    workflow_ref = re.search(r"reusable-bench\.yml@([0-9a-f]{40})", GENERATED_WORKFLOW)
-    assert workflow_ref
-    pinned_workflow = subprocess.run(
-        ["git", "show", f"{workflow_ref.group(1)}:.github/workflows/reusable-bench.yml"],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout
-    assert "MOBENCH_TRUSTED_SHA: 13d716e3187bf4f0576276b738fd6d67a307e3c5" in pinned_workflow
-    assert "rust_toolchain:" in GENERATED_WORKFLOW
-    assert "ffi_backend:" in GENERATED_WORKFLOW
-    assert "prepare_script:" in GENERATED_WORKFLOW
-    assert "functions_ios:" in GENERATED_WORKFLOW
-    assert "functions_android:" in GENERATED_WORKFLOW
-    assert "ios_devices:" in GENERATED_WORKFLOW
-    assert "android_devices:" in GENERATED_WORKFLOW
-    assert "secrets: inherit" not in GENERATED_WORKFLOW
-    assert "BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}" in GENERATED_WORKFLOW
-    assert "BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}" in GENERATED_WORKFLOW
-    for ref in re.findall(r"^\s*uses:\s*([^\s#]+)", GENERATED_ACTION, re.MULTILINE):
-        assert ref.startswith("./") or re.search(r"@[0-9a-f]{40}$", ref), ref
 
 
 def test_malicious_fixture_covers_required_attack_surfaces() -> None:

@@ -1,8 +1,7 @@
-//! Custom benchmark metrics captured alongside the timed samples.
+//! Custom benchmark metrics captured alongside timed samples.
 //!
-//! The timing harness deliberately owns the clock. Benchmark functions can
-//! record small scalar outputs, such as serialized proof length, and the
-//! native JSON ABI attaches them to the report after timing has completed.
+//! Benchmark functions can record small scalar outputs, such as serialized
+//! proof length. The native JSON ABI attaches them after timing completes.
 
 use {
     serde::Serialize,
@@ -19,15 +18,10 @@ pub struct CustomMetrics {
 }
 
 thread_local! {
-    static CUSTOM_METRICS: RefCell<CustomMetrics> =
-        RefCell::new(CustomMetrics::default());
+    static CUSTOM_METRICS: RefCell<CustomMetrics> = RefCell::new(CustomMetrics::default());
 }
 
 /// Records an unsigned scalar for the current benchmark invocation.
-///
-/// Values are retained in invocation order, including warmups. Recording uses
-/// thread-local storage so it does not acquire a process-wide lock. Call this
-/// near the end of the benchmark function after producing the measured output.
 pub fn record_sample_u64(name: impl Into<String>, value: u64) {
     CUSTOM_METRICS.with(|metrics| {
         metrics
@@ -40,8 +34,6 @@ pub fn record_sample_u64(name: impl Into<String>, value: u64) {
 }
 
 /// Records or replaces an unsigned run-wide scalar.
-///
-/// This is intended for setup code that runs outside the measured region.
 pub fn record_run_u64(name: impl Into<String>, value: u64) {
     CUSTOM_METRICS.with(|metrics| {
         metrics.borrow_mut().run_u64.insert(name.into(), value);
@@ -50,9 +42,7 @@ pub fn record_run_u64(name: impl Into<String>, value: u64) {
 
 #[cfg(feature = "registry")]
 pub(crate) fn clear() {
-    CUSTOM_METRICS.with(|metrics| {
-        *metrics.borrow_mut() = CustomMetrics::default();
-    });
+    CUSTOM_METRICS.with(|metrics| *metrics.borrow_mut() = CustomMetrics::default());
 }
 
 #[cfg(feature = "registry")]

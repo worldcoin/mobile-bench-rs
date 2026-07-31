@@ -1,11 +1,10 @@
 //! Build automation for browser-hosted WebAssembly benchmarks.
 
-use super::common::{get_cargo_target_dir, run_command, validate_project_root};
+use super::common::{ToolCommand, get_cargo_target_dir, run_tool_command, validate_project_root};
 use crate::{BenchError, BuildProfile};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 const WEB_GLUE_NAME: &str = "mobench_web";
@@ -16,6 +15,7 @@ const WORKER_JS: &str = include_str!("../../templates/web/worker.js");
 /// Configuration for a generated web benchmark bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WebBuildConfig {
+    /// Cargo build profile used for the WebAssembly library.
     pub profile: BuildProfile,
 }
 
@@ -30,11 +30,17 @@ impl Default for WebBuildConfig {
 /// Paths produced by [`WebBuilder`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebBuildResult {
+    /// Root directory containing the complete static browser bundle.
     pub bundle_dir: PathBuf,
+    /// Browser harness entry point.
     pub index_html: PathBuf,
+    /// Main-thread harness controller.
     pub runner_js: PathBuf,
+    /// JavaScript glue emitted by `wasm-bindgen`.
     pub bindgen_js: PathBuf,
+    /// WebAssembly module emitted by `wasm-bindgen`.
     pub wasm: PathBuf,
+    /// Machine-readable bundle manifest.
     pub manifest: PathBuf,
 }
 
@@ -51,6 +57,7 @@ pub struct WebBuilder {
 }
 
 impl WebBuilder {
+    /// Creates a web builder for one benchmark crate.
     pub fn new(project_root: impl Into<PathBuf>, crate_name: impl Into<String>) -> Self {
         let project_root = project_root.into();
         let crate_name = crate_name.into();
@@ -66,36 +73,43 @@ impl WebBuilder {
         }
     }
 
+    /// Overrides the Rust library artifact name.
     pub fn library_name(mut self, library_name: impl Into<String>) -> Self {
         self.library_name = library_name.into();
         self
     }
 
+    /// Overrides the benchmark crate directory.
     pub fn crate_dir(mut self, crate_dir: impl Into<PathBuf>) -> Self {
         self.crate_dir = Some(crate_dir.into());
         self
     }
 
+    /// Overrides the Mobench output root.
     pub fn output_dir(mut self, output_dir: impl Into<PathBuf>) -> Self {
         self.output_dir = output_dir.into();
         self
     }
 
+    /// Selects the `wasm-bindgen` executable or explicit path.
     pub fn wasm_bindgen(mut self, wasm_bindgen: impl Into<PathBuf>) -> Self {
         self.wasm_bindgen = wasm_bindgen.into();
         self
     }
 
+    /// Enables detailed build output.
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
 
+    /// Prints the deterministic build plan without running tools or writing files.
     pub fn dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
         self
     }
 
+    /// Compiles the crate and emits a complete browser bundle.
     pub fn build(&self, config: &WebBuildConfig) -> Result<WebBuildResult, BenchError> {
         validate_project_root(&self.project_root, &self.crate_name)?;
         let crate_dir = self.resolve_crate_dir()?;
@@ -140,7 +154,7 @@ impl WebBuilder {
             return Ok(result);
         }
 
-        let mut cargo = Command::new("cargo");
+        let mut cargo = ToolCommand::path_search("cargo");
         cargo
             .arg("build")
             .arg("--manifest-path")
@@ -151,7 +165,7 @@ impl WebBuilder {
         if config.profile == BuildProfile::Release {
             cargo.arg("--release");
         }
-        run_command(cargo, "web benchmark Cargo build")?;
+        run_tool_command(cargo, "web benchmark Cargo build")?;
         if !input_wasm.is_file() {
             return Err(BenchError::Build(format!(
                 "WebAssembly artifact was not produced at {}.\n\n\
@@ -168,7 +182,7 @@ impl WebBuilder {
                 result.bundle_dir.display()
             ))
         })?;
-        let mut bindgen = Command::new(&self.wasm_bindgen);
+        let mut bindgen = ToolCommand::explicit(&self.wasm_bindgen)?;
         bindgen
             .arg(&input_wasm)
             .arg("--target")
@@ -178,7 +192,7 @@ impl WebBuilder {
             .arg("--out-name")
             .arg(WEB_GLUE_NAME)
             .arg("--no-typescript");
-        run_command(bindgen, "wasm-bindgen web glue generation")?;
+        run_tool_command(bindgen, "wasm-bindgen web glue generation")?;
 
         write_bundle_file(&result.index_html, INDEX_HTML)?;
         write_bundle_file(&result.runner_js, RUNNER_JS)?;
@@ -277,9 +291,10 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::write(
             temp.path().join("Cargo.toml"),
-            "[package]\nname = \"demo-bench\"\nversion = \"0.1.0\"\n",
+            "[package]\nname = \"demo-bench\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
         )
         .expect("manifest");
+        fs::write(temp.path().join("lib.rs"), "").expect("library");
         let output = temp.path().join("out");
 
         let result = WebBuilder::new(temp.path(), "demo-bench")
@@ -297,10 +312,11 @@ mod tests {
     }
 
     #[test]
-    fn templates_expose_stable_window_contract() {
+    fn templates_expose_worker_backed_window_contract() {
         assert!(INDEX_HTML.contains("runner.js"));
         assert!(RUNNER_JS.contains("window.mobench"));
         assert!(RUNNER_JS.contains("new Worker"));
+        assert!(!RUNNER_JS.contains("runBenchmarkJson("));
         assert!(WORKER_JS.contains("runBenchmarkJson"));
         assert!(WORKER_JS.contains("JSON.parse"));
     }

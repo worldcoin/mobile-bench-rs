@@ -1,6 +1,6 @@
 # Testing
 
-Updated: 2026-07-23. Current release: `0.1.49`.
+Updated: 2026-07-31. Release line: `0.2.0`.
 
 ## Host-Side Rust Tests
 
@@ -62,8 +62,6 @@ cargo run -q -p mobench --bin mobench -- --help
 cargo run -q -p mobench --bin mobench -- build --help
 cargo run -q -p mobench --bin mobench -- run --help
 cargo run -q -p mobench --bin mobench -- ci run --help
-cargo run -q -p mobench --bin mobench -- ci prepare --help
-cargo run -q -p mobench --bin mobench -- ci run-prebuilt --help
 cargo run -q -p mobench --bin mobench -- profile run --help
 ```
 
@@ -175,31 +173,6 @@ Quality workflows:
 
 - `rust.yml`
 - `compile-gate.yml`
-
-### Reusable Workflow Security Regression Tests
-
-The security suite must prove behavior at the job boundary, not merely inspect
-the commenter's authorization:
-
-- a hostile fixture's `build.rs`, fixture hook, dependency, and benchmark see
-  no BrowserStack variables and cannot use the job token for repository writes;
-- credentialed jobs have no caller checkout and invoke no caller-controlled
-  process on the GitHub runner;
-- caller preparation hooks are path-confined, secretless, read-only, and fail
-  before manifest upload; platform function fallback and structured device
-  arrays remain data rather than shell programs;
-- complete-matrix tests cover multiple functions and devices and reject
-  missing, unexpected, and duplicate result shards;
-- manifest verification rejects traversal, absolute/duplicate/unexpected paths,
-  missing/extra files, size mismatches, hash mismatches, platform mismatches,
-  and incompatible benchmark ABI metadata;
-- report inputs reject workflow-command/path injection and escape untrusted
-  benchmark names and Markdown/HTML fields;
-- `actionlint` and existing workflow/self-tests remain green.
-
-One Android and one iOS run through `ci run-prebuilt` are service-gated release
-checks. Record them separately from static and host-only checks; do not claim
-live validation from fixture or workflow-shape tests.
 
 ## Testing Guidance
 

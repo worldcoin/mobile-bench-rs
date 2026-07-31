@@ -1,6 +1,6 @@
 # Reusable Workflow Security
 
-Current secure workflow release: **0.1.49** (older releases remain immutable).
+Current secure workflow release: **0.2.0** (older releases remain immutable).
 
 The reusable BrowserStack workflow is secure by default for pull requests,
 including fork pull requests. Its core invariant is:
@@ -226,7 +226,7 @@ the pull request or executes a file from those artifacts.
 ## Caller Migration
 
 Update the reusable workflow reference to immutable commit
-`9495b599d8250a5e992874aca61a6a0653b381ff` for the `v0.1.49`
+`b869932669c164273656ffe785a43c245f4a720e` for the `v0.2.0`
 release and pass secrets explicitly:
 
 ```yaml
@@ -238,7 +238,7 @@ permissions:
 
 jobs:
   mobench:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@9495b599d8250a5e992874aca61a6a0653b381ff
+    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@13d716e3187bf4f0576276b738fd6d67a307e3c5
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}

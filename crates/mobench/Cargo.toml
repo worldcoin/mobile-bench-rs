@@ -40,6 +40,12 @@ path = "src/bin/cargo-mobench.rs"
 
 [dependencies]
 anyhow.workspace = true
+mobench-artifacts.workspace = true
+mobench-domain.workspace = true
+mobench-process.workspace = true
+mobench-provider.workspace = true
+mobench-report.workspace = true
+mobench-runtime.workspace = true
 mobench-sdk = { workspace = true, features = ["full"] }
 clap.workspace = true
 serde.workspace = true
@@ -51,10 +57,16 @@ dotenvy = "0.15"
 time.workspace = true
 sha2 = "0.10"
 comfy-table = "7"
+ctrlc = "3"
 tempfile = "3"
 inferno = { version = "0.12", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+thiserror.workspace = true
+getrandom.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 criterion = "0.5"

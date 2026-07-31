@@ -27,31 +27,6 @@ on:
         description: "JSON array of benchmark function names"
         required: true
         type: string
-      functions_ios:
-        description: "Optional iOS function list; defaults to functions"
-        required: false
-        type: string
-        default: ""
-      functions_android:
-        description: "Optional Android function list; defaults to functions"
-        required: false
-        type: string
-        default: ""
-      prepare_script:
-        description: "Optional repository-relative preparation script"
-        required: false
-        type: string
-        default: ""
-      ios_devices:
-        description: "Optional JSON array of iOS device objects"
-        required: false
-        type: string
-        default: ""
-      android_devices:
-        description: "Optional JSON array of Android device objects"
-        required: false
-        type: string
-        default: ""
       default_device_profile:
         description: "Default device profile"
         required: false
@@ -95,6 +70,8 @@ jobs:
           HEAD_SHA_WR: ${{ github.event.workflow_run.head_sha }}
           REPO: ${{ github.repository }}
         run: |
+          # shellcheck disable=SC2129
+          set_output() { printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; }
           # For label events, use the PR directly
           if [ "$EVENT_NAME" = "pull_request" ]; then
             PR_NUMBER="$PR_NUMBER_EVENT"
@@ -106,9 +83,16 @@ jobs:
               --jq ".[] | select(.head.sha == \"${HEAD_SHA}\") | .number" | head -1)
             if [ -z "$PR_NUMBER" ]; then
               echo "::notice::No open PR found for SHA ${HEAD_SHA}, skipping"
-              echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+              set_output "should_dispatch=false"
               exit 0
             fi
+          fi
+
+          PR_HEAD_REPO=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')
+          if [ "$PR_HEAD_REPO" != "$REPO" ]; then
+            echo "::warning::PR #${PR_NUMBER} comes from ${PR_HEAD_REPO}; skipping secret-bearing BrowserStack dispatch"
+            set_output "should_dispatch=false"
+            exit 0
           fi
 
           # Check if bench label is present
@@ -116,7 +100,7 @@ jobs:
             --jq ".[].name" | grep -qx "$BENCH_LABEL" && echo "true" || echo "false")
           if [ "$HAS_LABEL" != "true" ]; then
             echo "::notice::PR #${PR_NUMBER} does not have '${BENCH_LABEL}' label, skipping"
-            echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+            set_output "should_dispatch=false"
             exit 0
           fi
 
@@ -126,15 +110,13 @@ jobs:
             | head -1)
           if [ "$GATE_STATUS" != "success" ]; then
             echo "::notice::Compile gate '${GATE_WORKFLOW}' not yet passed for ${HEAD_SHA} (status: ${GATE_STATUS:-pending})"
-            echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+            set_output "should_dispatch=false"
             exit 0
           fi
 
-          {
-            echo "pr_number=${PR_NUMBER}"
-            echo "head_sha=${HEAD_SHA}"
-            echo "should_dispatch=true"
-          } >> "$GITHUB_OUTPUT"
+          set_output "pr_number=${PR_NUMBER}"
+          set_output "head_sha=${HEAD_SHA}"
+          set_output "should_dispatch=true"
 
       - name: Dispatch benchmark workflow
         if: steps.pr.outputs.should_dispatch == 'true'
@@ -144,23 +126,13 @@ jobs:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           FUNCTIONS: ${{ inputs.functions }}
-          FUNCTIONS_IOS: ${{ inputs.functions_ios }}
-          FUNCTIONS_ANDROID: ${{ inputs.functions_android }}
-          PREPARE_SCRIPT: ${{ inputs.prepare_script }}
-          IOS_DEVICES: ${{ inputs.ios_devices }}
-          ANDROID_DEVICES: ${{ inputs.android_devices }}
           CRATE_PATH: ${{ inputs.crate_path }}
           DEVICE_PROFILE: ${{ inputs.default_device_profile }}
           ITERATIONS: ${{ inputs.default_iterations }}
           WARMUP: ${{ inputs.default_warmup }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          compatibility="$(jq -cn \
-            --arg functions_ios "$FUNCTIONS_IOS" --arg functions_android "$FUNCTIONS_ANDROID" \
-            --arg prepare_script "$PREPARE_SCRIPT" --arg ios_devices "$IOS_DEVICES" \
-            --arg android_devices "$ANDROID_DEVICES" \
-            '{functions_ios:$functions_ios,functions_android:$functions_android,prepare_script:$prepare_script,ios_devices:$ios_devices,android_devices:$android_devices} | with_entries(select(.value != ""))')"
-          dispatch=(gh workflow run "$WORKFLOW" \
+          gh workflow run "$WORKFLOW" \
             --ref "$DEFAULT_BRANCH" \
             -f head_sha="$HEAD_SHA" \
             -f crate_path="$CRATE_PATH" \
@@ -170,7 +142,5 @@ jobs:
             -f iterations="$ITERATIONS" \
             -f warmup="$WARMUP" \
             -f pr_number="$PR_NUMBER" \
-            -f requested_by="auto:${GITHUB_EVENT_NAME}")
-          [ "$compatibility" = '{}' ] || dispatch+=(-f compatibility_json="$compatibility")
-          "${dispatch[@]}"
+            -f requested_by="auto:${GITHUB_EVENT_NAME}"
           echo "Dispatched benchmark for PR #${PR_NUMBER} at ${HEAD_SHA}"

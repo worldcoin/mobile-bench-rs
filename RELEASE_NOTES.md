@@ -1,353 +1,100 @@
 # Release Notes
 
-`mobench`, `mobench-sdk`, and `mobench-macros` were published rapidly during
-bring-up. Treat only the current release line as supported for new integrations
-unless an older release is explicitly called out. For a concise
-release-by-release change list, see `CHANGELOG.md`.
+The 0.2 release publishes the CLI, SDK, macro, and rewrite foundation crates
+together. Treat only the current release line as supported for new integrations
+unless an older release is explicitly called out. For a concise release-by-
+release change list, see `CHANGELOG.md`.
 
 Crates.io release pages:
 
 - [mobench](https://crates.io/crates/mobench)
 - [mobench-sdk](https://crates.io/crates/mobench-sdk)
 - [mobench-macros](https://crates.io/crates/mobench-macros)
+- [mobench-runtime](https://crates.io/crates/mobench-runtime)
+- [mobench-domain](https://crates.io/crates/mobench-domain)
+- [mobench-process](https://crates.io/crates/mobench-process)
+- [mobench-artifacts](https://crates.io/crates/mobench-artifacts)
+- [mobench-provider](https://crates.io/crates/mobench-provider)
+- [mobench-report](https://crates.io/crates/mobench-report)
 
-## Unreleased
-
-No user-facing unreleased changes yet.
-
-## v0.1.49
+## v0.2.0 - 2026-07-31
 
 Status: current supported release.
 
-Publication date: 2026-07-31.
-
-### Native Android ABI and diagnostics
-
-The native C ABI Android runner now maps Rust `usize` arguments and
-`MobenchBuf` lengths/capacities with JNA `NativeLong`. This preserves the
-correct LP32/LP64 layout on supported Android ABIs, including `armeabi-v7a`,
-and prevents the pre-execution `SIGBUS`/`BUS_ADRALN` failure caused by fixed
-width Kotlin `Long` fields.
-
-Native reports can now include application-defined scalar metrics through
-`mobench_sdk::record_sample_u64` and `record_run_u64`. Sample values and
-run-wide values are serialized under `custom_metrics`; timing remains owned by
-the harness. Native ABI panic errors retain string panic payloads, and Android
-runners report a dead worker promptly instead of waiting for the full timeout.
-
-BrowserStack artifact uploads use HTTP/1.1 with no implicit total request
-deadline, while retaining a bounded connection timeout, for reliable large
-IPA/AAB transfers.
-
-### Public ProveKit browser SDK release coverage
-
-The downstream WASM release gate now builds a lockfile-pinned
-`@worldcoin/provekit@0.1.0` browser fixture and executes it through Mobench's
-`run-web` BrowserStack Automate path. The fixture initializes the public SDK
-with `threads: false` for cross-browser compatibility, loads pinned PKP/PKV
-artifacts, proves and verifies deterministic inputs, and rejects a tampered
-proof. It runs alongside, rather than replacing, the Rust ProveKit WASM lane.
-
-### Migration From v0.1.48
-
-Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.49` as
-applicable. Existing benchmark configurations remain compatible. Native C ABI
-users should regenerate Android runners to receive the 32-bit ABI correction.
-
-## v0.1.48
-
-Status: superseded by `v0.1.49`.
-
-Publication date: 2026-07-23.
-
-### Browser-hosted WASM benchmarks
-
-`mobench-sdk` now uses browser `performance.now()` timing and exports the
-benchmark registry through a `wasm-bindgen` JSON bridge. `cargo mobench build
---target web` produces a static bundle, while `cargo mobench run-web` drives
-that bundle through BrowserStack Automate's W3C WebDriver endpoint on desktop
-and real-mobile browsers.
-
-### Real downstream release gate
-
-The manual release self-test now pins real ProveKit and world-id-protocol
-fixtures. A release candidate must pass ProveKit passport age-check proving and
-World ID nullifier proving on two Android devices, two iOS devices, and browser
-WASM on macOS Safari, Windows Chrome, iOS Safari, and Android Chrome. The
-secretless build jobs patch the pinned consumers to the candidate SDK; native
-credentialed jobs still consume only prebuilt packages.
-
-The gate pins each downstream Rust toolchain exactly, permits up to three
-explicitly requested attempts for transient failures in secretless fixture
-preparation, and leaves long WebDriver HTTP requests bounded by the configured
-script/page and outer workflow timeouts instead of reqwest's 30-second default.
-Browser proofs run in a dedicated module worker and return through page-owned
-polling, keeping the WebDriver page responsive and avoiding the shorter
-server-side atom limit imposed by some real-mobile sessions.
-
-### Migration From v0.1.47
-
-Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.48` as
-applicable. Pin reusable workflow callers to immutable commit
-`9495b599d8250a5e992874aca61a6a0653b381ff`:
-
-```yaml
-uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@9495b599d8250a5e992874aca61a6a0653b381ff
-with:
-  mobench_version: "0.1.48"
-```
-
-Existing native configurations remain compatible; browser benchmarks can opt
-into `build --target web` and `run-web`.
-
-## v0.1.47
-
-Status: superseded by `v0.1.48`.
-
-Publication date: 2026-07-20.
-
-### Reliable Long-Running BrowserStack Sessions
-
-The reusable workflow now accepts `max_completion_timeout_secs`, defaulting to
-1,800 seconds and capped by the trusted control plane at 21,600 seconds. The
-caller-provided manifest may request a shorter completion timeout, but it cannot
-extend execution beyond this trusted ceiling. iOS uses the resolved bounded
-timeout consistently for the application launch configuration, XCUITest wait,
-and BrowserStack polling.
-
-Generated SwiftUI runners expose a low-impact heartbeat control that XCUITest
-interacts with every five minutes during long benchmarks. The XCUITest suite
-predicate-waits in 30-second intervals, emits heartbeat diagnostics, and reads
-the finished report from the first accessibility channel containing valid JSON.
-The BrowserStack XCUITest request also uses a 15-minute idle timeout. Completion
-is based on the marker's completed state, not merely the marker's existence.
-
-Generated native-C-ABI Android runners now identify the isolated worker by PID
-and process name. The instrumentation watchdog detects a dead worker after a
-bounded grace period and emits structured `worker_exit` diagnostics instead of
-waiting for the full benchmark timeout. Native linkage failures, including JNA
-`UnsatisfiedLinkError`, are returned as benchmark failures when the process can
-still report them.
-
-Credentialed iOS and Android jobs run serially so repositories using both
-platforms do not exceed constrained BrowserStack account concurrency. Android
-can still proceed when the iOS run fails or is skipped, preserving the second
-platform's diagnostics instead of suppressing it. Successful result summaries
-still require every requested function, device, measured iteration, and warmup
-for each included platform.
-
-### Exact-Head Validation And Credential Boundary
-
-All five PR-head API checks now retry transient GitHub API failures up to five
-times with bounded backoff. The checks remain fail-closed: exhausted requests or
-any SHA mismatch stop the workflow, and the credentialed jobs revalidate the
-exact current PR head immediately before BrowserStack use.
-
-The security architecture is otherwise unchanged. Pull-request code, hooks,
-dependencies, Cargo, Gradle, and Xcode execute only in secretless read-only
-prepare jobs. Credentialed jobs do not check out caller code or execute caller
-commands; they verify the enumerated manifest and upload opaque mobile packages
-for execution on BrowserStack devices. Reporting remains isolated, secrets are
-passed explicitly, and normal benchmark paths do not receive `contents: write`.
-
-### Migration From v0.1.46
-
-Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.47` as applicable.
-Pin reusable workflow callers to immutable commit
-`f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f`. Remove temporary branch-based
-`mobench_ref` values once the crates.io packages are available:
-
-```yaml
-uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@f36ea5420bdb6633a6b8e91b00522ca9d5a2a84f
-with:
-  mobench_version: "0.1.47"
-```
-
-Existing inputs remain compatible. Set `max_completion_timeout_secs` only when
-a benchmark needs more than the 30-minute trusted default. Continue passing
-BrowserStack secrets explicitly and never use `secrets: inherit`.
-
-## v0.1.46
-
-Status: superseded by `v0.1.47`.
-
-Publication date: 2026-07-19.
-
-### Pinned Toolchains And Native Prebuilt Preparation
-
-Reusable BrowserStack callers can now pass `rust_toolchain` with an exact
-channel such as `nightly-2026-03-04`. The input defaults to `stable`. Every
-requested Android or iOS target is installed for that exact caller build
-toolchain in the secretless prepare job. The trusted `cargo-mobench` control
-plane remains pinned independently and builds with its own stable toolchain.
-
-`cargo mobench ci prepare` now accepts typed `--ffi-backend` values. Selection
-precedence is the explicit CLI or reusable-workflow value, then
-`[project].ffi_backend` in `mobench.toml`, then the compatibility default
-`uniffi`. Android and iOS builders receive the resolved backend in every build
-and packaging path. `native-c-abi` preparation therefore emits native runners
-and never invokes `uniffi-bindgen`. The Android native runner now also matches
-the generated Espresso timeout/failure interface, allowing both APKs to compile
-and package as one verified prebuilt handoff.
-
-For actual UniFFI projects, the reusable workflow resolves the lockfile through
-the Cargo workspace containing `crate_path`. It no longer selects the first
-nested `Cargo.lock` found in a monorepo. Native C ABI and BoltFFI projects skip
-UniFFI generator installation entirely.
-
-### Migration From v0.1.45
-
-Pin the reusable workflow to immutable commit
-`1ac54adaf2bd97c6ca303705e1e0471257716f48` and install `mobench 0.1.46`.
-Pinned-toolchain callers should pass their exact toolchain explicitly:
-
-```yaml
-jobs:
-  mobench:
-    uses: worldcoin/mobile-bench-rs/.github/workflows/reusable-bench.yml@1ac54adaf2bd97c6ca303705e1e0471257716f48
-    with:
-      rust_toolchain: nightly-2026-03-04
-      ffi_backend: native-c-abi
-```
-
-Omit `ffi_backend` to use `mobench.toml`, or omit both sources to retain the
-UniFFI default. Continue passing BrowserStack secrets explicitly; do not use
-`secrets: inherit`.
-
-The two-stage authorization boundary is unchanged. Caller checkout, toolchain
-selection, generator discovery, hooks, dependencies, and mobile builds remain
-secretless. Credentialed jobs verify and execute only the fixed trusted
-control-plane command against enumerated prebuilt artifacts; they never check
-out the caller or run Cargo, Gradle, Xcode, or caller scripts.
-
-## v0.1.45
-
-Status: superseded by `v0.1.46`.
-
-Publication date: 2026-07-17. The prebuilt BrowserStack path passed on Android
-and iOS, including exact-head validation, secretless packaging, credentialed
-prebuilt execution, complete-matrix sanitization, and isolated reporting.
-
-### Secure Workflow Compatibility
-
-The reusable workflow now accepts an optional `prepare_script` for generic
-caller-owned fixture generation and toolchain setup. The value must be a
-normalized repository-relative path resolving to a regular file inside the
-exact PR checkout. It runs with `MOBENCH_CI_PREPARE=1` only in the secretless,
-read-only platform preparation jobs. A hook failure prevents packaging and
-manifest upload.
-
-Callers may select different benchmarks with `functions_ios` and
-`functions_android`; an empty platform input falls back to `functions`.
-Structured `ios_devices` and `android_devices` inputs accept arrays of
-`{"device":"...","os_version":"..."}` objects. They override the legacy
-single-device fields and device profile while preserving those fields as the
-compatibility fallback.
-
-Each function is packaged once per platform, then the trusted prebuilt runner
-submits all requested devices without rebuilding caller code. The run is
-complete only when every requested function/device pair has exactly one result.
-Missing, unexpected, and duplicate shards fail closed, while BrowserStack
-diagnostic artifacts remain available for investigating partial failures.
-
-The authorization invariant is unchanged: an authorized `/mobench` command
-authorizes a run but does not make the requested PR revision trusted. PR code
-still never executes in a job containing BrowserStack credentials or a
-write-capable repository token.
-
-### Migration From v0.1.44
-
-Existing callers remain compatible without new inputs. Update the reusable
-workflow reference and the explicitly installed mobench version to the final
-immutable `v0.1.45` release revision. Add `prepare_script` only when the project
-needs caller-specific preparation, and use the platform function/device inputs
-only when the shared selections are insufficient. Continue passing
-BrowserStack secrets explicitly; do not use `secrets: inherit`.
-
-The CLI package again declares `mobench` as its default binary, and SDK rustdoc
-examples consistently reference `0.1.45`.
-
-## v0.1.44
-
-Status: superseded by `v0.1.45`.
-
-Publication date: 2026-07-17. The prebuilt BrowserStack path passed on Android
-and iOS, including exact-head validation, secretless packaging, credentialed
-prebuilt execution, sanitization, and isolated reporting.
-
-### BrowserStack Pull-Request Trust Boundary
-
-The reusable workflow now assumes that an authorized `/mobench` request can
-target a malicious fork revision. Authorization to request a benchmark is not
-treated as trust in the requested commit.
-
-- `validate-request` accepts only a full commit SHA and verifies that it is the
-  current head of the requested pull request.
-- `prepare-android` and `prepare-ios` check out that exact revision, run fixture
-  hooks and builds without BrowserStack secrets or protected environments, and
-  have read-only repository permissions. Their only handoff is an explicitly
-  enumerated mobile artifact set plus a machine-readable manifest.
-- `run-android` and `run-ios` do not check out the caller and
-  do not invoke caller scripts, Cargo, Gradle, Xcode, dependencies, fixture
-  generators, or mobile binaries on the GitHub runner. A trusted, immutable
-  mobench revision verifies the manifest and uploads only the prebuilt
-  APK/Android test APK or IPA/XCUITest suite. Mobile code executes only on
-  BrowserStack devices.
-- BrowserStack credentials are scoped to the upload/run/fetch operations in the
-  credentialed jobs. An environment approval is defense in depth, not the
-  security boundary.
-- Result summarization remains read-only. Sticky comments/check updates happen
-  in a separate reporting job with only the required PR/check write permission
-  and no caller checkout. Plot-branch writes are disabled unless a caller
-  explicitly opts into the protected publishing job.
-
-The artifact manifest binds the artifact set to one platform and benchmark ABI,
-and binds each normalized relative path to its artifact role, byte size, and
-SHA-256 digest. Verification rejects absolute or traversing paths, missing or
-unexpected files, invalid metadata, size mismatches, and digest mismatches
-before credentials are used.
-Downloaded report fields and filenames remain untrusted and are escaped or
-rejected before shell, workflow-command, path, Markdown, or HTML use.
-BrowserStack API bodies, device logs, and downloaded diagnostics are bounded;
-provider error bodies are not echoed into the Actions command stream, and
-manifest-provided completion timeouts cannot exceed the trusted runner cap.
-
-### New Two-Stage CLI Interface
-
-`cargo mobench ci prepare --target <android|ios> --source-sha <full-sha>
---manifest <path>` builds and packages the untrusted revision and writes the
-artifact manifest.
-
-`cargo mobench ci run-prebuilt --manifest <path> --expected-source-sha
-<full-sha> --expected-platform <android|ios> --expected-functions <functions>
---expected-iterations <count> --expected-warmup <count> --devices <selection>
---output-dir <path>` verifies that handoff and performs only trusted BrowserStack
-upload, run, fetch, and report normalization.
-`run-prebuilt` never invokes build tools, caller hooks, or files from a caller
-checkout.
-
-### Android Result Handoff And Collection Fixes
-
-Android runner result codes now use a qualified mobench namespace instead of an
-unqualified `RESULT_OK` that can collide with `Activity.RESULT_OK`. BrowserStack
-Espresso collection now reads per-test-case logs, reconstructs bounded chunked
-benchmark JSON, and rejects oversized text/report payloads. The fix covers the
-UniFFI, native C ABI, and BoltFFI runner paths.
-
-### Migration For Reusable Workflow Callers
-
-Existing callers should update their reusable workflow reference to the
-immutable `v0.1.44` release commit, keep passing the exact PR number/head SHA,
-grant `actions: read`, `contents: read`, `pull-requests: write`, and
-`checks: write` at the caller level for reporting, and pass
-`BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY` explicitly.
-Do not use `secrets: inherit`. Platform, function, iteration, warmup, device,
-artifact, summary, and sticky-comment inputs remain available; callers do not
-need to copy the split-job YAML into their own repositories.
+Mobench 0.2 is a clean rewrite that preserves the v0.1 feature contract while
+splitting the implementation into explicit, testable workspace boundaries. All
+nine workspace crates are published at 0.2.0 so downstream users can depend on
+the CLI, SDK, or a focused runtime/reporting boundary independently.
+
+### Benchmark authoring and execution
+
+- Preserved `#[benchmark]` registration, compile-time signature validation,
+  inventory discovery, setup/teardown, per-iteration setup, warmup, measured
+  samples, and custom scalar metrics.
+- Preserved host-only, local Android/iOS, and BrowserStack execution through the
+  `mobench` CLI and its programmatic `RunRequest`/`RunResult` API.
+- Preserved config-first project resolution, device profiles and structured
+  device matrices, per-platform function selection, custom toolchains/targets,
+  release builds, split-sample merging, fetch/summary commands, and doctor/check
+  prerequisite diagnostics.
+
+### Generated runners and FFI
+
+- Preserved generated Android and iOS projects with synchronized editable and
+  embedded templates, UniFFI compatibility, BoltFFI compatibility, and the
+  direct `native-c-abi` JSON runner backend.
+- Added Android-native-width C ABI `usize` fields for 32-bit devices, panic
+  diagnostics, custom metrics, worker-death watchdogs, fail-closed result
+  handoff, and reliable iOS heartbeat/accessibility result transport.
+- Preserved strict requested/observed report identity and run-scoped benchmark
+  configuration embedding in generated mobile artifacts.
+
+### Browser and WASM
+
+- Added browser-safe timing and resource behavior, `runBenchmarkJson`, a
+  version-matched `wasm-bindgen` builder, `build --target web`, and `run-web`.
+- Added a dedicated module worker so synchronous proving does not block browser
+  polling, plus synchronized editable and embedded web templates.
+- Added direct W3C BrowserStack Automate transport with BrowserStack Local
+  lifecycle, bounded connect/request/session timeouts, cleanup, credential
+  redaction, and deterministic artifact handling.
+- Added a release gate for both Rust-source downstream WASM adapters and the
+  published `@worldcoin/provekit` browser SDK. The npm lane proves and verifies
+  through the public SDK API and rejects a tampered proof.
+
+### Security, artifacts, reports, and profiling
+
+- Split reusable CI into secretless prepare jobs and credentialed prebuilt-only
+  execution. Handoffs are enumerated, hashed, immutable, and checked against
+  the exact candidate SHA; caller hooks, dependencies, toolchains, and FFI
+  customization never run with provider credentials.
+- Added explicit runtime, domain, process, provider, report, and artifact
+  crates with bounded counts, strict v2 report envelopes, subprocess
+  supervision, context-safe Markdown/CSV/GitHub rendering, atomic immutable
+  publication, manifests, leases, recovery, latest snapshots, and retention.
+- Preserved JSON, Markdown, CSV, SVG plot, PR/check-run, trace-event, and local
+  native profiling outputs, including Android `simpleperf`, iOS simulator
+  `sample`, symbol caches, flamegraphs, semantic phases, and profile diffs.
+  BrowserStack native stack/flamegraph profiling remains explicitly unsupported.
+
+### Compatibility and acceptance
+
+- Feature parity is tracked against v0.1.49, including the v0.1.40-v0.1.49
+  additions, native Android reliability fixes, FFI backends, reporting/resource
+  contracts, profiling, secure reusable workflows, and BrowserStack behavior.
+- The exact candidate passed the full 40-job release gate in run
+  [30652763040](https://github.com/worldcoin/mobile-bench-rs/actions/runs/30652763040):
+  two Android and two iOS devices for ProveKit and world-id-protocol, plus
+  macOS Safari, Windows Chrome, iOS Safari, and Android Chrome for both
+  downstream WASM lanes and the `@worldcoin/provekit` npm lane.
+- Local acceptance includes locked workspace tests, formatting, Clippy,
+  workflow security tests, actionlint, fresh pinned downstream WASM builds, and
+  template synchronization checks. See
+  [`docs/0.2-feature-parity-checklist.md`](docs/0.2-feature-parity-checklist.md).
 
 ## v0.1.43
 
-Status: superseded by `v0.1.44`.
+Status: current supported release.
 
 Publication date: 2026-07-05.
 
@@ -484,13 +231,9 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.49` | 2026-07-31 | `mobench 0.1.49`, `mobench-sdk 0.1.49`, `mobench-macros 0.1.49` | Current supported release |
-| `v0.1.48` | 2026-07-23 | `mobench 0.1.48`, `mobench-sdk 0.1.48`, `mobench-macros 0.1.48` | Superseded by `v0.1.49` |
-| `v0.1.47` | 2026-07-20 | `mobench 0.1.47`, `mobench-sdk 0.1.47`, `mobench-macros 0.1.47` | Superseded by `v0.1.48` |
-| `v0.1.46` | 2026-07-19 | `mobench 0.1.46`, `mobench-sdk 0.1.46`, `mobench-macros 0.1.46` | Superseded by `v0.1.47` |
-| `v0.1.45` | 2026-07-17 | `mobench 0.1.45`, `mobench-sdk 0.1.45`, `mobench-macros 0.1.45` | Superseded by `v0.1.46` |
-| `v0.1.44` | 2026-07-17 | `mobench 0.1.44`, `mobench-sdk 0.1.44`, `mobench-macros 0.1.44` | Superseded by `v0.1.45` |
-| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Superseded by `v0.1.44` |
+| `v0.2.0` | 2026-07-31 | All nine workspace crates at `0.2.0` | Current supported release |
+| `v0.1.49` | 2026-07-30 | `mobench 0.1.49`, `mobench-sdk 0.1.49`, `mobench-macros 0.1.49` | Superseded by `v0.2.0`; compatibility baseline |
+| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Superseded by `v0.1.49` |
 | `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Superseded by `v0.1.43` |
 | `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Superseded by `v0.1.42` |
 | `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Superseded by `v0.1.41` |

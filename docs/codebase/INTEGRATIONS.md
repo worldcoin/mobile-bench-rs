@@ -1,6 +1,6 @@
 # Integrations
 
-Updated: 2026-07-23. Current release: `0.1.49`.
+Updated: 2026-07-31. Release line: `0.2.0`.
 
 ## BrowserStack
 
@@ -39,13 +39,12 @@ Explicitly unsupported:
 
 ```toml
 [project]
-ffi_backend = "uniffi" # or "native-c-abi" / "boltffi"
+ffi_backend = "uniffi" # or "native-c-abi"
 ```
 
 - `uniffi`: compatibility backend using generated Kotlin/Swift bindings.
 - `native-c-abi`: direct JSON C ABI backend using
   `mobench_sdk::export_native_c_abi!()`.
-- `boltffi`: generated Kotlin/Swift bindings through BoltFFI.
 
 Both backends emit benchmark JSON for CLI parsing and CI normalization.
 
@@ -93,25 +92,6 @@ Primary artifact contracts:
 - BrowserStack fetch: session JSON, logs, and available provider artifacts.
 - Profiling self-test: profile manifest, summary, folded stacks, flamegraphs,
   and viewer artifacts.
-
-### Reusable Workflow Trust Boundary
-
-`reusable-bench.yml` is split across security domains. PR-head validation and
-Android/iOS preparation run without secrets and with read-only permissions.
-They produce only enumerated prebuilt mobile artifacts and a path, size,
-SHA-256, platform, and benchmark-ABI manifest.
-
-An optional normalized `prepare_script` and all caller build tooling remain in
-those secretless jobs. Platform-specific function lists and structured device
-arrays are normalized before use; each function is built once, then the trusted
-phase requires the complete function/device result matrix.
-
-Credentialed BrowserStack jobs do not check out the caller and do not run
-caller-controlled build tools, scripts, dependencies, hooks, or binaries on the
-GitHub runner. They use a trusted SHA-pinned mobench release to verify and upload
-the prebuilt packages. Summarization is read-only; sticky PR/check publishing is
-a separate, narrowly write-enabled job. See
-[Reusable Workflow Security](../guides/reusable-workflow-security.md).
 
 ## Local Configuration And Credentials
 

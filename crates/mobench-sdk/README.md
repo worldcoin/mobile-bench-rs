@@ -1,11 +1,11 @@
 # mobench-sdk
 
 Rust SDK for mobench mobile benchmarking. It provides the benchmark timing
-harness, `#[benchmark]` registry integration, generated runner support, Android
-and iOS builders, UniFFI compatibility, native JSON C ABI exports, and semantic
-profiling helpers used by the `mobench` CLI.
+harness, `#[benchmark]` registry integration, generated runner support, Android,
+iOS, and WebAssembly builders, UniFFI compatibility, native/browser JSON
+exports, and semantic profiling helpers used by the `mobench` CLI.
 
-Current release: **0.1.49**.
+Current release: **0.2.0**.
 
 ## Features
 
@@ -14,6 +14,7 @@ Current release: **0.1.49**.
 - Lightweight timing harness with warmup and measured iterations.
 - Setup, teardown, and per-iteration benchmark inputs.
 - Android and iOS build automation used by `cargo mobench build/run/ci run`.
+- Browser-compatible timing and a worker-backed WebAssembly benchmark harness.
 - Generated mobile runner templates for:
   - `uniffi` (default compatibility backend)
   - `native-c-abi` (direct mobench JSON C ABI backend)
@@ -26,7 +27,7 @@ Full SDK, including builders and code generation:
 
 ```toml
 [dependencies]
-mobench-sdk = "0.1.49"
+mobench-sdk = "0.2.0"
 inventory = "0.3"
 ```
 
@@ -35,7 +36,7 @@ narrower registry feature:
 
 ```toml
 [dependencies]
-mobench-sdk = { version = "0.1.49", default-features = false, features = ["registry"] }
+mobench-sdk = { version = "0.2.0", default-features = false, features = ["registry"] }
 inventory = "0.3"
 ```
 
@@ -45,6 +46,30 @@ For generated mobile libraries, configure crate types:
 [lib]
 crate-type = ["cdylib", "staticlib", "lib"]
 ```
+
+The `cdylib` crate type is also required for WebAssembly bundles.
+
+## Browser WebAssembly
+
+`WebBuilder` compiles a registered benchmark crate for
+`wasm32-unknown-unknown`, runs a caller-selected `wasm-bindgen` executable, and
+emits a static worker-backed bundle:
+
+```rust
+use mobench_sdk::builders::{WebBuildConfig, WebBuilder};
+
+let result = WebBuilder::new(".", "my-bench-crate")
+    .wasm_bindgen("wasm-bindgen")
+    .build(&WebBuildConfig::default())?;
+
+println!("bundle: {}", result.bundle_dir.display());
+# Ok::<(), mobench_sdk::BenchError>(())
+```
+
+The `wasm-bindgen` CLI version must match the Rust dependency selected by the
+benchmark crate. Generated workers call the exported `runBenchmarkJson`
+function off the main browser thread and return the normal `RunnerReport` JSON
+contract.
 
 ## Basic Benchmark
 
@@ -203,6 +228,7 @@ the legacy `bench-mobile/` layout.
 - `debug_benchmarks`
 - `BenchmarkBuilder`
 - `run_benchmark`
+- `run_benchmark_json`
 - `discover_benchmarks`
 - `find_benchmark`
 - `list_benchmark_names`
@@ -210,6 +236,7 @@ the legacy `bench-mobile/` layout.
 - `SemanticPhase`, `HarnessTimelineSpan`, `TimingError`
 - `profile_phase`, `run_closure`
 - `Target`, `FfiBackend`, `BuildConfig`, `BuildProfile`, `BuildResult`
+- `builders::{WebBuilder, WebBuildConfig, WebBuildResult}`
 - `MobenchBuf`
 
 ## License

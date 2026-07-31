@@ -1,6 +1,6 @@
 # BrowserStack Metrics Guide
 
-Current release: **0.1.49**.
+Current release: **0.2.0**.
 
 BrowserStack benchmark runs can provide timing results and resource metrics
 when those values are present in mobile runner output or provider logs. Native

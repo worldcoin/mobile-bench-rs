@@ -1,10 +1,11 @@
 # Build Guide
 
-Current release: **0.1.49**.
+Current published release: **0.2.0**. The WebAssembly commands below are part
+of the 0.2 release.
 
 Use `cargo mobench build --target <android|ios|both|web>` for repository
-development and CI. The CLI resolves the benchmark crate, builds native mobile
-artifacts or a browser-hosted WebAssembly bundle, and writes outputs to
+development and CI. The CLI resolves the benchmark crate, builds native Rust
+artifacts, generates or updates mobile runner projects, and writes outputs to
 `target/mobench/` by default.
 
 ## Prerequisite Checks
@@ -56,23 +57,6 @@ Install targets:
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 ```
 
-## WebAssembly Prerequisites
-
-- Rust target `wasm32-unknown-unknown`
-- `wasm-bindgen-cli` with the same schema version as the resolved Rust
-  `wasm-bindgen` dependency
-- A benchmark crate producing a `cdylib`
-
-Install the target and CLI:
-
-```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version 0.2.113
-```
-
-If the CLI and crate schema versions differ, `wasm-bindgen` reports both
-versions and the matching `cargo update` or `cargo install` command.
-
 ## Build Commands
 
 Android:
@@ -91,16 +75,6 @@ Both:
 
 ```bash
 cargo mobench build --target both --progress
-```
-
-WebAssembly:
-
-```bash
-cargo mobench build \
-  --target web \
-  --crate-path examples/basic-benchmark \
-  --release \
-  --progress
 ```
 
 Release builds:
@@ -210,59 +184,40 @@ cargo mobench package-ipa --method adhoc
 cargo mobench package-xcuitest
 ```
 
-## Web Outputs
+## Pinned Browser Release Adapters
 
-Web bundles are written below `target/mobench/web/`:
+The release gate builds browser bundles from fresh, immutable downstream
+checkouts with:
 
 ```text
-target/mobench/web/
-├── index.html
-├── runner.js
-├── mobench_web.js
-├── mobench_web_bg.wasm
-└── mobench-web.json
+tests/release-fixtures/
+├── prepare-provekit-wasm.sh
+├── prepare-world-id-wasm.sh
+└── provekit-wasm/
+    ├── export_witness.rs
+    └── lib.rs
 ```
 
-`runner.js` initializes the generated bindings and exposes:
+These scripts are release adapters, not generic source-rewriting utilities.
+They verify the exact dependency and workspace layout of their pinned
+downstream commits before changing anything.
 
-```js
-await window.mobench.run({
-  function: "my_crate::my_benchmark",
-  iterations: 20,
-  warmup: 5,
-});
-```
+The ProveKit adapter:
 
-The result is the existing `RunnerReport` JSON shape. CPU and memory resource
-fields remain absent for browser WASM because the native resource samplers are
-not comparable across browser engines.
+- patches `mobench-sdk` to the exact release-candidate checkout;
+- keeps witness-generation and parallel prover features native-only;
+- generates the complete passport age-check fixture outside measurement;
+- serializes and embeds its deterministic witness because ACVM witness
+  generation is unavailable on `wasm32`;
+- exposes a browser-only benchmark that measures `prove_with_witness`.
 
-Configure a non-default CLI path in `mobench.toml` when needed:
+The world-id-protocol adapter patches the candidate SDK, enables embedded
+proving keys, removes UniFFI-only browser-incompatible code, and retains
+`zk_mobile_bench::bench_nullifier_proving_only`.
 
-```toml
-[web]
-wasm_bindgen = "/trusted/path/to/wasm-bindgen"
-```
-
-The initial web slice builds and locally serves as a static bundle.
-BrowserStack web execution uses the separate Automate WebDriver transport, not
-the existing App Automate Espresso/XCUITest endpoints. Programmatic callers can
-use `mobench::browserstack_automate::BrowserStackAutomateClient` and
-`AutomateRunRequest`; the complete-session operation always attempts to mark
-and close a created session. The same flow is available from the CLI:
-
-```bash
-cargo mobench run-web \
-  --url https://bench.example.test/ \
-  --function my_crate::my_benchmark \
-  --browser chrome \
-  --os "OS X" \
-  --os-version Sequoia
-```
-
-For a private URL, start BrowserStack Local separately and pass its identifier
-with `--local-identifier`. Automatic Local binary lifecycle management is not
-yet wired.
+Both adapters must run only against the SHAs and toolchains pinned by the
+release workflow. If a downstream pin changes, review and update the adapter
+against that exact checkout and rebuild it from fresh state.
 
 ## Verify Artifacts
 
@@ -286,9 +241,6 @@ cargo mobench verify \
 
 - BrowserStack upload timeout: build with `--release`.
 - Missing Android target: run `rustup target add <target>`.
-- Missing WASM target: run `rustup target add wasm32-unknown-unknown`.
-- `wasm-bindgen` schema mismatch: install the CLI version named in the error or
-  update the locked Rust dependency to the installed CLI version.
 - Missing NDK tools: set `ANDROID_NDK_HOME` or install the NDK through Android
   Studio.
 - Unsigned iOS framework: rerun `cargo mobench build --target ios` or sign the

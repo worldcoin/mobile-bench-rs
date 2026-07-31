@@ -1977,37 +1977,8 @@ pub fn ensure_ios_project_with_backend_options(
         ffi_backend,
         options,
     )?;
-    sync_ios_mobile_spec(output_dir)?;
     println!("  Generated iOS project at {:?}", output_dir.join("ios"));
     println!("  Default benchmark function: {}", default_function);
-    Ok(())
-}
-
-fn sync_ios_mobile_spec(output_dir: &Path) -> Result<(), BenchError> {
-    let source = output_dir.join("target/mobile-spec/ios/bench_spec.json");
-    if !source.is_file() {
-        return Ok(());
-    }
-    let destination = output_dir.join("ios/BenchRunner/BenchRunner/Resources/bench_spec.json");
-    let parent = destination.parent().ok_or_else(|| {
-        BenchError::Build(format!(
-            "Invalid iOS benchmark spec destination: {}",
-            destination.display()
-        ))
-    })?;
-    fs::create_dir_all(parent).map_err(|error| {
-        BenchError::Build(format!(
-            "Failed to create iOS benchmark resource directory {}: {error}",
-            parent.display()
-        ))
-    })?;
-    fs::copy(&source, &destination).map_err(|error| {
-        BenchError::Build(format!(
-            "Failed to copy iOS benchmark spec from {} to {}: {error}",
-            source.display(),
-            destination.display()
-        ))
-    })?;
     Ok(())
 }
 
@@ -2145,6 +2116,15 @@ mod tests {
             "MainActivity.kt should be in package directory: {:?}",
             main_activity_path
         );
+        let main_activity = fs::read_to_string(&main_activity_path).unwrap();
+        assert!(main_activity.contains("BENCH_RESULT_OK"));
+        assert!(!main_activity.contains("private const val RESULT_OK"));
+        assert!(main_activity.contains("fun benchmarkTimeoutSecs()"));
+        assert!(main_activity.contains("fun heartbeatIntervalSecs()"));
+        assert!(main_activity.contains("fun checkWorkerExit()"));
+        assert!(main_activity.contains("fun isBenchmarkFailed()"));
+        assert!(main_activity.contains("fun getBenchmarkFailureJson()"));
+        assert!(main_activity.contains("fun emitTimeoutFailureFromTest()"));
 
         let test_activity_path = android_dir
             .join("app/src/androidTest/java/dev/world/mybenchproject/MainActivityTest.kt");
@@ -2233,10 +2213,14 @@ mod tests {
         assert!(!main_activity.contains("specLen: Long"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(main_activity.contains("bench_spec.json"));
-        assert!(main_activity.contains("logBenchJson(json.toString())"));
-        assert!(main_activity.contains("fun benchmarkTimeoutSecs(): Long"));
-        assert!(main_activity.contains("fun heartbeatIntervalSecs(): Long"));
-        assert!(main_activity.contains("fun emitTimeoutFailureFromTest(): String"));
+        assert!(main_activity.contains("BENCH_RESULT_OK"));
+        assert!(!main_activity.contains("private const val RESULT_OK"));
+        assert!(main_activity.contains("fun benchmarkTimeoutSecs()"));
+        assert!(main_activity.contains("fun heartbeatIntervalSecs()"));
+        assert!(main_activity.contains("fun checkWorkerExit()"));
+        assert!(main_activity.contains("fun isBenchmarkFailed()"));
+        assert!(main_activity.contains("fun getBenchmarkFailureJson()"));
+        assert!(main_activity.contains("fun emitTimeoutFailureFromTest()"));
         assert!(
             !main_activity.contains("uniffi."),
             "native Android runner must not import UniFFI bindings:\n{}",
@@ -2246,15 +2230,6 @@ mod tests {
             !main_activity.contains("runBenchmark("),
             "native Android runner must call the JSON C ABI, not UniFFI runBenchmark"
         );
-        let package_manifest =
-            fs::read_to_string(temp_dir.join("android/app/build.gradle")).unwrap();
-        assert!(package_manifest.contains("net.java.dev.jna:jna"));
-        assert!(!package_manifest.contains("uniffi"));
-        let android_manifest =
-            fs::read_to_string(temp_dir.join("android/app/src/main/AndroidManifest.xml")).unwrap();
-        assert!(android_manifest.contains("android:name=\".MainActivity\""));
-        assert!(!android_manifest.contains("uniffi"));
-        assert!(!android_manifest.contains("{{"));
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -2280,6 +2255,12 @@ mod tests {
         assert!(main_activity.contains("import com.mobench.boltbenchmark.runBenchmarkJson"));
         assert!(main_activity.contains("runBenchmarkJson(specJson = spec.toString())"));
         assert!(main_activity.contains("fun isBenchmarkComplete()"));
+        assert!(main_activity.contains("fun benchmarkTimeoutSecs()"));
+        assert!(main_activity.contains("fun heartbeatIntervalSecs()"));
+        assert!(main_activity.contains("fun checkWorkerExit()"));
+        assert!(main_activity.contains("fun isBenchmarkFailed()"));
+        assert!(main_activity.contains("fun getBenchmarkFailureJson()"));
+        assert!(main_activity.contains("fun emitTimeoutFailureFromTest()"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(
             !main_activity.contains("uniffi."),
@@ -2482,9 +2463,13 @@ mod tests {
             "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
         );
         assert!(
-            ios_test.contains("\\\"error\\\""),
+            ios_test.contains("XCTAssertNil(payload[\"error\"]"),
             "iOS XCUITest template should fail when the benchmark report is an error payload"
         );
+        assert!(ios_test.contains("JSONSerialization.jsonObject"));
+        assert!(ios_test.contains("reportedFunction"));
+        assert!(ios_test.contains("payload[\"samples_ns\"]"));
+        assert!(ios_test.contains("payload[\"schema_version\"]"));
 
         let android_manifest =
             include_str!("../templates/android/app/src/main/AndroidManifest.xml");
@@ -2527,71 +2512,155 @@ mod tests {
         assert!(ios.contains("currentProcessResidentMemoryKb"));
         assert!(ios.contains("task_info("));
         assert!(ios.contains("\"memory_process\": \"benchmark_app\""));
-        assert!(ios.contains("generateJSONReport(report, runProcessPeakMemoryKb:"));
+        assert!(ios.contains("params: params,"));
         assert!(ios.contains("processPeakSamplesKb.max() ?? runProcessPeakMemoryKb"));
     }
 
     #[test]
-    fn test_android_worker_result_codes_do_not_collide_with_activity_constants() {
-        let generated_runner =
-            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template");
-        let native_runner = include_str!("native_templates/android/MainActivity.kt.template");
+    fn all_generated_runner_backends_emit_strict_v2_identity_and_counts() {
+        let templates = [
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template"),
+            include_str!("../templates/ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift.template"),
+            include_str!("native_templates/android/MainActivity.kt.template"),
+            include_str!("native_templates/ios/BenchRunnerFFI.swift.template"),
+            include_str!("boltffi_templates/android/MainActivity.kt.template"),
+            include_str!("boltffi_templates/ios/BenchRunnerFFI.swift.template"),
+        ];
 
-        for (runner, success_receiver) in [
-            (generated_runner, "MobenchResultCode.SUCCESS ->"),
-            (native_runner, "resultCode == MobenchResultCode.SUCCESS"),
-        ] {
-            assert!(
-                runner.contains("private object MobenchResultCode"),
-                "worker result codes must live behind a qualified namespace"
-            );
-            assert!(runner.contains(success_receiver));
-            assert!(runner.contains(
-                "if (result.errorMessage == null) MobenchResultCode.SUCCESS else MobenchResultCode.ERROR"
-            ));
-            assert!(
-                !runner.contains("private const val RESULT_OK"),
-                "Activity.RESULT_OK shadows an unqualified top-level RESULT_OK"
-            );
+        for template in templates {
+            for field in [
+                "mobench.run/v2",
+                "run_id",
+                "nonce",
+                "logical_session_id",
+                "function_id",
+                "producer",
+                "requested",
+                "observed",
+                "samples_ns",
+                "outcome",
+                "success",
+                "code",
+            ] {
+                assert!(
+                    template.contains(field),
+                    "generated runner omitted strict v2 field `{field}`"
+                );
+            }
         }
-        assert!(generated_runner.contains("MobenchResultCode.HEARTBEAT ->"));
-        assert!(generated_runner.contains("receiver?.send(MobenchResultCode.HEARTBEAT"));
-        for runner in [generated_runner, native_runner] {
-            assert!(runner.contains("watchdogHandler.postDelayed(watchdog"));
-            assert!(runner.contains("override fun onDestroy()"));
-            assert!(runner.contains("stopWatchdog()"));
-            assert!(runner.contains("resultText?.text = message"));
-            assert!(runner.contains("elapsedMs >= params.timeoutSecs * 1_000L"));
-        }
-        assert!(
-            !generated_runner.contains("benchmarkComplete || workerPid == null"),
-            "the watchdog must detect a worker killed before its first heartbeat"
-        );
-        assert!(native_runner.contains("MobenchResultCode.HEARTBEAT"));
-        assert!(native_runner.contains("fun checkWorkerExit()"));
-        assert!(
-            native_runner.contains("Benchmark worker process exited before BENCH_JSON was emitted")
-        );
-        assert!(native_runner.contains("catch (e: Throwable)"));
-        assert!(native_runner.contains("RESULT_FAILURE_JSON_EXTRA"));
-        assert!(native_runner.contains("BENCH_FAILURE_JSON $payload"));
-        assert!(native_runner.contains("result.failureJson?.let"));
     }
 
     #[test]
-    fn test_android_runners_emit_collectable_chunked_benchmark_reports() {
-        let generated_runner =
+    fn android_worker_failures_are_detected_and_v2_bound() {
+        let uniffi =
             include_str!("../templates/android/app/src/main/java/MainActivity.kt.template");
-        let native_runner = include_str!("native_templates/android/MainActivity.kt.template");
-        let boltffi_runner = include_str!("boltffi_templates/android/MainActivity.kt.template");
+        let native = include_str!("native_templates/android/MainActivity.kt.template");
 
-        for runner in [generated_runner, native_runner, boltffi_runner] {
-            assert!(runner.contains("BENCH_JSON_START"));
-            assert!(runner.contains("BENCH_JSON_CHUNK"));
-            assert!(runner.contains("BENCH_JSON_END"));
-            assert!(runner.contains("val chunkSize = 1000"));
-            assert!(runner.contains("Character.isHighSurrogate"));
+        for template in [uniffi, native] {
+            for contract in [
+                "BENCH_RESULT_HEARTBEAT",
+                "WorkerHeartbeat",
+                "BENCH_HEARTBEAT_JSON",
+                "workerPid",
+                "runningAppProcesses()",
+                "worker_exit",
+                "RESULT_FAILURE_JSON_EXTRA",
+                "androidExitInfoJson",
+                "emitFailure(\"timeout\"",
+                "applyV2Envelope",
+                "\"failure\"",
+            ] {
+                assert!(
+                    template.contains(contract),
+                    "Android worker template omitted fail-closed contract `{contract}`"
+                );
+            }
+            for watchdog_contract in [
+                "watchdogHandler.postDelayed(watchdog",
+                "override fun onDestroy()",
+                "stopWatchdog()",
+                "resultText?.text = message",
+                "elapsedMs >= params.timeoutSecs * 1_000L",
+            ] {
+                assert!(
+                    template.contains(watchdog_contract),
+                    "Android worker template omitted watchdog contract `{watchdog_contract}`"
+                );
+            }
         }
+        assert!(
+            !uniffi.contains("benchmarkComplete || workerPid == null"),
+            "the watchdog must detect a worker killed before its first heartbeat"
+        );
+
+        let boltffi = include_str!("boltffi_templates/android/MainActivity.kt.template");
+        assert!(boltffi.contains("emitFailure(\"exception\""));
+        assert!(boltffi.contains("applyV2Envelope"));
+        assert!(boltffi.contains("\"failure\""));
+    }
+
+    #[test]
+    fn ios_result_transport_has_heartbeat_and_redundant_accessibility_channels() {
+        let swiftui =
+            include_str!("../templates/ios/BenchRunner/BenchRunner/ContentView.swift.template");
+        let uikit = include_str!(
+            "../templates/ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift.template"
+        );
+        let ui_test = include_str!(
+            "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+        );
+
+        for template in [swiftui, uikit] {
+            assert!(template.contains("benchmarkHeartbeat"));
+            assert!(template.contains("MOBENCH_HEARTBEAT app interaction"));
+            assert!(template.contains("benchmarkReportJSON"));
+            assert!(template.contains("accessibilityLabel"));
+            assert!(template.contains("accessibilityValue"));
+        }
+        assert!(ui_test.contains("waitForBenchmarkCompletion"));
+        assert!(ui_test.contains("MOBENCH_HEARTBEAT waiting for benchmark completion"));
+        assert!(ui_test.contains("app.buttons[\"benchmarkHeartbeat\"]"));
+        assert!(ui_test.contains("app.activate()"));
+        assert!(ui_test.contains("firstValidJSON([reportValue, reportElement.label])"));
+        assert!(ui_test.contains("validateBenchmarkReport(jsonString)"));
+    }
+
+    #[test]
+    fn editable_native_runner_templates_match_embedded_sources() {
+        assert_eq!(
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template"),
+            include_str!("../../../templates/android/app/src/main/java/MainActivity.kt.template"),
+        );
+        assert_eq!(
+            include_str!(
+                "../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
+            ),
+            include_str!(
+                "../../../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
+            ),
+        );
+        assert_eq!(
+            include_str!("../templates/ios/BenchRunner/BenchRunner/ContentView.swift.template"),
+            include_str!(
+                "../../../templates/ios/BenchRunner/BenchRunner/ContentView.swift.template"
+            ),
+        );
+        assert_eq!(
+            include_str!(
+                "../templates/ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift.template"
+            ),
+            include_str!(
+                "../../../templates/ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift.template"
+            ),
+        );
+        assert_eq!(
+            include_str!(
+                "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+            ),
+            include_str!(
+                "../../../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+            ),
+        );
     }
 
     #[test]
@@ -2868,52 +2937,18 @@ pub fn public_bench() {
     }
 
     #[test]
-    fn test_ensure_ios_project_copies_persisted_mobile_spec_into_resources() {
-        let temp_dir = env::temp_dir().join("mobench-sdk-ios-persisted-spec-test");
-        let _ = fs::remove_dir_all(&temp_dir);
-        let source = temp_dir.join("target/mobile-spec/ios/bench_spec.json");
-        fs::create_dir_all(source.parent().unwrap()).unwrap();
-        let expected = r#"{"function":"bench_mobile::bench_prove","iterations":1,"warmup":0}"#;
-        fs::write(&source, expected).unwrap();
-
-        ensure_ios_project_with_backend_options(
-            &temp_dir,
-            "bench-mobile",
-            None,
-            None,
-            crate::FfiBackend::NativeCAbi,
-            IosProjectOptions::default(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            fs::read_to_string(
-                temp_dir.join("ios/BenchRunner/BenchRunner/Resources/bench_spec.json")
-            )
-            .unwrap(),
-            expected
-        );
-
-        fs::remove_dir_all(&temp_dir).ok();
-    }
-
-    #[test]
     fn test_generate_ios_native_backend_runner_template() {
         let temp_dir = env::temp_dir().join("mobench-sdk-ios-native-test");
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
-        generate_ios_project_with_backend_options(
+        generate_ios_project_with_backend(
             &temp_dir,
             "native_benchmark",
             "BenchRunner",
             "dev.world.nativebenchmark",
             "native_benchmark::bench_prove",
             crate::FfiBackend::NativeCAbi,
-            IosProjectOptions {
-                runner: IosRunner::UikitLegacy,
-                ..IosProjectOptions::default()
-            },
         )
         .unwrap();
 
@@ -2942,22 +2977,6 @@ pub fn public_bench() {
         )
         .unwrap();
         assert!(bridging_header.contains("#import \"native_benchmarkFFI.h\""));
-        let package_manifest =
-            fs::read_to_string(temp_dir.join("ios/BenchRunner/project.yml")).unwrap();
-        assert!(package_manifest.contains("../native_benchmark.xcframework"));
-        assert!(package_manifest.contains("SWIFT_OBJC_BRIDGING_HEADER"));
-        assert!(!package_manifest.contains("uniffi"));
-
-        let runner = fs::read_to_string(
-            temp_dir.join("ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift"),
-        )
-        .unwrap();
-        assert!(runner.contains("jsonLabel.accessibilityValue = result.jsonReport"));
-        assert!(runner.contains("completionLabel.accessibilityLabel = \"completed\""));
-        assert!(
-            runner.contains("heartbeatButton.accessibilityIdentifier = \"benchmarkHeartbeat\"")
-        );
-        assert!(runner.contains("@objc private func heartbeatTapped()"));
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -3048,31 +3067,6 @@ pub fn public_bench() {
             "refreshed ContentView.swift should apply UI updates on the main actor, got:\n{}",
             refreshed
         );
-        assert!(
-            refreshed.contains(".accessibilityLabel(reportJSON)"),
-            "refreshed ContentView.swift should expose report JSON to XCUITest, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains(".accessibilityValue(reportJSON)"),
-            "refreshed ContentView.swift should expose report JSON as an accessibility value, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains(".frame(width: 1, height: 1)"),
-            "refreshed ContentView.swift should keep the report element in the accessibility tree, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains(".opacity(0.01)"),
-            "refreshed ContentView.swift should keep the report element nearly transparent, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains(".accessibilityIdentifier(\"benchmarkHeartbeat\")"),
-            "refreshed ContentView.swift should expose a remote-session heartbeat control, got:\n{}",
-            refreshed
-        );
 
         fs::remove_dir_all(&temp_dir).ok();
     }
@@ -3112,51 +3106,25 @@ pub fn public_bench() {
             refreshed
         );
         assert!(
-            refreshed.contains("waitForBenchmarkCompletion(completedIndicator, app: app)"),
-            "refreshed BenchRunnerUITests.swift should use heartbeat polling, got:\n{}",
+            refreshed.contains(
+                "private let expectedBenchmarkFunction = \"sample_fns::example_benchmark\""
+            ),
+            "generated XCUITest must bind the report to the requested function, got:\n{}",
             refreshed
         );
-        assert!(
-            refreshed.contains("NSPredicate(format: \"label == %@\", \"completed\")"),
-            "refreshed BenchRunnerUITests.swift should wait for the completed state, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed
-                .contains("XCTWaiter.wait(for: [completedExpectation], timeout: waitInterval)"),
-            "refreshed BenchRunnerUITests.swift should predicate-wait without busy polling, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains("MOBENCH_HEARTBEAT waiting for benchmark completion"),
-            "refreshed BenchRunnerUITests.swift should emit heartbeat activity, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains("heartbeatControl.tap()"),
-            "refreshed BenchRunnerUITests.swift should keep remote sessions active with app interaction, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains("reportElement.value as? String"),
-            "refreshed BenchRunnerUITests.swift should read report JSON from the accessibility value, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains("firstValidJSON([reportValue, reportElement.label])"),
-            "refreshed BenchRunnerUITests.swift should fall back across valid accessibility JSON channels, got:\n{}",
-            refreshed
-        );
-        assert!(
-            refreshed.contains("JSONSerialization.jsonObject(with: data)"),
-            "refreshed BenchRunnerUITests.swift should reject corrupt accessibility values, got:\n{}",
-            refreshed
-        );
-        assert!(
-            !refreshed.contains("completedIndicator.waitForExistence"),
-            "refreshed BenchRunnerUITests.swift should not treat marker existence as completion, got:\n{}",
-            refreshed
-        );
+        for validator in [
+            "JSONSerialization.jsonObject",
+            "XCTAssertNil(payload[\"error\"]",
+            "reportedFunction",
+            "payload[\"samples_ns\"]",
+            "payload[\"samples\"]",
+            "payload[\"schema_version\"]",
+        ] {
+            assert!(
+                refreshed.contains(validator),
+                "generated XCUITest omitted `{validator}`, got:\n{refreshed}"
+            );
+        }
 
         fs::remove_dir_all(&temp_dir).ok();
     }

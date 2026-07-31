@@ -1,0 +1,29 @@
+[package]
+name = "mobench-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors = ["Dominik Clemente - dcbuilder.eth <dc@world.org>"]
+description = "Provider-free runtime statistics and resource primitives for mobench"
+repository = "https://github.com/worldcoin/mobile-bench-rs"
+documentation = "https://docs.rs/mobench-runtime"
+keywords = ["benchmark", "statistics", "mobile", "performance"]
+categories = ["development-tools::profiling", "development-tools::testing"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[features]
+bench-support = []
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1"
+
+[[bench]]
+name = "distribution"
+harness = false
+required-features = ["bench-support"]
