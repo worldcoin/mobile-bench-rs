@@ -1281,10 +1281,20 @@ mod tests {
     #[cfg(unix)]
     fn write_executable_script(directory: &Path, name: &str, body: &str) -> PathBuf {
         let path = directory.join(name);
-        fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).expect("write test script");
-        let mut permissions = fs::metadata(&path).expect("script metadata").permissions();
+        // Publish the executable atomically after writing and chmod'ing it. On
+        // Linux, executing a path while another test process is still mutating
+        // that same inode can transiently return ETXTBSY ("Text file busy").
+        // Keeping the writable staging inode private avoids making unrelated
+        // process-runner tests depend on filesystem timing.
+        let staging_path = directory.join(format!(".{name}.staging"));
+        fs::write(&staging_path, format!("#!/bin/sh\nset -eu\n{body}\n"))
+            .expect("write test script");
+        let mut permissions = fs::metadata(&staging_path)
+            .expect("script metadata")
+            .permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(&path, permissions).expect("make test script executable");
+        fs::set_permissions(&staging_path, permissions).expect("make test script executable");
+        fs::rename(&staging_path, &path).expect("publish test script");
         path
     }
 
