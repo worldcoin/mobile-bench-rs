@@ -1,6 +1,6 @@
 # Build Guide
 
-Current published release: **0.1.47**. The WebAssembly commands below are part
+Current published release: **0.1.49**. The WebAssembly commands below are part
 of the unreleased 0.2 parity candidate.
 
 Use `cargo mobench build --target <android|ios|both|web>` for repository

@@ -6,7 +6,6 @@ const CONTRACT: &str = include_str!("fixtures/contracts/v0.1.43/cli-help.json");
 
 #[derive(Debug, Deserialize)]
 struct HelpContract {
-    version: String,
     commands: Vec<HelpCommand>,
 }
 
@@ -70,15 +69,17 @@ fn v0_1_43_help_tree_and_cargo_wrapper_are_stable() {
 }
 
 #[test]
-fn v0_1_43_version_and_exit_streams_are_stable() {
-    let contract: HelpContract = serde_json::from_str(CONTRACT).expect("valid help contract");
+fn current_version_and_exit_streams_are_stable() {
     for binary in [
         env!("CARGO_BIN_EXE_mobench"),
         env!("CARGO_BIN_EXE_cargo-mobench"),
     ] {
         let output = invoke(binary, &[], "--version");
         let stdout = assert_clean_success(&output, binary, &[]);
-        assert_eq!(stdout.trim(), format!("mobench {}", contract.version));
+        assert_eq!(
+            stdout.trim(),
+            format!("mobench {}", env!("CARGO_PKG_VERSION"))
+        );
     }
 }
 

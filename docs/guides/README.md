@@ -1,6 +1,6 @@
 # mobench Guides
 
-Current published release line: **0.1.47**. Web commands documented in this
+Current published release line: **0.1.49**. Web commands documented in this
 branch belong to the unreleased 0.2 parity candidate.
 
 These guides cover the current mobench CLI, SDK, generated mobile runners,

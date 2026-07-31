@@ -1,4 +1,4 @@
-//! Compile-time receipt for the published v0.1.43 `mobench` Rust surface.
+//! Compile-time receipt preserving the published v0.1.43 `mobench` Rust surface.
 
 use mobench::config::{
     AndroidConfig, BenchmarksConfig, BrowserStackConfig, IosConfig, MobenchConfig, ProjectConfig,
@@ -117,7 +117,7 @@ fn v0_1_43_config_exports_remain_nameable() {
 }
 
 #[test]
-fn adr_000_baseline_receipt_matches_the_workspace_contract() {
+fn adr_000_historical_baseline_receipt_remains_valid() {
     let receipt: BaselineReceipt = serde_json::from_str(BASELINE).expect("valid ADR-000 receipt");
     assert_eq!(receipt.implementation_revision.len(), 40);
     assert_eq!(receipt.default_branch, "main");
@@ -125,10 +125,10 @@ fn adr_000_baseline_receipt_matches_the_workspace_contract() {
     assert_eq!(receipt.release_oracle.revision.len(), 40);
     assert!(!receipt.release_oracle.draft);
     assert!(!receipt.release_oracle.prerelease);
-    assert_eq!(receipt.published_crates.mobench, env!("CARGO_PKG_VERSION"));
+    assert_eq!(receipt.published_crates.mobench, "0.1.43");
     assert_eq!(receipt.published_crates.mobench_sdk, "0.1.43");
     assert_eq!(receipt.published_crates.mobench_macros, "0.1.43");
-    assert_eq!(receipt.workspace.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(receipt.workspace.version, "0.1.43");
     assert_eq!(receipt.workspace.edition, "2024");
     assert_eq!(receipt.workspace.rust_version, "1.85");
 }

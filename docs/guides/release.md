@@ -1,6 +1,6 @@
 # Release Guide
 
-Current published release line: **0.1.47**. This guide also describes the
+Current published release line: **0.1.49**. This guide also describes the
 unreleased 0.2 parity acceptance gate.
 
 Use this checklist when cutting a mobench workspace release.
@@ -145,7 +145,7 @@ cargo search mobench --limit 5
 Install the published CLI in a clean environment:
 
 ```bash
-cargo install mobench --version 0.1.43
+cargo install mobench --version 0.1.49
 mobench --version
 mobench --help
 ```
@@ -161,8 +161,8 @@ rg -n '<new-version>' README.md CHANGELOG.md RELEASE_NOTES.md docs crates -g '*.
 Tag the published commit:
 
 ```bash
-git tag v0.1.43
-git push origin v0.1.43
+git tag v0.1.49
+git push origin v0.1.49
 ```
 
 Do not add `Co-Authored-By` lines to release commits.
