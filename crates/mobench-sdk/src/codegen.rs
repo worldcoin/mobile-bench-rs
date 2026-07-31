@@ -2225,7 +2225,12 @@ mod tests {
         )
         .unwrap();
         assert!(main_activity.contains("com.sun.jna.Native"));
+        assert!(main_activity.contains("com.sun.jna.NativeLong"));
         assert!(main_activity.contains("mobench_run_benchmark_json"));
+        assert!(main_activity.contains("specLen: NativeLong"));
+        assert!(main_activity.contains("@JvmField var len: NativeLong = NativeLong(0)"));
+        assert!(main_activity.contains("@JvmField var cap: NativeLong = NativeLong(0)"));
+        assert!(!main_activity.contains("specLen: Long"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(main_activity.contains("bench_spec.json"));
         assert!(main_activity.contains("logBenchJson(json.toString())"));
@@ -2551,6 +2556,17 @@ mod tests {
         }
         assert!(generated_runner.contains("MobenchResultCode.HEARTBEAT ->"));
         assert!(generated_runner.contains("receiver?.send(MobenchResultCode.HEARTBEAT"));
+        for runner in [generated_runner, native_runner] {
+            assert!(runner.contains("watchdogHandler.postDelayed(watchdog"));
+            assert!(runner.contains("override fun onDestroy()"));
+            assert!(runner.contains("stopWatchdog()"));
+            assert!(runner.contains("resultText?.text = message"));
+            assert!(runner.contains("elapsedMs >= params.timeoutSecs * 1_000L"));
+        }
+        assert!(
+            !generated_runner.contains("benchmarkComplete || workerPid == null"),
+            "the watchdog must detect a worker killed before its first heartbeat"
+        );
         assert!(native_runner.contains("MobenchResultCode.HEARTBEAT"));
         assert!(native_runner.contains("fun checkWorkerExit()"));
         assert!(

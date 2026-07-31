@@ -304,6 +304,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Core timing module - always available
+pub mod metrics;
 pub mod timing;
 pub mod types;
 
@@ -347,6 +348,7 @@ pub use mobench_macros::benchmark;
 pub use inventory;
 
 // Re-export key registry types for convenience
+pub use metrics::{record_run_u64, record_sample_u64};
 #[cfg(feature = "registry")]
 #[cfg_attr(docsrs, doc(cfg(feature = "registry")))]
 pub use native_c_abi::MobenchBuf;
