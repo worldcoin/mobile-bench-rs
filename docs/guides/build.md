@@ -1,7 +1,7 @@
 # Build Guide
 
-Current published release: **0.1.49**. The WebAssembly commands below are part
-of the unreleased 0.2 parity candidate.
+Current published release: **0.2.0**. The WebAssembly commands below are part
+of the 0.2 release.
 
 Use `cargo mobench build --target <android|ios|both|web>` for repository
 development and CI. The CLI resolves the benchmark crate, builds native Rust

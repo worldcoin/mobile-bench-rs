@@ -1,7 +1,7 @@
 # Release Guide
 
-Current published release line: **0.1.49**. This guide also describes the
-unreleased 0.2 parity acceptance gate.
+Current published release line: **0.2.0**. This guide records the 0.2 parity
+acceptance gate and the dependency-ordered workspace publication.
 
 Use this checklist when cutting a mobench workspace release.
 
@@ -106,9 +106,15 @@ intentional historical note is being added.
 
 ## Versioning
 
-All published crates should use the same release version:
+All published workspace crates should use the same release version:
 
 - `mobench-macros`
+- `mobench-process`
+- `mobench-runtime`
+- `mobench-artifacts`
+- `mobench-domain`
+- `mobench-provider`
+- `mobench-report`
 - `mobench-sdk`
 - `mobench`
 
@@ -128,6 +134,12 @@ Publish dependencies before dependents:
 
 ```bash
 cargo publish -p mobench-macros
+cargo publish -p mobench-process
+cargo publish -p mobench-runtime
+cargo publish -p mobench-artifacts
+cargo publish -p mobench-domain
+cargo publish -p mobench-provider
+cargo publish -p mobench-report
 cargo publish -p mobench-sdk
 cargo publish -p mobench
 ```
@@ -145,7 +157,7 @@ cargo search mobench --limit 5
 Install the published CLI in a clean environment:
 
 ```bash
-cargo install mobench --version 0.1.49
+cargo install mobench --version 0.2.0
 mobench --version
 mobench --help
 ```
@@ -155,14 +167,14 @@ copy-pasted old-version install snippets:
 
 ```bash
 rg -n '<previous-version>|mobench-sdk = "<previous-version>"' README.md docs crates -g '*.md'
-rg -n '<new-version>' README.md CHANGELOG.md RELEASE_NOTES.md docs crates -g '*.md'
+rg -n '0\.2\.0' README.md CHANGELOG.md RELEASE_NOTES.md docs crates -g '*.md'
 ```
 
 Tag the published commit:
 
 ```bash
-git tag v0.1.49
-git push origin v0.1.49
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Do not add `Co-Authored-By` lines to release commits.

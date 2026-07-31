@@ -1,35 +1,96 @@
 # Release Notes
 
-`mobench`, `mobench-sdk`, and `mobench-macros` were published rapidly during
-bring-up. Treat only the current release line as supported for new integrations
-unless an older release is explicitly called out. For a concise
-release-by-release change list, see `CHANGELOG.md`.
+The 0.2 release publishes the CLI, SDK, macro, and rewrite foundation crates
+together. Treat only the current release line as supported for new integrations
+unless an older release is explicitly called out. For a concise release-by-
+release change list, see `CHANGELOG.md`.
 
 Crates.io release pages:
 
 - [mobench](https://crates.io/crates/mobench)
 - [mobench-sdk](https://crates.io/crates/mobench-sdk)
 - [mobench-macros](https://crates.io/crates/mobench-macros)
+- [mobench-runtime](https://crates.io/crates/mobench-runtime)
+- [mobench-domain](https://crates.io/crates/mobench-domain)
+- [mobench-process](https://crates.io/crates/mobench-process)
+- [mobench-artifacts](https://crates.io/crates/mobench-artifacts)
+- [mobench-provider](https://crates.io/crates/mobench-provider)
+- [mobench-report](https://crates.io/crates/mobench-report)
 
-## Unreleased
+## v0.2.0 - 2026-07-31
 
-Status: 0.2 integration candidate; not yet released.
+Status: current supported release.
 
-The 0.2 architecture now carries the secure prebuilt BrowserStack boundary,
-native runner reliability behavior, and WASM/browser surface from the v0.1.47
-and PR #42 authority. The implementation preserves the 0.2 runtime, domain,
-report, process, artifact, and provider crates rather than merging the 0.1
-monolith.
+Mobench 0.2 is a clean rewrite that preserves the v0.1 feature contract while
+splitting the implementation into explicit, testable workspace boundaries. All
+nine workspace crates are published at 0.2.0 so downstream users can depend on
+the CLI, SDK, or a focused runtime/reporting boundary independently.
 
-The browser surface includes browser-safe timing, `runBenchmarkJson`, a
-version-matched `wasm-bindgen` builder, a dedicated module worker, `build
---target web`, `run-web`, and direct W3C Automate transport with bounded
-timeouts, cleanup, Local binding, and credential redaction.
+### Benchmark authoring and execution
 
-Release acceptance remains evidence-gated. ProveKit and world-id-protocol must
-both pass the required two-device Android matrix, two-device iOS matrix, macOS
-Safari, Windows Chrome, iOS Safari, and Android Chrome at low samples on the
-exact candidate SHA. See `docs/0.2-feature-parity-checklist.md`.
+- Preserved `#[benchmark]` registration, compile-time signature validation,
+  inventory discovery, setup/teardown, per-iteration setup, warmup, measured
+  samples, and custom scalar metrics.
+- Preserved host-only, local Android/iOS, and BrowserStack execution through the
+  `mobench` CLI and its programmatic `RunRequest`/`RunResult` API.
+- Preserved config-first project resolution, device profiles and structured
+  device matrices, per-platform function selection, custom toolchains/targets,
+  release builds, split-sample merging, fetch/summary commands, and doctor/check
+  prerequisite diagnostics.
+
+### Generated runners and FFI
+
+- Preserved generated Android and iOS projects with synchronized editable and
+  embedded templates, UniFFI compatibility, BoltFFI compatibility, and the
+  direct `native-c-abi` JSON runner backend.
+- Added Android-native-width C ABI `usize` fields for 32-bit devices, panic
+  diagnostics, custom metrics, worker-death watchdogs, fail-closed result
+  handoff, and reliable iOS heartbeat/accessibility result transport.
+- Preserved strict requested/observed report identity and run-scoped benchmark
+  configuration embedding in generated mobile artifacts.
+
+### Browser and WASM
+
+- Added browser-safe timing and resource behavior, `runBenchmarkJson`, a
+  version-matched `wasm-bindgen` builder, `build --target web`, and `run-web`.
+- Added a dedicated module worker so synchronous proving does not block browser
+  polling, plus synchronized editable and embedded web templates.
+- Added direct W3C BrowserStack Automate transport with BrowserStack Local
+  lifecycle, bounded connect/request/session timeouts, cleanup, credential
+  redaction, and deterministic artifact handling.
+- Added a release gate for both Rust-source downstream WASM adapters and the
+  published `@worldcoin/provekit` browser SDK. The npm lane proves and verifies
+  through the public SDK API and rejects a tampered proof.
+
+### Security, artifacts, reports, and profiling
+
+- Split reusable CI into secretless prepare jobs and credentialed prebuilt-only
+  execution. Handoffs are enumerated, hashed, immutable, and checked against
+  the exact candidate SHA; caller hooks, dependencies, toolchains, and FFI
+  customization never run with provider credentials.
+- Added explicit runtime, domain, process, provider, report, and artifact
+  crates with bounded counts, strict v2 report envelopes, subprocess
+  supervision, context-safe Markdown/CSV/GitHub rendering, atomic immutable
+  publication, manifests, leases, recovery, latest snapshots, and retention.
+- Preserved JSON, Markdown, CSV, SVG plot, PR/check-run, trace-event, and local
+  native profiling outputs, including Android `simpleperf`, iOS simulator
+  `sample`, symbol caches, flamegraphs, semantic phases, and profile diffs.
+  BrowserStack native stack/flamegraph profiling remains explicitly unsupported.
+
+### Compatibility and acceptance
+
+- Feature parity is tracked against v0.1.49, including the v0.1.40-v0.1.49
+  additions, native Android reliability fixes, FFI backends, reporting/resource
+  contracts, profiling, secure reusable workflows, and BrowserStack behavior.
+- The exact candidate passed the full 40-job release gate in run
+  [30652763040](https://github.com/worldcoin/mobile-bench-rs/actions/runs/30652763040):
+  two Android and two iOS devices for ProveKit and world-id-protocol, plus
+  macOS Safari, Windows Chrome, iOS Safari, and Android Chrome for both
+  downstream WASM lanes and the `@worldcoin/provekit` npm lane.
+- Local acceptance includes locked workspace tests, formatting, Clippy,
+  workflow security tests, actionlint, fresh pinned downstream WASM builds, and
+  template synchronization checks. See
+  [`docs/0.2-feature-parity-checklist.md`](docs/0.2-feature-parity-checklist.md).
 
 ## v0.1.43
 
@@ -170,7 +231,9 @@ consolidation of old `mobench-runner` functionality into `mobench-sdk`.
 
 | Version | Published | Published crates | Status |
 | --- | --- | --- | --- |
-| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Current supported release |
+| `v0.2.0` | 2026-07-31 | All nine workspace crates at `0.2.0` | Current supported release |
+| `v0.1.49` | 2026-07-30 | `mobench 0.1.49`, `mobench-sdk 0.1.49`, `mobench-macros 0.1.49` | Superseded by `v0.2.0`; compatibility baseline |
+| `v0.1.43` | 2026-07-05 | `mobench 0.1.43`, `mobench-sdk 0.1.43`, `mobench-macros 0.1.43` | Superseded by `v0.1.49` |
 | `v0.1.42` | 2026-06-29 | `mobench 0.1.42`, `mobench-sdk 0.1.42`, `mobench-macros 0.1.42` | Superseded by `v0.1.43` |
 | `v0.1.41` | 2026-05-14 | `mobench 0.1.41`, `mobench-sdk 0.1.41`, `mobench-macros 0.1.41` | Superseded by `v0.1.42` |
 | `v0.1.37` | 2026-04-27 | `mobench 0.1.37`, `mobench-sdk 0.1.37`, `mobench-macros 0.1.37` | Superseded by `v0.1.41` |

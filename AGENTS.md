@@ -10,7 +10,7 @@ toolkit. It lets benchmark authors define Rust benchmarks once, build generated
 Android/iOS runners, run host-only/local/BrowserStack benchmark jobs, produce
 stable CI artifacts, and run local native profiling sessions.
 
-Current workspace and crates.io release line: **v0.1.43**.
+Current workspace and crates.io release line: **v0.2.0**.
 
 Published crates:
 
@@ -21,6 +21,18 @@ Published crates:
   helpers, UniFFI compatibility, and native C ABI support.
 - [`mobench-macros`](https://crates.io/crates/mobench-macros): `#[benchmark]`
   proc macro.
+- [`mobench-runtime`](https://crates.io/crates/mobench-runtime): bounded counts,
+  distributions, and resource aggregation.
+- [`mobench-domain`](https://crates.io/crates/mobench-domain): strict report
+  envelopes and mobile framing.
+- [`mobench-process`](https://crates.io/crates/mobench-process): subprocess
+  supervision and provenance.
+- [`mobench-artifacts`](https://crates.io/crates/mobench-artifacts): isolated,
+  immutable artifact publication.
+- [`mobench-provider`](https://crates.io/crates/mobench-provider): provider
+  lifecycle and execution state.
+- [`mobench-report`](https://crates.io/crates/mobench-report): context-safe
+  Markdown, CSV, and GitHub report rendering.
 
 All packages are MIT licensed by World Foundation, 2026.
 

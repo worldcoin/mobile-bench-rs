@@ -2,7 +2,7 @@
 
 Status: current source-of-truth product/API specification.
 
-Release line: `0.1.43`.
+Release line: `0.2.0`.
 
 Last updated: 2026-07-15.
 
@@ -12,13 +12,20 @@ mobench. Historical design proposals are intentionally excluded.
 
 ## Product Scope
 
-mobench is a Rust mobile benchmarking toolkit with three published crates:
+mobench is a Rust mobile and browser benchmarking toolkit with nine published
+workspace crates:
 
 - `mobench`: CLI orchestration and programmatic CLI API.
 - `mobench-sdk`: timing harness, benchmark registry, generated runner support,
   Android/iOS builders, profiling helpers, UniFFI compatibility, and native C
   ABI support.
 - `mobench-macros`: `#[benchmark]` proc macro.
+- `mobench-runtime`: bounded execution counts, distributions, and resources.
+- `mobench-domain`: strict versioned report envelopes.
+- `mobench-process`: subprocess supervision and provenance.
+- `mobench-artifacts`: isolated immutable artifact publication.
+- `mobench-provider`: provider lifecycle and execution state.
+- `mobench-report`: context-safe Markdown, CSV, and GitHub renderers.
 
 mobench supports two product surfaces:
 
@@ -43,7 +50,7 @@ Workspace package defaults:
 - Edition: Rust 2024.
 - MSRV: Rust 1.85.
 - License: MIT.
-- Current version: `0.1.43`.
+- Current version: `0.2.0`.
 
 ## Benchmark Authoring
 

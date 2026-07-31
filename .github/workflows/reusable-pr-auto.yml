@@ -70,6 +70,8 @@ jobs:
           HEAD_SHA_WR: ${{ github.event.workflow_run.head_sha }}
           REPO: ${{ github.repository }}
         run: |
+          # shellcheck disable=SC2129
+          set_output() { printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; }
           # For label events, use the PR directly
           if [ "$EVENT_NAME" = "pull_request" ]; then
             PR_NUMBER="$PR_NUMBER_EVENT"
@@ -81,7 +83,7 @@ jobs:
               --jq ".[] | select(.head.sha == \"${HEAD_SHA}\") | .number" | head -1)
             if [ -z "$PR_NUMBER" ]; then
               echo "::notice::No open PR found for SHA ${HEAD_SHA}, skipping"
-              echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+              set_output "should_dispatch=false"
               exit 0
             fi
           fi
@@ -89,7 +91,7 @@ jobs:
           PR_HEAD_REPO=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')
           if [ "$PR_HEAD_REPO" != "$REPO" ]; then
             echo "::warning::PR #${PR_NUMBER} comes from ${PR_HEAD_REPO}; skipping secret-bearing BrowserStack dispatch"
-            echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+            set_output "should_dispatch=false"
             exit 0
           fi
 
@@ -98,7 +100,7 @@ jobs:
             --jq ".[].name" | grep -qx "$BENCH_LABEL" && echo "true" || echo "false")
           if [ "$HAS_LABEL" != "true" ]; then
             echo "::notice::PR #${PR_NUMBER} does not have '${BENCH_LABEL}' label, skipping"
-            echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+            set_output "should_dispatch=false"
             exit 0
           fi
 
@@ -108,13 +110,13 @@ jobs:
             | head -1)
           if [ "$GATE_STATUS" != "success" ]; then
             echo "::notice::Compile gate '${GATE_WORKFLOW}' not yet passed for ${HEAD_SHA} (status: ${GATE_STATUS:-pending})"
-            echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+            set_output "should_dispatch=false"
             exit 0
           fi
 
-          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
-          echo "should_dispatch=true" >> "$GITHUB_OUTPUT"
+          set_output "pr_number=${PR_NUMBER}"
+          set_output "head_sha=${HEAD_SHA}"
+          set_output "should_dispatch=true"
 
       - name: Dispatch benchmark workflow
         if: steps.pr.outputs.should_dispatch == 'true'

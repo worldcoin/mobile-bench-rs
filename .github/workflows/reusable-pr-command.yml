@@ -55,11 +55,13 @@ jobs:
           AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
           TRUSTED: ${{ inputs.trusted_associations }}
         run: |
+          # shellcheck disable=SC2129
+          set_output() { printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; }
           if echo "$TRUSTED" | tr ',' '\n' | grep -qx "$AUTHOR_ASSOCIATION"; then
-            echo "trusted=true" >> "$GITHUB_OUTPUT"
+            set_output "trusted=true"
           else
             echo "::warning::Untrusted author association: $AUTHOR_ASSOCIATION"
-            echo "trusted=false" >> "$GITHUB_OUTPUT"
+            set_output "trusted=false"
           fi
 
       - name: Parse command
@@ -108,10 +110,10 @@ jobs:
           fi
           warmup="${warmup:-$DEFAULT_WARMUP}"
 
-          echo "platform=${platform}" >> "$GITHUB_OUTPUT"
-          echo "device_profile=${device_profile}" >> "$GITHUB_OUTPUT"
-          echo "iterations=${iterations}" >> "$GITHUB_OUTPUT"
-          echo "warmup=${warmup}" >> "$GITHUB_OUTPUT"
+          set_output "platform=${platform}"
+          set_output "device_profile=${device_profile}"
+          set_output "iterations=${iterations}"
+          set_output "warmup=${warmup}"
 
       - name: Get PR head SHA
         if: steps.trust.outputs.trusted == 'true'
@@ -125,11 +127,11 @@ jobs:
           head_repo=$(gh api "$PR_URL" --jq '.head.repo.full_name')
           if [ "$head_repo" != "$REPO" ]; then
             echo "::warning::PR #${{ github.event.issue.number }} comes from ${head_repo}; skipping secret-bearing BrowserStack dispatch"
-            echo "trusted_head=false" >> "$GITHUB_OUTPUT"
+            set_output "trusted_head=false"
             exit 0
           fi
-          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
-          echo "trusted_head=true" >> "$GITHUB_OUTPUT"
+          set_output "head_sha=${head_sha}"
+          set_output "trusted_head=true"
 
       - name: Dispatch benchmark workflow
         if: steps.trust.outputs.trusted == 'true' && steps.pr.outputs.trusted_head == 'true'

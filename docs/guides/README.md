@@ -1,7 +1,7 @@
 # mobench Guides
 
-Current published release line: **0.1.49**. Web commands documented in this
-branch belong to the unreleased 0.2 parity candidate.
+Current published release line: **0.2.0**. This release includes the WebAssembly
+and BrowserStack Automate surfaces described below.
 
 These guides cover the current mobench CLI, SDK, generated mobile runners,
 BrowserStack execution, CI outputs, artifact fetching, and local native

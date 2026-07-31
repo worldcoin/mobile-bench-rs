@@ -1310,7 +1310,7 @@ dependencies = [
 
 [[package]]
 name = "mobench"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1347,7 +1347,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-artifacts"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "fs2",
  "libc",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-domain"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "mobench-runtime",
  "serde",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-macros"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1382,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-process"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "libc",
  "tempfile",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-provider"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "mobench-process",
  "thiserror 1.0.69",
@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-report"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "mobench-domain",
  "serde",
@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-runtime"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "mobench-sdk"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "include_dir",
@@ -2068,7 +2068,7 @@ dependencies = [
 
 [[package]]
 name = "sample-fns"
-version = "0.1.49"
+version = "0.2.0"
 dependencies = [
  "boltffi",
  "camino",

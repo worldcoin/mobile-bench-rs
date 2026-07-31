@@ -9,9 +9,9 @@ Rust benchmarks on Android, iOS, and WebAssembly, locally or on BrowserStack, wi
 library-first SDK, a `cargo mobench` CLI, config-first project resolution,
 stable CI output contracts, and local native profiling artifacts.
 
-Current crates.io release line: **v0.1.47**. This branch is the unreleased 0.2
-architecture and parity candidate; its completion status is tracked in
-[`docs/0.2-feature-parity-checklist.md`](docs/0.2-feature-parity-checklist.md).
+Current crates.io release line: **v0.2.0**. The 0.2 release is the clean
+architecture rewrite with feature parity through v0.1.49; its acceptance
+evidence is tracked in [`docs/0.2-feature-parity-checklist.md`](docs/0.2-feature-parity-checklist.md).
 
 ## What It Provides
 

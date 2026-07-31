@@ -1,6 +1,6 @@
 # Architecture
 
-Updated: 2026-07-16. Release line: `0.1.43`.
+Updated: 2026-07-31. Release line: `0.2.0`.
 
 The in-progress 0.2 rewrite foundations and their verification status are
 documented in [../0.2-rewrite-architecture.md](../0.2-rewrite-architecture.md).
@@ -36,9 +36,8 @@ mobench has two product surfaces:
 - `mobench-artifacts`: validated roots, isolated workspaces, immutable
   publications, manifests, latest snapshots, recovery, leases, and retention.
 
-These crates currently support the compatibility-preserving strangler rewrite.
-They are internal architecture boundaries until the 0.2 release process
-explicitly decides which of them become independently supported public crates.
+These crates are independently published at 0.2.0 so downstream integrations
+can depend on the stable boundaries without importing the CLI implementation.
 
 ## Runtime Layers
 

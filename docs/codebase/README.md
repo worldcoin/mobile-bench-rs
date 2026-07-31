@@ -1,6 +1,6 @@
 # Codebase Reference
 
-Updated: 2026-07-16. Release line: `0.1.43`.
+Updated: 2026-07-31. Release line: `0.2.0`.
 
 These notes describe the current repository structure, implementation
 boundaries, integration points, and release-sensitive public surface. For user
