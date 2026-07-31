@@ -1,0 +1,14 @@
+{
+  "name": "mobench-provekit-npm-release-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@worldcoin/provekit": "0.1.0"
+  },
+  "devDependencies": {
+    "vite": "7.2.7"
+  }
+}

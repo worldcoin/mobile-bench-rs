@@ -14,6 +14,9 @@ No user-facing unreleased changes yet.
 
 - Added `record_sample_u64` and `record_run_u64` for native benchmark reports;
   the JSON ABI emits their values under `custom_metrics`.
+- Added a BrowserStack Automate release lane for the pinned public
+  `@worldcoin/provekit` browser package. The fixture proves, verifies, and
+  rejects a tampered proof through the package API on desktop and mobile web.
 
 ### Fixed
 

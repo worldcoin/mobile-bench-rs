@@ -102,7 +102,7 @@ def test_trusted_control_plane_is_from_a_literal_commit() -> None:
         capture_output=True,
         check=True,
     ).stdout
-    assert 'version = "0.1.49"' in cargo_toml
+    assert 'version = "0.1.48"' in cargo_toml
 
 
 def test_caller_toolchain_is_explicit_and_confined_to_prepare_jobs() -> None:
@@ -393,7 +393,14 @@ def test_release_gate_pins_real_downstreams_and_complete_target_matrix() -> None
         '{"device":"Samsung Galaxy S24","os_version":"14.0"}]\''
     ) == 2
 
-    assert "project: [provekit, world-id-protocol]" in RELEASE_WEB_WORKFLOW
+    assert "project: [provekit, world-id-protocol, provekit-npm]" in RELEASE_WEB_WORKFLOW
+    assert "prepare-provekit-npm:" in RELEASE_WEB_WORKFLOW
+    assert "@worldcoin/provekit" in (
+        ROOT / "tests/release-fixtures/provekit-npm-web/package.json"
+    ).read_text()
+    assert "bun install --frozen-lockfile" in RELEASE_WEB_WORKFLOW
+    assert "release-web-provekit-npm" in RELEASE_WEB_WORKFLOW
+    assert "PROVEKIT_NPM_FUNCTION: provekit_npm::oprf_taceo_prove_and_verify" in RELEASE_WEB_WORKFLOW
     assert (
         "environment: [macOS Safari, Windows Chrome, iOS Safari, Android Chrome]"
         in RELEASE_WEB_WORKFLOW

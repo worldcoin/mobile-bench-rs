@@ -60,8 +60,9 @@ The `Full mobench release gate` job must pass. It requires:
 - ProveKit complete passport age-check proving on two Android and two iOS
   devices;
 - World ID nullifier proving on the same native matrix;
-- both downstream benchmarks as WASM on macOS Safari, Windows Chrome, iOS
-  Safari, and Android Chrome.
+- Rust ProveKit and World ID WASM benchmarks, plus the lockfile-pinned public
+  `@worldcoin/provekit` browser SDK fixture, on macOS Safari, Windows Chrome,
+  iOS Safari, and Android Chrome through BrowserStack Automate.
 
 The downstream source revisions are immutable SHAs in
 `.github/workflows/mobile-bench-selftest.yml`. Review and advance those pins

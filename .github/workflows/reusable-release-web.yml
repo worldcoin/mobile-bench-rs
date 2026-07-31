@@ -190,9 +190,44 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  prepare-provekit-npm:
+    name: Prepare ProveKit npm browser bundle
+    needs: [validate, trusted-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact mobench candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: worldcoin/mobile-bench-rs
+          ref: ${{ inputs.mobench_sha }}
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Verify pinned public fixture assets
+        working-directory: tests/release-fixtures/provekit-npm-web
+        run: |
+          set -euo pipefail
+          echo "1fa4f2b74e405653d77e635864f91650656b112eba30655e06dc1127dd0f7566  public/artifacts/oprf_taceo.pkp" | sha256sum --check --status
+          echo "18f31e1f91652967d59872f846f6d1540e96a8ee8b99ac0cc53d172eb311a1ba  public/artifacts/oprf_taceo.pkv" | sha256sum --check --status
+          echo "3bb7a7ab32da798341c1d7c5152d4d91bf2ddad4416673c78f6993f07f750259  public/artifacts/inputs.json" | sha256sum --check --status
+      - name: Build pinned ProveKit npm browser fixture
+        working-directory: tests/release-fixtures/provekit-npm-web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Upload immutable ProveKit npm bundle
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-web-provekit-npm
+          path: tests/release-fixtures/provekit-npm-web/dist
+          if-no-files-found: error
+          retention-days: 1
+
   browser:
     name: ${{ matrix.project }} WASM on ${{ matrix.environment }}
-    needs: [trusted-cli, prepare]
+    needs: [trusted-cli, prepare, prepare-provekit-npm]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: browserstack
@@ -202,7 +237,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        project: [provekit, world-id-protocol]
+        project: [provekit, world-id-protocol, provekit-npm]
         environment: [macOS Safari, Windows Chrome, iOS Safari, Android Chrome]
         include:
           - environment: macOS Safari
@@ -278,12 +313,14 @@ jobs:
           MOBENCH_SHA: ${{ inputs.mobench_sha }}
           WARMUP: ${{ inputs.warmup }}
           PROVEKIT_FUNCTION: bench_mobile::bench_passport_complete_age_check_prove
+          PROVEKIT_NPM_FUNCTION: provekit_npm::oprf_taceo_prove_and_verify
           WORLD_ID_FUNCTION: zk_mobile_bench::bench_nullifier_proving_only
         run: |
           set -euo pipefail
           chmod +x trusted-bin/cargo-mobench
           function_name="$WORLD_ID_FUNCTION"
           [ "$PROJECT" != provekit ] || function_name="$PROVEKIT_FUNCTION"
+          [ "$PROJECT" != provekit-npm ] || function_name="$PROVEKIT_NPM_FUNCTION"
           args=(
             run-web
             --url http://127.0.0.1:4173/
@@ -327,14 +364,16 @@ jobs:
 
   complete:
     name: Downstream WASM release gate
-    needs: [prepare, browser]
+    needs: [prepare, prepare-provekit-npm, browser]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require every WASM lane
         env:
           PREPARE_RESULT: ${{ needs.prepare.result }}
+          PROVEKIT_NPM_PREPARE_RESULT: ${{ needs.prepare-provekit-npm.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
         run: |
           test "$PREPARE_RESULT" = success
+          test "$PROVEKIT_NPM_PREPARE_RESULT" = success
           test "$BROWSER_RESULT" = success

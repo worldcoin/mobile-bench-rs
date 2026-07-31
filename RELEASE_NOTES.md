@@ -39,6 +39,15 @@ BrowserStack artifact uploads use HTTP/1.1 with no implicit total request
 deadline, while retaining a bounded connection timeout, for reliable large
 IPA/AAB transfers.
 
+### Public ProveKit browser SDK release coverage
+
+The downstream WASM release gate now builds a lockfile-pinned
+`@worldcoin/provekit@0.1.0` browser fixture and executes it through Mobench's
+`run-web` BrowserStack Automate path. The fixture initializes the public SDK
+with `threads: false` for cross-browser compatibility, loads pinned PKP/PKV
+artifacts, proves and verifies deterministic inputs, and rejects a tampered
+proof. It runs alongside, rather than replacing, the Rust ProveKit WASM lane.
+
 ### Migration From v0.1.48
 
 Update `mobench`, `mobench-sdk`, and `mobench-macros` to `0.1.49` as
