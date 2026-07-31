@@ -488,7 +488,17 @@ jobs:
           [ -z "$BROWSER_VERSION" ] || args+=(--browser-version "$BROWSER_VERSION")
           [ -z "$TARGET_OS" ] || args+=(--os "$TARGET_OS")
           [ -z "$DEVICE" ] || args+=(--device "$DEVICE")
-          trusted-bin/cargo-mobench "${args[@]}"
+          for attempt in 1 2 3; do
+            if trusted-bin/cargo-mobench "${args[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::BrowserStack web benchmark failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "::warning::BrowserStack web benchmark attempt ${attempt} failed; retrying"
+            sleep "$((attempt * 10))"
+          done
       - name: Stop BrowserStack Local
         if: always()
         uses: browserstack/github-actions/setup-local@93aebce225b754566349151c0676b26b005e591b

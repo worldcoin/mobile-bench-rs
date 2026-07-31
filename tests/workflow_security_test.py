@@ -425,6 +425,8 @@ def test_release_web_boundary_is_candidate_pinned_and_fail_closed() -> None:
     assert RELEASE_WEB_WORKFLOW.count("sha256sum --check cargo-mobench.sha256") == 2
     assert "release artifact hash mismatch" in RELEASE_WEB_WORKFLOW
     assert "release artifact set mismatch" in RELEASE_WEB_WORKFLOW
+    assert 'for attempt in 1 2 3; do' in RELEASE_WEB_WORKFLOW
+    assert 'BrowserStack web benchmark failed after ${attempt} attempts' in RELEASE_WEB_WORKFLOW
     assert "if: always()" in RELEASE_WEB_WORKFLOW
     assert 'test "$PREPARE_RESULT" = success' in RELEASE_WEB_WORKFLOW
     assert 'test "$BROWSER_RESULT" = success' in RELEASE_WEB_WORKFLOW
