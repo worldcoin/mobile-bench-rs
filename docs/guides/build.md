@@ -1,6 +1,6 @@
 # Build Guide
 
-Current release: **0.1.48**.
+Current release: **0.1.49**.
 
 Use `cargo mobench build --target <android|ios|both|web>` for repository
 development and CI. The CLI resolves the benchmark crate, builds native mobile

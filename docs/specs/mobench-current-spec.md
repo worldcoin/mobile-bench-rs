@@ -2,7 +2,7 @@
 
 Status: current source-of-truth product/API specification.
 
-Current release: `0.1.48`.
+Current release: `0.1.49`.
 
 Last updated: 2026-07-19.
 
@@ -43,7 +43,7 @@ Workspace package defaults:
 - Edition: Rust 2024.
 - MSRV: Rust 1.85.
 - License: MIT.
-- Current workspace version: `0.1.48`.
+- Current workspace version: `0.1.49`.
 
 ## Benchmark Authoring
 

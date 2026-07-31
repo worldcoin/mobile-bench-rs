@@ -3,7 +3,7 @@
 Command-line tool for building, running, reporting, and profiling Rust mobile
 benchmarks on Android and iOS.
 
-Current release: **0.1.48**.
+Current release: **0.1.49**.
 
 ## Install
 
