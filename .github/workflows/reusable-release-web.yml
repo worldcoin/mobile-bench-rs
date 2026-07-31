@@ -390,10 +390,23 @@ jobs:
           for entry in entries:
               if set(entry) != {"path", "size", "sha256"}:
                   raise SystemExit("release artifact entry has unexpected fields")
-              relative = PurePosixPath(entry["path"])
-              if relative.is_absolute() or ".." in relative.parts or len(relative.parts) != 1:
+              raw_path = entry["path"]
+              relative = PurePosixPath(raw_path)
+              if (
+                  not isinstance(raw_path, str)
+                  or not raw_path
+                  or "\\" in raw_path
+                  or relative.is_absolute()
+                  or relative.as_posix() != raw_path
+                  or any(part in ("", ".", "..") for part in relative.parts)
+              ):
                   raise SystemExit(f"unsafe release artifact path: {relative}")
-              path = root / str(relative)
+              path = root.joinpath(*relative.parts)
+              parent = path.parent
+              while parent != root:
+                  if parent.is_symlink() or not parent.is_dir():
+                      raise SystemExit(f"unsafe release artifact parent: {relative}")
+                  parent = parent.parent
               if path.is_symlink() or not path.is_file():
                   raise SystemExit(f"release artifact is missing or unsafe: {relative}")
               contents = path.read_bytes()

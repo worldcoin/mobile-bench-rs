@@ -473,6 +473,7 @@ def test_release_bundle_verifier_rejects_hash_and_file_set_drift() -> None:
         "index.html",
         "runner.js",
         "worker.js",
+        "artifacts/inputs.json",
         "mobench_web.js",
         "mobench_web_bg.wasm",
         "mobench-web.json",
@@ -485,7 +486,9 @@ def test_release_bundle_verifier_rejects_hash_and_file_set_drift() -> None:
 
         for index, filename in enumerate(filenames):
             contents = f"fixture-{index}".encode()
-            (bundle / filename).write_bytes(contents)
+            path = bundle / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
             entries.append(
                 {
                     "path": filename,
