@@ -21,6 +21,10 @@ const USER_AGENT: &str = "mobench/0.2";
 // BrowserStack may take longer than a normal API request to allocate a session,
 // especially while a release matrix is starting several browsers at once.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+// Keep the transport deadline above BrowserStack's allocation and page-load
+// windows while still bounding a stalled HTTP operation independently of the
+// benchmark's own polling timeout.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_OPERATION_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_READY_POLL: Duration = Duration::from_millis(250);
@@ -191,6 +195,7 @@ impl BrowserStackAutomateClient {
             // default request timeout. The WebDriver page/script deadlines,
             // bounded polling loops, and cancellation token are authoritative.
             .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .context("building BrowserStack Automate HTTP client")?;
         Ok(Self {
