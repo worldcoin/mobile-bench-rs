@@ -462,6 +462,22 @@ jobs:
           PY
           version="$(cargo metadata --manifest-path mobench-sdk-under-test/Cargo.toml --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "mobench-sdk") | .version')"
+          SDK_VERSION="$version" CALLER_ROOT="$CALLER_ROOT" python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path(os.environ["CALLER_ROOT"])
+          version = os.environ["SDK_VERSION"]
+          direct = re.compile(r'(mobench-sdk\s*=\s*")([^"]+)(")')
+          inline = re.compile(r'(mobench-sdk\s*=\s*\{[^}\n]*\bversion\s*=\s*")([^"]+)(")')
+          for manifest in root.rglob("Cargo.toml"):
+              text = manifest.read_text()
+              updated = inline.sub(rf'\g<1>{version}\g<3>', text)
+              updated = direct.sub(rf'\g<1>{version}\g<3>', updated)
+              if updated != text:
+                  manifest.write_text(updated)
+          PY
           cargo update --manifest-path caller/Cargo.toml -p mobench-sdk --precise "$version"
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -691,6 +707,22 @@ jobs:
           PY
           version="$(cargo metadata --manifest-path mobench-sdk-under-test/Cargo.toml --no-deps --format-version 1 |
             jq -er '.packages[] | select(.name == "mobench-sdk") | .version')"
+          SDK_VERSION="$version" CALLER_ROOT="$CALLER_ROOT" python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path(os.environ["CALLER_ROOT"])
+          version = os.environ["SDK_VERSION"]
+          direct = re.compile(r'(mobench-sdk\s*=\s*")([^"]+)(")')
+          inline = re.compile(r'(mobench-sdk\s*=\s*\{[^}\n]*\bversion\s*=\s*")([^"]+)(")')
+          for manifest in root.rglob("Cargo.toml"):
+              text = manifest.read_text()
+              updated = inline.sub(rf'\g<1>{version}\g<3>', text)
+              updated = direct.sub(rf'\g<1>{version}\g<3>', updated)
+              if updated != text:
+                  manifest.write_text(updated)
+          PY
           cargo update --manifest-path caller/Cargo.toml -p mobench-sdk --precise "$version"
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
