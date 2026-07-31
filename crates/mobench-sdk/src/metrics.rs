@@ -48,17 +48,20 @@ pub fn record_run_u64(name: impl Into<String>, value: u64) {
     });
 }
 
+#[cfg(feature = "registry")]
 pub(crate) fn clear() {
     CUSTOM_METRICS.with(|metrics| {
         *metrics.borrow_mut() = CustomMetrics::default();
     });
 }
 
+#[cfg(feature = "registry")]
 pub(crate) fn take() -> CustomMetrics {
     CUSTOM_METRICS.with(|metrics| std::mem::take(&mut *metrics.borrow_mut()))
 }
 
 impl CustomMetrics {
+    #[cfg(feature = "registry")]
     pub(crate) fn is_empty(&self) -> bool {
         self.sample_u64.is_empty() && self.run_u64.is_empty()
     }
