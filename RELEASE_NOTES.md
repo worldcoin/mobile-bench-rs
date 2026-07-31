@@ -13,7 +13,23 @@ Crates.io release pages:
 
 ## Unreleased
 
-No user-facing unreleased changes yet.
+Status: 0.2 integration candidate; not yet released.
+
+The 0.2 architecture now carries the secure prebuilt BrowserStack boundary,
+native runner reliability behavior, and WASM/browser surface from the v0.1.47
+and PR #42 authority. The implementation preserves the 0.2 runtime, domain,
+report, process, artifact, and provider crates rather than merging the 0.1
+monolith.
+
+The browser surface includes browser-safe timing, `runBenchmarkJson`, a
+version-matched `wasm-bindgen` builder, a dedicated module worker, `build
+--target web`, `run-web`, and direct W3C Automate transport with bounded
+timeouts, cleanup, Local binding, and credential redaction.
+
+Release acceptance remains evidence-gated. ProveKit and world-id-protocol must
+both pass the required two-device Android matrix, two-device iOS matrix, macOS
+Safari, Windows Chrome, iOS Safari, and Android Chrome at low samples on the
+exact candidate SHA. See `docs/0.2-feature-parity-checklist.md`.
 
 ## v0.1.43
 

@@ -27,6 +27,7 @@ struct LayoutConfigExtensions {
     project: LayoutProjectExtensions,
     ios: LayoutIosExtensions,
     browserstack: LayoutBrowserStackExtensions,
+    web: LayoutWebExtensions,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -46,6 +47,12 @@ struct LayoutIosExtensions {
 struct LayoutBrowserStackExtensions {
     android_benchmark_timeout_secs: Option<u64>,
     android_heartbeat_interval_secs: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LayoutWebExtensions {
+    wasm_bindgen: Option<PathBuf>,
 }
 
 fn load_layout_config_extensions(path: &Path) -> Result<LayoutConfigExtensions> {
@@ -323,6 +330,7 @@ pub(crate) fn resolve_project_layout(
     let ios_runner = extensions.ios.runner;
     let android_benchmark_timeout_secs = extensions.browserstack.android_benchmark_timeout_secs;
     let android_heartbeat_interval_secs = extensions.browserstack.android_heartbeat_interval_secs;
+    let web_wasm_bindgen = extensions.web.wasm_bindgen;
     let configured_output_dir = config
         .as_ref()
         .and_then(|cfg| cfg.project.output_dir.as_deref())
@@ -355,6 +363,7 @@ pub(crate) fn resolve_project_layout(
         ios_runner,
         android_benchmark_timeout_secs,
         android_heartbeat_interval_secs,
+        web_wasm_bindgen,
         config_path,
         output_dir,
         default_function,

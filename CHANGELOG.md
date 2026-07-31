@@ -6,7 +6,33 @@ longer integration-oriented release notes and support status.
 
 ## Unreleased
 
-No user-facing unreleased changes yet.
+### Added
+
+- Added a browser-compatible SDK timing path, browser-callable JSON benchmark
+  boundary, worker-backed web harness, and WebAssembly builder.
+- Added `cargo mobench build --target web` and `cargo mobench run-web` with a
+  direct W3C BrowserStack Automate transport.
+- Added hashed `ci prepare` / `ci run-prebuilt` bundles for separating
+  untrusted downstream builds from credentialed BrowserStack execution.
+- Added pinned ProveKit and world-id-protocol native/WASM release-gate
+  workflows and fixture adapters.
+
+### Changed
+
+- Ported the v0.1.47 secure reusable-workflow boundary, configurable
+  toolchains/targets/backends/functions/device matrices, and bounded completion
+  timeout into the 0.2 architecture.
+- Hardened Android worker-death handling and iOS heartbeat/accessibility result
+  transport while retaining strict 0.2 report identity.
+- Kept BrowserStack native stack/flamegraph profiling explicitly unsupported.
+
+### Validation
+
+- Local formatting, locked workspace tests, native/WASM checks, Clippy,
+  workflow security tests, and workflow linting are required.
+- The 0.2 parity candidate is not complete until both pinned downstreams pass
+  two Android devices, two iOS devices, and all four browser environments on
+  the exact candidate SHA.
 
 ## v0.1.43 - 2026-07-05
 

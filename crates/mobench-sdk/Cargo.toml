@@ -62,8 +62,12 @@ include_dir = { workspace = true, optional = true }
 # Build automation (only with full feature)
 toml = { workspace = true, optional = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
 [dev-dependencies]
 criterion = "0.5"
+tempfile = "3"
 
 [[bench]]
 name = "statistics"

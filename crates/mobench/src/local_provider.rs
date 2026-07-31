@@ -565,6 +565,7 @@ mod tests {
             ios_runner: None,
             android_benchmark_timeout_secs: None,
             android_heartbeat_interval_secs: None,
+            web_wasm_bindgen: None,
             config_path: None,
             output_dir: root.join("target/mobench/local-provider-test"),
             default_function: None,

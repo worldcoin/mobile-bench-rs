@@ -11,7 +11,7 @@
 //!
 //! `mobench` is the CLI orchestrator for the mobench ecosystem. It handles:
 //!
-//! - **Building** - Compiles Rust code for Android/iOS and packages mobile apps
+//! - **Building** - Compiles Rust code for Android/iOS/WebAssembly
 //! - **Running** - Executes benchmarks locally or on BrowserStack devices
 //! - **Profiling** - Plans and executes supported local native captures
 //! - **Reporting** - Collects and formats benchmark and profiling results
@@ -48,7 +48,10 @@
 //! |---------|-------------|
 //! | `init` | Initialize a new benchmark project |
 //! | `build` | Build mobile artifacts (APK/xcframework) |
+//! | `run-web` | Execute a hosted WASM bundle through BrowserStack Automate |
 //! | `run` | Execute benchmarks locally or on devices |
+//! | `ci prepare` | Build a hashed prebuilt bundle without credentials |
+//! | `ci run-prebuilt` | Verify and run a closed bundle with BrowserStack credentials |
 //! | `ci run` | Run standardized CI orchestration (`summary.json`, `summary.md`, `results.csv`) |
 //! | `doctor` | Validate local/CI prerequisites and configuration |
 //! | `config validate` | Validate run config + matrix contract |
@@ -151,11 +154,12 @@ use browserstack::{
     BrowserStackRunHandle, completed_browserstack_collection,
 };
 use build_commands::*;
+use ci_prebuilt::{cmd_ci_prepare, cmd_ci_run_prebuilt};
 #[cfg(test)]
 pub(crate) use cli::CiTarget;
 pub use cli::MobileTarget;
 pub(crate) use cli::{
-    CheckOutputFormat, CiCommand, CiMergeSplitRunsArgs, Cli, Command, ConfigCommand,
+    BuildTarget, CheckOutputFormat, CiCommand, CiMergeSplitRunsArgs, Cli, Command, ConfigCommand,
     ContractErrorCategory, DevicePlatform, DevicesCommand, FixtureCommand, IosRunnerArg,
     ProfileCommand, ReportCommand, SdkTarget,
 };
@@ -176,11 +180,14 @@ use report_binding::bind_report_value;
 use reporting::*;
 use run_spec::*;
 use summary_command::*;
+use web_commands::cmd_run_web;
 use workspace_fs::*;
 
 mod browserstack;
+pub(crate) mod browserstack_automate;
 mod build_commands;
 mod ci;
+mod ci_prebuilt;
 mod cli;
 pub mod config;
 mod devices;
@@ -201,6 +208,7 @@ mod run_spec;
 mod split_runs;
 pub(crate) mod summarize;
 mod summary_command;
+mod web_commands;
 mod workspace_fs;
 
 pub use ci::*;
@@ -351,6 +359,7 @@ pub(crate) struct ResolvedProjectLayout {
     pub(crate) ios_runner: Option<String>,
     pub(crate) android_benchmark_timeout_secs: Option<u64>,
     pub(crate) android_heartbeat_interval_secs: Option<u64>,
+    pub(crate) web_wasm_bindgen: Option<PathBuf>,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) output_dir: PathBuf,
     pub(crate) default_function: Option<String>,
@@ -1203,6 +1212,12 @@ pub fn run() -> Result<()> {
             CiCommand::Run(args) => {
                 cmd_ci_run(args)?;
             }
+            CiCommand::Prepare(args) => {
+                cmd_ci_prepare(args, cli.dry_run)?;
+            }
+            CiCommand::RunPrebuilt(args) => {
+                cmd_ci_run_prebuilt(args, cli.dry_run)?;
+            }
             CiCommand::MergeSplitRuns(args) => {
                 split_runs::cmd_ci_merge_split_runs(args, cli.dry_run)?;
             }
@@ -1267,18 +1282,68 @@ pub fn run() -> Result<()> {
             crate_path,
             progress,
         } => {
-            cmd_build(
-                target,
-                release,
-                ios_completion_timeout_secs,
-                ios_deployment_target,
-                ios_runner,
-                project_root,
-                output_dir,
-                crate_path,
+            if target == BuildTarget::Web {
+                cmd_build_web(
+                    release,
+                    project_root,
+                    output_dir,
+                    crate_path,
+                    cli.dry_run,
+                    cli.verbose,
+                    progress,
+                )?;
+            } else {
+                cmd_build(
+                    target
+                        .mobile()
+                        .expect("non-web build target must map to a mobile target"),
+                    release,
+                    ios_completion_timeout_secs,
+                    ios_deployment_target,
+                    ios_runner,
+                    project_root,
+                    output_dir,
+                    crate_path,
+                    cli.dry_run,
+                    cli.verbose,
+                    progress,
+                )?;
+            }
+        }
+        Command::RunWeb {
+            url,
+            function,
+            iterations,
+            warmup,
+            browser,
+            browser_version,
+            os,
+            os_version,
+            device,
+            build_name,
+            session_name,
+            local_identifier,
+            script_timeout_secs,
+            page_load_timeout_secs,
+            output,
+        } => {
+            cmd_run_web(
+                url,
+                function,
+                iterations,
+                warmup,
+                browser,
+                browser_version,
+                os,
+                os_version,
+                device,
+                build_name,
+                session_name,
+                local_identifier,
+                script_timeout_secs,
+                page_load_timeout_secs,
+                output,
                 cli.dry_run,
-                cli.verbose,
-                progress,
             )?;
         }
         Command::PackageIpa {
@@ -2045,9 +2110,33 @@ project = "proj"
         assert_eq!(layout.ios_completion_timeout_secs, Some(900));
         assert_eq!(layout.ios_deployment_target, "15.0");
         assert_eq!(layout.ios_runner, None);
+        assert_eq!(layout.web_wasm_bindgen, None);
         assert_eq!(
             layout.default_function.as_deref(),
             Some("zk_mobile_bench::bench_query_proof_generation")
+        );
+    }
+
+    #[test]
+    fn resolver_reads_private_web_wasm_bindgen_extension() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let (project_root, _) = write_custom_layout_project(&temp_dir);
+        let config_path = project_root.join("mobench.toml");
+        let mut contents = fs::read_to_string(&config_path).expect("read config");
+        contents.push_str("\n[web]\nwasm_bindgen = \"tools/wasm-bindgen\"\n");
+        write_file(&config_path, contents.as_bytes()).expect("write config");
+
+        let layout = resolve_project_layout(ProjectLayoutOptions {
+            start_dir: Some(project_root.as_path()),
+            project_root: None,
+            crate_path: None,
+            config_path: None,
+        })
+        .expect("resolve project layout");
+
+        assert_eq!(
+            layout.web_wasm_bindgen,
+            Some(PathBuf::from("tools/wasm-bindgen"))
         );
     }
 
@@ -2834,6 +2923,106 @@ runner = "swiftui"
                 assert_eq!(ios_runner, Some(IosRunnerArg::UikitLegacy));
             }
             _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn build_parses_web_without_expanding_public_sdk_target() {
+        let cli = Cli::parse_from(["mobench", "build", "--target", "web", "--release"]);
+        match cli.command {
+            Command::Build {
+                target, release, ..
+            } => {
+                assert_eq!(target, BuildTarget::Web);
+                assert!(release);
+                assert_eq!(target.mobile(), None);
+            }
+            _ => panic!("expected web build command"),
+        }
+    }
+
+    #[test]
+    fn run_web_parses_mobile_local_environment() {
+        let cli = Cli::parse_from([
+            "mobench",
+            "run-web",
+            "--url",
+            "https://bench.example.test/",
+            "--function",
+            "sample::bench",
+            "--device",
+            "iPhone 16 Pro Max",
+            "--os-version",
+            "18",
+            "--local-identifier",
+            "mobench-run-1",
+        ]);
+        match cli.command {
+            Command::RunWeb {
+                url,
+                function,
+                device,
+                os_version,
+                local_identifier,
+                ..
+            } => {
+                assert_eq!(url, "https://bench.example.test/");
+                assert_eq!(function, "sample::bench");
+                assert_eq!(device.as_deref(), Some("iPhone 16 Pro Max"));
+                assert_eq!(os_version, "18");
+                assert_eq!(local_identifier.as_deref(), Some("mobench-run-1"));
+            }
+            _ => panic!("expected run-web command"),
+        }
+    }
+
+    #[test]
+    fn ci_prebuilt_commands_parse_trusted_controls() {
+        let prepare = Cli::parse_from([
+            "mobench",
+            "ci",
+            "prepare",
+            "--target",
+            "android",
+            "--functions",
+            "sample::bench",
+            "--source-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+        ]);
+        assert!(matches!(
+            prepare.command,
+            Command::Ci {
+                command: CiCommand::Prepare(_)
+            }
+        ));
+
+        let run = Cli::parse_from([
+            "mobench",
+            "ci",
+            "run-prebuilt",
+            "--manifest",
+            "bundle/manifest.json",
+            "--expected-source-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--expected-platform",
+            "android",
+            "--expected-functions",
+            "sample::bench",
+            "--expected-iterations",
+            "2",
+            "--expected-warmup",
+            "1",
+            "--devices",
+            "Google Pixel 7-13.0",
+        ]);
+        match run.command {
+            Command::Ci {
+                command: CiCommand::RunPrebuilt(args),
+            } => {
+                assert_eq!(args.expected_iterations, 2);
+                assert_eq!(args.max_completion_timeout_secs, 1800);
+            }
+            _ => panic!("expected ci run-prebuilt command"),
         }
     }
 

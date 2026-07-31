@@ -1,4 +1,4 @@
-//! Build automation for mobile platforms.
+//! Build automation for mobile and browser platforms.
 //!
 //! This module provides builders for Android and iOS that automate the process
 //! of compiling Rust code to mobile libraries and packaging them into mobile apps.
@@ -18,6 +18,7 @@
 //! |---------|----------|--------|
 //! | [`AndroidBuilder`] | Android | APK with native `.so` libraries |
 //! | [`IosBuilder`] | iOS | xcframework with static libraries |
+//! | [`WebBuilder`] | Browser WebAssembly | Static worker-backed web bundle |
 //!
 //! ## Common Utilities
 //!
@@ -64,6 +65,7 @@
 pub mod android;
 pub mod common;
 pub mod ios;
+pub mod web;
 
 // Re-export builders
 pub use android::AndroidBuilder;
@@ -71,3 +73,4 @@ pub use common::{
     BenchMeta, EmbeddedBenchSpec, create_bench_meta, embed_bench_meta, embed_bench_spec,
 };
 pub use ios::{IosBuilder, SigningMethod};
+pub use web::{WebBuildConfig, WebBuildResult, WebBuilder};

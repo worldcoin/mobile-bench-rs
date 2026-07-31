@@ -253,7 +253,7 @@ pub(crate) enum Command {
     /// Build mobile artifacts from the resolved benchmark crate.
     Build {
         #[arg(long, value_enum)]
-        target: SdkTarget,
+        target: BuildTarget,
         #[arg(long, help = "Build in release mode")]
         release: bool,
         #[arg(
@@ -290,6 +290,39 @@ pub(crate) enum Command {
         crate_path: Option<PathBuf>,
         #[arg(long, help = "Show simplified step-by-step progress output")]
         progress: bool,
+    },
+    /// Run a hosted WASM benchmark through BrowserStack Automate WebDriver.
+    RunWeb {
+        #[arg(long, help = "HTTP(S) URL of the generated mobench web runner")]
+        url: String,
+        #[arg(long, help = "Fully-qualified Rust function to benchmark")]
+        function: String,
+        #[arg(long, default_value_t = 20, value_parser = parse_iterations)]
+        iterations: u32,
+        #[arg(long, default_value_t = 5, value_parser = parse_warmup)]
+        warmup: u32,
+        #[arg(long, default_value = "chrome")]
+        browser: String,
+        #[arg(long)]
+        browser_version: Option<String>,
+        #[arg(long, default_value = "OS X")]
+        os: String,
+        #[arg(long, default_value = "Sequoia")]
+        os_version: String,
+        #[arg(long, help = "Real mobile device name; omit for desktop")]
+        device: Option<String>,
+        #[arg(long)]
+        build_name: Option<String>,
+        #[arg(long)]
+        session_name: Option<String>,
+        #[arg(long)]
+        local_identifier: Option<String>,
+        #[arg(long, default_value_t = 300)]
+        script_timeout_secs: u64,
+        #[arg(long, default_value_t = 60)]
+        page_load_timeout_secs: u64,
+        #[arg(long, default_value = "target/mobench/web-results.json")]
+        output: PathBuf,
     },
     /// Package iOS app as IPA for distribution or testing.
     PackageIpa {
@@ -472,12 +505,89 @@ pub(crate) enum CiCommand {
     },
     /// Run a full CI benchmark flow with stable output contract.
     Run(CiRunArgs),
+    /// Build untrusted mobile code into a hashed, enumerated prebuilt bundle.
+    Prepare(CiPrepareArgs),
+    /// Run a verified prebuilt bundle without invoking caller build tooling.
+    RunPrebuilt(CiRunPrebuiltArgs),
     /// Merge one-sample CI summaries into a normal CI output set.
     MergeSplitRuns(CiMergeSplitRunsArgs),
     /// Summarize benchmark results with device metrics.
     Summarize(CiSummarizeArgs),
     /// Create a GitHub Check Run with benchmark results.
     CheckRun(CiCheckRunArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct CiPrepareArgs {
+    #[arg(long, value_enum)]
+    pub(crate) target: MobileTarget,
+    #[arg(long)]
+    pub(crate) crate_path: Option<PathBuf>,
+    #[arg(long, value_enum)]
+    pub(crate) ffi_backend: Option<FfiBackendArg>,
+    #[arg(long, required = true)]
+    pub(crate) functions: Vec<String>,
+    #[arg(long, default_value_t = 100, value_parser = parse_iterations)]
+    pub(crate) iterations: u32,
+    #[arg(long, default_value_t = 10, value_parser = parse_warmup)]
+    pub(crate) warmup: u32,
+    #[arg(long)]
+    pub(crate) release: bool,
+    #[arg(long)]
+    pub(crate) source_sha: String,
+    #[arg(long, default_value = "target/mobench/prebuilt")]
+    pub(crate) output_dir: PathBuf,
+    #[arg(long, default_value = "target/mobench/prebuilt/manifest.json")]
+    pub(crate) manifest: PathBuf,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub(crate) enum FfiBackendArg {
+    Uniffi,
+    NativeCAbi,
+    #[value(name = "boltffi", alias = "bolt-ffi")]
+    BoltFfi,
+}
+
+impl From<FfiBackendArg> for mobench_sdk::FfiBackend {
+    fn from(value: FfiBackendArg) -> Self {
+        match value {
+            FfiBackendArg::Uniffi => Self::Uniffi,
+            FfiBackendArg::NativeCAbi => Self::NativeCAbi,
+            FfiBackendArg::BoltFfi => Self::BoltFfi,
+        }
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct CiRunPrebuiltArgs {
+    #[arg(long)]
+    pub(crate) manifest: PathBuf,
+    #[arg(long)]
+    pub(crate) expected_source_sha: String,
+    #[arg(long, value_enum)]
+    pub(crate) expected_platform: MobileTarget,
+    #[arg(long, required = true)]
+    pub(crate) expected_functions: Vec<String>,
+    #[arg(long, value_parser = parse_iterations)]
+    pub(crate) expected_iterations: u32,
+    #[arg(long, value_parser = parse_warmup)]
+    pub(crate) expected_warmup: u32,
+    #[arg(long, required = true)]
+    pub(crate) devices: Vec<String>,
+    #[arg(long, default_value = "target/mobench/ci")]
+    pub(crate) output_dir: PathBuf,
+    #[arg(long)]
+    pub(crate) fetch: bool,
+    #[arg(long, default_value = "target/browserstack")]
+    pub(crate) fetch_output_dir: PathBuf,
+    #[arg(long, default_value_t = 5)]
+    pub(crate) fetch_poll_interval_secs: u64,
+    #[arg(long, default_value_t = 300)]
+    pub(crate) fetch_timeout_secs: u64,
+    #[arg(long, default_value_t = 1800)]
+    pub(crate) max_completion_timeout_secs: u64,
 }
 
 #[derive(Subcommand, Debug)]
@@ -920,6 +1030,26 @@ pub(crate) enum SdkTarget {
     Android,
     Ios,
     Both,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub(crate) enum BuildTarget {
+    Android,
+    Ios,
+    Both,
+    Web,
+}
+
+impl BuildTarget {
+    pub(crate) fn mobile(self) -> Option<SdkTarget> {
+        match self {
+            Self::Android => Some(SdkTarget::Android),
+            Self::Ios => Some(SdkTarget::Ios),
+            Self::Both => Some(SdkTarget::Both),
+            Self::Web => None,
+        }
+    }
 }
 
 impl From<SdkTarget> for mobench_sdk::Target {

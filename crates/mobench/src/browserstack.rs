@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 mod adapter;
+mod client;
 mod collection;
 mod extraction;
 mod polling;
@@ -324,10 +325,20 @@ pub(crate) const DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS: u64 = 900;
 const ESPRESSO_IDLE_TIMEOUT_SECS: u64 = 900;
 const USER_AGENT: &str = "mobile-bench-rs/0.1";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BrowserStackAuth {
     pub username: String,
     pub access_key: String,
+}
+
+impl std::fmt::Debug for BrowserStackAuth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrowserStackAuth")
+            .field("username", &self.username)
+            .field("access_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// BrowserStack App Automate (Espresso) client.
@@ -340,67 +351,6 @@ pub struct BrowserStackClient {
 }
 
 impl BrowserStackClient {
-    pub fn new(auth: BrowserStackAuth, project: Option<String>) -> Result<Self> {
-        let http = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .context("building HTTP client")?;
-
-        Ok(Self {
-            http,
-            auth,
-            base_url: DEFAULT_BASE_URL.to_string(),
-            project,
-        })
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)] // Used in tests to verify URL construction
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    fn api(&self, path: &str) -> String {
-        format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
-    }
-
-    pub fn get_json(&self, path: &str) -> Result<Value> {
-        let resp = self
-            .http
-            .get(self.api(path))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .send()
-            .with_context(|| format!("requesting BrowserStack API {}", path))?;
-
-        parse_response(resp, path)
-    }
-
-    pub fn download_url(&self, url: &str, dest: &Path) -> Result<()> {
-        let resp = self
-            .asset_request(url)
-            .send()
-            .with_context(|| format!("downloading BrowserStack asset {}", url))?;
-        let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .with_context(|| format!("reading BrowserStack asset body {}", url))?;
-        if !status.is_success() {
-            return Err(anyhow!(
-                "BrowserStack asset download failed (status {}): {}",
-                status,
-                String::from_utf8_lossy(&bytes)
-            ));
-        }
-        std::fs::write(dest, bytes)
-            .with_context(|| format!("writing BrowserStack asset to {:?}", dest))?;
-        Ok(())
-    }
-
     fn fetch_devices_inventory(&self) -> Result<Vec<BrowserStackDevice>> {
         let json = self.get_json("app-automate/devices.json")?;
         parse_device_list(json, "devices")
@@ -468,91 +418,6 @@ impl BrowserStackClient {
         let path = format!("app-automate/xcuitest/v2/builds/{}", build_id);
         let json = self.get_json(&path)?;
         build_status_from_value(json).context("parsing build status response")
-    }
-
-    /// Fetch device logs for a specific session
-    pub fn get_device_logs(
-        &self,
-        build_id: &str,
-        session_id: &str,
-        platform: &str,
-    ) -> Result<String> {
-        let path = match platform {
-            "espresso" => format!(
-                "app-automate/espresso/v2/builds/{}/sessions/{}/devicelogs",
-                build_id, session_id
-            ),
-            "xcuitest" => format!(
-                "app-automate/xcuitest/v2/builds/{}/sessions/{}/devicelogs",
-                build_id, session_id
-            ),
-            _ => return Err(anyhow!("unsupported platform: {}", platform)),
-        };
-
-        let resp = self
-            .http
-            .get(self.api(&path))
-            .basic_auth(&self.auth.username, Some(&self.auth.access_key))
-            .send()
-            .with_context(|| format!("fetching device logs for session {}", session_id))?;
-
-        let status = resp.status();
-        let text = resp.text().context("reading device logs response")?;
-
-        if !status.is_success() {
-            return Err(anyhow!(
-                "Failed to fetch device logs (status {}): {}",
-                status,
-                text
-            ));
-        }
-
-        Ok(text)
-    }
-
-    fn get_session_json(&self, build_id: &str, session_id: &str, platform: &str) -> Result<Value> {
-        let path = match platform {
-            "espresso" => format!(
-                "app-automate/espresso/v2/builds/{}/sessions/{}",
-                build_id, session_id
-            ),
-            "xcuitest" => format!(
-                "app-automate/xcuitest/v2/builds/{}/sessions/{}",
-                build_id, session_id
-            ),
-            _ => return Err(anyhow!("unsupported platform: {}", platform)),
-        };
-
-        self.get_json(&path)
-    }
-
-    fn download_text_url(&self, url: &str) -> Result<String> {
-        let resp = self
-            .asset_request(url)
-            .send()
-            .with_context(|| format!("downloading BrowserStack asset {}", url))?;
-        let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .with_context(|| format!("reading BrowserStack asset body {}", url))?;
-        if !status.is_success() {
-            return Err(anyhow!(
-                "BrowserStack asset download failed (status {}): {}",
-                status,
-                String::from_utf8_lossy(&bytes)
-            ));
-        }
-
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    }
-
-    fn asset_request(&self, url: &str) -> reqwest::blocking::RequestBuilder {
-        let request = self.http.get(url);
-        if should_authenticate_asset_url(url) {
-            request.basic_auth(&self.auth.username, Some(&self.auth.access_key))
-        } else {
-            request
-        }
     }
 
     /// Extract benchmark results from device logs

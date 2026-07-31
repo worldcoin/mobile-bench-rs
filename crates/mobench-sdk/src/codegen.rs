@@ -2205,7 +2205,12 @@ mod tests {
         )
         .unwrap();
         assert!(main_activity.contains("com.sun.jna.Native"));
+        assert!(main_activity.contains("com.sun.jna.NativeLong"));
         assert!(main_activity.contains("mobench_run_benchmark_json"));
+        assert!(main_activity.contains("specLen: NativeLong"));
+        assert!(main_activity.contains("@JvmField var len: NativeLong = NativeLong(0)"));
+        assert!(main_activity.contains("@JvmField var cap: NativeLong = NativeLong(0)"));
+        assert!(!main_activity.contains("specLen: Long"));
         assert!(main_activity.contains("BENCH_JSON"));
         assert!(main_activity.contains("bench_spec.json"));
         assert!(main_activity.contains("BENCH_RESULT_OK"));
@@ -2543,6 +2548,119 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn android_worker_failures_are_detected_and_v2_bound() {
+        let uniffi =
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template");
+        let native = include_str!("native_templates/android/MainActivity.kt.template");
+
+        for template in [uniffi, native] {
+            for contract in [
+                "BENCH_RESULT_HEARTBEAT",
+                "WorkerHeartbeat",
+                "BENCH_HEARTBEAT_JSON",
+                "workerPid",
+                "runningAppProcesses()",
+                "worker_exit",
+                "RESULT_FAILURE_JSON_EXTRA",
+                "androidExitInfoJson",
+                "emitFailure(\"timeout\"",
+                "applyV2Envelope",
+                "\"failure\"",
+            ] {
+                assert!(
+                    template.contains(contract),
+                    "Android worker template omitted fail-closed contract `{contract}`"
+                );
+            }
+            for watchdog_contract in [
+                "watchdogHandler.postDelayed(watchdog",
+                "override fun onDestroy()",
+                "stopWatchdog()",
+                "resultText?.text = message",
+                "elapsedMs >= params.timeoutSecs * 1_000L",
+            ] {
+                assert!(
+                    template.contains(watchdog_contract),
+                    "Android worker template omitted watchdog contract `{watchdog_contract}`"
+                );
+            }
+        }
+        assert!(
+            !uniffi.contains("benchmarkComplete || workerPid == null"),
+            "the watchdog must detect a worker killed before its first heartbeat"
+        );
+
+        let boltffi = include_str!("boltffi_templates/android/MainActivity.kt.template");
+        assert!(boltffi.contains("emitFailure(\"exception\""));
+        assert!(boltffi.contains("applyV2Envelope"));
+        assert!(boltffi.contains("\"failure\""));
+    }
+
+    #[test]
+    fn ios_result_transport_has_heartbeat_and_redundant_accessibility_channels() {
+        let swiftui =
+            include_str!("../templates/ios/BenchRunner/BenchRunner/ContentView.swift.template");
+        let uikit = include_str!(
+            "../templates/ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift.template"
+        );
+        let ui_test = include_str!(
+            "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+        );
+
+        for template in [swiftui, uikit] {
+            assert!(template.contains("benchmarkHeartbeat"));
+            assert!(template.contains("MOBENCH_HEARTBEAT app interaction"));
+            assert!(template.contains("benchmarkReportJSON"));
+            assert!(template.contains("accessibilityLabel"));
+            assert!(template.contains("accessibilityValue"));
+        }
+        assert!(ui_test.contains("waitForBenchmarkCompletion"));
+        assert!(ui_test.contains("MOBENCH_HEARTBEAT waiting for benchmark completion"));
+        assert!(ui_test.contains("app.buttons[\"benchmarkHeartbeat\"]"));
+        assert!(ui_test.contains("app.activate()"));
+        assert!(ui_test.contains("firstValidJSON([reportValue, reportElement.label])"));
+        assert!(ui_test.contains("validateBenchmarkReport(jsonString)"));
+    }
+
+    #[test]
+    fn editable_native_runner_templates_match_embedded_sources() {
+        assert_eq!(
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template"),
+            include_str!("../../../templates/android/app/src/main/java/MainActivity.kt.template"),
+        );
+        assert_eq!(
+            include_str!(
+                "../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
+            ),
+            include_str!(
+                "../../../templates/android/app/src/androidTest/java/MainActivityTest.kt.template"
+            ),
+        );
+        assert_eq!(
+            include_str!("../templates/ios/BenchRunner/BenchRunner/ContentView.swift.template"),
+            include_str!(
+                "../../../templates/ios/BenchRunner/BenchRunner/ContentView.swift.template"
+            ),
+        );
+        assert_eq!(
+            include_str!(
+                "../templates/ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift.template"
+            ),
+            include_str!(
+                "../../../templates/ios/BenchRunner/BenchRunner/UIKitLegacyRunner.swift.template"
+            ),
+        );
+        assert_eq!(
+            include_str!(
+                "../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+            ),
+            include_str!(
+                "../../../templates/ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift.template"
+            ),
+        );
     }
 
     #[test]

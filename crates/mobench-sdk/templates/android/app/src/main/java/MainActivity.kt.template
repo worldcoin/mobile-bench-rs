@@ -29,8 +29,8 @@ import uniffi.{{UNIFFI_NAMESPACE}}.runBenchmark
 private const val DEFAULT_FUNCTION = "{{DEFAULT_FUNCTION}}"
 private const val DEFAULT_ITERATIONS = 20u
 private const val DEFAULT_WARMUP = 3u
-private const val DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS = 1800L
-private const val DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS = 10L
+private const val DEFAULT_ANDROID_BENCHMARK_TIMEOUT_SECS = {{ANDROID_BENCHMARK_TIMEOUT_SECS}}L
+private const val DEFAULT_ANDROID_HEARTBEAT_INTERVAL_SECS = {{ANDROID_HEARTBEAT_INTERVAL_SECS}}L
 private const val FUNCTION_EXTRA = "bench_function"
 private const val ITERATIONS_EXTRA = "bench_iterations"
 private const val WARMUP_EXTRA = "bench_warmup"
@@ -70,6 +70,21 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var lastProgressAtMs: Long? = null
     @Volatile private var startedAtMs: Long = 0L
     private lateinit var params: BenchParams
+    private var resultText: TextView? = null
+    private val watchdogHandler = Handler(Looper.getMainLooper())
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (benchmarkComplete) return
+            checkWorkerExit()
+            if (!benchmarkComplete) {
+                val elapsedMs = android.os.SystemClock.elapsedRealtime() - startedAtMs
+                if (elapsedMs >= params.timeoutSecs * 1_000L) {
+                    emitFailure("timeout", "Timed out waiting ${params.timeoutSecs}s for benchmark completion")
+                }
+            }
+            if (!benchmarkComplete) watchdogHandler.postDelayed(this, watchdogPollIntervalMs())
+        }
+    }
 
     data class BenchParams(
         val function: String,
@@ -88,7 +103,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        val resultText = findViewById<TextView>(R.id.result_text)
+        resultText = findViewById(R.id.result_text)
         resultText?.text = "Running benchmark..."
 
         params = resolveBenchParams()
@@ -107,6 +122,7 @@ class MainActivity : AppCompatActivity() {
                             ?: "Benchmark worker completed"
                         resultText?.text = display
                         benchmarkComplete = true
+                        stopWatchdog()
                         android.util.Log.i("BenchRunner", "Benchmark worker completed")
                     }
                     else -> {
@@ -118,6 +134,7 @@ class MainActivity : AppCompatActivity() {
                         benchmarkFailed = true
                         benchmarkComplete = true
                         failureJson = payload
+                        stopWatchdog()
                         if (payload == null) {
                             emitFailure("unknown", display)
                         }
@@ -147,12 +164,18 @@ class MainActivity : AppCompatActivity() {
             } else {
                 startService(intent)
             }
+            watchdogHandler.postDelayed(watchdog, watchdogPollIntervalMs())
         } catch (e: Exception) {
             android.util.Log.e("BenchRunner", "Failed to run benchmark worker", e)
             val message = "Failed to run benchmark worker: ${e.message}"
             resultText?.text = message
             emitFailure("exception", message)
         }
+    }
+
+    override fun onDestroy() {
+        stopWatchdog()
+        super.onDestroy()
     }
 
     fun isBenchmarkComplete(): Boolean {
@@ -176,14 +199,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun checkWorkerExit(): String? {
-        if (benchmarkComplete || workerPid == null) {
+        if (benchmarkComplete) {
             return failureJson
         }
 
-        val pid = workerPid ?: return failureJson
         val processName = workerProcessName ?: workerProcessName()
+        val pid = workerPid
         val alive = runningAppProcesses().any {
-            it.pid == pid || it.processName == processName
+            (pid != null && it.pid == pid) || it.processName == processName
         }
         val graceMs = params.heartbeatIntervalSecs.coerceAtLeast(1L) * 3_000L
         val stale = android.os.SystemClock.elapsedRealtime() - (lastProgressAtMs ?: startedAtMs) > graceMs
@@ -203,8 +226,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun emitFailure(kind: String, message: String) {
         if (failureJson != null) {
+            resultText?.text = message
             benchmarkFailed = true
             benchmarkComplete = true
+            stopWatchdog()
             return
         }
         val payload = buildFailureJson(
@@ -228,7 +253,16 @@ class MainActivity : AppCompatActivity() {
         failureJson = encoded
         benchmarkFailed = true
         benchmarkComplete = true
+        resultText?.text = message
+        stopWatchdog()
         android.util.Log.e("BenchRunner", "BENCH_FAILURE_JSON $encoded")
+    }
+
+    private fun watchdogPollIntervalMs(): Long =
+        (params.heartbeatIntervalSecs.coerceAtLeast(1L) * 1_000L).coerceAtMost(5_000L)
+
+    private fun stopWatchdog() {
+        watchdogHandler.removeCallbacks(watchdog)
     }
 
     private fun resolveBenchParams(): BenchParams {

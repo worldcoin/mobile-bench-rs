@@ -51,6 +51,68 @@ pub(crate) fn cmd_init_sdk(
     Ok(())
 }
 
+/// Build a browser-hosted WebAssembly benchmark bundle.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cmd_build_web(
+    release: bool,
+    project_root: Option<PathBuf>,
+    output_dir: Option<PathBuf>,
+    crate_path: Option<PathBuf>,
+    dry_run: bool,
+    verbose: bool,
+    progress: bool,
+) -> Result<()> {
+    let layout = resolve_project_layout(ProjectLayoutOptions {
+        start_dir: None,
+        project_root: project_root.as_deref(),
+        crate_path: crate_path.as_deref(),
+        config_path: None,
+    })?;
+    let effective_output_dir = output_dir.unwrap_or_else(|| layout.output_dir.clone());
+    let profile = if release {
+        mobench_sdk::BuildProfile::Release
+    } else {
+        mobench_sdk::BuildProfile::Debug
+    };
+    let mut builder =
+        mobench_sdk::builders::WebBuilder::new(&layout.project_root, layout.crate_name.clone())
+            .library_name(layout.library_name.clone())
+            .crate_dir(&layout.crate_dir)
+            .output_dir(&effective_output_dir)
+            .dry_run(dry_run)
+            .verbose(verbose);
+    if let Some(wasm_bindgen) = &layout.web_wasm_bindgen {
+        builder = builder.wasm_bindgen(wasm_bindgen);
+    }
+
+    if progress {
+        println!("[1/3] Compiling Rust benchmark to WebAssembly...");
+        println!("[2/3] Generating browser bindings and harness...");
+    } else {
+        println!("Building web benchmark bundle...");
+        println!("  Target: wasm32-unknown-unknown");
+        println!("  Profile: {}", profile.as_str());
+        println!("  Output: {}", effective_output_dir.join("web").display());
+        if dry_run {
+            println!("  Mode: dry-run (no changes will be made)");
+        }
+    }
+
+    let result = builder.build(&mobench_sdk::builders::WebBuildConfig { profile })?;
+    if progress {
+        println!("[3/3] Done!");
+    }
+    if dry_run {
+        println!("\n[dry-run] Web build simulation completed. No changes were made.");
+    } else {
+        println!("\n\u{2713} Web bundle: {}", result.bundle_dir.display());
+        println!("  Entrypoint: {}", result.index_html.display());
+        println!("  WebAssembly: {}", result.wasm.display());
+        println!("  Manifest: {}", result.manifest.display());
+    }
+    Ok(())
+}
+
 /// Build mobile artifacts using `mobench-sdk`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cmd_build(

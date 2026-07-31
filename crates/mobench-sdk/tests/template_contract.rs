@@ -27,7 +27,7 @@ fn relative_files(root: &Path) -> BTreeSet<PathBuf> {
 }
 
 #[test]
-fn v0_1_43_template_mirrors_have_the_characterized_three_file_drift() {
+fn template_mirrors_have_only_the_characterized_ios_header_drift() {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let editable_root = workspace.join("templates");
     let embedded_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates");
@@ -50,13 +50,37 @@ fn v0_1_43_template_mirrors_have_the_characterized_three_file_drift() {
 
     assert_eq!(
         mismatches,
-        [
-            PathBuf::from("android/app/src/androidTest/java/MainActivityTest.kt.template"),
-            PathBuf::from("android/app/src/main/java/MainActivity.kt.template"),
-            PathBuf::from("ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h.template",),
-        ]
+        [PathBuf::from(
+            "ios/BenchRunner/BenchRunner/BenchRunner-Bridging-Header.h.template",
+        )]
         .into_iter()
         .collect(),
-        "update the v0.1.43 receipt when template ownership changes"
+        "update the template ownership receipt when mirror drift changes"
     );
+}
+
+#[test]
+fn web_templates_are_synchronized_byte_for_byte() {
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let editable_root = workspace.join("templates/web");
+    let embedded_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates/web");
+
+    let expected = [
+        PathBuf::from("index.html"),
+        PathBuf::from("runner.js"),
+        PathBuf::from("worker.js"),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(relative_files(&editable_root), expected);
+    assert_eq!(relative_files(&embedded_root), expected);
+
+    for relative in expected {
+        assert_eq!(
+            fs::read(editable_root.join(&relative)).expect("read editable web template"),
+            fs::read(embedded_root.join(&relative)).expect("read embedded web template"),
+            "web template mirror drifted: {}",
+            relative.display()
+        );
+    }
 }

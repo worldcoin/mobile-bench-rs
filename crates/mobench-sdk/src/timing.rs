@@ -68,10 +68,50 @@ use mobench_runtime::{
 };
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, mpsc};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use thiserror::Error;
+
+#[cfg(target_arch = "wasm32")]
+mod browser_time {
+    use std::time::Duration;
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_namespace = performance, js_name = now)]
+        fn performance_now_ms() -> f64;
+    }
+
+    /// Browser-backed monotonic instant.
+    ///
+    /// `std::time::Instant::now()` panics on `wasm32-unknown-unknown`, so the
+    /// timing harness uses the browser's high-resolution monotonic clock.
+    #[derive(Clone, Copy)]
+    pub(super) struct Instant(f64);
+
+    impl Instant {
+        pub(super) fn now() -> Self {
+            Self(performance_now_ms())
+        }
+
+        pub(super) fn duration_since(self, earlier: Self) -> Duration {
+            Duration::from_secs_f64(((self.0 - earlier.0).max(0.0)) / 1_000.0)
+        }
+
+        pub(super) fn elapsed(self) -> Duration {
+            Self::now().duration_since(self)
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+use browser_time::Instant;
 
 /// Benchmark specification defining what and how to benchmark.
 ///
@@ -230,7 +270,7 @@ fn validate_benchmark_counts(iterations: u32, warmup: u32) -> Result<(), TimingE
 pub struct BenchSample {
     /// Duration of the iteration in nanoseconds.
     ///
-    /// Measured using [`std::time::Instant`] for monotonic, high-resolution timing.
+    /// Measured using a platform monotonic clock with high-resolution timing.
     pub duration_ns: u64,
 
     /// CPU time consumed by the measured iteration in milliseconds.
@@ -630,9 +670,11 @@ struct DefaultResourceMonitor {
     /// creation is significantly more expensive than on desktop Linux, and
     /// 1000+ iteration benchmarks would otherwise spawn 1000+ throwaway
     /// threads.
+    #[cfg(not(target_arch = "wasm32"))]
     memory_sampler: Option<PersistentMemorySampler>,
     /// Set after the first attempt to start the sampler so we do not retry
     /// on platforms where the sampler is not supported.
+    #[cfg(not(target_arch = "wasm32"))]
     sampler_init_attempted: bool,
 }
 
@@ -651,6 +693,7 @@ impl ProcessCpuTimeSnapshot {
         })
     }
 
+    #[cfg(unix)]
     fn total_ns(self) -> u64 {
         self.user_ns.saturating_add(self.system_ns)
     }
@@ -660,6 +703,7 @@ struct DefaultResourceToken {
     cpu_time_start: Option<ProcessCpuTimeSnapshot>,
     /// True if the persistent sampler accepted a `Begin` for this iteration
     /// and we therefore expect a corresponding result on `finish`.
+    #[cfg(not(target_arch = "wasm32"))]
     has_memory_window: bool,
 }
 
@@ -667,17 +711,25 @@ impl ResourceMonitor for DefaultResourceMonitor {
     type Token = DefaultResourceToken;
 
     fn start(&mut self) -> Self::Token {
-        if !self.sampler_init_attempted {
-            self.memory_sampler = PersistentMemorySampler::start();
-            self.sampler_init_attempted = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !self.sampler_init_attempted {
+                self.memory_sampler = PersistentMemorySampler::start();
+                self.sampler_init_attempted = true;
+            }
+            let has_memory_window = self
+                .memory_sampler
+                .as_ref()
+                .is_some_and(PersistentMemorySampler::begin_window);
+            Self::Token {
+                cpu_time_start: current_process_cpu_time(),
+                has_memory_window,
+            }
         }
-        let has_memory_window = self
-            .memory_sampler
-            .as_ref()
-            .is_some_and(PersistentMemorySampler::begin_window);
+
+        #[cfg(target_arch = "wasm32")]
         Self::Token {
-            cpu_time_start: current_process_cpu_time(),
-            has_memory_window,
+            cpu_time_start: None,
         }
     }
 
@@ -687,24 +739,36 @@ impl ResourceMonitor for DefaultResourceMonitor {
             .zip(current_process_cpu_time())
             .and_then(|(start, end)| process_cpu_delta_ms(start, end));
 
-        let memory_peak = if token.has_memory_window {
-            self.memory_sampler
-                .as_ref()
-                .and_then(PersistentMemorySampler::end_window)
-        } else {
-            None
-        };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let memory_peak = if token.has_memory_window {
+                self.memory_sampler
+                    .as_ref()
+                    .and_then(PersistentMemorySampler::end_window)
+            } else {
+                None
+            };
 
-        IterationResourceUsage {
-            cpu_time_ms,
-            peak_memory_kb: memory_peak
-                .and_then(|peak| (peak.growth_kb > 0).then_some(peak.growth_kb)),
-            process_peak_memory_kb: memory_peak
-                .and_then(|peak| (peak.process_peak_kb > 0).then_some(peak.process_peak_kb)),
+            IterationResourceUsage {
+                cpu_time_ms,
+                peak_memory_kb: memory_peak
+                    .and_then(|peak| (peak.growth_kb > 0).then_some(peak.growth_kb)),
+                process_peak_memory_kb: memory_peak
+                    .and_then(|peak| (peak.process_peak_kb > 0).then_some(peak.process_peak_kb)),
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            IterationResourceUsage {
+                cpu_time_ms,
+                ..IterationResourceUsage::default()
+            }
         }
     }
 }
 
+#[cfg(unix)]
 fn round_ns_to_ms(ns: u64) -> u64 {
     ((u128::from(ns) + 500_000) / 1_000_000) as u64
 }
@@ -755,9 +819,12 @@ fn current_process_cpu_time() -> Option<ProcessCpuTimeSnapshot> {
     None
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const MEMORY_SAMPLER_INTERVAL: Duration = Duration::from_millis(1);
+#[cfg(not(target_arch = "wasm32"))]
 type MemoryReader = Arc<dyn Fn() -> Option<u64> + Send + Sync + 'static>;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ProcessMemoryPeak {
     growth_kb: u64,
@@ -771,18 +838,21 @@ struct ProcessMemoryPeak {
 /// thread for every sample. On Android (Bionic) and iOS that thread-creation
 /// overhead is non-trivial and would inflate harness wall time on
 /// high-iteration runs.
+#[cfg(not(target_arch = "wasm32"))]
 struct PersistentMemorySampler {
     cmd_tx: mpsc::SyncSender<SamplerCmd>,
     result_rx: mpsc::Receiver<Option<ProcessMemoryPeak>>,
     handle: Option<JoinHandle<()>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum SamplerCmd {
     Begin(mpsc::SyncSender<bool>),
     End,
     Shutdown,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PersistentMemorySampler {
     fn start() -> Option<Self> {
         Self::start_with_reader(Arc::new(current_process_memory_kb))
@@ -901,6 +971,7 @@ impl PersistentMemorySampler {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for PersistentMemorySampler {
     fn drop(&mut self) {
         let _ = self.cmd_tx.send(SamplerCmd::Shutdown);
@@ -964,7 +1035,8 @@ fn current_process_memory_kb() -> Option<u64> {
     target_os = "android",
     target_os = "linux",
     target_os = "ios",
-    target_os = "macos"
+    target_os = "macos",
+    target_arch = "wasm32"
 )))]
 fn current_process_memory_kb() -> Option<u64> {
     None
@@ -2046,6 +2118,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn memory_peak_sampler_uses_the_first_post_startup_sample_as_its_baseline() {
         use std::collections::VecDeque;
         use std::sync::{Arc, Mutex};
@@ -2081,6 +2154,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn persistent_memory_sampler_does_not_queue_result_when_begin_fails() {
         use std::collections::VecDeque;
         use std::sync::{Arc, Mutex};
@@ -2119,6 +2193,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn persistent_memory_sampler_waits_for_baseline_before_begin_returns() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::{Arc, Mutex};
@@ -2172,6 +2247,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn persistent_memory_sampler_supports_multiple_windows() {
         use std::collections::VecDeque;
         use std::sync::{Arc, Mutex};

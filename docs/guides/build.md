@@ -1,8 +1,9 @@
 # Build Guide
 
-Current release: **0.1.43**.
+Current published release: **0.1.47**. The WebAssembly commands below are part
+of the unreleased 0.2 parity candidate.
 
-Use `cargo mobench build --target <android|ios|both>` for repository
+Use `cargo mobench build --target <android|ios|both|web>` for repository
 development and CI. The CLI resolves the benchmark crate, builds native Rust
 artifacts, generates or updates mobile runner projects, and writes outputs to
 `target/mobench/` by default.
@@ -182,6 +183,41 @@ Package iOS BrowserStack artifacts:
 cargo mobench package-ipa --method adhoc
 cargo mobench package-xcuitest
 ```
+
+## Pinned Browser Release Adapters
+
+The release gate builds browser bundles from fresh, immutable downstream
+checkouts with:
+
+```text
+tests/release-fixtures/
+├── prepare-provekit-wasm.sh
+├── prepare-world-id-wasm.sh
+└── provekit-wasm/
+    ├── export_witness.rs
+    └── lib.rs
+```
+
+These scripts are release adapters, not generic source-rewriting utilities.
+They verify the exact dependency and workspace layout of their pinned
+downstream commits before changing anything.
+
+The ProveKit adapter:
+
+- patches `mobench-sdk` to the exact release-candidate checkout;
+- keeps witness-generation and parallel prover features native-only;
+- generates the complete passport age-check fixture outside measurement;
+- serializes and embeds its deterministic witness because ACVM witness
+  generation is unavailable on `wasm32`;
+- exposes a browser-only benchmark that measures `prove_with_witness`.
+
+The world-id-protocol adapter patches the candidate SDK, enables embedded
+proving keys, removes UniFFI-only browser-incompatible code, and retains
+`zk_mobile_bench::bench_nullifier_proving_only`.
+
+Both adapters must run only against the SHAs and toolchains pinned by the
+release workflow. If a downstream pin changes, review and update the adapter
+against that exact checkout and rebuild it from fresh state.
 
 ## Verify Artifacts
 

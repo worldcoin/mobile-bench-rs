@@ -7,7 +7,8 @@
 //! [`crate::RunnerReport`] JSON payload without using UniFFI-generated bindings.
 
 use crate::BenchSpec;
-use libc::c_char;
+use core::ffi::c_char;
+use std::any::Any;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -66,6 +67,8 @@ pub unsafe fn mobench_run_benchmark_json_impl(
     out: *mut MobenchBuf,
 ) -> i32 {
     let result = catch_unwind(AssertUnwindSafe(|| {
+        crate::metrics::clear();
+
         if out.is_null() {
             return Err("output buffer pointer must not be null".to_string());
         }
@@ -86,7 +89,20 @@ pub unsafe fn mobench_run_benchmark_json_impl(
         let spec: BenchSpec = serde_json::from_slice(spec_bytes)
             .map_err(|error| format!("failed to parse BenchSpec JSON: {error}"))?;
         let report = crate::run_benchmark(spec).map_err(|error| error.to_string())?;
-        let mut bytes = serde_json::to_vec(&report)
+        let mut report_value = serde_json::to_value(&report)
+            .map_err(|error| format!("failed to serialize BenchReport JSON: {error}"))?;
+        let custom_metrics = crate::metrics::take();
+        if !custom_metrics.is_empty() {
+            let report_object = report_value
+                .as_object_mut()
+                .ok_or_else(|| "serialized benchmark report must be a JSON object".to_string())?;
+            report_object.insert(
+                "custom_metrics".to_string(),
+                serde_json::to_value(custom_metrics)
+                    .map_err(|error| format!("failed to serialize custom metrics: {error}"))?,
+            );
+        }
+        let mut bytes = serde_json::to_vec(&report_value)
             .map_err(|error| format!("failed to serialize BenchReport JSON: {error}"))?;
 
         let buf = MobenchBuf {
@@ -108,11 +124,22 @@ pub unsafe fn mobench_run_benchmark_json_impl(
             set_last_error(error);
             1
         }
-        Err(_) => {
-            set_last_error("benchmark panicked across native C ABI boundary");
+        Err(payload) => {
+            set_last_error(format!(
+                "benchmark panicked across native C ABI boundary: {}",
+                panic_payload_message(payload.as_ref())
+            ));
             2
         }
     }
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
 }
 
 /// Frees a buffer returned by [`mobench_run_benchmark_json_impl`].
@@ -212,6 +239,8 @@ mod tests {
     use std::ffi::CStr;
 
     fn native_abi_test_runner(spec: crate::BenchSpec) -> Result<crate::RunnerReport, TimingError> {
+        crate::record_run_u64("payload_size_bytes", 4096);
+        crate::record_sample_u64("proof_size_bytes", 192);
         Ok(crate::RunnerReport {
             spec,
             samples: vec![crate::BenchSample {
@@ -225,10 +254,23 @@ mod tests {
         })
     }
 
+    fn native_abi_panicking_runner(
+        _spec: crate::BenchSpec,
+    ) -> Result<crate::RunnerReport, TimingError> {
+        panic!("diagnostic panic payload")
+    }
+
     inventory::submit! {
         BenchFunction {
             name: "native_abi_test_benchmark",
             runner: native_abi_test_runner,
+        }
+    }
+
+    inventory::submit! {
+        BenchFunction {
+            name: "native_abi_panicking_benchmark",
+            runner: native_abi_panicking_runner,
         }
     }
 
@@ -245,9 +287,20 @@ mod tests {
         assert!(out.len > 0);
 
         let report_bytes = unsafe { slice::from_raw_parts(out.ptr, out.len) };
-        let report: crate::RunnerReport = serde_json::from_slice(report_bytes).unwrap();
-        assert_eq!(report.spec.name, "native_abi_test_benchmark");
-        assert_eq!(report.samples[0].duration_ns, 42);
+        let report: serde_json::Value = serde_json::from_slice(report_bytes).unwrap();
+        assert_eq!(
+            report["spec"]["name"],
+            serde_json::json!("native_abi_test_benchmark")
+        );
+        assert_eq!(report["samples"][0]["duration_ns"], serde_json::json!(42));
+        assert_eq!(
+            report["custom_metrics"]["sample_u64"]["proof_size_bytes"],
+            serde_json::json!([192])
+        );
+        assert_eq!(
+            report["custom_metrics"]["run_u64"]["payload_size_bytes"],
+            serde_json::json!(4096)
+        );
 
         unsafe { mobench_free_buf_impl(&mut out) };
         assert!(out.ptr.is_null());
@@ -285,6 +338,25 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert!(error.contains("unknown benchmark function"));
+    }
+
+    #[test]
+    fn panic_error_includes_the_string_payload() {
+        let spec = br#"{"name":"native_abi_panicking_benchmark","iterations":1,"warmup":0}"#;
+        let mut out = MobenchBuf::default();
+
+        let status =
+            unsafe { mobench_run_benchmark_json_impl(spec.as_ptr(), spec.len(), &mut out) };
+
+        assert_eq!(status, 2);
+        assert!(out.ptr.is_null());
+        let error = unsafe { CStr::from_ptr(mobench_last_error_message_impl()) }
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            error,
+            "benchmark panicked across native C ABI boundary: diagnostic panic payload"
+        );
     }
 
     #[test]

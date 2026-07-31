@@ -1,5 +1,6 @@
 //! Compile-time receipt for the published v0.1.43 `mobench-sdk` facade.
 
+use mobench_sdk::builders::{WebBuildConfig, WebBuildResult, WebBuilder};
 use mobench_sdk::{
     BenchError, BenchFunction, BenchSample, BenchSpec, BenchSummary, BenchmarkBuilder, BuildConfig,
     BuildProfile, BuildResult, FfiBackend, HarnessTimelineSpan, InitConfig, MobenchBuf,
@@ -33,6 +34,9 @@ fn v0_1_43_root_types_remain_nameable() {
     let _: Option<SemanticPhase> = None;
     let _: Option<Target> = None;
     let _: Option<TimingError> = None;
+    let _: Option<WebBuildConfig> = None;
+    let _: Option<WebBuildResult> = None;
+    let _: Option<WebBuilder> = None;
 }
 
 #[test]
@@ -41,6 +45,9 @@ fn v0_1_43_functions_modules_and_macros_remain_reachable() {
     let _ = mobench_sdk::find_benchmark;
     let _ = mobench_sdk::list_benchmark_names;
     let _ = mobench_sdk::run_benchmark;
+    let _ = mobench_sdk::run_benchmark_json;
+    mobench_sdk::record_run_u64("contract_run", 1);
+    mobench_sdk::record_sample_u64("contract_sample", 1);
     assert_eq!(mobench_sdk::profile_phase("contract", || 1_u8), 1);
     let _ = mobench_sdk::run_closure::<fn() -> Result<(), TimingError>>;
     let _: Option<mobench_sdk::ffi::BenchReportFfi> = None;

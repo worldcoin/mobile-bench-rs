@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>mobench web runner</title>
+  </head>
+  <body>
+    <main>
+      <h1>mobench web runner</h1>
+      <p id="mobench-status" aria-live="polite">Loading WebAssembly benchmark runner…</p>
+      <form id="mobench-form">
+        <label>
+          Function
+          <input id="mobench-function" name="function" required>
+        </label>
+        <label>
+          Iterations
+          <input id="mobench-iterations" name="iterations" type="number" min="1" value="20" required>
+        </label>
+        <label>
+          Warmup
+          <input id="mobench-warmup" name="warmup" type="number" min="0" value="5" required>
+        </label>
+        <button type="submit">Run benchmark</button>
+      </form>
+      <pre id="mobench-result" aria-live="polite" hidden></pre>
+    </main>
+    <script type="module" src="./runner.js"></script>
+  </body>
+</html>

@@ -4,18 +4,20 @@
 
 # mobench
 
-mobench is a Rust mobile benchmarking toolkit. It builds and runs Rust
-benchmarks on Android and iOS, locally or on BrowserStack, with a
+mobench is a Rust mobile and browser benchmarking toolkit. It builds and runs
+Rust benchmarks on Android, iOS, and WebAssembly, locally or on BrowserStack, with a
 library-first SDK, a `cargo mobench` CLI, config-first project resolution,
 stable CI output contracts, and local native profiling artifacts.
 
-Current workspace release and crates.io line: **v0.1.43**.
+Current crates.io release line: **v0.1.47**. This branch is the unreleased 0.2
+architecture and parity candidate; its completion status is tracked in
+[`docs/0.2-feature-parity-checklist.md`](docs/0.2-feature-parity-checklist.md).
 
 ## What It Provides
 
 - `#[benchmark]` for registering Rust functions through `inventory`.
-- `mobench-sdk` timing, registry, runner, mobile builders, and generated runner
-  templates.
+- `mobench-sdk` timing, registry, runner, mobile/WASM builders, and generated
+  runner templates.
 - `mobench` CLI orchestration for build, run, CI, reporting, BrowserStack,
   device resolution, and local native profiling.
 - Three generated mobile runner backends:
@@ -28,6 +30,8 @@ Current workspace release and crates.io line: **v0.1.43**.
   flamegraph bundles.
 - Programmatic CLI integration types in the `mobench` crate:
   `RunRequest`, `RunResult`, `DeviceSelection`, and `Report`.
+- `cargo mobench build --target web` for a static worker-backed WASM harness,
+  plus `cargo mobench run-web` for direct W3C BrowserStack Automate execution.
 
 ## Why It Exists
 
@@ -43,10 +47,13 @@ that CI systems and humans can compare.
 2. The macro registers functions at compile time through `inventory`.
 3. The CLI resolves the benchmark crate from flags, `mobench.toml`, Cargo
    metadata, git root, or the legacy `bench-mobile/` layout.
-4. The SDK builders compile native libraries and generate Android/iOS runners.
+4. The SDK builders compile native libraries or WebAssembly and generate the
+   Android/iOS/browser harness.
 5. Generated runners call either the UniFFI surface or the direct native C ABI.
 6. The CLI collects local or BrowserStack results and renders reports.
-7. Optional local profile sessions capture `simpleperf` or simulator-host
+7. Browser benchmarks execute synchronous WASM work in a module worker so the
+   main page remains responsive to WebDriver polling.
+8. Optional local profile sessions capture `simpleperf` or simulator-host
    `sample` stacks and produce flamegraph artifacts.
 
 ## Workflow Diagrams

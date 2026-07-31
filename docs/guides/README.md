@@ -1,6 +1,7 @@
 # mobench Guides
 
-Current release line: **0.1.43**.
+Current published release line: **0.1.47**. Web commands documented in this
+branch belong to the unreleased 0.2 parity candidate.
 
 These guides cover the current mobench CLI, SDK, generated mobile runners,
 BrowserStack execution, CI outputs, artifact fetching, and local native
@@ -13,7 +14,8 @@ profiling.
 - [examples.md](examples.md): minimal benchmark, setup/teardown,
   native C ABI export, CI output, and programmatic integration patterns.
 - [build.md](build.md): Android and iOS prerequisites, build outputs,
-  project resolution, generated runner backends, and troubleshooting.
+  WebAssembly bundles, project resolution, generated runner backends, and
+  troubleshooting.
 - [testing.md](testing.md): host tests, CLI checks, local smoke tests,
   Android/iOS validation, BrowserStack smoke tests, and profiling checks.
 - [browserstack-ci.md](browserstack-ci.md): BrowserStack credentials,
@@ -27,6 +29,8 @@ profiling.
   `ios-instruments`, `rust-tracing` trace contracts, semantic phases, and
   profile diffs.
 - [release.md](release.md): release checklist for the workspace crates and docs.
+- [reusable-workflow-security.md](reusable-workflow-security.md): the
+  secretless prepare and credentialed prebuilt-only trust boundary.
 
 For the full behavior and API contract, see
 [../specs/mobench-current-spec.md](../specs/mobench-current-spec.md).
