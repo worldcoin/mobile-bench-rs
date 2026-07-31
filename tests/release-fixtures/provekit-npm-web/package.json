@@ -6,7 +6,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@worldcoin/provekit": "0.1.0"
+    "@worldcoin/provekit": "0.1.1"
   },
   "devDependencies": {
     "vite": "7.2.7"
