@@ -1640,6 +1640,15 @@ impl IosBuilder {
         }
     }
 
+    /// Regenerates the Xcode project after generated resources have changed.
+    ///
+    /// The normal `build()` flow generates the project before run-scoped files
+    /// such as `bench_spec.json` are embedded. Packaging callers must refresh
+    /// the project so Xcode includes those resources in the app bundle.
+    pub fn regenerate_xcode_project(&self) -> Result<(), BenchError> {
+        self.generate_xcode_project()
+    }
+
     /// Locate the generated UniFFI header for the crate
     fn find_uniffi_header(&self, header_name: &str) -> Option<PathBuf> {
         // Check generated Swift bindings directory first

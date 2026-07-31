@@ -106,6 +106,9 @@ pub(crate) fn package_ios_xcuitest_artifacts(
     // the function requested for this run, not a stale scaffolding default.
     embed_spec_into_apps(&layout.output_dir, spec, identity)
         .context("Failed to bind generated iOS artifacts to the current bench spec")?;
+    builder
+        .regenerate_xcode_project()
+        .context("Failed to regenerate iOS Xcode project after embedding bench spec")?;
     let app = builder
         .package_ipa("BenchRunner", mobench_sdk::builders::SigningMethod::AdHoc)
         .context("Failed to package iOS IPA for BrowserStack")?;

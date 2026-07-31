@@ -553,7 +553,10 @@ fn bind_ios_xcuitest_to_requested_function(
     let test_source =
         output_dir.join("ios/BenchRunner/BenchRunnerUITests/BenchRunnerUITests.swift");
     if !test_source.exists() {
-        return Ok(());
+        return Err(BenchError::Build(format!(
+            "Generated iOS XCUITest source is missing at {}",
+            test_source.display()
+        )));
     }
 
     let contents = std::fs::read_to_string(&test_source).map_err(|e| {
@@ -1068,6 +1071,32 @@ members = ["crates/*"]
                 .contains("private let expectedBenchmarkFunction = \"test_crate::first_run\"")
         );
         assert!(!ios_test_contents.contains("test_crate::generated_default"));
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn embed_bench_spec_fails_when_generated_ios_ui_test_is_missing() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "mobench-test-embed-spec-missing-ui-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(temp_dir.join("ios/BenchRunner")).unwrap();
+
+        #[derive(serde::Serialize)]
+        struct Spec {
+            function: String,
+        }
+
+        let error = embed_bench_spec(
+            &temp_dir,
+            &Spec {
+                function: "test_crate::requested".to_string(),
+            },
+        )
+        .expect_err("missing generated UI test must fail closed");
+        assert!(format!("{error}").contains("Generated iOS XCUITest source is missing"));
 
         std::fs::remove_dir_all(&temp_dir).unwrap();
     }
