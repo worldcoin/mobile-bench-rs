@@ -430,6 +430,7 @@ def test_release_web_boundary_is_candidate_pinned_and_fail_closed() -> None:
     assert "if: always()" in RELEASE_WEB_WORKFLOW
     assert 'test "$PREPARE_RESULT" = success' in RELEASE_WEB_WORKFLOW
     assert 'test "$BROWSER_RESULT" = success' in RELEASE_WEB_WORKFLOW
+    assert WORKFLOW.count('--fetch-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS"') == 2
     prepare = RELEASE_WEB_WORKFLOW[
         RELEASE_WEB_WORKFLOW.index("  prepare:\n"):
         RELEASE_WEB_WORKFLOW.index("  browser:\n")

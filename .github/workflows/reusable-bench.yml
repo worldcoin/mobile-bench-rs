@@ -958,6 +958,7 @@ jobs:
             --expected-platform ios --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
             --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
+            --fetch-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/ios
       - name: Upload iOS results
@@ -1084,6 +1085,7 @@ jobs:
             --expected-platform android --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
             --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
+            --fetch-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/android
       - name: Upload Android results
