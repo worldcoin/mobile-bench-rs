@@ -12,6 +12,7 @@ readme = "README.md"
 keywords = ["benchmark", "mobile", "android", "ios", "performance"]
 categories = ["development-tools", "command-line-utilities"]
 exclude = ["artifacts/**"]
+default-run = "mobench"
 
 [badges]
 maintenance = { status = "actively-developed" }
@@ -21,8 +22,6 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 # Build on default target for docs.rs
 targets = ["x86_64-unknown-linux-gnu"]
-
-default-run = "mobench"
 
 [features]
 bench-support = []

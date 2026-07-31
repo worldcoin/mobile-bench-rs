@@ -409,6 +409,10 @@ deployment_target = "15.0"
 # Development team ID for code signing (optional, uses ad-hoc signing if not set)
 # team_id = "YOUR_TEAM_ID"
 
+[web]
+# Optional path to a wasm-bindgen CLI whose schema matches the Rust dependency.
+# wasm_bindgen = "wasm-bindgen"
+
 [benchmarks]
 # Default benchmark function to run
 default_function = "{library_name}::my_benchmark"
@@ -755,6 +759,8 @@ crate = "discovered-bench"
         assert!(toml.contains("target_sdk = 34"));
         assert!(toml.contains("deployment_target = \"15.0\""));
         assert!(toml.contains("runner = \"swiftui\""));
+        assert!(toml.contains("[web]"));
+        assert!(toml.contains("wasm_bindgen"));
         assert!(toml.contains("default_iterations = 100"));
         assert!(toml.contains("default_warmup = 10"));
         assert!(toml.contains("[browserstack]"));

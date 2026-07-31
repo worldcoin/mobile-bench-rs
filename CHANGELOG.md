@@ -38,6 +38,199 @@ longer integration-oriented release notes and support status.
   iOS devices, and all four browser environments on the exact candidate SHA in
   workflow run 30652763040.
 
+## v0.1.49 - 2026-07-31
+
+### Added
+
+- Added `record_sample_u64` and `record_run_u64` for native benchmark reports;
+  the JSON ABI emits their values under `custom_metrics`.
+- Added a BrowserStack Automate release lane for the pinned public
+  `@worldcoin/provekit` browser package. The fixture proves, verifies, and
+  rejects a tampered proof through the package API on desktop and mobile web.
+
+### Fixed
+
+- Fixed the native Android C ABI runner on 32-bit Android by mapping Rust
+  `usize` values to JNA `NativeLong`, preventing misaligned buffer layouts.
+- Surface native Android worker exits promptly, preserve panic payloads in ABI
+  diagnostics, and make large BrowserStack artifact uploads use HTTP/1.1.
+
+## v0.1.48 - 2026-07-23
+
+### Added
+
+- Added browser-hosted WASM bundles, browser-safe timing, and direct
+  BrowserStack Automate execution through `cargo mobench build --target web`
+  and `cargo mobench run-web`.
+- Added a required downstream release gate covering ProveKit passport
+  age-check proving and World ID nullifier proving on two native Android
+  devices, two native iOS devices, and WASM browsers on macOS, Windows, iOS,
+  and Android.
+
+### Fixed
+
+- Kept `[web].wasm_bindgen` configuration semver-compatible by resolving it
+  from raw TOML instead of adding a field to the public `MobenchConfig`.
+- Limited WASM builds to the selected library target so benchmark packages may
+  retain native-only helper binaries.
+- Removed reqwest's implicit 30-second total deadline from BrowserStack
+  WebDriver requests so session allocation and long proving scripts honor the
+  explicit WebDriver/workflow timeouts.
+- Run browser proofs in a dedicated module worker and poll page-owned result
+  state so real-mobile BrowserStack sessions stay responsive and do not depend
+  on one long-lived WebDriver atom.
+- Installed the caller-matched UniFFI generator from the correct `uniffi`
+  package with its `cli` feature, and added opt-in bounded retries for
+  secretless prepare hooks that download pinned fixture tooling.
+
+## v0.1.47 - 2026-07-20
+
+### Added
+
+- Added a reusable-workflow `max_completion_timeout_secs` input with a trusted
+  30-minute default and a hard six-hour control-plane maximum for long-running
+  prebuilt BrowserStack benchmarks.
+- Added XCUITest heartbeat interactions and accessibility-backed report
+  transport so long iOS benchmarks stay active and return validated JSON across
+  supported iOS/Xcode combinations.
+- Added native Android worker PID/process reporting and early worker-death
+  detection, including structured failures for native linkage errors.
+
+### Changed
+
+- Serialized credentialed iOS and Android jobs to respect constrained
+  BrowserStack account concurrency while allowing Android to proceed when the
+  iOS lane fails or is skipped.
+- Reused the trusted completion timeout for iOS app launch, XCUITest, and
+  BrowserStack polling so every layer observes the same bounded run window.
+
+### Fixed
+
+- Fixed iOS completion detection so the XCUITest waits for the completed state
+  instead of treating the existence of a hidden marker as completion.
+- Fixed native Android failures such as JNA `UnsatisfiedLinkError` being hidden
+  behind the full benchmark timeout.
+- Added five bounded retries to every GitHub PR-head lookup. Transient API
+  failures retry, while an exhausted lookup or mismatched SHA still fails
+  closed before build or credential use.
+
+### Security
+
+- Preserved the secretless prepare and credentialed prebuilt execution split.
+  Retry, timeout, heartbeat, and result-transport changes do not introduce a
+  caller checkout or caller-controlled command in credentialed jobs.
+
+## v0.1.46 - 2026-07-19
+
+### Added
+
+- Added the reusable-workflow `rust_toolchain` input, defaulting to `stable`,
+  so pinned callers can install every mobile target on their exact Rust
+  toolchain while the trusted control plane remains on its own stable toolchain.
+- Added typed `cargo mobench ci prepare --ffi-backend` selection with explicit
+  CLI values taking precedence over `mobench.toml` and the UniFFI default.
+
+### Fixed
+
+- Propagated the resolved FFI backend through every Android and iOS builder
+  path, including secretless prebuilt preparation, so native C ABI projects
+  generate native runners without invoking `uniffi-bindgen`.
+- Fixed the generated Android native C ABI runner and Espresso test interface
+  so the app and test APKs compile and package together.
+- Resolved UniFFI generator versions from the Cargo workspace containing
+  `crate_path` instead of an arbitrary nested lockfile, and skipped UniFFI
+  generator installation for native C ABI and BoltFFI callers.
+
+### Security
+
+- Preserved the secretless prepare and credentialed prebuilt execution split.
+  Toolchain and lockfile decisions influenced by caller files remain confined
+  to untrusted prepare jobs; credentialed jobs still have no caller checkout or
+  caller-controlled build command.
+
+## v0.1.45 - 2026-07-17
+
+### Added
+
+- Added the optional `prepare_script` reusable-workflow input for caller-specific
+  code generation and toolchain setup. The normalized repository-relative hook
+  runs only in secretless, read-only prepare jobs with
+  `MOBENCH_CI_PREPARE=1`; invalid, escaping, missing, or failing hooks stop the
+  handoff before any manifest is uploaded.
+- Added `functions_ios` and `functions_android`, each falling back to the shared
+  `functions` input, plus structured `ios_devices` and `android_devices` JSON
+  arrays for platform-specific multi-device runs.
+
+### Changed
+
+- Reusable BrowserStack runs now require the complete function/device matrix.
+  Missing, unexpected, or duplicate result shards fail the run instead of
+  producing a successful partial summary.
+- Generated CI workflows use the secure two-stage reusable workflow by default;
+  the local composite action remains appropriate only for trusted revisions or
+  secretless execution.
+
+### Fixed
+
+- Restored `cargo run -p mobench -- ...` binary selection by placing
+  `default-run` in the package manifest, and updated SDK rustdoc dependency
+  examples to the `0.1.45` release line.
+
+### Security
+
+- Preserved the `0.1.44` credential boundary: caller hooks, dependencies, and
+  builds remain confined to untrusted prepare jobs, while credentialed jobs use
+  only verified prebuilt mobile packages and the SHA-pinned trusted mobench
+  control plane.
+
+## v0.1.44 - 2026-07-17
+
+### Security
+
+- Split the reusable BrowserStack workflow into untrusted prepare jobs and
+  credentialed prebuilt-run jobs. Pull-request code is built without secrets,
+  protected environments, or write-capable GitHub permissions; credentialed
+  jobs never check out or execute the pull-request revision on the GitHub
+  runner.
+- Added strict manifest verification for the enumerated APK, Android test APK,
+  IPA, and XCUITest artifacts, including normalized paths, platform and
+  benchmark ABI metadata, file sizes, and SHA-256 hashes.
+- Isolated sticky PR/check reporting from benchmark execution and treats report
+  artifacts, filenames, benchmark names, Markdown, CSV, and JSON as untrusted
+  input.
+
+### Added
+
+- Added `cargo mobench ci prepare` for unprivileged mobile builds and
+  `cargo mobench ci run-prebuilt` for trusted upload, BrowserStack execution,
+  result collection, and CI contract output from verified prebuilt artifacts.
+- Added trust-boundary regression fixtures covering hostile build scripts,
+  fixture hooks, dependencies, benchmark code, artifact paths, and report
+  fields.
+
+### Changed
+
+- Reusable workflow callers receive the two-stage architecture by default.
+- Workflow-level permissions are empty; jobs receive only the read or narrowly
+  scoped write permissions they need. Plot-branch publication remains an
+  explicit, protected opt-in instead of a default benchmark permission.
+- `/mobench` dispatches exact fork PR heads instead of treating fork origin as
+  trust, and PR callers must supply both the PR number and full head SHA.
+- Third-party workflow actions are pinned to immutable commit SHAs and
+  BrowserStack secrets must be passed explicitly.
+- Bounded credentialed BrowserStack API, device-log, and diagnostic downloads,
+  neutralized provider response bodies before runner logging, and capped
+  PR-provided completion timeouts against a trusted control-plane maximum.
+
+### Fixed
+
+- Prevented Android `ResultReceiver` success codes from colliding with
+  `Activity.RESULT_OK` across the UniFFI and native C ABI runners, and kept the
+  BoltFFI runner's result markers aligned with the collector contract.
+- Hardened BrowserStack Android result collection for per-test-case Espresso
+  logs and chunked benchmark JSON while bounding downloaded text and report
+  sizes.
+
 ## v0.1.43 - 2026-07-05
 
 ### Added
