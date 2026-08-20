@@ -167,7 +167,8 @@ pub fn render_markdown_summary<T: Display>(summary: &SummaryReport<T>) -> String
                 benchmark.resource_usage.as_ref().and_then(|usage| {
                     (usage.logical_cpu_count.is_some()
                         || usage.affinity_cpu_count.is_some()
-                        || usage.rayon_num_threads_env.is_some())
+                        || usage.rayon_num_threads_env.is_some()
+                        || usage.effective_cpu_cores_median.is_some())
                     .then_some((device, benchmark, usage))
                 })
             })
@@ -178,15 +179,16 @@ pub fn render_markdown_summary<T: Display>(summary: &SummaryReport<T>) -> String
         let _ = writeln!(output);
         let _ = writeln!(
             output,
-            "| Device | Function | Logical CPUs | Affinity CPUs | `RAYON_NUM_THREADS` |"
+            "| Device | Function | Effective cores | Logical CPUs | Affinity CPUs | `RAYON_NUM_THREADS` |"
         );
-        let _ = writeln!(output, "| --- | --- | ---: | ---: | ---: |");
+        let _ = writeln!(output, "| --- | --- | ---: | ---: | ---: | ---: |");
         for (device, benchmark, usage) in diagnostics {
             let _ = writeln!(
                 output,
-                "| {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} |",
                 markdown_table_field_text(&device.device),
                 markdown_table_field_text(&benchmark.function),
+                optional_float(usage.effective_cpu_cores_median),
                 optional_number(usage.logical_cpu_count),
                 optional_number(usage.affinity_cpu_count),
                 optional_number(usage.rayon_num_threads_env),
@@ -719,5 +721,21 @@ mod tests {
         assert_eq!(report.rows.len(), 1);
         assert_eq!(detect_regressions(&report, 10.0).len(), 1);
         assert!(render_compare_markdown(&report).contains("+50.00%"));
+    }
+
+    #[test]
+    fn markdown_cpu_diagnostics_include_effective_core_count() {
+        let mut summary = summary();
+        summary.device_summaries[0].benchmarks[0].resource_usage = Some(BenchmarkResourceUsage {
+            effective_cpu_cores_median: Some(3.75),
+            logical_cpu_count: Some(8),
+            affinity_cpu_count: Some(6),
+            rayon_num_threads_env: Some(4),
+            ..BenchmarkResourceUsage::default()
+        });
+
+        let markdown = render_markdown_summary(&summary);
+        assert!(markdown.contains("| Device | Function | Effective cores |"));
+        assert!(markdown.contains("| Pixel 7 | crate::bench | 3.750 | 8 | 6 | 4 |"));
     }
 }
