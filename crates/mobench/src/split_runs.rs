@@ -1,6 +1,6 @@
 use crate::{
-    CiMergeSplitRunsArgs, MobileTarget, compute_sample_stats, ensure_parent_dir, json_value_to_u64,
-    summary_report_from_value, write_file,
+    CiMergeSplitRunsArgs, MobileTarget, compute_sample_stats, ensure_parent_dir, json_value_to_f64,
+    json_value_to_u64, summary_report_from_value, write_file,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use mobench_report::{
@@ -450,6 +450,13 @@ fn merge_resource_usage(
         cpu_median_ms: sample_resources
             .cpu_median_ms
             .or_else(|| median_resource_values(&resource_values, &["cpu_median_ms"])),
+        logical_cpu_count: consistent_resource_u32(&resource_values, "logical_cpu_count"),
+        affinity_cpu_count: consistent_resource_u32(&resource_values, "affinity_cpu_count"),
+        rayon_num_threads_env: consistent_resource_u32(&resource_values, "rayon_num_threads_env"),
+        effective_cpu_cores_median: median_resource_f64(
+            &resource_values,
+            "effective_cpu_cores_median",
+        ),
         peak_memory_kb: sample_resources
             .peak_memory_growth_kb
             .or_else(|| max_resource_value(&resource_values, &["peak_memory_kb"])),
@@ -499,6 +506,31 @@ fn median_resource_values(resources: &[&Value], keys: &[&str]) -> Option<u64> {
 
 fn max_resource_value(resources: &[&Value], keys: &[&str]) -> Option<u64> {
     resource_numbers(resources, keys).into_iter().max()
+}
+
+fn consistent_resource_u32(resources: &[&Value], key: &str) -> Option<u32> {
+    let values = resources
+        .iter()
+        .filter_map(|resource| resource.get(key))
+        .filter_map(crate::json_value_to_u32)
+        .collect::<Vec<_>>();
+    let first = *values.first()?;
+    values.iter().all(|value| *value == first).then_some(first)
+}
+
+fn median_resource_f64(resources: &[&Value], key: &str) -> Option<f64> {
+    let mut values = resources
+        .iter()
+        .filter_map(|resource| resource.get(key))
+        .filter_map(json_value_to_f64)
+        .collect::<Vec<_>>();
+    values.sort_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    match values.len() {
+        0 => None,
+        len if len % 2 == 1 => Some(values[middle]),
+        _ => Some((values[middle - 1] + values[middle]) / 2.0),
+    }
 }
 
 fn aggregate_cpu_values(values: &[u64]) -> ResourceAggregate {
@@ -669,7 +701,7 @@ mod tests {
         assert_eq!(
             csv.lines().next(),
             Some(
-                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb"
+                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb,effective_cpu_cores_median,logical_cpu_count,affinity_cpu_count,rayon_num_threads_env"
             )
         );
     }

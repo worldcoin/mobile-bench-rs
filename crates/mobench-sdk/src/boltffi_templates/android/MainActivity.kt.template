@@ -117,10 +117,15 @@ class MainActivity : AppCompatActivity() {
         val samples = json.optJSONArray("samples") ?: JSONArray()
         val samplesNs = JSONArray()
         val durations = mutableListOf<Long>()
+        val cpuSamplesMs = mutableListOf<Long>()
         for (index in 0 until samples.length()) {
-            val duration = samples.optJSONObject(index)?.optLong("duration_ns", 0L) ?: 0L
+            val sample = samples.optJSONObject(index) ?: continue
+            val duration = sample.optLong("duration_ns", 0L)
             samplesNs.put(duration)
             durations.add(duration)
+            if (sample.has("cpu_time_ms") && !sample.isNull("cpu_time_ms")) {
+                cpuSamplesMs.add(sample.optLong("cpu_time_ms"))
+            }
         }
         json.put("samples_ns", samplesNs)
         applyV2Envelope(json, params, samplesNs, "success", null, null)
@@ -134,15 +139,43 @@ class MainActivity : AppCompatActivity() {
 
         val memInfo = Debug.MemoryInfo()
         Debug.getMemoryInfo(memInfo)
-        json.put(
-            "resources",
-            JSONObject()
+        val affinityCpuCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val logicalCpuCount = try {
+            java.io.File("/sys/devices/system/cpu/possible").readText().trim().split(',').sumOf { range ->
+                val bounds = range.split('-', limit = 2).mapNotNull(String::toIntOrNull)
+                when (bounds.size) {
+                    1 -> 1
+                    2 -> (bounds[1] - bounds[0] + 1).coerceAtLeast(0)
+                    else -> 0
+                }
+            }.takeIf { it > 0 } ?: affinityCpuCount
+        } catch (_: Exception) {
+            affinityCpuCount
+        }
+        val resources = JSONObject()
                 .put("elapsed_cpu_ms", Process.getElapsedCpuTime())
                 .put("uptime_ms", SystemClock.elapsedRealtime())
+                .put("logical_cpu_count", logicalCpuCount)
+                .put("affinity_cpu_count", affinityCpuCount)
                 .put("total_pss_kb", memInfo.totalPss)
                 .put("private_dirty_kb", memInfo.totalPrivateDirty)
                 .put("native_heap_kb", Debug.getNativeHeapAllocatedSize() / 1024)
-        )
+        System.getenv("RAYON_NUM_THREADS")?.toIntOrNull()?.takeIf { it > 0 }?.let {
+            resources.put("rayon_num_threads_env", it)
+        }
+        if (durations.size == cpuSamplesMs.size && durations.isNotEmpty()) {
+            val ratios = durations.zip(cpuSamplesMs).mapNotNull { (durationNs, cpuMs) ->
+                durationNs.takeIf { it > 0 }?.let { cpuMs.toDouble() * 1_000_000.0 / it.toDouble() }
+            }.sorted()
+            if (ratios.isNotEmpty()) {
+                val middle = ratios.size / 2
+                resources.put(
+                    "effective_cpu_cores_median",
+                    if (ratios.size % 2 == 0) (ratios[middle - 1] + ratios[middle]) / 2.0 else ratios[middle],
+                )
+            }
+        }
+        json.put("resources", resources)
         return json
     }
 

@@ -1,6 +1,6 @@
 # Testing Guide
 
-Current release: **0.2.0**.
+Current release: **0.2.1**.
 
 This guide covers host tests, CLI validation, generated mobile artifacts,
 BrowserStack smoke tests, and local native profiling checks.

@@ -58,6 +58,14 @@ pub struct BenchmarkFailureStats {
 pub struct BenchmarkResourceUsage {
     pub cpu_total_ms: Option<u64>,
     pub cpu_median_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logical_cpu_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affinity_cpu_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayon_num_threads_env: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_cpu_cores_median: Option<f64>,
     /// Legacy alias for `peak_memory_growth_kb`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_memory_kb: Option<u64>,
@@ -85,6 +93,10 @@ impl BenchmarkResourceUsage {
     pub fn is_empty(&self) -> bool {
         self.cpu_total_ms.is_none()
             && self.cpu_median_ms.is_none()
+            && self.logical_cpu_count.is_none()
+            && self.affinity_cpu_count.is_none()
+            && self.rayon_num_threads_env.is_none()
+            && self.effective_cpu_cores_median.is_none()
             && self.peak_memory_kb.is_none()
             && self.peak_memory_growth_kb.is_none()
             && self.process_peak_memory_kb.is_none()

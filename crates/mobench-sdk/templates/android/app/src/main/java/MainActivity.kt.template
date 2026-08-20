@@ -1028,6 +1028,38 @@ private fun buildBenchReportJson(
         resources.put("cpu_median_ms", median(cpuSamplesMs))
         resources.put("elapsed_cpu_ms", cpuTotalMs)
     }
+    val affinityCpuCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    val logicalCpuCount = try {
+        java.io.File("/sys/devices/system/cpu/possible").readText().trim().split(',').sumOf { range ->
+            val bounds = range.split('-', limit = 2).mapNotNull(String::toIntOrNull)
+            when (bounds.size) {
+                1 -> 1
+                2 -> (bounds[1] - bounds[0] + 1).coerceAtLeast(0)
+                else -> 0
+            }
+        }.takeIf { it > 0 } ?: affinityCpuCount
+    } catch (_: Exception) {
+        affinityCpuCount
+    }
+    resources.put("logical_cpu_count", logicalCpuCount)
+    resources.put("affinity_cpu_count", affinityCpuCount)
+    System.getenv("RAYON_NUM_THREADS")?.toIntOrNull()?.takeIf { it > 0 }?.let {
+        resources.put("rayon_num_threads_env", it)
+    }
+    if (durationSamplesNs.size == cpuSamplesMs.size && durationSamplesNs.isNotEmpty()) {
+        val ratios = durationSamplesNs.zip(cpuSamplesMs).mapNotNull { (durationNs, cpuMs) ->
+            durationNs.takeIf { it > 0 }?.let { cpuMs.toDouble() * 1_000_000.0 / it.toDouble() }
+        }.sorted()
+        if (ratios.isNotEmpty()) {
+            val middle = ratios.size / 2
+            val effectiveCores = if (ratios.size % 2 == 0) {
+                (ratios[middle - 1] + ratios[middle]) / 2.0
+            } else {
+                ratios[middle]
+            }
+            resources.put("effective_cpu_cores_median", effectiveCores)
+        }
+    }
     if (peakSamplesKb.isNotEmpty()) {
         val peakGrowthKb = peakSamplesKb.maxOrNull() ?: 0L
         resources.put("peak_memory_kb", peakGrowthKb)

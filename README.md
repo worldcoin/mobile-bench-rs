@@ -428,8 +428,10 @@ default:
 - `results.csv`
 - `plots/*.svg` when local plot rendering is enabled
 
-Summary resource fields include `cpu_total_ms`, `cpu_median_ms`, and
-`peak_memory_kb`. Missing resource metrics are emitted as blank CSV fields.
+Summary resource fields include `cpu_total_ms`, `cpu_median_ms`,
+`effective_cpu_cores_median`, `logical_cpu_count`, `affinity_cpu_count`, the optional
+`rayon_num_threads_env`, and `peak_memory_kb`. Missing resource metrics are emitted as
+blank CSV fields.
 
 ## Profiling Outputs
 

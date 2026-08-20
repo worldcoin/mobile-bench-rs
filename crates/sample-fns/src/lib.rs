@@ -1,6 +1,8 @@
 //! Sample benchmark functions for mobile testing using UniFFI (proc macro mode).
 
 use mobench_sdk::timing::{profile_phase, run_closure, TimingError};
+use std::sync::{Arc, Barrier};
+use std::time::{Duration, Instant};
 
 const CHECKSUM_INPUT: [u8; 1024] = [1; 1024];
 
@@ -145,6 +147,13 @@ pub fn run_benchmark(spec: BenchSpec) -> Result<BenchReport, BenchError> {
             })
             .map_err(|e: TimingError| -> BenchError { e.into() })?
         }
+        "parallel_cpu_saturation" | "sample_fns::parallel_cpu_saturation" => {
+            run_closure(timing_spec, || {
+                parallel_cpu_saturation();
+                Ok(())
+            })
+            .map_err(|e: TimingError| -> BenchError { e.into() })?
+        }
         _ => {
             return Err(BenchError::UnknownFunction {
                 name: timing_spec.name.clone(),
@@ -196,6 +205,36 @@ pub fn checksum(bytes: &[u8]) -> u64 {
     bytes.iter().map(|&b| b as u64).sum()
 }
 
+/// Saturate every logical processor exposed to this process for approximately 100 ms.
+///
+/// This diagnostic benchmark verifies that a Mobench runner can execute CPU work
+/// concurrently. Compare its effective CPU-core result with an application benchmark
+/// to distinguish runner constraints from serial application code.
+pub fn parallel_cpu_saturation() {
+    let workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let barrier = Arc::new(Barrier::new(workers));
+    let handles = (0..workers)
+        .map(|worker| {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                let deadline = Instant::now() + Duration::from_millis(100);
+                let mut accumulator = worker as u64;
+                while Instant::now() < deadline {
+                    accumulator = accumulator
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
+                    std::hint::black_box(accumulator);
+                }
+                accumulator
+            })
+        })
+        .collect::<Vec<_>>();
+    for handle in handles {
+        std::hint::black_box(handle.join().expect("CPU saturation worker panicked"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +277,18 @@ mod tests {
         };
         let report = run_benchmark(spec).unwrap();
         assert_eq!(report.samples.len(), 2);
+    }
+
+    #[test]
+    fn test_parallel_cpu_saturation_benchmark() {
+        let spec = BenchSpec {
+            name: "parallel_cpu_saturation".to_string(),
+            iterations: 1,
+            warmup: 0,
+        };
+        let report = run_benchmark(spec).unwrap();
+        assert_eq!(report.samples.len(), 1);
+        assert!(report.samples[0].duration_ns >= 50_000_000);
     }
 
     #[test]

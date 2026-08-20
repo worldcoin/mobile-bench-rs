@@ -17,6 +17,21 @@ Crates.io release pages:
 - [mobench-provider](https://crates.io/crates/mobench-provider)
 - [mobench-report](https://crates.io/crates/mobench-report)
 
+## v0.2.1 - 2026-08-20
+
+Status: release candidate.
+
+Mobench 0.2.1 adds CPU-topology and effective-utilization diagnostics to generated
+Android and iOS runners. Reports now distinguish the device's logical processor count
+from the processors available to the benchmark process, record an explicit
+`RAYON_NUM_THREADS` environment setting when present, and show the median effective
+core count calculated from process CPU time divided by wall time.
+
+The release also includes `sample_fns::parallel_cpu_saturation`, a controlled
+multicore fixture intended to verify that a runner can schedule concurrent CPU work.
+Comparing it with an application fixture makes serial application code distinguishable
+from provider affinity or quota constraints.
+
 ## v0.2.0 - 2026-07-31
 
 Status: current supported release.

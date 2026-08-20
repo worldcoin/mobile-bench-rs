@@ -19,7 +19,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
-version = "0.2.0"
+version = "0.2.1"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -43,11 +43,11 @@ proc-macro2 = "1"
 
 # Phase 1: Template embedding
 include_dir = "0.7"
-mobench-macros = { version = "0.2.0", path = "crates/mobench-macros" }
-mobench-sdk = { version = "0.2.0", path = "crates/mobench-sdk", default-features = false }
-mobench-artifacts = { version = "0.2.0", path = "crates/mobench-artifacts" }
-mobench-domain = { version = "0.2.0", path = "crates/mobench-domain" }
-mobench-process = { version = "0.2.0", path = "crates/mobench-process" }
-mobench-provider = { version = "0.2.0", path = "crates/mobench-provider" }
-mobench-report = { version = "0.2.0", path = "crates/mobench-report" }
-mobench-runtime = { version = "0.2.0", path = "crates/mobench-runtime" }
+mobench-macros = { version = "0.2.1", path = "crates/mobench-macros" }
+mobench-sdk = { version = "0.2.1", path = "crates/mobench-sdk", default-features = false }
+mobench-artifacts = { version = "0.2.1", path = "crates/mobench-artifacts" }
+mobench-domain = { version = "0.2.1", path = "crates/mobench-domain" }
+mobench-process = { version = "0.2.1", path = "crates/mobench-process" }
+mobench-provider = { version = "0.2.1", path = "crates/mobench-provider" }
+mobench-report = { version = "0.2.1", path = "crates/mobench-report" }
+mobench-runtime = { version = "0.2.1", path = "crates/mobench-runtime" }

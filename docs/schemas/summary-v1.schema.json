@@ -53,6 +53,10 @@
                       "properties": {
                         "cpu_total_ms": { "type": ["integer", "null"] },
                         "cpu_median_ms": { "type": ["integer", "null"] },
+                        "effective_cpu_cores_median": { "type": ["number", "null"], "minimum": 0 },
+                        "logical_cpu_count": { "type": ["integer", "null"], "minimum": 1 },
+                        "affinity_cpu_count": { "type": ["integer", "null"], "minimum": 1 },
+                        "rayon_num_threads_env": { "type": ["integer", "null"], "minimum": 1 },
                         "peak_memory_kb": { "type": ["integer", "null"] },
                         "peak_memory_growth_kb": { "type": ["integer", "null"] },
                         "process_peak_memory_kb": { "type": ["integer", "null"] },

@@ -71,10 +71,18 @@ pub struct TimingStats {
 }
 
 /// Resource usage metrics from SDK reports.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ResourceUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_total_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_cpu_cores_median: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logical_cpu_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affinity_cpu_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayon_num_threads_env: Option<u32>,
     /// Legacy alias for `peak_memory_growth_kb`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_memory_kb: Option<u64>,
@@ -712,6 +720,10 @@ impl ResourceUsage {
 
     fn is_empty(&self) -> bool {
         self.cpu_total_ms.is_none()
+            && self.effective_cpu_cores_median.is_none()
+            && self.logical_cpu_count.is_none()
+            && self.affinity_cpu_count.is_none()
+            && self.rayon_num_threads_env.is_none()
             && self.peak_memory_kb.is_none()
             && self.peak_memory_growth_kb.is_none()
             && self.process_peak_memory_kb.is_none()
@@ -724,6 +736,18 @@ impl ResourceUsage {
     fn merge_missing(&mut self, other: &Self) {
         if self.cpu_total_ms.is_none() {
             self.cpu_total_ms = other.cpu_total_ms;
+        }
+        if self.effective_cpu_cores_median.is_none() {
+            self.effective_cpu_cores_median = other.effective_cpu_cores_median;
+        }
+        if self.logical_cpu_count.is_none() {
+            self.logical_cpu_count = other.logical_cpu_count;
+        }
+        if self.affinity_cpu_count.is_none() {
+            self.affinity_cpu_count = other.affinity_cpu_count;
+        }
+        if self.rayon_num_threads_env.is_none() {
+            self.rayon_num_threads_env = other.rayon_num_threads_env;
         }
         if self.peak_memory_kb.is_none() {
             self.peak_memory_kb = other.peak_memory_kb;
@@ -793,6 +817,22 @@ fn parse_resource_usage_object(value: &serde_json::Value) -> Option<ResourceUsag
         .get("cpu_total_ms")
         .or_else(|| object.get("elapsed_cpu_ms"))
         .and_then(json_value_to_u64);
+    let effective_cpu_cores_median = object
+        .get("effective_cpu_cores_median")
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite() && *value >= 0.0);
+    let logical_cpu_count = object
+        .get("logical_cpu_count")
+        .and_then(json_value_to_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let affinity_cpu_count = object
+        .get("affinity_cpu_count")
+        .and_then(json_value_to_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let rayon_num_threads_env = object
+        .get("rayon_num_threads_env")
+        .and_then(json_value_to_u64)
+        .and_then(|value| u32::try_from(value).ok());
     let total_pss_kb = object.get("total_pss_kb").and_then(json_value_to_u64);
     let private_dirty_kb = object.get("private_dirty_kb").and_then(json_value_to_u64);
     let native_heap_kb = object.get("native_heap_kb").and_then(json_value_to_u64);
@@ -810,6 +850,10 @@ fn parse_resource_usage_object(value: &serde_json::Value) -> Option<ResourceUsag
 
     let resource_usage = ResourceUsage {
         cpu_total_ms,
+        effective_cpu_cores_median,
+        logical_cpu_count,
+        affinity_cpu_count,
+        rayon_num_threads_env,
         peak_memory_kb,
         peak_memory_growth_kb,
         process_peak_memory_kb,
@@ -1561,6 +1605,10 @@ mod tests {
                     },
                     resource_usage: Some(ResourceUsage {
                         cpu_total_ms: Some(482),
+                        effective_cpu_cores_median: None,
+                        logical_cpu_count: None,
+                        affinity_cpu_count: None,
+                        rayon_num_threads_env: None,
                         peak_memory_kb: Some(654321),
                         peak_memory_growth_kb: Some(654321),
                         process_peak_memory_kb: Some(1_477_787),

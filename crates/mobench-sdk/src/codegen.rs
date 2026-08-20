@@ -2517,6 +2517,24 @@ mod tests {
     }
 
     #[test]
+    fn all_native_runner_backends_emit_cpu_diagnostics() {
+        let templates = [
+            include_str!("../templates/android/app/src/main/java/MainActivity.kt.template"),
+            include_str!("../templates/ios/BenchRunner/BenchRunner/BenchRunnerFFI.swift.template"),
+            NATIVE_ANDROID_MAIN_ACTIVITY_TEMPLATE,
+            NATIVE_IOS_BENCH_RUNNER_FFI_TEMPLATE,
+            BOLTFFI_ANDROID_MAIN_ACTIVITY_TEMPLATE,
+            BOLTFFI_IOS_BENCH_RUNNER_FFI_TEMPLATE,
+        ];
+        for template in templates {
+            assert!(template.contains("logical_cpu_count"));
+            assert!(template.contains("affinity_cpu_count"));
+            assert!(template.contains("rayon_num_threads_env"));
+            assert!(template.contains("effective_cpu_cores_median"));
+        }
+    }
+
+    #[test]
     fn all_generated_runner_backends_emit_strict_v2_identity_and_counts() {
         let templates = [
             include_str!("../templates/android/app/src/main/java/MainActivity.kt.template"),

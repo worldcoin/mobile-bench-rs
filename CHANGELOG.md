@@ -4,6 +4,21 @@ All notable user-facing changes to `mobench`, `mobench-sdk`, and
 `mobench-macros` are tracked here by release. See `RELEASE_NOTES.md` for the
 longer integration-oriented release notes and support status.
 
+## v0.2.1 - 2026-08-20
+
+### Added
+
+- Report logical and affinity-available CPU counts on generated Android and iOS runners.
+- Report `RAYON_NUM_THREADS` when explicitly configured and effective CPU cores derived
+  from process CPU time divided by wall time.
+- Add `sample_fns::parallel_cpu_saturation` to distinguish runner CPU constraints from
+  serial benchmark implementations.
+
+### Changed
+
+- Preserve CPU diagnostics through JSON summaries, split-run merging, Markdown reports,
+  and CSV output. Split runs retain topology only when every sample agrees.
+
 ## v0.2.0 - 2026-07-31
 
 ### Added

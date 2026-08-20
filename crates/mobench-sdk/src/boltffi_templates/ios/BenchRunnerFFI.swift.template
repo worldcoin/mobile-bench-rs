@@ -150,6 +150,9 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         json["function"] = spec["name"] as? String ?? defaultFunction
         let samples = json["samples"] as? [[String: Any]] ?? []
         let durations = samples.compactMap { coerceToUInt64($0["duration_ns"] ?? 0) }
+        let cpuSamplesMs = samples.compactMap { sample in
+            sample["cpu_time_ms"].flatMap(coerceToUInt64)
+        }
         json["samples_ns"] = durations
         applyV2Envelope(to: &json, params: params, samplesNs: durations, outcome: ["status": "success"])
         if !durations.isEmpty {
@@ -162,10 +165,29 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
                 "median_ns": median(durations)
             ] as [String: Any]
         }
-        json["resources"] = [
+        var resources: [String: Any] = [
             "platform": "ios",
-            "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
-        ] as [String: Any]
+            "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000),
+            "logical_cpu_count": ProcessInfo.processInfo.processorCount,
+            "affinity_cpu_count": ProcessInfo.processInfo.activeProcessorCount
+        ]
+        if let rayonThreads = ProcessInfo.processInfo.environment["RAYON_NUM_THREADS"].flatMap(Int.init), rayonThreads > 0 {
+            resources["rayon_num_threads_env"] = rayonThreads
+        }
+        if durations.count == cpuSamplesMs.count, !durations.isEmpty {
+            let ratios = zip(durations, cpuSamplesMs).compactMap { pair -> Double? in
+                let (durationNs, cpuMs) = pair
+                guard durationNs > 0 else { return nil }
+                return Double(cpuMs) * 1_000_000.0 / Double(durationNs)
+            }.sorted()
+            if !ratios.isEmpty {
+                let middle = ratios.count / 2
+                resources["effective_cpu_cores_median"] = ratios.count.isMultiple(of: 2)
+                    ? (ratios[middle - 1] + ratios[middle]) / 2.0
+                    : ratios[middle]
+            }
+        }
+        json["resources"] = resources
         return json
     }
 

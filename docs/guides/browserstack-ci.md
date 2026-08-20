@@ -1,6 +1,6 @@
 # BrowserStack CI Guide
 
-Current release: **0.2.0**.
+Current release: **0.2.1**.
 
 This guide covers BrowserStack benchmark execution, deterministic device
 resolution, CI contract outputs, artifact fetching, PR reporting, and baseline

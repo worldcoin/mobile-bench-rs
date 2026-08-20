@@ -3779,6 +3779,10 @@ android_heartbeat_interval_secs = 7
                     resource_usage: Some(BenchmarkResourceUsage {
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
+                        logical_cpu_count: None,
+                        affinity_cpu_count: None,
+                        rayon_num_threads_env: None,
+                        effective_cpu_cores_median: None,
                         peak_memory_kb: Some(249_416),
                         peak_memory_growth_kb: Some(249_416),
                         process_peak_memory_kb: Some(1_477_787),
@@ -3826,6 +3830,10 @@ android_heartbeat_interval_secs = 7
                     resource_usage: Some(BenchmarkResourceUsage {
                         cpu_total_ms: Some(800),
                         cpu_median_ms: Some(200),
+                        logical_cpu_count: None,
+                        affinity_cpu_count: None,
+                        rayon_num_threads_env: None,
+                        effective_cpu_cores_median: None,
                         peak_memory_kb: Some(1_024),
                         peak_memory_growth_kb: Some(1_024),
                         process_peak_memory_kb: None,
@@ -3871,6 +3879,10 @@ android_heartbeat_interval_secs = 7
                     resource_usage: Some(BenchmarkResourceUsage {
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
+                        logical_cpu_count: None,
+                        affinity_cpu_count: None,
+                        rayon_num_threads_env: None,
+                        effective_cpu_cores_median: None,
                         peak_memory_kb: Some(249_416),
                         peak_memory_growth_kb: Some(249_416),
                         process_peak_memory_kb: Some(1_477_787),
@@ -3886,10 +3898,10 @@ android_heartbeat_interval_secs = 7
 
         assert!(
             csv.starts_with(
-                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb\n"
+                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb,effective_cpu_cores_median,logical_cpu_count,affinity_cpu_count,rayon_num_threads_env\n"
             )
         );
-        assert!(csv.contains(",482,241,249416,249416,1477787\n"));
+        assert!(csv.contains(",482,241,249416,249416,1477787,,,,\n"));
     }
 
     #[test]
@@ -3921,8 +3933,8 @@ android_heartbeat_interval_secs = 7
         assert_eq!(
             csv,
             concat!(
-                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb\n",
-                "\"'\t=HYPERLINK(\"\"https://evil.invalid/a,b\"\")\r\nPixel\",\"'+SUM(1,2)\",1,1,1,1,1,1,,,,,\n"
+                "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb,effective_cpu_cores_median,logical_cpu_count,affinity_cpu_count,rayon_num_threads_env\n",
+                "\"'\t=HYPERLINK(\"\"https://evil.invalid/a,b\"\")\r\nPixel\",\"'+SUM(1,2)\",1,1,1,1,1,1,,,,,,,,,\n"
             )
         );
     }
@@ -4113,6 +4125,10 @@ android_heartbeat_interval_secs = 7
                     resource_usage: Some(BenchmarkResourceUsage {
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
+                        logical_cpu_count: None,
+                        affinity_cpu_count: None,
+                        rayon_num_threads_env: None,
+                        effective_cpu_cores_median: None,
                         peak_memory_kb: Some(249_416),
                         peak_memory_growth_kb: None,
                         process_peak_memory_kb: Some(1_477_787),
@@ -4130,7 +4146,7 @@ android_heartbeat_interval_secs = 7
         let csv = render_csv_summary(&summary);
 
         assert!(markdown.contains("243.57 MB"));
-        assert!(csv.contains(",482,241,249416,249416,1477787\n"));
+        assert!(csv.contains(",482,241,249416,249416,1477787,,,,\n"));
     }
 
     #[test]
@@ -4156,6 +4172,10 @@ android_heartbeat_interval_secs = 7
                     resource_usage: Some(BenchmarkResourceUsage {
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
+                        logical_cpu_count: None,
+                        affinity_cpu_count: None,
+                        rayon_num_threads_env: None,
+                        effective_cpu_cores_median: None,
                         peak_memory_kb: Some(654_321),
                         peak_memory_growth_kb: Some(654_321),
                         process_peak_memory_kb: Some(1_477_787),
@@ -4206,6 +4226,10 @@ android_heartbeat_interval_secs = 7
                     resource_usage: Some(BenchmarkResourceUsage {
                         cpu_total_ms: Some(482),
                         cpu_median_ms: Some(241),
+                        logical_cpu_count: None,
+                        affinity_cpu_count: None,
+                        rayon_num_threads_env: None,
+                        effective_cpu_cores_median: None,
                         peak_memory_kb: Some(654_321),
                         peak_memory_growth_kb: Some(654_321),
                         process_peak_memory_kb: Some(1_477_787),
@@ -4259,6 +4283,10 @@ android_heartbeat_interval_secs = 7
                     resource_usage: Some(BenchmarkResourceUsage {
                         cpu_total_ms: None,
                         cpu_median_ms: None,
+                        logical_cpu_count: None,
+                        affinity_cpu_count: None,
+                        rayon_num_threads_env: None,
+                        effective_cpu_cores_median: None,
                         peak_memory_kb: Some(171_556),
                         peak_memory_growth_kb: Some(171_556),
                         process_peak_memory_kb: Some(1_477_787),
@@ -4688,11 +4716,11 @@ android_heartbeat_interval_secs = 7
         assert_eq!(
             csv,
             "\
-device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb
-Google Pixel 8-14.0,basic_benchmark::bench_fibonacci,5,100000000,100000000,105000000,95000000,105000000,,,,,
-Google Pixel 8-14.0,basic_benchmark::bench_checksum,5,145000000,145000000,151000000,140000000,151000000,,,,,
-Samsung Galaxy S23-14.0,basic_benchmark::bench_fibonacci,5,94000000,94000000,98000000,90000000,98000000,,,,,
-Samsung Galaxy S23-14.0,basic_benchmark::bench_checksum,5,136000000,136000000,140000000,132000000,140000000,,,,,
+device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb,effective_cpu_cores_median,logical_cpu_count,affinity_cpu_count,rayon_num_threads_env
+Google Pixel 8-14.0,basic_benchmark::bench_fibonacci,5,100000000,100000000,105000000,95000000,105000000,,,,,,,,,
+Google Pixel 8-14.0,basic_benchmark::bench_checksum,5,145000000,145000000,151000000,140000000,151000000,,,,,,,,,
+Samsung Galaxy S23-14.0,basic_benchmark::bench_fibonacci,5,94000000,94000000,98000000,90000000,98000000,,,,,,,,,
+Samsung Galaxy S23-14.0,basic_benchmark::bench_checksum,5,136000000,136000000,140000000,132000000,140000000,,,,,,,,,
 "
         );
     }
@@ -5444,6 +5472,10 @@ mod resource_usage_tests {
         let entry = json!({
             "resources": {
                 "elapsed_cpu_ms": 120,
+                "logical_cpu_count": 8,
+                "affinity_cpu_count": 6,
+                "rayon_num_threads_env": 4,
+                "effective_cpu_cores_median": 3.75,
                 "total_pss_kb": 4096,
                 "private_dirty_kb": 2048,
                 "native_heap_kb": 1024,
@@ -5453,6 +5485,10 @@ mod resource_usage_tests {
 
         let usage = extract_benchmark_resource_usage(&entry, None).unwrap();
         assert_eq!(usage.cpu_total_ms, Some(120));
+        assert_eq!(usage.logical_cpu_count, Some(8));
+        assert_eq!(usage.affinity_cpu_count, Some(6));
+        assert_eq!(usage.rayon_num_threads_env, Some(4));
+        assert_eq!(usage.effective_cpu_cores_median, Some(3.75));
         assert_eq!(usage.total_pss_kb, Some(4096));
         assert_eq!(usage.private_dirty_kb, Some(2048));
         assert_eq!(usage.native_heap_kb, Some(1024));
@@ -5533,6 +5569,10 @@ mod resource_usage_tests {
         let usage = BenchmarkResourceUsage {
             cpu_total_ms: Some(250),
             cpu_median_ms: Some(125),
+            logical_cpu_count: Some(8),
+            affinity_cpu_count: Some(6),
+            rayon_num_threads_env: Some(4),
+            effective_cpu_cores_median: Some(3.75),
             peak_memory_kb: Some(8192),
             peak_memory_growth_kb: Some(8192),
             process_peak_memory_kb: Some(12288),

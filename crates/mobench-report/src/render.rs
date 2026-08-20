@@ -159,6 +159,41 @@ pub fn render_markdown_summary<T: Display>(summary: &SummaryReport<T>) -> String
         }
     }
     let _ = writeln!(output);
+    let diagnostics = summary
+        .device_summaries
+        .iter()
+        .flat_map(|device| {
+            device.benchmarks.iter().filter_map(move |benchmark| {
+                benchmark.resource_usage.as_ref().and_then(|usage| {
+                    (usage.logical_cpu_count.is_some()
+                        || usage.affinity_cpu_count.is_some()
+                        || usage.rayon_num_threads_env.is_some())
+                    .then_some((device, benchmark, usage))
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    if !diagnostics.is_empty() {
+        let _ = writeln!(output, "#### CPU diagnostics");
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "| Device | Function | Logical CPUs | Affinity CPUs | `RAYON_NUM_THREADS` |"
+        );
+        let _ = writeln!(output, "| --- | --- | ---: | ---: | ---: |");
+        for (device, benchmark, usage) in diagnostics {
+            let _ = writeln!(
+                output,
+                "| {} | {} | {} | {} | {} |",
+                markdown_table_field_text(&device.device),
+                markdown_table_field_text(&benchmark.function),
+                optional_number(usage.logical_cpu_count),
+                optional_number(usage.affinity_cpu_count),
+                optional_number(usage.rayon_num_threads_env),
+            );
+        }
+        let _ = writeln!(output);
+    }
     if summary_has_memory_baseline_gap(summary) {
         let _ = writeln!(output, "_Note: {MEMORY_BASELINE_GAP_NOTE}_");
         let _ = writeln!(output);
@@ -172,13 +207,13 @@ pub fn render_csv_summary<T>(summary: &SummaryReport<T>) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
-        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb"
+        "device,function,samples,mean_ns,median_ns,p95_ns,min_ns,max_ns,cpu_total_ms,cpu_median_ms,peak_memory_kb,peak_memory_growth_kb,process_peak_memory_kb,effective_cpu_cores_median,logical_cpu_count,affinity_cpu_count,rayon_num_threads_env"
     );
     for device in &summary.device_summaries {
         for bench in &device.benchmarks {
             let _ = writeln!(
                 output,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 csv_field(&device.device),
                 csv_field(&bench.function),
                 bench.samples,
@@ -216,6 +251,30 @@ pub fn render_csv_summary<T>(summary: &SummaryReport<T>) -> String {
                         .resource_usage
                         .as_ref()
                         .and_then(|usage| usage.process_peak_memory_kb)
+                ),
+                optional_float(
+                    bench
+                        .resource_usage
+                        .as_ref()
+                        .and_then(|usage| usage.effective_cpu_cores_median)
+                ),
+                optional_number(
+                    bench
+                        .resource_usage
+                        .as_ref()
+                        .and_then(|usage| usage.logical_cpu_count)
+                ),
+                optional_number(
+                    bench
+                        .resource_usage
+                        .as_ref()
+                        .and_then(|usage| usage.affinity_cpu_count)
+                ),
+                optional_number(
+                    bench
+                        .resource_usage
+                        .as_ref()
+                        .and_then(|usage| usage.rayon_num_threads_env)
                 ),
             );
         }
@@ -547,6 +606,10 @@ fn format_cpu_wall_ratio(
         ),
         _ => "-".to_string(),
     }
+}
+
+fn optional_float(value: Option<f64>) -> String {
+    value.map(|value| format!("{value:.3}")).unwrap_or_default()
 }
 
 #[must_use]

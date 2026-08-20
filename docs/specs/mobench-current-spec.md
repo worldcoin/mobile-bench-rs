@@ -550,6 +550,10 @@ CSV rows include benchmark-scoped resource columns:
 
 - `cpu_total_ms`
 - `cpu_median_ms`
+- `effective_cpu_cores_median`
+- `logical_cpu_count`
+- `affinity_cpu_count`
+- `rayon_num_threads_env`
 - `peak_memory_kb`
 
 Missing resource metrics are emitted as blank CSV fields.

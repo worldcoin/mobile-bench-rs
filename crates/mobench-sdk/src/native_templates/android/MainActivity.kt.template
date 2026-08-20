@@ -705,6 +705,48 @@ private fun formatDuration(ns: Long): String {
     }
 }
 
+private fun linuxLogicalCpuCount(): Int? = try {
+    val spec = java.io.File("/sys/devices/system/cpu/possible").readText().trim()
+    spec.split(',').sumOf { range ->
+        val bounds = range.split('-', limit = 2).mapNotNull(String::toIntOrNull)
+        when (bounds.size) {
+            1 -> 1
+            2 -> (bounds[1] - bounds[0] + 1).coerceAtLeast(0)
+            else -> 0
+        }
+    }.takeIf { it > 0 }
+} catch (_: Exception) {
+    null
+}
+
+private fun addCpuDiagnostics(
+    resources: JSONObject,
+    durationsNs: List<Long>,
+    cpuSamplesMs: List<Long>,
+) {
+    val affinityCpuCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    resources.put("logical_cpu_count", linuxLogicalCpuCount() ?: affinityCpuCount)
+    resources.put("affinity_cpu_count", affinityCpuCount)
+    System.getenv("RAYON_NUM_THREADS")?.toIntOrNull()?.takeIf { it > 0 }?.let {
+        resources.put("rayon_num_threads_env", it)
+    }
+
+    if (durationsNs.size == cpuSamplesMs.size && durationsNs.isNotEmpty()) {
+        val effectiveCores = durationsNs.zip(cpuSamplesMs).mapNotNull { (durationNs, cpuMs) ->
+            durationNs.takeIf { it > 0 }?.let { cpuMs.toDouble() * 1_000_000.0 / it.toDouble() }
+        }.sorted()
+        if (effectiveCores.isNotEmpty()) {
+            val middle = effectiveCores.size / 2
+            val median = if (effectiveCores.size % 2 == 0) {
+                (effectiveCores[middle - 1] + effectiveCores[middle]) / 2.0
+            } else {
+                effectiveCores[middle]
+            }
+            resources.put("effective_cpu_cores_median", median)
+        }
+    }
+}
+
 private fun buildNativeBenchReportJson(
     report: JSONObject,
     params: BenchParams,
@@ -755,6 +797,7 @@ private fun buildNativeBenchReportJson(
         resources.put("cpu_median_ms", median(cpuSamplesMs))
         resources.put("elapsed_cpu_ms", total)
     }
+    addCpuDiagnostics(resources, durations, cpuSamplesMs)
     peakSamplesKb.maxOrNull()?.let {
         resources.put("peak_memory_kb", it)
         resources.put("peak_memory_growth_kb", it)

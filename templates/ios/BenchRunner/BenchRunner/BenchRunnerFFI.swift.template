@@ -301,13 +301,31 @@ enum {{PROJECT_NAME_PASCAL}}FFI {
         var resources: [String: Any] = [
             "platform": "ios",
             "memory_process": "benchmark_app",
-            "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000)
+            "timestamp_ms": Int64(Date().timeIntervalSince1970 * 1000),
+            "logical_cpu_count": ProcessInfo.processInfo.processorCount,
+            "affinity_cpu_count": ProcessInfo.processInfo.activeProcessorCount
         ]
+        if let rayonThreads = ProcessInfo.processInfo.environment["RAYON_NUM_THREADS"].flatMap(Int.init), rayonThreads > 0 {
+            resources["rayon_num_threads_env"] = rayonThreads
+        }
         if !cpuSamplesMs.isEmpty {
             let cpuTotalMs = cpuSamplesMs.reduce(0, +)
             resources["cpu_total_ms"] = cpuTotalMs
             resources["cpu_median_ms"] = median(cpuSamplesMs)
             resources["elapsed_cpu_ms"] = cpuTotalMs
+        }
+        if durationSamplesNs.count == cpuSamplesMs.count, !durationSamplesNs.isEmpty {
+            let ratios = zip(durationSamplesNs, cpuSamplesMs).compactMap { pair -> Double? in
+                let (durationNs, cpuMs) = pair
+                guard durationNs > 0 else { return nil }
+                return Double(cpuMs) * 1_000_000.0 / Double(durationNs)
+            }.sorted()
+            if !ratios.isEmpty {
+                let middle = ratios.count / 2
+                resources["effective_cpu_cores_median"] = ratios.count.isMultiple(of: 2)
+                    ? (ratios[middle - 1] + ratios[middle]) / 2.0
+                    : ratios[middle]
+            }
         }
         if let peakMemoryKb = peakSamplesKb.max() {
             resources["peak_memory_kb"] = peakMemoryKb

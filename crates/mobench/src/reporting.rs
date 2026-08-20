@@ -897,6 +897,12 @@ pub(crate) fn json_value_to_u32(value: &Value) -> Option<u32> {
         .and_then(|value| u32::try_from(value).ok())
 }
 
+pub(crate) fn json_value_to_f64(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
 fn extract_sample_resources(value: &Value) -> ResourceAggregate {
     let mut resources = ResourceAccumulator::new();
     if let Some(samples) = value.get("samples").and_then(Value::as_array) {
@@ -936,6 +942,18 @@ pub(crate) fn extract_benchmark_resource_usage(
         .and_then(|res| res.get("cpu_median_ms"))
         .and_then(json_value_to_u64)
         .or(sample_resources.cpu_median_ms);
+    let logical_cpu_count = resources
+        .and_then(|res| res.get("logical_cpu_count"))
+        .and_then(json_value_to_u32);
+    let affinity_cpu_count = resources
+        .and_then(|res| res.get("affinity_cpu_count"))
+        .and_then(json_value_to_u32);
+    let rayon_num_threads_env = resources
+        .and_then(|res| res.get("rayon_num_threads_env"))
+        .and_then(json_value_to_u32);
+    let effective_cpu_cores_median = resources
+        .and_then(|res| res.get("effective_cpu_cores_median"))
+        .and_then(json_value_to_f64);
     let total_pss_kb = resources
         .and_then(|res| res.get("total_pss_kb"))
         .and_then(json_value_to_u64);
@@ -966,6 +984,10 @@ pub(crate) fn extract_benchmark_resource_usage(
     let resource_usage = BenchmarkResourceUsage {
         cpu_total_ms,
         cpu_median_ms,
+        logical_cpu_count,
+        affinity_cpu_count,
+        rayon_num_threads_env,
+        effective_cpu_cores_median,
         peak_memory_kb,
         peak_memory_growth_kb,
         process_peak_memory_kb,
@@ -982,6 +1004,10 @@ fn extract_benchmark_resource_usage_from_memory(memory: &Value) -> Option<Benchm
     let resource_usage = BenchmarkResourceUsage {
         cpu_total_ms: None,
         cpu_median_ms: None,
+        logical_cpu_count: None,
+        affinity_cpu_count: None,
+        rayon_num_threads_env: None,
+        effective_cpu_cores_median: None,
         peak_memory_kb: None,
         peak_memory_growth_kb: None,
         process_peak_memory_kb: memory.get("process_pss_kb").and_then(json_value_to_u64),

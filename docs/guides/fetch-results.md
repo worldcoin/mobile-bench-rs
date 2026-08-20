@@ -1,6 +1,6 @@
 # Fetch Results Guide
 
-Current release: **0.2.0**.
+Current release: **0.2.1**.
 
 Use `--fetch` or `cargo mobench fetch` to collect BrowserStack artifacts after a
 remote benchmark run. Fetching is for benchmark logs and session artifacts;
