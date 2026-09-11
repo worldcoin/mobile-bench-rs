@@ -42,7 +42,7 @@ jobs:
         run: cargo deny check advisories bans licenses sources
 
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@77f7de69a88565bdcf254b89775fc9b4d7e6e1d2 # cargo-semver-checks
+        uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2.87.11 https://github.com/taiki-e/install-action/releases/tag/v2.87.11
         with:
           tool: cargo-semver-checks
 

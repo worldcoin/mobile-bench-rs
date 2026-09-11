@@ -72,6 +72,8 @@ jobs:
           DEFAULT_ITERATIONS: ${{ inputs.default_iterations }}
           DEFAULT_WARMUP: ${{ inputs.default_warmup }}
         run: |
+          set_output() { printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; }
+
           # Extract key=value pairs from /mobench command
           LINE=$(echo "$COMMENT_BODY" | head -1)
 
@@ -123,6 +125,8 @@ jobs:
           PR_URL: ${{ github.event.issue.pull_request.url }}
           REPO: ${{ github.repository }}
         run: |
+          set_output() { printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; }
+
           head_sha=$(gh api "$PR_URL" --jq '.head.sha')
           head_repo=$(gh api "$PR_URL" --jq '.head.repo.full_name')
           if [ "$head_repo" != "$REPO" ]; then
@@ -150,6 +154,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           gh workflow run "$WORKFLOW" \
+            -R "$GITHUB_REPOSITORY" \
             --ref "$DEFAULT_BRANCH" \
             -f head_sha="$HEAD_SHA" \
             -f crate_path="$CRATE_PATH" \
