@@ -55,6 +55,24 @@ pub fn decode_android_bench_frames(logs: &str) -> Result<Vec<Value>, AndroidBenc
     for (index, line) in logs.lines().enumerate() {
         let line_number = index + 1;
         let Some(message) = android_protocol_message(line) else {
+            // Log pipelines can wrap one logcat entry across several text lines;
+            // the continuation lines carry neither a protocol marker nor a logcat
+            // prefix. While a frame is open, splice them back into the payload so
+            // a wrapped BENCH_JSON_CHUNK does not truncate the report.
+            if let Some(frame) = open_frame.as_mut()
+                && is_wrapped_continuation(line)
+            {
+                let fragment = line.trim();
+                if frame.payload.len().saturating_add(fragment.len())
+                    > MAX_ANDROID_BENCH_PAYLOAD_BYTES
+                {
+                    return Err(AndroidBenchFrameError::PayloadTooLarge {
+                        line: line_number,
+                        limit: MAX_ANDROID_BENCH_PAYLOAD_BYTES,
+                    });
+                }
+                frame.payload.push_str(fragment);
+            }
             continue;
         };
         if message == "BENCH_JSON_START" {
@@ -146,6 +164,31 @@ fn android_protocol_message(line: &str) -> Option<&str> {
     marker_is_log_message.then_some(&trimmed[index..])
 }
 
+/// Whether a marker-less line is the wrapped continuation of the previous
+/// logcat entry rather than a foreign log line.
+///
+/// Genuine logcat entries carry a `<level>/<tag>` prefix (e.g.
+/// `I/BenchRunner(1234):`) near the start of the line; a line that a log
+/// pipeline wrapped mid-entry starts with raw payload instead.
+fn is_wrapped_continuation(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let mut head_end = trimmed.len().min(64);
+    while !trimmed.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let head = &trimmed[..head_end];
+    let bytes = head.as_bytes();
+    let looks_like_logcat_entry = bytes.iter().enumerate().any(|(i, &b)| {
+        matches!(b, b'V' | b'D' | b'I' | b'W' | b'E' | b'F')
+            && bytes.get(i + 1) == Some(&b'/')
+            && (i == 0 || bytes[i - 1] == b' ')
+    });
+    !looks_like_logcat_entry
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +207,61 @@ mod tests {
         assert_eq!(values.len(), 1);
         assert_eq!(values[0]["function"], "sample_fns::checksum");
         assert_eq!(values[0]["samples_ns"], serde_json::json!([1000, 2000]));
+    }
+
+    #[test]
+    fn decodes_chunk_frame_wrapped_by_log_pipeline() {
+        // Observed on BrowserStack (Galaxy S24 / Android 14): the log pipeline
+        // wrapped one BENCH_JSON_CHUNK entry across two text lines, leaving the
+        // continuation without a marker or logcat prefix.
+        let logs = r#"
+09-14 11:27:47.073 I/BenchRunner(27837): BENCH_JSON_START
+09-14 11:27:47.073 I/BenchRunner(27837): BENCH_JSON_CHUNK {"function":"zk_mobile_bench::bench_nullifier_proof_generation","samples_ns":[1000,
+09-14 11:27:47.073 I/BenchRunner(27837): BENCH_JSON_CHUNK 2000],"resources":{"platform":"android","pro
+cess_peak_memory_kb":460888}}
+09-14 11:27:47.073 I/BenchRunner(27837): BENCH_JSON_END
+"#;
+
+        let values = decode_android_bench_frames(logs).expect("decode wrapped frame");
+
+        assert_eq!(values.len(), 1);
+        assert_eq!(
+            values[0]["function"],
+            "zk_mobile_bench::bench_nullifier_proof_generation"
+        );
+        assert_eq!(
+            values[0]["resources"]["process_peak_memory_kb"],
+            serde_json::json!(460888)
+        );
+    }
+
+    #[test]
+    fn skips_foreign_logcat_lines_inside_chunk_frame() {
+        let logs = r#"
+I/BenchRunner: BENCH_JSON_START
+I/BenchRunner: BENCH_JSON_CHUNK {"function":"sample_fns::checksum",
+09-14 11:27:47.100 W/ActivityManager(1234): unrelated system noise
+I/BenchRunner: BENCH_JSON_CHUNK "samples_ns":[1000]}
+I/BenchRunner: BENCH_JSON_END
+"#;
+
+        let values = decode_android_bench_frames(logs).expect("decode frame with foreign lines");
+
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0]["samples_ns"], serde_json::json!([1000]));
+    }
+
+    #[test]
+    fn ignores_unmarked_lines_outside_frames() {
+        let logs = r#"
+just some stray text without markers
+I/BenchRunner: BENCH_JSON {"function":"legacy::bench","samples_ns":[7]}
+trailing stray text
+"#;
+
+        let values = decode_android_bench_frames(logs).expect("decode with stray lines");
+
+        assert_eq!(values.len(), 1);
     }
 
     #[test]
