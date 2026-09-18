@@ -731,6 +731,10 @@ jobs:
           targets: ${{ inputs.rust_targets_android }}
       - name: Setup Android SDK/NDK
         uses: android-actions/setup-android@651bceb6f9ca583f16b8d75b62c36ded2ae6fc9c # v4.0.0
+        with:
+          # v4.0.0 defaults to 'tools platform-tools'; the obsolete 'tools' package
+          # was dropped from Google's SDK manifest and now fails the install.
+          packages: "platform-tools"
       - name: Install Android SDK packages and select NDK
         shell: bash
         run: |
