@@ -84,6 +84,7 @@ jobs:
 
           platform=$(extract_val platform)
           device_profile=$(extract_val device_profile)
+          functions=$(extract_val functions)
           iterations=$(extract_val iterations)
           warmup=$(extract_val warmup)
 
@@ -93,11 +94,22 @@ jobs:
             *) echo "::warning::Invalid platform '${platform}', defaulting to 'both'"; platform="both" ;;
           esac
 
-          # Validate device_profile against allowlist
-          case "${device_profile:-low-spec}" in
-            low-spec|mid-spec|high-spec|flagship) device_profile="${device_profile:-low-spec}" ;;
-            *) echo "::warning::Invalid device_profile '${device_profile}', defaulting to 'low-spec'"; device_profile="low-spec" ;;
-          esac
+          # Profiles are tags in the caller's device matrix, so the set of valid
+          # names is repo-specific. Check the shape only and let `devices resolve`
+          # be the authority: an unknown tag then fails loudly instead of silently
+          # benchmarking a different device tier than the one that was asked for.
+          device_profile="${device_profile:-low-spec}"
+          if ! [[ "$device_profile" =~ ^[a-z0-9-]{1,32}$ ]]; then
+            echo "::warning::Invalid device_profile '${device_profile}', defaulting to 'low-spec'"
+            device_profile="low-spec"
+          fi
+
+          # Comma-separated fully-qualified function names. Left empty when absent
+          # or malformed so the dispatch step falls back to the caller's list.
+          if [ -n "$functions" ] && ! [[ "$functions" =~ ^[A-Za-z0-9_:,]{1,512}$ ]]; then
+            echo "::warning::Invalid functions '${functions}', falling back to the caller default"
+            functions=""
+          fi
 
           # Validate numeric fields
           if ! [[ "${iterations:-$DEFAULT_ITERATIONS}" =~ ^[0-9]+$ ]]; then
@@ -114,6 +126,7 @@ jobs:
 
           set_output "platform=${platform}"
           set_output "device_profile=${device_profile}"
+          set_output "functions=${functions}"
           set_output "iterations=${iterations}"
           set_output "warmup=${warmup}"
 
@@ -149,7 +162,7 @@ jobs:
           WARMUP: ${{ steps.parse.outputs.warmup }}
           PR_NUMBER: ${{ github.event.issue.number }}
           REQUESTED_BY: ${{ github.event.comment.user.login }}
-          FUNCTIONS: ${{ inputs.functions }}
+          FUNCTIONS: ${{ steps.parse.outputs.functions != '' && steps.parse.outputs.functions || inputs.functions }}
           CRATE_PATH: ${{ inputs.crate_path }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
