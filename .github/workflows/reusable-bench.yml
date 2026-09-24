@@ -52,7 +52,7 @@ on:
         type: string
         default: both
       device_profile:
-        description: "Device profile: low-spec, mid-spec, high-spec, custom"
+        description: "Device matrix tag to resolve (for example low-spec), or custom with explicit device inputs"
         required: false
         type: string
         default: low-spec

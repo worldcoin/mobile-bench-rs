@@ -80,7 +80,8 @@ Current workflow families:
 - `mobile-bench-pr-auto.yml`: automatic PR benchmark dispatch.
 - `mobile-bench-pr-command.yml`: command-triggered PR benchmark dispatch.
 - `reusable-pr-auto.yml` and `reusable-pr-command.yml`: reusable PR workflow
-  pieces.
+  pieces. The `/mobench` comment syntax is documented in
+  [`docs/guides/browserstack-ci.md`](../guides/browserstack-ci.md).
 - `mobile-bench-plot-fixtures.yml`: plot fixture validation.
 - `mobile-bench-profile-selftest.yml`: local profile artifact validation.
 - `mobile-bench-selftest.yml`: benchmark self-test workflow.
