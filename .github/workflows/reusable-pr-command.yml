@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       functions:
-        description: "JSON array of benchmark function names"
+        description: "JSON array or comma-separated list of benchmark function names; used when the comment has no functions="
         required: true
         type: string
       trusted_associations:
@@ -82,6 +82,9 @@ jobs:
             echo "$LINE" | sed -n "s/.*${1}=\([^ ]*\).*/\1/p"
           }
 
+          # Web-UI comments spanning more than one line use CRLF, and `[^ ]*`
+          # would capture the CR into whichever key ends the first line.
+          LINE="${LINE%$'\r'}"
           platform=$(extract_val platform)
           device_profile=$(extract_val device_profile)
           functions=$(extract_val functions)
@@ -98,17 +101,25 @@ jobs:
           # names is repo-specific. Check the shape only and let `devices resolve`
           # be the authority: an unknown tag then fails loudly instead of silently
           # benchmarking a different device tier than the one that was asked for.
-          device_profile="${device_profile:-low-spec}"
-          if ! [[ "$device_profile" =~ ^[a-z0-9-]{1,32}$ ]]; then
-            echo "::warning::Invalid device_profile '${device_profile}', defaulting to 'low-spec'"
+          # The shape check mirrors `resolve_devices_from_matrix`, which trims and
+          # lowercases tags and accepts any characters.
+          if [ -z "$device_profile" ]; then
             device_profile="low-spec"
+          elif [[ "$device_profile" =~ ^[A-Za-z0-9._-]{1,32}$ ]]; then
+            device_profile="${device_profile,,}"
+          else
+            echo "::error::Invalid device_profile '${device_profile}'; expected a device matrix tag matching [A-Za-z0-9._-]{1,32}"
+            exit 1
           fi
 
           # Comma-separated fully-qualified function names. Left empty when absent
-          # or malformed so the dispatch step falls back to the caller's list.
-          if [ -n "$functions" ] && ! [[ "$functions" =~ ^[A-Za-z0-9_:,]{1,512}$ ]]; then
-            echo "::warning::Invalid functions '${functions}', falling back to the caller default"
-            functions=""
+          # so the dispatch step falls back to the caller's list; an explicit but
+          # malformed list fails rather than silently running every function.
+          # Length is checked separately because POSIX only guarantees
+          # RE_DUP_MAX = 255 for a `{1,512}` bound.
+          if [ -n "$functions" ] && ! { [ "${#functions}" -le 512 ] && [[ "$functions" =~ ^[A-Za-z0-9_:,]+$ && "$functions" =~ [A-Za-z0-9_] ]]; }; then
+            echo "::error::Invalid functions '${functions}'; expected comma-separated names matching [A-Za-z0-9_:]"
+            exit 1
           fi
 
           # Validate numeric fields

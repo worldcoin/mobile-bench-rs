@@ -238,6 +238,38 @@ jobs:
 Use `--release` for BrowserStack runs. Debug Android artifacts can be large and
 may time out during upload.
 
+## `/mobench` Comment Command
+
+`reusable-pr-command.yml` dispatches a benchmark run when a trusted author
+comments on a pull request. Arguments are `key=value` pairs read from the
+**first line only**, separated by spaces:
+
+```
+/mobench [platform=android|ios|both] [device_profile=<tag>] [functions=a::b,c::d] [iterations=N] [warmup=N]
+```
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `platform` | `both` | `android`, `ios`, or `both` |
+| `device_profile` | `low-spec` | A tag in the caller's device matrix |
+| `functions` | the caller's configured list | Comma-separated fully-qualified names |
+| `iterations` | caller's `default_iterations` | Positive integer |
+| `warmup` | caller's `default_warmup` | Positive integer |
+
+Omit a key to take its default. An **explicit** `device_profile` or `functions`
+that fails validation fails the dispatch rather than running something else —
+falling back would benchmark the wrong device tier, or run every configured
+function when a subset was asked for. `platform`, `iterations` and `warmup`
+still warn and fall back.
+
+`device_profile` is checked for shape only; `cargo mobench devices resolve` is
+the authority on which tags exist, so an unknown tag fails at resolution with
+`Profile <tag> resolved to no <platform> devices`.
+
+```
+/mobench platform=android device_profile=high-spec functions=my_bench::bench_prove iterations=30 warmup=5
+```
+
 ## PR Reporting
 
 Render Markdown from an existing summary:
