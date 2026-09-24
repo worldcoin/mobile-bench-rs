@@ -915,6 +915,14 @@ pub(crate) fn cmd_ci_run_single(
         extra_args.push("--android-heartbeat-interval-secs".to_string());
         extra_args.push(interval_secs.to_string());
     }
+    if args.retry_skipped_sessions > 0 {
+        extra_args.push("--retry-skipped-sessions".to_string());
+        extra_args.push(args.retry_skipped_sessions.to_string());
+    }
+    if args.retry_busy_parallels > 0 {
+        extra_args.push("--retry-busy-parallels".to_string());
+        extra_args.push(args.retry_busy_parallels.to_string());
+    }
 
     let result = run_request_with_extra_args(
         &RunRequest {

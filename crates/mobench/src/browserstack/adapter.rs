@@ -4,6 +4,8 @@ use anyhow::anyhow;
 use mobench_process::ProcessCancellation;
 use mobench_provider::{AdapterRun, ProviderAdapter};
 
+use super::polling::sleep_cancellable;
+use super::scheduling::schedule_when_parallels_free;
 use super::{
     BrowserStackAdapterError, BrowserStackArtifacts, BrowserStackClient, BrowserStackPlatform,
     BrowserStackReport, BrowserStackRunHandle, BrowserStackRunRequest,
@@ -15,6 +17,7 @@ pub(crate) struct BrowserStackProviderAdapter {
     client: BrowserStackClient,
     timeout_secs: u64,
     poll_interval_secs: u64,
+    busy_parallel_retries: u8,
 }
 
 impl BrowserStackProviderAdapter {
@@ -27,7 +30,14 @@ impl BrowserStackProviderAdapter {
             client,
             timeout_secs,
             poll_interval_secs,
+            busy_parallel_retries: 0,
         }
+    }
+
+    /// Retries scheduling up to `retries` times while all BrowserStack parallels are in use.
+    pub(crate) fn with_busy_parallel_retries(mut self, retries: u8) -> Self {
+        self.busy_parallel_retries = retries;
+        self
     }
 }
 
@@ -59,14 +69,19 @@ impl ProviderAdapter for BrowserStackProviderAdapter {
                     .client
                     .upload_espresso_test_suite(test_suite)
                     .map_err(BrowserStackAdapterError::from_anyhow)?;
-                let run = self
-                    .client
-                    .schedule_espresso_run(
-                        &request.devices,
-                        &app_upload.app_url,
-                        &test_upload.test_suite_url,
-                    )
-                    .map_err(BrowserStackAdapterError::from_anyhow)?;
+                let run = schedule_when_parallels_free(
+                    self.busy_parallel_retries,
+                    cancellation,
+                    sleep_cancellable,
+                    || {
+                        self.client.schedule_espresso_run(
+                            &request.devices,
+                            &app_upload.app_url,
+                            &test_upload.test_suite_url,
+                        )
+                    },
+                )
+                .map_err(BrowserStackAdapterError::from_anyhow)?;
                 Ok(BrowserStackRunHandle {
                     platform: BrowserStackPlatform::Espresso,
                     requested_devices: request.devices.clone(),
@@ -87,14 +102,19 @@ impl ProviderAdapter for BrowserStackProviderAdapter {
                     .client
                     .upload_xcuitest_test_suite(test_suite)
                     .map_err(BrowserStackAdapterError::from_anyhow)?;
-                let run = self
-                    .client
-                    .schedule_xcuitest_run(
-                        &request.devices,
-                        &app_upload.app_url,
-                        &test_upload.test_suite_url,
-                    )
-                    .map_err(BrowserStackAdapterError::from_anyhow)?;
+                let run = schedule_when_parallels_free(
+                    self.busy_parallel_retries,
+                    cancellation,
+                    sleep_cancellable,
+                    || {
+                        self.client.schedule_xcuitest_run(
+                            &request.devices,
+                            &app_upload.app_url,
+                            &test_upload.test_suite_url,
+                        )
+                    },
+                )
+                .map_err(BrowserStackAdapterError::from_anyhow)?;
                 Ok(BrowserStackRunHandle {
                     platform: BrowserStackPlatform::XcuiTest,
                     requested_devices: request.devices.clone(),
