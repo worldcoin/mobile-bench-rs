@@ -14,7 +14,7 @@ use serde_json::json;
 
 use crate::browserstack::{
     self, BrowserStackArtifacts, BrowserStackAuth, BrowserStackClient, BrowserStackProviderAdapter,
-    BrowserStackRunRequest, DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS,
+    BrowserStackRunHandle, BrowserStackRunRequest, DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS,
 };
 use crate::project_layout::*;
 use crate::report_binding::RunEnvelopeIdentity;
@@ -334,7 +334,8 @@ pub(crate) fn trigger_browserstack_espresso(
     spec: &RunSpec,
     apk: &Path,
     test_apk: &Path,
-) -> Result<RemoteRun> {
+    busy_parallel_retries: u8,
+) -> Result<(RemoteRun, BrowserStackRunHandle)> {
     // Validate artifacts exist before attempting upload
     validate_artifacts_for_browserstack(MobileTarget::Android, Some(apk), Some(test_apk), None)?;
 
@@ -347,11 +348,10 @@ pub(crate) fn trigger_browserstack_espresso(
         creds.project.clone(),
     )?;
 
-    let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
-        client,
-        DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS,
-        5,
-    ));
+    let engine = mobench_provider::ProviderEngine::new(
+        BrowserStackProviderAdapter::new(client, DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, 5)
+            .with_busy_parallel_retries(busy_parallel_retries),
+    );
     let request = BrowserStackRunRequest {
         devices: spec.devices.clone(),
         artifacts: BrowserStackArtifacts::Espresso {
@@ -376,16 +376,18 @@ pub(crate) fn trigger_browserstack_espresso(
     println!();
     println!("Waiting for results...");
 
-    Ok(RemoteRun::Android {
-        app_url: run.app_url,
-        build_id: run.build_id,
-    })
+    let remote = RemoteRun::Android {
+        app_url: run.app_url.clone(),
+        build_id: run.build_id.clone(),
+    };
+    Ok((remote, run))
 }
 
 pub(crate) fn trigger_browserstack_xcuitest(
     spec: &RunSpec,
     artifacts: &IosXcuitestArtifacts,
-) -> Result<RemoteRun> {
+    busy_parallel_retries: u8,
+) -> Result<(RemoteRun, BrowserStackRunHandle)> {
     // Validate artifacts exist before attempting upload
     validate_artifacts_for_browserstack(MobileTarget::Ios, None, None, Some(artifacts))?;
 
@@ -398,11 +400,10 @@ pub(crate) fn trigger_browserstack_xcuitest(
         creds.project.clone(),
     )?;
 
-    let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
-        client,
-        DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS,
-        5,
-    ));
+    let engine = mobench_provider::ProviderEngine::new(
+        BrowserStackProviderAdapter::new(client, DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, 5)
+            .with_busy_parallel_retries(busy_parallel_retries),
+    );
     let request = BrowserStackRunRequest {
         devices: spec.devices.clone(),
         artifacts: BrowserStackArtifacts::XcuiTest {
@@ -427,13 +428,15 @@ pub(crate) fn trigger_browserstack_xcuitest(
     println!();
     println!("Waiting for results...");
 
-    Ok(RemoteRun::Ios {
-        app_url: run.app_url,
+    let remote = RemoteRun::Ios {
+        app_url: run.app_url.clone(),
         test_suite_url: run
             .test_suite_url
+            .clone()
             .context("BrowserStack XCUITest start omitted the test-suite URL")?,
-        build_id: run.build_id,
-    })
+        build_id: run.build_id.clone(),
+    };
+    Ok((remote, run))
 }
 
 pub(crate) fn resolve_browserstack_credentials(

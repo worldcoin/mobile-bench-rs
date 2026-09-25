@@ -164,6 +164,18 @@ pub(crate) enum Command {
         fetch_poll_interval_secs: u64,
         #[arg(long, default_value_t = DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS)]
         fetch_timeout_secs: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Schedule up to N fresh BrowserStack builds when a device session is skipped"
+        )]
+        retry_skipped_sessions: u8,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Retry scheduling up to N times, with backoff, while all BrowserStack parallels are in use"
+        )]
+        retry_busy_parallels: u8,
         #[arg(long, help = "Show simplified step-by-step progress output")]
         progress: bool,
     },
@@ -825,6 +837,18 @@ pub(crate) struct CiRunArgs {
     pub(crate) fetch_poll_interval_secs: u64,
     #[arg(long, default_value_t = DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS)]
     pub(crate) fetch_timeout_secs: u64,
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Schedule up to N fresh BrowserStack builds when a device session is skipped"
+    )]
+    pub(crate) retry_skipped_sessions: u8,
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Retry scheduling up to N times, with backoff, while all BrowserStack parallels are in use"
+    )]
+    pub(crate) retry_busy_parallels: u8,
     #[arg(long, help = "Show simplified step-by-step progress output")]
     pub(crate) progress: bool,
     #[arg(

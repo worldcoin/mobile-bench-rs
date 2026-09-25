@@ -7,7 +7,10 @@ use mobench_process::ProcessCancellation;
 
 use super::{BrowserStackClient, BuildStatus};
 
-fn sleep_cancellable(duration: Duration, cancellation: &ProcessCancellation) -> Result<()> {
+pub(super) fn sleep_cancellable(
+    duration: Duration,
+    cancellation: &ProcessCancellation,
+) -> Result<()> {
     let started = Instant::now();
     while started.elapsed() < duration {
         if cancellation.is_cancelled() {
