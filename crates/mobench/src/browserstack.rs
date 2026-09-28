@@ -234,7 +234,6 @@ pub(crate) fn collect_rerunning_skipped_sessions(
     retries: u8,
     mut collect: impl FnMut(&BrowserStackRunHandle) -> Result<ProviderRun<BrowserStackReport>>,
     mut reschedule: impl FnMut(&BrowserStackRunHandle) -> Result<BrowserStackRunHandle>,
-    mut on_discard: impl FnMut(&BrowserStackRunHandle),
 ) -> Result<(ProviderRun<BrowserStackReport>, BrowserStackRunHandle)> {
     let mut rerun = 0u8;
     loop {
@@ -251,7 +250,6 @@ pub(crate) fn collect_rerunning_skipped_sessions(
             handle.build_id,
             run.assessment()
         );
-        on_discard(&handle);
         handle = reschedule(&handle)?;
         println!("Waiting for build {} to complete...", handle.build_id);
     }
@@ -3619,75 +3617,44 @@ BENCH_REPORT_JSON_END
     }
 
     #[test]
-    fn rerun_schedules_fresh_build_after_skipped_session_and_keeps_its_result() {
-        let mut runs = vec![
-            rerun_fixture_run(&[
-                ("iphone-14", "passed", false),
-                ("iphone-16-pro", "skipped", false),
-            ]),
-            rerun_fixture_run(&[
-                ("iphone-14", "passed", false),
-                ("iphone-16-pro", "passed", false),
-            ]),
-        ]
-        .into_iter();
-        let mut collected_builds = Vec::new();
-        let mut discarded = Vec::new();
-
-        let (run, handle) = collect_rerunning_skipped_sessions(
-            rerun_fixture_handle("build-1"),
-            2,
-            |handle| {
-                collected_builds.push(handle.build_id.clone());
-                Ok(runs.next().expect("fixture run"))
-            },
-            |_| Ok(rerun_fixture_handle("build-2")),
-            |handle| discarded.push(handle.build_id.clone()),
-        )
-        .expect("rerun collects");
-
-        assert!(run.assessment().is_complete());
-        assert_eq!(handle.build_id, "build-2");
-        assert_eq!(collected_builds, ["build-1", "build-2"]);
-        assert_eq!(discarded, ["build-1"]);
-    }
-
-    #[test]
-    fn rerun_stops_after_retry_budget_and_returns_the_incomplete_run() {
-        let mut next_build = 1;
-        let (run, handle) = collect_rerunning_skipped_sessions(
-            rerun_fixture_handle("build-1"),
-            2,
-            |_| Ok(rerun_fixture_run(&[("iphone-14", "skipped", false)])),
-            |_| {
-                next_build += 1;
-                Ok(rerun_fixture_handle(&format!("build-{next_build}")))
-            },
-            |_| {},
-        )
-        .expect("rerun collects");
-
-        assert!(!run.assessment().is_complete());
-        assert_eq!(handle.build_id, "build-3");
-        assert!(completed_browserstack_collection(run).is_err());
-    }
-
-    #[test]
-    fn rerun_never_reschedules_a_real_failure_or_when_disabled() {
-        for (retries, statuses) in [
-            (3, vec![("iphone-14", "failed", true)]),
-            (0, vec![("iphone-14", "skipped", false)]),
-        ] {
+    fn rerun_reschedules_only_skipped_sessions_within_the_budget() {
+        let skipped = [
+            ("iphone-14", "passed", false),
+            ("iphone-16-pro", "skipped", false),
+        ];
+        let passed = [
+            ("iphone-14", "passed", false),
+            ("iphone-16-pro", "passed", false),
+        ];
+        let failed = [("iphone-14", "failed", true)];
+        // (retries, collected runs in order, expected final build, expected complete)
+        type Case<'a> = (u8, Vec<&'a [(&'a str, &'a str, bool)]>, &'a str, bool);
+        let cases: [Case; 4] = [
+            (2, vec![&skipped, &passed], "build-2", true),
+            (2, vec![&skipped, &skipped, &skipped], "build-3", false),
+            (3, vec![&failed], "build-1", false),
+            (0, vec![&skipped], "build-1", false),
+        ];
+        for (retries, runs, expected_build, complete) in cases {
+            let mut runs = runs.into_iter();
+            let mut next_build = 1;
             let (run, handle) = collect_rerunning_skipped_sessions(
                 rerun_fixture_handle("build-1"),
                 retries,
-                |_| Ok(rerun_fixture_run(&statuses)),
-                |_| panic!("must not reschedule"),
-                |_| panic!("must not discard"),
+                |_| {
+                    Ok(rerun_fixture_run(
+                        runs.next().expect("unexpected extra collect"),
+                    ))
+                },
+                |_| {
+                    next_build += 1;
+                    Ok(rerun_fixture_handle(&format!("build-{next_build}")))
+                },
             )
             .expect("collect");
-            assert!(!run.assessment().is_complete());
-            assert_eq!(handle.build_id, "build-1");
+            assert_eq!(handle.build_id, expected_build);
+            assert_eq!(run.assessment().is_complete(), complete);
+            assert!(runs.next().is_none(), "collected fewer runs than expected");
         }
     }
 

@@ -729,7 +729,7 @@ pub(crate) fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Res
         };
         let (remote, _) = match manifest.platform {
             MobileTarget::Android => {
-                trigger_browserstack_espresso(&spec, &entry.app, &entry.test_suite, 0)?
+                trigger_browserstack_espresso(&spec, &entry.app, &entry.test_suite)?
             }
             MobileTarget::Ios => trigger_browserstack_xcuitest(
                 &spec,
@@ -737,7 +737,6 @@ pub(crate) fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Res
                     app: entry.app,
                     test_suite: entry.test_suite,
                 },
-                0,
             )?,
         };
         let build_id = match &remote {

@@ -334,7 +334,6 @@ pub(crate) fn trigger_browserstack_espresso(
     spec: &RunSpec,
     apk: &Path,
     test_apk: &Path,
-    busy_parallel_retries: u8,
 ) -> Result<(RemoteRun, BrowserStackRunHandle)> {
     // Validate artifacts exist before attempting upload
     validate_artifacts_for_browserstack(MobileTarget::Android, Some(apk), Some(test_apk), None)?;
@@ -348,10 +347,11 @@ pub(crate) fn trigger_browserstack_espresso(
         creds.project.clone(),
     )?;
 
-    let engine = mobench_provider::ProviderEngine::new(
-        BrowserStackProviderAdapter::new(client, DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, 5)
-            .with_busy_parallel_retries(busy_parallel_retries),
-    );
+    let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+        client,
+        DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS,
+        5,
+    ));
     let request = BrowserStackRunRequest {
         devices: spec.devices.clone(),
         artifacts: BrowserStackArtifacts::Espresso {
@@ -386,7 +386,6 @@ pub(crate) fn trigger_browserstack_espresso(
 pub(crate) fn trigger_browserstack_xcuitest(
     spec: &RunSpec,
     artifacts: &IosXcuitestArtifacts,
-    busy_parallel_retries: u8,
 ) -> Result<(RemoteRun, BrowserStackRunHandle)> {
     // Validate artifacts exist before attempting upload
     validate_artifacts_for_browserstack(MobileTarget::Ios, None, None, Some(artifacts))?;
@@ -400,10 +399,11 @@ pub(crate) fn trigger_browserstack_xcuitest(
         creds.project.clone(),
     )?;
 
-    let engine = mobench_provider::ProviderEngine::new(
-        BrowserStackProviderAdapter::new(client, DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS, 5)
-            .with_busy_parallel_retries(busy_parallel_retries),
-    );
+    let engine = mobench_provider::ProviderEngine::new(BrowserStackProviderAdapter::new(
+        client,
+        DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS,
+        5,
+    ));
     let request = BrowserStackRunRequest {
         devices: spec.devices.clone(),
         artifacts: BrowserStackArtifacts::XcuiTest {

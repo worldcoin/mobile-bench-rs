@@ -441,7 +441,6 @@ pub fn run() -> Result<()> {
             fetch_poll_interval_secs,
             fetch_timeout_secs,
             retry_skipped_sessions,
-            retry_busy_parallels,
             progress,
         } => {
             let layout = resolve_project_layout(ProjectLayoutOptions {
@@ -748,12 +747,8 @@ pub fn run() -> Result<()> {
                             let test_apk = build.test_suite_path.as_ref().context(
                                 "Android test suite APK missing. Run `cargo mobench build --target android` or `./gradlew app:assembleReleaseAndroidTest` in target/mobench/android",
                             )?;
-                            let (run, handle) = trigger_browserstack_espresso(
-                                &spec,
-                                &apk,
-                                test_apk,
-                                retry_busy_parallels,
-                            )?;
+                            let (run, handle) =
+                                trigger_browserstack_espresso(&spec, &apk, test_apk)?;
                             remote_run = Some(run);
                             remote_handle = Some(handle);
                             Some(MobileArtifacts::Android { apk })
@@ -815,8 +810,7 @@ pub fn run() -> Result<()> {
                             let xcui = ios_xcuitest.as_ref().context(
                                 "iOS XCUITest artifacts required when targeting BrowserStack devices; provide --ios-app and --ios-test-suite or set ios_xcuitest in the config",
                             )?;
-                            let (run, handle) =
-                                trigger_browserstack_xcuitest(&spec, xcui, retry_busy_parallels)?;
+                            let (run, handle) = trigger_browserstack_xcuitest(&spec, xcui)?;
                             remote_run = Some(run);
                             remote_handle = Some(handle);
                         }
@@ -898,27 +892,9 @@ pub fn run() -> Result<()> {
                             .context("BrowserStack provider failed to collect")
                     },
                     |handle| {
-                        let next =
-                            client.reschedule_run(handle, retry_busy_parallels, &cancellation)?;
+                        let next = client.reschedule_run(handle)?;
                         final_build_id = next.build_id.clone();
                         Ok(next)
-                    },
-                    |handle| {
-                        // The discarded build's session records are the only evidence of why it was skipped.
-                        if let Err(error) = fetch_browserstack_artifacts(
-                            &client,
-                            run_summary.spec.target,
-                            &handle.build_id,
-                            &fetch_output_dir.join(&handle.build_id),
-                            false,
-                            fetch_poll_interval_secs,
-                            fetch_timeout_secs,
-                        ) {
-                            eprintln!(
-                                "Warning: failed to fetch artifacts for discarded build {}: {error}",
-                                handle.build_id
-                            );
-                        }
                     },
                 )
                 .and_then(|(run, _)| completed_browserstack_collection(run));
@@ -1904,18 +1880,17 @@ project = "proj"
     }
 
     #[test]
-    fn browserstack_retries_default_off_and_parse_on_run_and_ci_run() {
+    fn retry_skipped_sessions_defaults_off_and_parses_on_ci_run() {
         let run = Cli::try_parse_from(["mobench", "run", "--config", "bench-config.toml"])
             .expect("parse run command");
         let Command::Run {
             retry_skipped_sessions,
-            retry_busy_parallels,
             ..
         } = run.command
         else {
             panic!("expected run command");
         };
-        assert_eq!((retry_skipped_sessions, retry_busy_parallels), (0, 0));
+        assert_eq!(retry_skipped_sessions, 0);
 
         let ci = Cli::try_parse_from([
             "mobench",
@@ -1927,8 +1902,6 @@ project = "proj"
             "bench",
             "--retry-skipped-sessions",
             "2",
-            "--retry-busy-parallels",
-            "10",
         ])
         .expect("parse ci run command");
         let Command::Ci {
@@ -1937,10 +1910,7 @@ project = "proj"
         else {
             panic!("expected ci run command");
         };
-        assert_eq!(
-            (args.retry_skipped_sessions, args.retry_busy_parallels),
-            (2, 10)
-        );
+        assert_eq!(args.retry_skipped_sessions, 2);
     }
 
     #[test]
