@@ -4,6 +4,23 @@ All notable user-facing changes to `mobench`, `mobench-sdk`, and
 `mobench-macros` are tracked here by release. See `RELEASE_NOTES.md` for the
 longer integration-oriented release notes and support status.
 
+## Unreleased
+
+### Added
+
+- Added `--retry-skipped-sessions <N>` to `run`, `ci run`, and
+  `ci run-prebuilt`, plus the `retry_skipped_sessions` reusable-workflow input.
+  When BrowserStack skips sessions without a benchmark failure, mobench
+  schedules up to `N` fresh builds from the uploaded app; every device reruns
+  and each build waits up to the fetch timeout again. Abandoned builds are
+  listed in the optional `superseded_build_ids` summary field.
+
+### Changed
+
+- Breaking (Rust API): `RunRequest` has a new public
+  `retry_skipped_sessions: u8` field. Struct-literal constructions must set it;
+  serialized requests without it still deserialize with `0`.
+
 ## v0.2.0 - 2026-07-31
 
 ### Added
