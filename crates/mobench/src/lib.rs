@@ -151,7 +151,8 @@ use tracing_subscriber::EnvFilter;
 
 use browserstack::{
     BrowserStackAuth, BrowserStackClient, BrowserStackProviderAdapter, BrowserStackRunHandle,
-    collect_rerunning_skipped_sessions, completed_browserstack_collection,
+    browserstack_build_dashboard_url, collect_rerunning_skipped_sessions,
+    completed_browserstack_collection,
 };
 use build_commands::*;
 use ci_prebuilt::{cmd_ci_prepare, cmd_ci_run_prebuilt};
@@ -337,6 +338,9 @@ struct RunSummary {
     artifacts: Option<MobileArtifacts>,
     local_report: Value,
     remote_run: Option<RemoteRun>,
+    /// BrowserStack builds abandoned and rescheduled because sessions were skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    superseded_build_ids: Vec<String>,
     summary: SummaryReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     benchmark_results: Option<BTreeMap<String, Vec<Value>>>,
@@ -379,6 +383,22 @@ enum RemoteRun {
         test_suite_url: String,
         build_id: String,
     },
+}
+
+impl RemoteRun {
+    fn build_id(&self) -> &str {
+        match self {
+            RemoteRun::Android { build_id, .. } | RemoteRun::Ios { build_id, .. } => build_id,
+        }
+    }
+
+    fn set_build_id(&mut self, id: String) {
+        match self {
+            RemoteRun::Android { build_id, .. } | RemoteRun::Ios { build_id, .. } => {
+                *build_id = id;
+            }
+        }
+    }
 }
 
 fn init_tracing(verbose: bool) {
@@ -831,6 +851,7 @@ pub fn run() -> Result<()> {
                 artifacts,
                 local_report,
                 remote_run,
+                superseded_build_ids: Vec::new(),
                 summary: summary_placeholder,
                 benchmark_results: None,
                 benchmark_failures: None,
@@ -844,12 +865,8 @@ pub fn run() -> Result<()> {
             }
 
             let mut pending_browserstack_error: Option<String> = None;
-            let mut rerun_build_id: Option<String> = None;
             if fetch && let Some(remote) = &run_summary.remote_run {
-                let original_build_id = match remote {
-                    RemoteRun::Android { build_id, .. } => build_id,
-                    RemoteRun::Ios { build_id, .. } => build_id,
-                };
+                let original_build_id = remote.build_id();
                 let creds =
                     resolve_browserstack_credentials(run_summary.spec.browserstack.as_ref())?;
                 let client = BrowserStackClient::new(
@@ -860,14 +877,14 @@ pub fn run() -> Result<()> {
                     creds.project,
                 )?;
 
-                let provider_handle: BrowserStackRunHandle = remote_handle
+                let mut provider_handle: BrowserStackRunHandle = remote_handle
                     .clone()
                     .context("started BrowserStack run is missing its provider handle")?;
 
                 println!("Waiting for build {} to complete...", original_build_id);
                 println!(
-                    "Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}",
-                    original_build_id
+                    "Dashboard: {}",
+                    browserstack_build_dashboard_url(original_build_id)
                 );
 
                 let mut browserstack_artifacts_fetched = false;
@@ -878,9 +895,10 @@ pub fn run() -> Result<()> {
                         fetch_poll_interval_secs,
                     ));
                 let cancellation = mobench_process::global_cancellation_token();
-                let mut final_build_id = original_build_id.clone();
+                let mut superseded_build_ids = Vec::new();
                 let provider_result = collect_rerunning_skipped_sessions(
-                    provider_handle,
+                    &mut provider_handle,
+                    &mut superseded_build_ids,
                     retry_skipped_sessions,
                     |handle| {
                         provider
@@ -891,21 +909,17 @@ pub fn run() -> Result<()> {
                             .map_err(anyhow::Error::new)
                             .context("BrowserStack provider failed to collect")
                     },
-                    |handle| {
-                        let next = client.reschedule_run(handle)?;
-                        final_build_id = next.build_id.clone();
-                        Ok(next)
-                    },
+                    |handle| client.reschedule_run(handle),
                 )
-                .and_then(|(run, _)| completed_browserstack_collection(run));
-                if final_build_id != *original_build_id {
-                    rerun_build_id = Some(final_build_id.clone());
+                .and_then(completed_browserstack_collection);
+                let build_id = &provider_handle.build_id;
+                let dashboard_url = browserstack_build_dashboard_url(build_id);
+                if !superseded_build_ids.is_empty() {
+                    println!(
+                        "Using BrowserStack build {build_id}; superseded after skipped sessions: {}",
+                        superseded_build_ids.join(", ")
+                    );
                 }
-                let build_id = &final_build_id;
-                let dashboard_url = format!(
-                    "https://app-automate.browserstack.com/dashboard/v2/builds/{}",
-                    build_id
-                );
                 match provider_result {
                     Ok(collection) => {
                         for collected in &collection.reports {
@@ -1018,20 +1032,13 @@ pub fn run() -> Result<()> {
                         )
                     })?;
                 }
+
+                if let Some(remote) = run_summary.remote_run.as_mut() {
+                    remote.set_build_id(provider_handle.build_id);
+                }
+                run_summary.superseded_build_ids = superseded_build_ids;
             } else if fetch {
                 println!("No BrowserStack run to fetch (devices not provided?)");
-            }
-            if let Some(build_id) = rerun_build_id
-                && let Some(
-                    RemoteRun::Android {
-                        build_id: recorded, ..
-                    }
-                    | RemoteRun::Ios {
-                        build_id: recorded, ..
-                    },
-                ) = &mut run_summary.remote_run
-            {
-                *recorded = build_id;
             }
 
             let collected_run = run_lifecycle.collect(bound_reports)?;
@@ -1911,6 +1918,83 @@ project = "proj"
             panic!("expected ci run command");
         };
         assert_eq!(args.retry_skipped_sessions, 2);
+
+        let prebuilt = Cli::try_parse_from([
+            "mobench",
+            "ci",
+            "run-prebuilt",
+            "--manifest",
+            "bundle/manifest.json",
+            "--expected-source-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+            "--expected-platform",
+            "ios",
+            "--expected-functions",
+            "bench",
+            "--expected-iterations",
+            "2",
+            "--expected-warmup",
+            "1",
+            "--devices",
+            "iPhone 15-17",
+            "--retry-skipped-sessions",
+            "3",
+        ])
+        .expect("parse ci run-prebuilt command");
+        let Command::Ci {
+            command: CiCommand::RunPrebuilt(args),
+        } = prebuilt.command
+        else {
+            panic!("expected ci run-prebuilt command");
+        };
+        assert_eq!(args.retry_skipped_sessions, 3);
+    }
+
+    #[test]
+    fn superseded_build_ids_are_omitted_when_empty_and_default_on_read() {
+        let spec = RunSpec {
+            target: MobileTarget::Android,
+            function: "sample_fns::fibonacci".to_string(),
+            iterations: 1,
+            warmup: 0,
+            devices: vec!["Google Pixel 7-13.0".to_string()],
+            ios_completion_timeout_secs: None,
+            ios_deployment_target: None,
+            ios_runner: None,
+            android_benchmark_timeout_secs: None,
+            android_heartbeat_interval_secs: None,
+            browserstack: None,
+            ios_xcuitest: None,
+        };
+        let summary_report = empty_summary(&spec);
+        let mut summary = RunSummary {
+            spec,
+            artifacts: None,
+            local_report: json!({}),
+            remote_run: Some(RemoteRun::Android {
+                app_url: "bs://app".to_string(),
+                build_id: "build-1".to_string(),
+            }),
+            superseded_build_ids: Vec::new(),
+            summary: summary_report,
+            benchmark_results: None,
+            benchmark_failures: None,
+            performance_metrics: None,
+        };
+        let value = serde_json::to_value(&summary).expect("serialize summary");
+        assert!(value.get("superseded_build_ids").is_none());
+        let read_back: RunSummary = serde_json::from_value(value).expect("read summary");
+        assert!(read_back.superseded_build_ids.is_empty());
+
+        summary
+            .remote_run
+            .as_mut()
+            .expect("remote run")
+            .set_build_id("build-2".into());
+        summary.superseded_build_ids = vec!["build-1".to_string()];
+        let value = serde_json::to_value(&summary).expect("serialize summary");
+        assert_eq!(value["superseded_build_ids"], json!(["build-1"]));
+        assert_eq!(value["remote_run"]["build_id"], "build-2");
     }
 
     #[test]
@@ -3075,6 +3159,7 @@ runner = "swiftui"
             } => {
                 assert_eq!(args.expected_iterations, 2);
                 assert_eq!(args.max_completion_timeout_secs, 1800);
+                assert_eq!(args.retry_skipped_sessions, 0);
             }
             _ => panic!("expected ci run-prebuilt command"),
         }
@@ -4355,6 +4440,7 @@ android_heartbeat_interval_secs = 7
             artifacts: None,
             local_report: json!({}),
             remote_run: None,
+            superseded_build_ids: Vec::new(),
             summary: empty_summary(&spec),
             benchmark_results: Some(BTreeMap::from([(
                 "Google Pixel 8-14.0".to_string(),
@@ -4405,6 +4491,7 @@ android_heartbeat_interval_secs = 7
             artifacts: None,
             local_report: json!({}),
             remote_run: None,
+            superseded_build_ids: Vec::new(),
             summary: empty_summary(&spec),
             benchmark_results: None,
             benchmark_failures: Some(BTreeMap::from([(
@@ -4464,6 +4551,7 @@ android_heartbeat_interval_secs = 7
             artifacts: None,
             local_report: json!({}),
             remote_run: None,
+            superseded_build_ids: Vec::new(),
             summary: empty_summary(&spec),
             benchmark_results: Some(BTreeMap::from([(
                 "Google Pixel 8-14.0".to_string(),
@@ -4585,6 +4673,7 @@ android_heartbeat_interval_secs = 7
             artifacts: None,
             local_report,
             remote_run: None,
+            superseded_build_ids: Vec::new(),
             summary: empty_summary(&RunSpec {
                 target: MobileTarget::Android,
                 function: "noop_benchmark".into(),
@@ -5322,6 +5411,7 @@ mod ci_merge_tests {
             artifacts: None,
             local_report,
             remote_run: None,
+            superseded_build_ids: Vec::new(),
             summary: empty_summary(&spec),
             benchmark_results: Some(BTreeMap::from([(
                 "Google Pixel 8-14.0".to_string(),
@@ -5380,6 +5470,7 @@ mod ci_merge_tests {
             artifacts: None,
             local_report: json!({}),
             remote_run: None,
+            superseded_build_ids: Vec::new(),
             summary: empty_summary(&spec),
             benchmark_results: Some(BTreeMap::from([(
                 "iPhone 15-17.0".to_string(),

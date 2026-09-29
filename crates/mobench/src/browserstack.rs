@@ -228,21 +228,30 @@ pub(crate) fn only_skipped_sessions(assessment: &MatrixAssessment) -> bool {
         })
 }
 
+/// BrowserStack App Automate dashboard page for a build.
+pub(crate) fn browserstack_build_dashboard_url(build_id: &str) -> String {
+    format!("https://app-automate.browserstack.com/dashboard/v2/builds/{build_id}")
+}
+
 /// Collects a run, scheduling up to `retries` fresh builds while its only failures are skipped sessions.
+///
+/// `handle` always holds the latest scheduled build and `superseded` the builds abandoned for it,
+/// including when an error is returned.
 pub(crate) fn collect_rerunning_skipped_sessions(
-    mut handle: BrowserStackRunHandle,
+    handle: &mut BrowserStackRunHandle,
+    superseded: &mut Vec<String>,
     retries: u8,
     mut collect: impl FnMut(&BrowserStackRunHandle) -> Result<ProviderRun<BrowserStackReport>>,
     mut reschedule: impl FnMut(&BrowserStackRunHandle) -> Result<BrowserStackRunHandle>,
-) -> Result<(ProviderRun<BrowserStackReport>, BrowserStackRunHandle)> {
+) -> Result<ProviderRun<BrowserStackReport>> {
     let mut rerun = 0u8;
     loop {
-        let run = collect(&handle)?;
+        let run = collect(handle)?;
         if run.assessment().is_complete()
             || rerun >= retries
             || !only_skipped_sessions(run.assessment())
         {
-            return Ok((run, handle));
+            return Ok(run);
         }
         rerun += 1;
         eprintln!(
@@ -250,8 +259,13 @@ pub(crate) fn collect_rerunning_skipped_sessions(
             handle.build_id,
             run.assessment()
         );
-        handle = reschedule(&handle)?;
+        let next = reschedule(handle)?;
+        superseded.push(std::mem::replace(handle, next).build_id);
         println!("Waiting for build {} to complete...", handle.build_id);
+        println!(
+            "Dashboard: {}",
+            browserstack_build_dashboard_url(&handle.build_id)
+        );
     }
 }
 
@@ -3627,19 +3641,34 @@ BENCH_REPORT_JSON_END
             ("iphone-16-pro", "passed", false),
         ];
         let failed = [("iphone-14", "failed", true)];
-        // (retries, collected runs in order, expected final build, expected complete)
-        type Case<'a> = (u8, Vec<&'a [(&'a str, &'a str, bool)]>, &'a str, bool);
+        // (retries, collected runs in order, expected final build, expected superseded, expected complete)
+        type Case<'a> = (
+            u8,
+            Vec<&'a [(&'a str, &'a str, bool)]>,
+            &'a str,
+            &'a [&'a str],
+            bool,
+        );
         let cases: [Case; 4] = [
-            (2, vec![&skipped, &passed], "build-2", true),
-            (2, vec![&skipped, &skipped, &skipped], "build-3", false),
-            (3, vec![&failed], "build-1", false),
-            (0, vec![&skipped], "build-1", false),
+            (2, vec![&skipped, &passed], "build-2", &["build-1"], true),
+            (
+                2,
+                vec![&skipped, &skipped, &skipped],
+                "build-3",
+                &["build-1", "build-2"],
+                false,
+            ),
+            (3, vec![&failed], "build-1", &[], false),
+            (0, vec![&skipped], "build-1", &[], false),
         ];
-        for (retries, runs, expected_build, complete) in cases {
+        for (retries, runs, expected_build, expected_superseded, complete) in cases {
             let mut runs = runs.into_iter();
             let mut next_build = 1;
-            let (run, handle) = collect_rerunning_skipped_sessions(
-                rerun_fixture_handle("build-1"),
+            let mut handle = rerun_fixture_handle("build-1");
+            let mut superseded = Vec::new();
+            let run = collect_rerunning_skipped_sessions(
+                &mut handle,
+                &mut superseded,
                 retries,
                 |_| {
                     Ok(rerun_fixture_run(
@@ -3653,9 +3682,36 @@ BENCH_REPORT_JSON_END
             )
             .expect("collect");
             assert_eq!(handle.build_id, expected_build);
+            assert_eq!(superseded, expected_superseded);
             assert_eq!(run.assessment().is_complete(), complete);
             assert!(runs.next().is_none(), "collected fewer runs than expected");
         }
+    }
+
+    #[test]
+    fn rerun_keeps_the_latest_build_when_a_rescheduled_collect_fails() {
+        let skipped = [("iphone-14", "skipped", false)];
+        let mut handle = rerun_fixture_handle("build-1");
+        let mut superseded = Vec::new();
+        let mut collects = 0;
+        let error = collect_rerunning_skipped_sessions(
+            &mut handle,
+            &mut superseded,
+            1,
+            |_| {
+                collects += 1;
+                if collects == 1 {
+                    Ok(rerun_fixture_run(&skipped))
+                } else {
+                    Err(anyhow!("collection timed out"))
+                }
+            },
+            |_| Ok(rerun_fixture_handle("build-2")),
+        )
+        .expect_err("second collect fails");
+        assert!(error.to_string().contains("timed out"));
+        assert_eq!(handle.build_id, "build-2");
+        assert_eq!(superseded, ["build-1"]);
     }
 
     #[test]

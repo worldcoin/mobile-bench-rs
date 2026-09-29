@@ -370,8 +370,8 @@ pub(crate) fn trigger_browserstack_espresso(
     println!("  Build ID: {}", run.build_id);
     println!("  Devices:  {}", spec.devices.join(", "));
     println!(
-        "  Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}",
-        run.build_id
+        "  Dashboard: {}",
+        browserstack::browserstack_build_dashboard_url(&run.build_id)
     );
     println!();
     println!("Waiting for results...");
@@ -422,8 +422,8 @@ pub(crate) fn trigger_browserstack_xcuitest(
     println!("  Build ID: {}", run.build_id);
     println!("  Devices:  {}", spec.devices.join(", "));
     println!(
-        "  Dashboard: https://app-automate.browserstack.com/dashboard/v2/builds/{}",
-        run.build_id
+        "  Dashboard: {}",
+        browserstack::browserstack_build_dashboard_url(&run.build_id)
     );
     println!();
     println!("Waiting for results...");

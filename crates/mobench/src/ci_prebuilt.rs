@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::browserstack::{BrowserStackAuth, BrowserStackClient};
+use crate::browserstack::{
+    BrowserStackAuth, BrowserStackClient, collect_rerunning_skipped_sessions,
+    completed_browserstack_results,
+};
 use crate::ci::{fetch_browserstack_artifacts, merge_summary_reports};
 use crate::cli::{CiPrepareArgs, CiRunPrebuiltArgs, FfiBackendArg, MobileTarget};
 use crate::execution::{
@@ -28,8 +31,8 @@ use crate::project_layout::{ProjectLayoutOptions, resolve_project_layout};
 use crate::report_binding::RunEnvelopeIdentity;
 use crate::reporting::build_summary;
 use crate::{
-    IosXcuitestArtifacts, RemoteRun, RunSpec, RunSummary, SummaryReport,
-    resolve_browserstack_credentials, write_file,
+    IosXcuitestArtifacts, RunSpec, RunSummary, SummaryReport, resolve_browserstack_credentials,
+    write_file,
 };
 
 const PREBUILT_SCHEMA: &str = "mobench.prebuilt.v1";
@@ -727,7 +730,7 @@ pub(crate) fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Res
             browserstack: None,
             ios_xcuitest: None,
         };
-        let (remote, _) = match manifest.platform {
+        let (mut remote, mut handle) = match manifest.platform {
             MobileTarget::Android => {
                 trigger_browserstack_espresso(&spec, &entry.app, &entry.test_suite)?
             }
@@ -739,19 +742,24 @@ pub(crate) fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Res
                 },
             )?,
         };
-        let build_id = match &remote {
-            RemoteRun::Android { build_id, .. } | RemoteRun::Ios { build_id, .. } => build_id,
-        };
-        let platform = match manifest.platform {
-            MobileTarget::Android => "espresso",
-            MobileTarget::Ios => "xcuitest",
-        };
-        let (results, metrics) = client.wait_and_fetch_all_results_with_poll(
-            build_id,
-            platform,
-            Some(timeout_secs),
-            Some(args.fetch_poll_interval_secs),
+        let mut superseded_build_ids = Vec::new();
+        let run = collect_rerunning_skipped_sessions(
+            &mut handle,
+            &mut superseded_build_ids,
+            args.retry_skipped_sessions,
+            |handle| {
+                client.wait_and_collect_run(
+                    &handle.build_id,
+                    handle.platform,
+                    timeout_secs,
+                    args.fetch_poll_interval_secs,
+                )
+            },
+            |handle| client.reschedule_run(handle),
         )?;
+        let (results, metrics) = completed_browserstack_results(run)?;
+        remote.set_build_id(handle.build_id.clone());
+        let build_id = &handle.build_id;
         if args.fetch {
             fetch_browserstack_artifacts(
                 &client,
@@ -786,6 +794,7 @@ pub(crate) fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Res
             artifacts: None,
             local_report: json!({"skipped": true, "reason": "prebuilt BrowserStack run"}),
             remote_run: Some(remote),
+            superseded_build_ids,
             summary: SummaryReport {
                 generated_at: String::new(),
                 generated_at_unix: 0,
