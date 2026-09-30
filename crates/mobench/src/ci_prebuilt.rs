@@ -751,6 +751,7 @@ pub(crate) fn cmd_ci_run_prebuilt(args: CiRunPrebuiltArgs, dry_run: bool) -> Res
                 client.wait_and_collect_run(
                     &handle.build_id,
                     handle.platform,
+                    Some(&handle.requested_devices),
                     timeout_secs,
                     args.fetch_poll_interval_secs,
                 )

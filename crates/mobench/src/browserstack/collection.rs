@@ -44,6 +44,7 @@ impl BrowserStackClient {
         let run = self.wait_and_collect_run(
             build_id,
             platform,
+            None,
             timeout_secs.unwrap_or(DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS),
             poll_interval_secs.unwrap_or(5),
         )?;
@@ -55,13 +56,14 @@ impl BrowserStackClient {
         &self,
         build_id: &str,
         platform: BrowserStackPlatform,
+        requested_devices: Option<&[String]>,
         timeout_secs: u64,
         poll_interval_secs: u64,
     ) -> Result<ProviderRun<BrowserStackReport>> {
         self.wait_and_collect_adapter_run(
             build_id,
             platform,
-            None,
+            requested_devices,
             timeout_secs,
             poll_interval_secs,
             &mobench_process::global_cancellation_token(),

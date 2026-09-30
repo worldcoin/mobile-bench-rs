@@ -2,8 +2,8 @@ use anyhow::{Context, Result, anyhow};
 #[cfg(test)]
 use mobench_process::ProcessCancellation;
 use mobench_provider::{
-    AdapterRun, CollectedOutput, ExpectedSession as ProviderExpectedSession, MatrixAssessment,
-    ProviderRun, SessionDisposition,
+    AdapterRun, CollectedOutput, ExpectedSession as ProviderExpectedSession, ProviderRun,
+    SessionDisposition,
 };
 use reqwest::Url;
 use reqwest::blocking::{Client, Response};
@@ -212,8 +212,16 @@ fn browserstack_adapter_run_with_bindings(
 }
 
 /// True when a run is incomplete only because BrowserStack skipped sessions without a benchmark failure.
-pub(crate) fn only_skipped_sessions(assessment: &MatrixAssessment) -> bool {
-    let mut incomplete = assessment
+pub(crate) fn only_skipped_sessions(run: &ProviderRun<BrowserStackReport>) -> bool {
+    if run
+        .sessions()
+        .iter()
+        .any(|session| session.failure.is_some())
+    {
+        return false;
+    }
+    let mut incomplete = run
+        .assessment()
         .sessions()
         .iter()
         .filter(|session| !matches!(session.disposition, SessionDisposition::Complete))
@@ -247,10 +255,7 @@ pub(crate) fn collect_rerunning_skipped_sessions(
     let mut rerun = 0u8;
     loop {
         let run = collect(handle)?;
-        if run.assessment().is_complete()
-            || rerun >= retries
-            || !only_skipped_sessions(run.assessment())
-        {
+        if run.assessment().is_complete() || rerun >= retries || !only_skipped_sessions(&run) {
             return Ok(run);
         }
         rerun += 1;
@@ -284,6 +289,14 @@ pub(crate) fn completed_browserstack_collection(
             "BrowserStack result set is incomplete; {}",
             run.assessment()
         ));
+    }
+    for session in run.sessions() {
+        if let Some(failure) = &session.failure {
+            return Err(anyhow!(
+                "BrowserStack session {} reported a benchmark failure; {failure}",
+                session.session_id
+            ));
+        }
     }
 
     let mut benchmark_results = std::collections::HashMap::new();
@@ -3606,7 +3619,7 @@ BENCH_REPORT_JSON_END
             ("iphone-14", "passed", false),
             ("iphone-16-pro", "skipped", false),
         ]);
-        assert!(only_skipped_sessions(run.assessment()));
+        assert!(only_skipped_sessions(&run));
     }
 
     #[test]
@@ -3620,13 +3633,19 @@ BENCH_REPORT_JSON_END
             ("iphone-16-pro", "failed", true),
         ]);
         let skipped_with_failure = rerun_fixture_run(&[("iphone-14", "skipped", true)]);
+        let passed_with_failure = rerun_fixture_run(&[
+            ("iphone-14", "passed", true),
+            ("iphone-16-pro", "skipped", false),
+        ]);
         let complete = rerun_fixture_run(&[("iphone-14", "passed", false)]);
-        for run in [failed, mixed, skipped_with_failure, complete] {
-            assert!(
-                !only_skipped_sessions(run.assessment()),
-                "{}",
-                run.assessment()
-            );
+        for run in [
+            failed,
+            mixed,
+            skipped_with_failure,
+            passed_with_failure,
+            complete,
+        ] {
+            assert!(!only_skipped_sessions(&run), "{}", run.assessment());
         }
     }
 
@@ -3641,6 +3660,10 @@ BENCH_REPORT_JSON_END
             ("iphone-16-pro", "passed", false),
         ];
         let failed = [("iphone-14", "failed", true)];
+        let passed_with_failure = [
+            ("iphone-14", "passed", true),
+            ("iphone-16-pro", "skipped", false),
+        ];
         // (retries, collected runs in order, expected final build, expected superseded, expected complete)
         type Case<'a> = (
             u8,
@@ -3649,7 +3672,7 @@ BENCH_REPORT_JSON_END
             &'a [&'a str],
             bool,
         );
-        let cases: [Case; 4] = [
+        let cases: [Case; 5] = [
             (2, vec![&skipped, &passed], "build-2", &["build-1"], true),
             (
                 2,
@@ -3659,6 +3682,7 @@ BENCH_REPORT_JSON_END
                 false,
             ),
             (3, vec![&failed], "build-1", &[], false),
+            (3, vec![&passed_with_failure], "build-1", &[], false),
             (0, vec![&skipped], "build-1", &[], false),
         ];
         for (retries, runs, expected_build, expected_superseded, complete) in cases {
@@ -3712,6 +3736,67 @@ BENCH_REPORT_JSON_END
         assert!(error.to_string().contains("timed out"));
         assert_eq!(handle.build_id, "build-2");
         assert_eq!(superseded, ["build-1"]);
+    }
+
+    #[test]
+    fn browserstack_complete_run_rejects_a_passed_session_with_a_failure_marker() {
+        let run = rerun_fixture_run(&[("iphone-14", "passed", true)]);
+        assert!(run.assessment().is_complete());
+        let error =
+            completed_browserstack_results(run).expect_err("failure marker is authoritative");
+        assert!(error.to_string().contains("benchmark failure"));
+        assert!(error.to_string().contains("iphone-14-session"));
+    }
+
+    #[test]
+    fn rerun_rejects_a_missing_requested_device_before_rescheduling() {
+        let responses = vec![ScriptedHttpResponse::json(
+            "/app-automate/espresso/v2/builds/build-1",
+            json!({
+                "build_id": "build-1",
+                "status": "done",
+                "devices": [{
+                    "device": "Google Pixel 7-13.0",
+                    "session_id": "session-1",
+                    "status": "skipped"
+                }]
+            }),
+        )];
+        let (base_url, requests, server) = spawn_browserstack_script_server(responses);
+        let client = test_client_with_base_url(base_url);
+        let mut handle = BrowserStackRunHandle {
+            platform: BrowserStackPlatform::Espresso,
+            requested_devices: vec![
+                "Google Pixel 7-13.0".to_owned(),
+                "Google Pixel 8-14.0".to_owned(),
+            ],
+            app_url: "bs://app-1".to_owned(),
+            test_suite_url: Some("bs://suite-1".to_owned()),
+            build_id: "build-1".to_owned(),
+        };
+        let mut superseded = Vec::new();
+        let error = collect_rerunning_skipped_sessions(
+            &mut handle,
+            &mut superseded,
+            2,
+            |handle| {
+                client.wait_and_collect_run(
+                    &handle.build_id,
+                    handle.platform,
+                    Some(&handle.requested_devices),
+                    1,
+                    0,
+                )
+            },
+            |_| panic!("missing devices must not trigger a fresh build"),
+        )
+        .expect_err("requested device is missing");
+        server.join().expect("join scripted server");
+        assert!(error.to_string().contains("Google Pixel 8-14.0"));
+        assert!(error.to_string().contains("no compatible observed session"));
+        assert_eq!(handle.build_id, "build-1");
+        assert!(superseded.is_empty());
+        assert_eq!(requests.lock().unwrap().len(), 1);
     }
 
     #[test]
