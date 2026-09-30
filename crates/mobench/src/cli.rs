@@ -52,6 +52,10 @@ pub(crate) struct Cli {
     pub(crate) command: Command,
 }
 
+const RETRY_SKIPPED_SESSIONS_HELP: &str = "Schedule up to N fresh BrowserStack builds (reusing the uploaded app) when the only \
+     failures are skipped sessions; every device reruns and each build waits up to the fetch timeout \
+     again, so wall time can reach (N+1)x that timeout";
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Run benchmarks locally or on BrowserStack devices.
@@ -164,6 +168,12 @@ pub(crate) enum Command {
         fetch_poll_interval_secs: u64,
         #[arg(long, default_value_t = DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS)]
         fetch_timeout_secs: u64,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = RETRY_SKIPPED_SESSIONS_HELP
+        )]
+        retry_skipped_sessions: u8,
         #[arg(long, help = "Show simplified step-by-step progress output")]
         progress: bool,
     },
@@ -588,6 +598,8 @@ pub(crate) struct CiRunPrebuiltArgs {
     pub(crate) fetch_timeout_secs: u64,
     #[arg(long, default_value_t = 1800)]
     pub(crate) max_completion_timeout_secs: u64,
+    #[arg(long, default_value_t = 0, help = RETRY_SKIPPED_SESSIONS_HELP)]
+    pub(crate) retry_skipped_sessions: u8,
 }
 
 #[derive(Subcommand, Debug)]
@@ -825,6 +837,12 @@ pub(crate) struct CiRunArgs {
     pub(crate) fetch_poll_interval_secs: u64,
     #[arg(long, default_value_t = DEFAULT_BROWSERSTACK_FETCH_TIMEOUT_SECS)]
     pub(crate) fetch_timeout_secs: u64,
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = RETRY_SKIPPED_SESSIONS_HELP
+    )]
+    pub(crate) retry_skipped_sessions: u8,
     #[arg(long, help = "Show simplified step-by-step progress output")]
     pub(crate) progress: bool,
     #[arg(

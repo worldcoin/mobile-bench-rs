@@ -3,8 +3,8 @@
 use anyhow::{Context, Result, anyhow};
 
 use super::{
-    BrowserStackClient, BuildRequest, BuildResponse, ESPRESSO_IDLE_TIMEOUT_SECS, ScheduledRun,
-    XcuitestBuildRequest, parse_response,
+    BrowserStackClient, BrowserStackPlatform, BrowserStackRunHandle, BuildRequest, BuildResponse,
+    ESPRESSO_IDLE_TIMEOUT_SECS, ScheduledRun, XcuitestBuildRequest, parse_response,
 };
 
 impl BrowserStackClient {
@@ -85,6 +85,35 @@ impl BrowserStackClient {
         let build: BuildResponse = parse_response(response, "schedule run")?;
         Ok(ScheduledRun {
             build_id: build.build_id,
+        })
+    }
+
+    /// Schedules a fresh build that reuses an existing run's uploaded app and test suite.
+    pub(crate) fn reschedule_run(
+        &self,
+        handle: &BrowserStackRunHandle,
+    ) -> Result<BrowserStackRunHandle> {
+        let test_suite_url = handle.test_suite_url.as_deref().ok_or_else(|| {
+            anyhow!(
+                "BrowserStack build {} has no test suite to reschedule",
+                handle.build_id
+            )
+        })?;
+        let run = match handle.platform {
+            BrowserStackPlatform::Espresso => self.schedule_espresso_run(
+                &handle.requested_devices,
+                &handle.app_url,
+                test_suite_url,
+            )?,
+            BrowserStackPlatform::XcuiTest => self.schedule_xcuitest_run(
+                &handle.requested_devices,
+                &handle.app_url,
+                test_suite_url,
+            )?,
+        };
+        Ok(BrowserStackRunHandle {
+            build_id: run.build_id,
+            ..handle.clone()
         })
     }
 }

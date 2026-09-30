@@ -98,6 +98,9 @@ pub struct RunRequest {
     pub fetch_poll_interval_secs: u64,
     /// Timeout (seconds) when fetching BrowserStack artifacts.
     pub fetch_timeout_secs: u64,
+    /// Fresh BrowserStack builds to schedule when the only failures are skipped sessions.
+    #[serde(default)]
+    pub retry_skipped_sessions: u8,
     /// Enable progress-oriented CLI output.
     pub progress: bool,
     /// Output directory for CI contract files.
@@ -256,6 +259,10 @@ pub(crate) fn run_request_with_extra_args(
     }
     if let Some(path) = &request.ios_test_suite {
         cmd.arg("--ios-test-suite").arg(path);
+    }
+    if request.retry_skipped_sessions > 0 {
+        cmd.arg("--retry-skipped-sessions")
+            .arg(request.retry_skipped_sessions.to_string());
     }
     if let Some(timeout_secs) = request.ios_completion_timeout_secs {
         cmd.arg("--ios-completion-timeout-secs")
@@ -941,6 +948,7 @@ pub(crate) fn cmd_ci_run_single(
             fetch_output_dir: args.fetch_output_dir.clone(),
             fetch_poll_interval_secs: args.fetch_poll_interval_secs,
             fetch_timeout_secs: args.fetch_timeout_secs,
+            retry_skipped_sessions: args.retry_skipped_sessions,
             progress: args.progress,
             output_dir: output_dir.to_path_buf(),
             plots: args.plots,
