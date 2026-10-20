@@ -208,6 +208,13 @@ sessions; native Android runners emit structured worker-exit and linkage-error
 diagnostics. These controls affect mobile/provider reliability only and do not
 expand the caller-controlled execution surface of credentialed jobs.
 
+`retry_skipped_sessions` (default `0`) is a trusted workflow input forwarded to
+`run-prebuilt` as `--retry-skipped-sessions`. When BrowserStack skips sessions
+without a benchmark failure, the trusted binary schedules up to that many fresh
+builds from the same verified uploads; every device reruns, and each build can
+wait up to `max_completion_timeout_secs` again. It re-runs only already
+verified artifacts and does not widen the caller-controlled execution surface.
+
 ## Reporting Boundary
 
 BrowserStack responses and downloaded JSON, CSV, Markdown, filenames, device

@@ -131,6 +131,11 @@ on:
         required: false
         type: number
         default: 1800
+      retry_skipped_sessions:
+        description: "Fresh BrowserStack builds to schedule when the only failures are skipped sessions (each waits up to max_completion_timeout_secs)"
+        required: false
+        type: number
+        default: 0
       ffi_backend:
         description: "Optional ci prepare FFI backend override: uniffi, native-c-abi, or boltffi"
         required: false
@@ -985,17 +990,20 @@ jobs:
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
           MAX_COMPLETION_TIMEOUT_SECS: ${{ inputs.max_completion_timeout_secs }}
+          RETRY_SKIPPED_SESSIONS: ${{ inputs.retry_skipped_sessions }}
         run: |
           set -euo pipefail
           device_args=()
           while IFS= read -r spec; do device_args+=(--devices "$spec"); done < <(jq -er '.[]' <<<"$DEVICE_SPECS")
+          retry_args=()
+          if [ "$RETRY_SKIPPED_SESSIONS" != "0" ]; then retry_args=(--retry-skipped-sessions "$RETRY_SKIPPED_SESSIONS"); fi
           trusted-bin/cargo-mobench ci run-prebuilt \
             --manifest prebuilt/ios/manifest.json --expected-source-sha "$HEAD_SHA" \
             --expected-platform ios --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
             --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             --fetch-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
-            "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
+            "${device_args[@]}" "${retry_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/ios
       - name: Upload iOS results
         if: always()
@@ -1112,17 +1120,20 @@ jobs:
           ITERATIONS: ${{ inputs.iterations }}
           WARMUP: ${{ inputs.warmup }}
           MAX_COMPLETION_TIMEOUT_SECS: ${{ inputs.max_completion_timeout_secs }}
+          RETRY_SKIPPED_SESSIONS: ${{ inputs.retry_skipped_sessions }}
         run: |
           set -euo pipefail
           device_args=()
           while IFS= read -r spec; do device_args+=(--devices "$spec"); done < <(jq -er '.[]' <<<"$DEVICE_SPECS")
+          retry_args=()
+          if [ "$RETRY_SKIPPED_SESSIONS" != "0" ]; then retry_args=(--retry-skipped-sessions "$RETRY_SKIPPED_SESSIONS"); fi
           trusted-bin/cargo-mobench ci run-prebuilt \
             --manifest prebuilt/android/manifest.json --expected-source-sha "$HEAD_SHA" \
             --expected-platform android --expected-functions "$FUNCTIONS_JSON" \
             --expected-iterations "$ITERATIONS" --expected-warmup "$WARMUP" \
             --max-completion-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
             --fetch-timeout-secs "$MAX_COMPLETION_TIMEOUT_SECS" \
-            "${device_args[@]}" --fetch --fetch-output-dir target/browserstack \
+            "${device_args[@]}" "${retry_args[@]}" --fetch --fetch-output-dir target/browserstack \
             --output-dir target/mobench/ci/android
       - name: Upload Android results
         if: always()

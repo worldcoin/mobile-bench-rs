@@ -273,8 +273,8 @@ pub(crate) fn print_run_completion_summary(
         println!("  Build ID:    {}", build_id);
         println!("  Platform:    {}", platform);
         println!(
-            "  Dashboard:   https://app-automate.browserstack.com/dashboard/v2/builds/{}",
-            build_id
+            "  Dashboard:   {}",
+            crate::browserstack::browserstack_build_dashboard_url(build_id)
         );
         println!();
 

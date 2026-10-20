@@ -3,6 +3,7 @@ use anyhow::{Context, Result, anyhow};
 use mobench_process::ProcessCancellation;
 use mobench_provider::{
     AdapterRun, CollectedOutput, ExpectedSession as ProviderExpectedSession, ProviderRun,
+    SessionDisposition,
 };
 use reqwest::Url;
 use reqwest::blocking::{Client, Response};
@@ -210,6 +211,69 @@ fn browserstack_adapter_run_with_bindings(
     }
 }
 
+/// True when a run is incomplete only because BrowserStack skipped sessions without a benchmark failure.
+pub(crate) fn only_skipped_sessions(run: &ProviderRun<BrowserStackReport>) -> bool {
+    if run
+        .sessions()
+        .iter()
+        .any(|session| session.failure.is_some())
+    {
+        return false;
+    }
+    let mut incomplete = run
+        .assessment()
+        .sessions()
+        .iter()
+        .filter(|session| !matches!(session.disposition, SessionDisposition::Complete))
+        .peekable();
+    incomplete.peek().is_some()
+        && incomplete.all(|session| {
+            matches!(
+                &session.disposition,
+                SessionDisposition::NonPassed { status, failure: None }
+                    if status.eq_ignore_ascii_case("skipped")
+            )
+        })
+}
+
+/// BrowserStack App Automate dashboard page for a build.
+pub(crate) fn browserstack_build_dashboard_url(build_id: &str) -> String {
+    format!("https://app-automate.browserstack.com/dashboard/v2/builds/{build_id}")
+}
+
+/// Collects a run, scheduling up to `retries` fresh builds while its only failures are skipped sessions.
+///
+/// `handle` always holds the latest scheduled build and `superseded` the builds abandoned for it,
+/// including when an error is returned.
+pub(crate) fn collect_rerunning_skipped_sessions(
+    handle: &mut BrowserStackRunHandle,
+    superseded: &mut Vec<String>,
+    retries: u8,
+    mut collect: impl FnMut(&BrowserStackRunHandle) -> Result<ProviderRun<BrowserStackReport>>,
+    mut reschedule: impl FnMut(&BrowserStackRunHandle) -> Result<BrowserStackRunHandle>,
+) -> Result<ProviderRun<BrowserStackReport>> {
+    let mut rerun = 0u8;
+    loop {
+        let run = collect(handle)?;
+        if run.assessment().is_complete() || rerun >= retries || !only_skipped_sessions(&run) {
+            return Ok(run);
+        }
+        rerun += 1;
+        eprintln!(
+            "Warning: BrowserStack build {} is incomplete ({}); scheduling fresh build {rerun}/{retries}",
+            handle.build_id,
+            run.assessment()
+        );
+        let next = reschedule(handle)?;
+        superseded.push(std::mem::replace(handle, next).build_id);
+        println!("Waiting for build {} to complete...", handle.build_id);
+        println!(
+            "Dashboard: {}",
+            browserstack_build_dashboard_url(&handle.build_id)
+        );
+    }
+}
+
 pub(crate) fn completed_browserstack_results(
     run: ProviderRun<BrowserStackReport>,
 ) -> Result<BrowserStackResults> {
@@ -225,6 +289,14 @@ pub(crate) fn completed_browserstack_collection(
             "BrowserStack result set is incomplete; {}",
             run.assessment()
         ));
+    }
+    for session in run.sessions() {
+        if let Some(failure) = &session.failure {
+            return Err(anyhow!(
+                "BrowserStack session {} reported a benchmark failure; {failure}",
+                session.session_id
+            ));
+        }
     }
 
     let mut benchmark_results = std::collections::HashMap::new();
@@ -3496,6 +3568,235 @@ BENCH_REPORT_JSON_END
 
         assert!(error.to_string().contains("missing collected sessions"));
         assert!(error.to_string().contains("session-9"));
+    }
+
+    fn rerun_fixture_run(sessions: &[(&str, &str, bool)]) -> ProviderRun<BrowserStackReport> {
+        let expected = sessions
+            .iter()
+            .map(|(device, status, _)| DeviceSession {
+                device: (*device).to_string(),
+                session_id: format!("{device}-session"),
+                status: (*status).to_string(),
+                device_logs: None,
+            })
+            .collect::<Vec<_>>();
+        // A skipped session still yields a collection record, just without reports.
+        let collected = sessions
+            .iter()
+            .map(|(device, status, failed)| CollectedBrowserStackSession {
+                session_id: format!("{device}-session"),
+                benchmark_results: if *status == "passed" {
+                    vec![json!({"function": "sample_fns::fibonacci", "samples_ns": [10]})]
+                } else {
+                    Vec::new()
+                },
+                benchmark_failures: if *failed {
+                    vec![json!({"kind": "panic", "message": "index out of bounds"})]
+                } else {
+                    Vec::new()
+                },
+                performance_metrics: PerformanceMetrics::default(),
+            })
+            .collect();
+        browserstack_adapter_run(&expected, collected)
+            .reconcile()
+            .expect("unambiguous fixture run")
+    }
+
+    fn rerun_fixture_handle(build_id: &str) -> BrowserStackRunHandle {
+        BrowserStackRunHandle {
+            platform: BrowserStackPlatform::XcuiTest,
+            requested_devices: vec!["iphone-14".to_string(), "iphone-16-pro".to_string()],
+            app_url: "bs://app".to_string(),
+            test_suite_url: Some("bs://suite".to_string()),
+            build_id: build_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn only_skipped_sessions_accepts_a_skipped_session_without_failure() {
+        let run = rerun_fixture_run(&[
+            ("iphone-14", "passed", false),
+            ("iphone-16-pro", "skipped", false),
+        ]);
+        assert!(only_skipped_sessions(&run));
+    }
+
+    #[test]
+    fn only_skipped_sessions_rejects_failed_complete_and_failure_carrying_runs() {
+        let failed = rerun_fixture_run(&[
+            ("iphone-14", "passed", false),
+            ("iphone-16-pro", "failed", true),
+        ]);
+        let mixed = rerun_fixture_run(&[
+            ("iphone-14", "skipped", false),
+            ("iphone-16-pro", "failed", true),
+        ]);
+        let skipped_with_failure = rerun_fixture_run(&[("iphone-14", "skipped", true)]);
+        let passed_with_failure = rerun_fixture_run(&[
+            ("iphone-14", "passed", true),
+            ("iphone-16-pro", "skipped", false),
+        ]);
+        let complete = rerun_fixture_run(&[("iphone-14", "passed", false)]);
+        for run in [
+            failed,
+            mixed,
+            skipped_with_failure,
+            passed_with_failure,
+            complete,
+        ] {
+            assert!(!only_skipped_sessions(&run), "{}", run.assessment());
+        }
+    }
+
+    #[test]
+    fn rerun_reschedules_only_skipped_sessions_within_the_budget() {
+        let skipped = [
+            ("iphone-14", "passed", false),
+            ("iphone-16-pro", "skipped", false),
+        ];
+        let passed = [
+            ("iphone-14", "passed", false),
+            ("iphone-16-pro", "passed", false),
+        ];
+        let failed = [("iphone-14", "failed", true)];
+        let passed_with_failure = [
+            ("iphone-14", "passed", true),
+            ("iphone-16-pro", "skipped", false),
+        ];
+        // (retries, collected runs in order, expected final build, expected superseded, expected complete)
+        type Case<'a> = (
+            u8,
+            Vec<&'a [(&'a str, &'a str, bool)]>,
+            &'a str,
+            &'a [&'a str],
+            bool,
+        );
+        let cases: [Case; 5] = [
+            (2, vec![&skipped, &passed], "build-2", &["build-1"], true),
+            (
+                2,
+                vec![&skipped, &skipped, &skipped],
+                "build-3",
+                &["build-1", "build-2"],
+                false,
+            ),
+            (3, vec![&failed], "build-1", &[], false),
+            (3, vec![&passed_with_failure], "build-1", &[], false),
+            (0, vec![&skipped], "build-1", &[], false),
+        ];
+        for (retries, runs, expected_build, expected_superseded, complete) in cases {
+            let mut runs = runs.into_iter();
+            let mut next_build = 1;
+            let mut handle = rerun_fixture_handle("build-1");
+            let mut superseded = Vec::new();
+            let run = collect_rerunning_skipped_sessions(
+                &mut handle,
+                &mut superseded,
+                retries,
+                |_| {
+                    Ok(rerun_fixture_run(
+                        runs.next().expect("unexpected extra collect"),
+                    ))
+                },
+                |_| {
+                    next_build += 1;
+                    Ok(rerun_fixture_handle(&format!("build-{next_build}")))
+                },
+            )
+            .expect("collect");
+            assert_eq!(handle.build_id, expected_build);
+            assert_eq!(superseded, expected_superseded);
+            assert_eq!(run.assessment().is_complete(), complete);
+            assert!(runs.next().is_none(), "collected fewer runs than expected");
+        }
+    }
+
+    #[test]
+    fn rerun_keeps_the_latest_build_when_a_rescheduled_collect_fails() {
+        let skipped = [("iphone-14", "skipped", false)];
+        let mut handle = rerun_fixture_handle("build-1");
+        let mut superseded = Vec::new();
+        let mut collects = 0;
+        let error = collect_rerunning_skipped_sessions(
+            &mut handle,
+            &mut superseded,
+            1,
+            |_| {
+                collects += 1;
+                if collects == 1 {
+                    Ok(rerun_fixture_run(&skipped))
+                } else {
+                    Err(anyhow!("collection timed out"))
+                }
+            },
+            |_| Ok(rerun_fixture_handle("build-2")),
+        )
+        .expect_err("second collect fails");
+        assert!(error.to_string().contains("timed out"));
+        assert_eq!(handle.build_id, "build-2");
+        assert_eq!(superseded, ["build-1"]);
+    }
+
+    #[test]
+    fn browserstack_complete_run_rejects_a_passed_session_with_a_failure_marker() {
+        let run = rerun_fixture_run(&[("iphone-14", "passed", true)]);
+        assert!(run.assessment().is_complete());
+        let error =
+            completed_browserstack_results(run).expect_err("failure marker is authoritative");
+        assert!(error.to_string().contains("benchmark failure"));
+        assert!(error.to_string().contains("iphone-14-session"));
+    }
+
+    #[test]
+    fn rerun_rejects_a_missing_requested_device_before_rescheduling() {
+        let responses = vec![ScriptedHttpResponse::json(
+            "/app-automate/espresso/v2/builds/build-1",
+            json!({
+                "build_id": "build-1",
+                "status": "done",
+                "devices": [{
+                    "device": "Google Pixel 7-13.0",
+                    "session_id": "session-1",
+                    "status": "skipped"
+                }]
+            }),
+        )];
+        let (base_url, requests, server) = spawn_browserstack_script_server(responses);
+        let client = test_client_with_base_url(base_url);
+        let mut handle = BrowserStackRunHandle {
+            platform: BrowserStackPlatform::Espresso,
+            requested_devices: vec![
+                "Google Pixel 7-13.0".to_owned(),
+                "Google Pixel 8-14.0".to_owned(),
+            ],
+            app_url: "bs://app-1".to_owned(),
+            test_suite_url: Some("bs://suite-1".to_owned()),
+            build_id: "build-1".to_owned(),
+        };
+        let mut superseded = Vec::new();
+        let error = collect_rerunning_skipped_sessions(
+            &mut handle,
+            &mut superseded,
+            2,
+            |handle| {
+                client.wait_and_collect_run(
+                    &handle.build_id,
+                    handle.platform,
+                    Some(&handle.requested_devices),
+                    1,
+                    0,
+                )
+            },
+            |_| panic!("missing devices must not trigger a fresh build"),
+        )
+        .expect_err("requested device is missing");
+        server.join().expect("join scripted server");
+        assert!(error.to_string().contains("Google Pixel 8-14.0"));
+        assert!(error.to_string().contains("no compatible observed session"));
+        assert_eq!(handle.build_id, "build-1");
+        assert!(superseded.is_empty());
+        assert_eq!(requests.lock().unwrap().len(), 1);
     }
 
     #[test]

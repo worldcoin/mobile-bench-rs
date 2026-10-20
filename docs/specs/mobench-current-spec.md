@@ -454,6 +454,7 @@ Key options:
 - `--fetch-output-dir <DIR>`
 - `--fetch-poll-interval-secs <N>`
 - `--fetch-timeout-secs <N>`
+- `--retry-skipped-sessions <N>` default `0`
 - `--progress`
 
 `--local-only` skips mobile builds and runs the host harness.
@@ -487,6 +488,7 @@ Key options:
 - `--release`
 - `--ios-app`, `--ios-test-suite`
 - `--fetch`, fetch timeout/poll options
+- `--retry-skipped-sessions <N>` default `0`
 - `--progress`
 - `--output-dir` default `target/mobench/ci`
 - `--requested-by`
@@ -585,6 +587,29 @@ Device commands:
 - `mobench devices resolve --platform android --profile default`
 
 Invalid device specs should produce suggestions when similar devices are known.
+
+### Skipped-session retry
+
+BrowserStack occasionally skips a device session without running the test.
+`run`, `ci run`, and `ci run-prebuilt` accept `--retry-skipped-sessions <N>`
+(default `0`, which keeps the previous fail-on-incomplete behavior). When a
+collected build is incomplete and every incomplete session has provider status
+`skipped` with no benchmark failure marker, mobench schedules a fresh build
+that reuses the already-uploaded app and test suite, up to `N` times. Any
+failed, missing, resultless, or failure-carrying session stops retrying and the
+build is reported as before.
+
+- A fresh build reruns every requested device, including devices that already
+  passed; results always come from one complete build.
+- Each fresh build waits up to the fetch timeout again, so the worst-case wall
+  time is `(N + 1)` times that timeout.
+- The dashboard link is printed for every fresh build. `remote_run.build_id`
+  records the build the results come from, and the optional
+  `superseded_build_ids` array beside it lists the abandoned builds in order.
+  Both sit at the top level of a single-function run summary and inside each
+  per-function entry under `functions` in merged and `ci run-prebuilt`
+  summaries. The array is omitted when no build was superseded.
+- The reusable workflow exposes this as the `retry_skipped_sessions` input.
 
 ## Build Outputs
 
@@ -718,6 +743,7 @@ The `mobench` crate exposes programmatic helpers for CI integrations.
 - `fetch_output_dir`
 - `fetch_poll_interval_secs`
 - `fetch_timeout_secs`
+- `retry_skipped_sessions` (defaults to `0` when deserialized)
 - `progress`
 - `output_dir`
 - `plots`

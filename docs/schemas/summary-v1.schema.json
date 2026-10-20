@@ -69,6 +69,11 @@
           }
         }
       }
+    },
+    "superseded_build_ids": {
+      "description": "BrowserStack builds abandoned and rescheduled because sessions were skipped, oldest first. Omitted when empty.",
+      "type": "array",
+      "items": { "type": "string" }
     }
   },
   "additionalProperties": true

@@ -238,6 +238,13 @@ fn external_github_actions_and_gradle_distribution_are_immutable() {
                 "invalid action reference in {}: {line}",
                 path.display()
             );
+            // relyance-sci.yml is managed by the org's terraform, which rewrites
+            // the pin back to `@main`; exempt only that action in that file.
+            if path.file_name().and_then(|name| name.to_str()) == Some("relyance-sci.yml")
+                && action == "worldcoin/gh-actions-public/relyance"
+            {
+                continue;
+            }
             assert_eq!(
                 revision.len(),
                 40,
