@@ -226,6 +226,12 @@ fn external_github_actions_and_gradle_distribution_are_immutable() {
             if reference.starts_with("./") {
                 continue;
             }
+            // Skips the bot-managed Relyance workflow action.
+            if path.ends_with("workflows/relyance-sci.yml")
+                && reference.starts_with("worldcoin/gh-actions-public/relyance@")
+            {
+                continue;
+            }
             let (action, revision) = reference.split_once('@').unwrap_or_else(|| {
                 panic!(
                     "external action has no revision in {}: {line}",
